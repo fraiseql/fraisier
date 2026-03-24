@@ -111,13 +111,19 @@ def cleanup_templates(
     """
     validate_pg_identifier(db_name, "database name")
     validate_pg_identifier(prefix.rstrip("_") or "t", "template prefix")
-    sql = (
-        "SELECT datname FROM pg_database "
-        f"WHERE datname LIKE '{prefix}{db_name}%' "
-        "ORDER BY oid DESC"
-    )
+    pattern = f"{prefix}{db_name}%"
     code, stdout, _ = _pg_cmd(
-        ["psql", "-t", "-A", "-c", sql],
+        [
+            "psql",
+            "-t",
+            "-A",
+            "-v",
+            f"pattern={pattern}",
+            "-c",
+            "SELECT datname FROM pg_database "
+            "WHERE datname LIKE :'pattern' "
+            "ORDER BY oid DESC",
+        ],
         sudo_user=sudo_user,
     )
     if code != 0:
