@@ -560,13 +560,13 @@ class TestScheduledDeployer:
 
         assert deployer.health_check() is False
 
-    def test_rollback_stops_and_disables_timer(self, mock_subprocess):
-        """Test rollback stops and disables timer."""
+    def test_rollback_restarts_timer(self, mock_subprocess):
+        """Test rollback restarts timer."""
         deployer = ScheduledDeployer(
             {"fraise_name": "backup", "systemd_timer": "backup.timer"}
         )
         mock_subprocess.return_value = MagicMock(
-            stdout="timer:inactive\n", returncode=0
+            stdout="timer:active\n", returncode=0
         )
 
         with patch("fraisier.deployers.mixins.write_status"):
@@ -575,10 +575,9 @@ class TestScheduledDeployer:
         assert result.success is True
         assert result.status == DeploymentStatus.ROLLED_BACK
 
-        # Should call stop and disable
+        # Should call restart
         calls = [str(c) for c in mock_subprocess.call_args_list]
-        assert any("stop" in c for c in calls)
-        assert any("disable" in c for c in calls)
+        assert any("restart" in c for c in calls)
 
 
 class TestDeploymentResult:

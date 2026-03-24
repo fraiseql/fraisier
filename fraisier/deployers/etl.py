@@ -2,7 +2,6 @@
 
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
@@ -61,20 +60,7 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
             if not target:
                 raise ValueError("No previous SHA available for rollback")
 
-            worktree = Path(self.app_path)
-            self.runner.run(
-                [
-                    "git",
-                    f"--work-tree={worktree}",
-                    f"--git-dir={self.bare_repo}",
-                    "checkout",
-                    "-f",
-                    target,
-                ],
-            )
-            self.runner.run(
-                ["git", "-C", str(worktree), "reset", "--soft", target],
-            )
+            self._git_rollback(target)
 
             new_version = target[:8]
             duration = time.time() - start_time

@@ -112,24 +112,26 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             return False
 
     def rollback(self, to_version: str | None = None) -> DeploymentResult:
-        """Rollback: stop/disable timer, optionally revert git."""
+        """Rollback: revert git, then restart timer."""
         start_time = time.time()
         current_version = self.get_current_version() or self._get_timer_state()
+        target = to_version or self._previous_sha
 
         try:
+            if target and self.app_path:
+                logger.info(f"Rolling back git to {target[:8]}")
+                self._git_rollback(target)
+
             if self.systemd_timer:
-                logger.info(f"Stopping timer: {self.systemd_timer}")
+                logger.info(f"Restarting timer: {self.systemd_timer}")
                 self.runner.run(
-                    ["sudo", "systemctl", "stop", self.systemd_timer],
-                )
-                self.runner.run(
-                    ["sudo", "systemctl", "disable", self.systemd_timer],
+                    ["sudo", "systemctl", "restart", self.systemd_timer],
                 )
 
-            new_version = self._get_timer_state()
+            new_version = target[:8] if target else self._get_timer_state()
             duration = time.time() - start_time
 
-            self._write_status("rolled_back")
+            self._write_status("rolled_back", commit_sha=target)
             return DeploymentResult(
                 success=True,
                 status=DeploymentStatus.ROLLED_BACK,

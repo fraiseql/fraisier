@@ -321,16 +321,14 @@ class TestScheduledDeployerBareRepo:
         assert "deploying" in states
         assert "success" in states
 
-    def test_rollback_stops_disables_timer_and_writes_status(self, mock_subprocess):
-        """ScheduledDeployer rollback stops/disables timer and writes status."""
+    def test_rollback_restarts_timer_and_writes_status(self, mock_subprocess):
+        """ScheduledDeployer rollback restarts timer and writes status."""
         config = {
             "fraise_name": "backup",
             "systemd_timer": "backup.timer",
         }
         deployer = ScheduledDeployer(config)
-        mock_subprocess.return_value = MagicMock(
-            stdout="timer:inactive\n", returncode=0
-        )
+        mock_subprocess.return_value = MagicMock(stdout="timer:active\n", returncode=0)
 
         with patch("fraisier.deployers.mixins.write_status") as mock_ws:
             result = deployer.rollback()
@@ -339,8 +337,7 @@ class TestScheduledDeployerBareRepo:
         assert result.status == DeploymentStatus.ROLLED_BACK
 
         calls = [str(c) for c in mock_subprocess.call_args_list]
-        assert any("stop" in c for c in calls)
-        assert any("disable" in c for c in calls)
+        assert any("restart" in c for c in calls)
 
         # Should write rolled_back status
         states = [call.args[0].state for call in mock_ws.call_args_list]

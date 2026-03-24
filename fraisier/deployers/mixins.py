@@ -88,6 +88,28 @@ class GitDeployMixin:
         self._previous_sha = old_sha
         return old_sha, new_sha
 
+    def _git_rollback(
+        self,
+        target: str,
+        runner: Any | None = None,
+    ) -> None:
+        """Rollback worktree to *target* SHA via bare repo checkout."""
+        r = runner or self.runner
+        worktree = Path(self.app_path)
+        r.run(
+            [
+                "git",
+                f"--work-tree={worktree}",
+                f"--git-dir={self.bare_repo}",
+                "checkout",
+                "-f",
+                target,
+            ],
+        )
+        r.run(
+            ["git", "-C", str(worktree), "reset", "--soft", target],
+        )
+
     def _wrap_error(self, exc: Exception) -> FraisierError:
         """Wrap a bare exception into a structured FraisierError."""
         ctx = {"fraise": self.fraise_name, "environment": self.environment}
