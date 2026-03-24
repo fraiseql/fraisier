@@ -321,6 +321,21 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 )
                 if not db_result.success:
                     logger.critical("Database rollback failed: %s", db_result.errors)
+                    duration = time.time() - start_time
+                    error_msg = (
+                        f"Database rollback failed — manual intervention required. "
+                        f"Errors: {'; '.join(db_result.errors)}. "
+                        f"Database may have {self._migrations_applied} unapplied "
+                        f"down migrations. Do NOT restart the service until resolved."
+                    )
+                    self._write_status("failed", error_message=error_msg)
+                    return DeploymentResult(
+                        success=False,
+                        status=DeploymentStatus.FAILED,
+                        old_version=current_version,
+                        duration_seconds=duration,
+                        error_message=error_msg,
+                    )
 
             worktree = Path(self.app_path)
             subprocess.run(

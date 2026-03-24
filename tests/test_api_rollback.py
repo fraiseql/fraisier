@@ -11,6 +11,7 @@ from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentStatus
 from fraisier.health_check import HealthCheckResult
 from fraisier.status import read_status
+from fraisier.strategies import StrategyResult
 
 
 def _make_deployer(tmp_path, **overrides):
@@ -129,6 +130,68 @@ class TestAutoRollbackOnHealthFailure:
 
         assert result.status == DeploymentStatus.ROLLED_BACK
         assert result.success is False
+
+
+class TestRollbackAbortsOnMigrationFailure:
+    """If migration rollback fails, do NOT proceed to git checkout."""
+
+    def test_rollback_aborts_on_migration_down_failure(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        deployer = _make_deployer(
+            tmp_path,
+            database={"strategy": "migrate", "confiture_config": "confiture.yaml"},
+        )
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 3
+
+        mock_strategy = MagicMock()
+        mock_strategy.rollback.return_value = StrategyResult(
+            success=False,
+            errors=["down migration 003 failed: file not found"],
+        )
+
+        with (
+            patch("fraisier.strategies.get_strategy", return_value=mock_strategy),
+            patch("subprocess.run") as mock_subprocess,
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_wait_for_health", return_value=True),
+        ):
+            result = deployer.rollback()
+
+        assert not result.success
+        assert result.status == DeploymentStatus.FAILED
+        assert "manual intervention required" in result.error_message.lower()
+        # Git checkout must NOT have been called
+        git_calls = [c for c in mock_subprocess.call_args_list if "checkout" in str(c)]
+        assert len(git_calls) == 0
+
+    def test_rollback_aborts_sets_clear_error_message(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        deployer = _make_deployer(
+            tmp_path,
+            database={"strategy": "migrate", "confiture_config": "confiture.yaml"},
+        )
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 2
+
+        mock_strategy = MagicMock()
+        mock_strategy.rollback.return_value = StrategyResult(
+            success=False,
+            errors=["Cannot apply down: 002_add_orders.down.sql not found"],
+        )
+
+        with (
+            patch("fraisier.strategies.get_strategy", return_value=mock_strategy),
+            patch("subprocess.run"),
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_wait_for_health", return_value=True),
+        ):
+            result = deployer.rollback()
+
+        assert "002_add_orders" in result.error_message
+        assert "manual intervention required" in result.error_message.lower()
 
 
 class TestStatusFileUpdates:
