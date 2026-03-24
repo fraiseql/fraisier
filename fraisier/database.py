@@ -45,250 +45,200 @@ def get_connection() -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
-def init_database() -> None:
-    """Initialize database schema following trinity pattern.
+def _tables_sql() -> str:
+    """SQL for write-side tables (tb_*)."""
+    return """
+        CREATE TABLE IF NOT EXISTS tb_fraise_state (
+            id TEXT NOT NULL UNIQUE,
+            identifier TEXT NOT NULL UNIQUE,
+            pk_fraise_state INTEGER PRIMARY KEY AUTOINCREMENT,
+            fraise_name TEXT NOT NULL,
+            environment_name TEXT NOT NULL,
+            job_name TEXT,
+            current_version TEXT,
+            last_deployed_at TEXT,
+            last_deployed_by TEXT,
+            status TEXT DEFAULT 'unknown',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(fraise_name, environment_name, job_name)
+        );
 
-    Trinity pattern conventions (aligned with PrintOptim):
-    - pk_* = Primary key for internal references
-      * SQLite: INTEGER AUTOINCREMENT (SQLite doesn't support BIGINT/GENERATED ALWAYS)
-      * PostgreSQL/Production: BIGINT GENERATED ALWAYS AS IDENTITY
-    - id = TEXT/UUID (public, API-exposed, cross-database sync)
-    - identifier = TEXT (business key, human-readable)
-    - fk_* = Foreign key references (always to pk_*, never id)
-    - tb_* = Write-side operational tables
-    - v_* = Read-side views
+        CREATE TABLE IF NOT EXISTS tb_deployment (
+            id TEXT NOT NULL UNIQUE,
+            identifier TEXT NOT NULL UNIQUE,
+            pk_deployment INTEGER PRIMARY KEY AUTOINCREMENT,
+            fk_fraise_state INTEGER REFERENCES tb_fraise_state(pk_fraise_state),
+            fraise_name TEXT NOT NULL,
+            environment_name TEXT NOT NULL,
+            job_name TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_seconds REAL,
+            old_version TEXT,
+            new_version TEXT,
+            status TEXT NOT NULL,
+            triggered_by TEXT,
+            triggered_by_user TEXT,
+            git_commit TEXT,
+            git_branch TEXT,
+            error_message TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
 
-    For multi-database reconciliation:
-    - id column enables UUID-based sync across databases
-    - identifier enables human-readable lookups
-    - pk_* enables efficient internal references
+        CREATE TABLE IF NOT EXISTS tb_webhook_event (
+            id TEXT NOT NULL UNIQUE,
+            identifier TEXT NOT NULL UNIQUE,
+            pk_webhook_event INTEGER PRIMARY KEY AUTOINCREMENT,
+            fk_deployment INTEGER REFERENCES tb_deployment(pk_deployment),
+            received_at TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            git_provider TEXT NOT NULL,
+            branch_name TEXT,
+            commit_sha TEXT,
+            sender TEXT,
+            payload TEXT,
+            processed INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
 
-    Note: SQLite uses INTEGER AUTOINCREMENT. When migrating to PostgreSQL,
-    use: ALTER TABLE RENAME TO _old; CREATE TABLE WITH BIGINT; MIGRATE DATA.
+        CREATE TABLE IF NOT EXISTS tb_deployment_lock (
+            pk_deployment_lock INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_name TEXT NOT NULL,
+            provider_name TEXT NOT NULL,
+            locked_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            UNIQUE(service_name, provider_name)
+        );
     """
+
+
+def _views_sql() -> str:
+    """SQL for read-side views (v_*)."""
+    return """
+        CREATE VIEW IF NOT EXISTS v_fraise_status AS
+        SELECT
+            fs.pk_fraise_state,
+            fs.id,
+            fs.identifier,
+            fs.fraise_name,
+            fs.environment_name,
+            fs.job_name,
+            fs.current_version,
+            fs.status,
+            fs.last_deployed_at,
+            fs.last_deployed_by,
+            (SELECT COUNT(*) FROM tb_deployment d
+             WHERE d.fk_fraise_state = fs.pk_fraise_state
+               AND d.status = 'success') as successful_deployments,
+            (SELECT COUNT(*) FROM tb_deployment d
+             WHERE d.fk_fraise_state = fs.pk_fraise_state
+               AND d.status = 'failed') as failed_deployments,
+            fs.created_at,
+            fs.updated_at
+        FROM tb_fraise_state fs;
+
+        CREATE VIEW IF NOT EXISTS v_deployment_history AS
+        SELECT
+            d.pk_deployment,
+            d.id,
+            d.identifier,
+            d.fraise_name,
+            d.environment_name,
+            d.job_name,
+            d.started_at,
+            d.completed_at,
+            d.duration_seconds,
+            d.old_version,
+            d.new_version,
+            d.status,
+            d.triggered_by,
+            d.triggered_by_user,
+            d.git_commit,
+            d.git_branch,
+            d.error_message,
+            CASE
+                WHEN d.old_version != d.new_version THEN 'upgrade'
+                WHEN d.old_version = d.new_version THEN 'redeploy'
+                ELSE 'unknown'
+            END as deployment_type,
+            d.created_at,
+            d.updated_at
+        FROM tb_deployment d
+        ORDER BY d.started_at DESC;
+
+        CREATE VIEW IF NOT EXISTS v_webhook_event_history AS
+        SELECT
+            we.pk_webhook_event,
+            we.id,
+            we.identifier,
+            we.git_provider,
+            we.event_type,
+            we.branch_name,
+            we.commit_sha,
+            we.sender,
+            we.received_at,
+            we.processed,
+            we.fk_deployment,
+            d.id as deployment_id,
+            d.fraise_name,
+            d.environment_name,
+            we.created_at,
+            we.updated_at
+        FROM tb_webhook_event we
+        LEFT JOIN tb_deployment d ON we.fk_deployment = d.pk_deployment
+        ORDER BY we.received_at DESC;
+    """
+
+
+def _indexes_sql() -> str:
+    """SQL for all indexes."""
+    return """
+        CREATE INDEX IF NOT EXISTS idx_fraise_state_name_env
+            ON tb_fraise_state(fraise_name, environment_name);
+        CREATE INDEX IF NOT EXISTS idx_fraise_state_identifier
+            ON tb_fraise_state(identifier);
+        CREATE INDEX IF NOT EXISTS idx_fraise_state_id
+            ON tb_fraise_state(id);
+
+        CREATE INDEX IF NOT EXISTS idx_deployment_fraise_state_fk
+            ON tb_deployment(fk_fraise_state);
+        CREATE INDEX IF NOT EXISTS idx_deployment_started_at
+            ON tb_deployment(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_deployment_identifier
+            ON tb_deployment(identifier);
+        CREATE INDEX IF NOT EXISTS idx_deployment_id
+            ON tb_deployment(id);
+        CREATE INDEX IF NOT EXISTS idx_deployment_status
+            ON tb_deployment(status);
+
+        CREATE INDEX IF NOT EXISTS idx_webhook_event_deployment_fk
+            ON tb_webhook_event(fk_deployment);
+        CREATE INDEX IF NOT EXISTS idx_webhook_event_received_at
+            ON tb_webhook_event(received_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_webhook_event_identifier
+            ON tb_webhook_event(identifier);
+        CREATE INDEX IF NOT EXISTS idx_webhook_event_id
+            ON tb_webhook_event(id);
+        CREATE INDEX IF NOT EXISTS idx_webhook_event_processed
+            ON tb_webhook_event(processed);
+
+        CREATE INDEX IF NOT EXISTS idx_deployment_lock_service_provider
+            ON tb_deployment_lock(service_name, provider_name);
+        CREATE INDEX IF NOT EXISTS idx_deployment_lock_expires_at
+            ON tb_deployment_lock(expires_at);
+    """
+
+
+def init_database() -> None:
+    """Initialize database schema following trinity pattern."""
     with get_connection() as conn:
-        conn.executescript("""
-            -- ================================================================
-            -- WRITE SIDE (tb_* tables) - Trinity Pattern
-            -- ================================================================
-
-            -- Current state of each fraise/environment
-            -- Trinity identifiers follow PrintOptim order: id → identifier → pk_*
-            CREATE TABLE IF NOT EXISTS tb_fraise_state (
-                id TEXT NOT NULL UNIQUE,          -- Public UUID
-                identifier TEXT NOT NULL UNIQUE,  -- fraise:env[:job]
-                pk_fraise_state INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                -- Foreign Keys (if any)
-
-                -- Domain Columns
-                fraise_name TEXT NOT NULL,
-                environment_name TEXT NOT NULL,
-                job_name TEXT,
-                current_version TEXT,
-                last_deployed_at TEXT,
-                last_deployed_by TEXT,
-                status TEXT DEFAULT 'unknown',
-
-                -- Audit Trail
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-
-                -- Natural Key
-                UNIQUE(fraise_name, environment_name, job_name)
-            );
-
-            -- Deployment history log
-            -- Trinity identifiers follow PrintOptim order: id → identifier → pk_*
-            CREATE TABLE IF NOT EXISTS tb_deployment (
-                id TEXT NOT NULL UNIQUE,          -- Public UUID
-                identifier TEXT NOT NULL UNIQUE,  -- fraise:env:timestamp
-                pk_deployment INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                -- Foreign Keys
-                fk_fraise_state INTEGER REFERENCES tb_fraise_state(pk_fraise_state),
-
-                -- Domain Columns
-                fraise_name TEXT NOT NULL,
-                environment_name TEXT NOT NULL,
-                job_name TEXT,
-                started_at TEXT NOT NULL,
-                completed_at TEXT,
-                duration_seconds REAL,
-                old_version TEXT,
-                new_version TEXT,
-                status TEXT NOT NULL,
-                triggered_by TEXT,
-                triggered_by_user TEXT,
-                git_commit TEXT,
-                git_branch TEXT,
-                error_message TEXT,
-                details TEXT,
-
-                -- Audit Trail
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            -- Webhook events received
-            -- Trinity identifiers follow PrintOptim order: id → identifier → pk_*
-            CREATE TABLE IF NOT EXISTS tb_webhook_event (
-                id TEXT NOT NULL UNIQUE,          -- Public UUID
-                identifier TEXT NOT NULL UNIQUE,  -- provider:timestamp:hash
-                pk_webhook_event INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                -- Foreign Keys
-                fk_deployment INTEGER REFERENCES tb_deployment(pk_deployment),
-
-                -- Domain Columns
-                received_at TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                git_provider TEXT NOT NULL,
-                branch_name TEXT,
-                commit_sha TEXT,
-                sender TEXT,
-                payload TEXT,
-                processed INTEGER DEFAULT 0,
-
-                -- Audit Trail
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            -- Deployment locks to prevent concurrent deployments
-            CREATE TABLE IF NOT EXISTS tb_deployment_lock (
-                pk_deployment_lock INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                service_name TEXT NOT NULL,
-                provider_name TEXT NOT NULL,
-                locked_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-
-                UNIQUE(service_name, provider_name)
-            );
-
-            -- ================================================================
-            -- READ SIDE (v_* views) - Trinity Pattern
-            -- ================================================================
-
-            -- Fraise status view with trinity identifiers
-            CREATE VIEW IF NOT EXISTS v_fraise_status AS
-            SELECT
-                fs.pk_fraise_state,
-                fs.id,
-                fs.identifier,
-                fs.fraise_name,
-                fs.environment_name,
-                fs.job_name,
-                fs.current_version,
-                fs.status,
-                fs.last_deployed_at,
-                fs.last_deployed_by,
-                (SELECT COUNT(*) FROM tb_deployment d
-                 WHERE d.fk_fraise_state = fs.pk_fraise_state
-                   AND d.status = 'success') as successful_deployments,
-                (SELECT COUNT(*) FROM tb_deployment d
-                 WHERE d.fk_fraise_state = fs.pk_fraise_state
-                   AND d.status = 'failed') as failed_deployments,
-                fs.created_at,
-                fs.updated_at
-            FROM tb_fraise_state fs;
-
-            -- Deployment history view with trinity identifiers and computed fields
-            CREATE VIEW IF NOT EXISTS v_deployment_history AS
-            SELECT
-                d.pk_deployment,
-                d.id,
-                d.identifier,
-                d.fraise_name,
-                d.environment_name,
-                d.job_name,
-                d.started_at,
-                d.completed_at,
-                d.duration_seconds,
-                d.old_version,
-                d.new_version,
-                d.status,
-                d.triggered_by,
-                d.triggered_by_user,
-                d.git_commit,
-                d.git_branch,
-                d.error_message,
-                CASE
-                    WHEN d.old_version != d.new_version THEN 'upgrade'
-                    WHEN d.old_version = d.new_version THEN 'redeploy'
-                    ELSE 'unknown'
-                END as deployment_type,
-                d.created_at,
-                d.updated_at
-            FROM tb_deployment d
-            ORDER BY d.started_at DESC;
-
-            -- Webhook event view with trinity identifiers
-            CREATE VIEW IF NOT EXISTS v_webhook_event_history AS
-            SELECT
-                we.pk_webhook_event,
-                we.id,
-                we.identifier,
-                we.git_provider,
-                we.event_type,
-                we.branch_name,
-                we.commit_sha,
-                we.sender,
-                we.received_at,
-                we.processed,
-                we.fk_deployment,
-                d.id as deployment_id,
-                d.fraise_name,
-                d.environment_name,
-                we.created_at,
-                we.updated_at
-            FROM tb_webhook_event we
-            LEFT JOIN tb_deployment d ON we.fk_deployment = d.pk_deployment
-            ORDER BY we.received_at DESC;
-
-            -- ================================================================
-            -- INDEXES - Optimized for common queries
-            -- ================================================================
-
-            -- Fraise state lookups
-            CREATE INDEX IF NOT EXISTS idx_fraise_state_name_env
-                ON tb_fraise_state(fraise_name, environment_name);
-            CREATE INDEX IF NOT EXISTS idx_fraise_state_identifier
-                ON tb_fraise_state(identifier);
-            CREATE INDEX IF NOT EXISTS idx_fraise_state_id
-                ON tb_fraise_state(id);
-
-            -- Deployment lookups
-            CREATE INDEX IF NOT EXISTS idx_deployment_fraise_state_fk
-                ON tb_deployment(fk_fraise_state);
-            CREATE INDEX IF NOT EXISTS idx_deployment_started_at
-                ON tb_deployment(started_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_deployment_identifier
-                ON tb_deployment(identifier);
-            CREATE INDEX IF NOT EXISTS idx_deployment_id
-                ON tb_deployment(id);
-            CREATE INDEX IF NOT EXISTS idx_deployment_status
-                ON tb_deployment(status);
-
-            -- Webhook lookups
-            CREATE INDEX IF NOT EXISTS idx_webhook_event_deployment_fk
-                ON tb_webhook_event(fk_deployment);
-            CREATE INDEX IF NOT EXISTS idx_webhook_event_received_at
-                ON tb_webhook_event(received_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_webhook_event_identifier
-                ON tb_webhook_event(identifier);
-            CREATE INDEX IF NOT EXISTS idx_webhook_event_id
-                ON tb_webhook_event(id);
-            CREATE INDEX IF NOT EXISTS idx_webhook_event_processed
-                ON tb_webhook_event(processed);
-
-            -- Deployment lock lookups
-            CREATE INDEX IF NOT EXISTS idx_deployment_lock_service_provider
-                ON tb_deployment_lock(service_name, provider_name);
-            CREATE INDEX IF NOT EXISTS idx_deployment_lock_expires_at
-                ON tb_deployment_lock(expires_at);
-        """)
+        conn.executescript(_tables_sql())
+        conn.executescript(_views_sql())
+        conn.executescript(_indexes_sql())
         conn.commit()
 
 
