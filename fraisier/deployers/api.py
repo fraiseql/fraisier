@@ -127,16 +127,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             return result
 
         except _DeploymentTimeout as e:
-            duration = time.time() - start_time
-            logger.error(str(e))
-            self._write_status("failed", error_message=str(e))
-            result = DeploymentResult(
-                success=False,
-                status=DeploymentStatus.FAILED,
-                old_version=old_version,
-                duration_seconds=duration,
-                error_message=str(e),
-            )
+            result = self._handle_timeout(e, old_version, start_time)
             self._complete_db_record(db_pk, result)
             return result
 
@@ -159,6 +150,35 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
         finally:
             _disarm_timeout(old_handler)
+
+    def _handle_timeout(
+        self,
+        exc: _DeploymentTimeout,
+        old_version: str | None,
+        start_time: float,
+    ) -> DeploymentResult:
+        """Handle a deployment timeout, attempting rollback if possible."""
+        logger.error(str(exc))
+
+        if self._previous_sha:
+            logger.warning(
+                "Timeout — attempting rollback to %s", self._previous_sha[:8]
+            )
+            rollback_result = self.rollback()
+            duration = time.time() - start_time
+            return self._build_timeout_rollback_result(
+                rollback_result, old_version, duration, str(exc)
+            )
+
+        duration = time.time() - start_time
+        self._write_status("failed", error_message=str(exc))
+        return DeploymentResult(
+            success=False,
+            status=DeploymentStatus.FAILED,
+            old_version=old_version,
+            duration_seconds=duration,
+            error_message=str(exc),
+        )
 
     def _run_strategy(self) -> None:
         """Run database migrations via deployment strategy."""
@@ -252,6 +272,55 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     "fraise": self.fraise_name,
                     "environment": self.environment,
                     "health_check_url": self.health_check_url,
+                    "rollback_error": rollback_result.error_message,
+                },
+            ),
+        )
+
+    def _build_timeout_rollback_result(
+        self,
+        rollback_result: DeploymentResult,
+        old_version: str | None,
+        duration: float,
+        timeout_message: str,
+    ) -> DeploymentResult:
+        """Build a DeploymentResult after a rollback triggered by timeout."""
+        if rollback_result.success:
+            self._write_status("rolled_back", commit_sha=rollback_result.new_version)
+            return DeploymentResult(
+                success=False,
+                status=DeploymentStatus.ROLLED_BACK,
+                old_version=old_version,
+                new_version=rollback_result.new_version,
+                duration_seconds=duration,
+                error_message=f"Timed out; rolled back successfully. {timeout_message}",
+                error=DeploymentError(
+                    timeout_message,
+                    context={
+                        "fraise": self.fraise_name,
+                        "environment": self.environment,
+                    },
+                ),
+            )
+
+        logger.critical(
+            "TIMEOUT ROLLBACK FAILED — service may be in broken state: %s",
+            rollback_result.error_message,
+        )
+        self._write_status("failed", error_message=timeout_message)
+        return DeploymentResult(
+            success=False,
+            status=DeploymentStatus.FAILED,
+            old_version=old_version,
+            duration_seconds=duration,
+            error_message=(
+                f"Timed out AND rollback failed: {rollback_result.error_message}"
+            ),
+            error=DeploymentError(
+                "Timeout and rollback both failed",
+                context={
+                    "fraise": self.fraise_name,
+                    "environment": self.environment,
                     "rollback_error": rollback_result.error_message,
                 },
             ),
