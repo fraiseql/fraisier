@@ -16,19 +16,13 @@ class BitbucketProvider(GitProvider):
     """
 
     name = "bitbucket"
+    signature_header = "X-Hub-Signature"
+    event_header = "X-Event-Key"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.webhook_secret = config.get("webhook_secret") or config.get("secret")
         self.is_server = config.get("server", False)  # Bitbucket Server vs Cloud
-
-    def get_signature_header_name(self) -> str:
-        if self.is_server:
-            return "X-Hub-Signature"
-        return "X-Hub-Signature"  # Cloud also uses this for IP allowlisting
-
-    def get_event_header_name(self) -> str:
-        return "X-Event-Key"
 
     def get_default_base_url(self) -> str:
         return "https://bitbucket.org"

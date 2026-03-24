@@ -15,17 +15,12 @@ class GiteaProvider(GitProvider):
     """
 
     name = "gitea"
+    signature_header = "X-Gitea-Signature"
+    event_header = "X-Gitea-Event"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.webhook_secret = config.get("webhook_secret") or config.get("secret")
-
-    def get_signature_header_name(self) -> str:
-        # Gitea can use either header depending on version
-        return "X-Gitea-Signature"
-
-    def get_event_header_name(self) -> str:
-        return "X-Gitea-Event"
 
     def get_default_base_url(self) -> str:
         # No default - must be configured for self-hosted

@@ -55,6 +55,8 @@ class GitProvider(ABC):
     """
 
     name: str  # Provider identifier (e.g., "github", "gitlab")
+    signature_header: str  # Header containing webhook signature
+    event_header: str  # Header containing event type
 
     def __init__(self, config: dict[str, Any]):
         """Initialize provider with configuration.
@@ -70,13 +72,6 @@ class GitProvider(ABC):
 
         Returns False when no secret is configured (secure default).
         Subclasses implement _verify_signature for provider-specific HMAC logic.
-
-        Args:
-            payload: Raw request body
-            headers: Request headers
-
-        Returns:
-            True if signature is valid
         """
         if not self.webhook_secret:
             return False
@@ -84,44 +79,23 @@ class GitProvider(ABC):
 
     @abstractmethod
     def _verify_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
-        """Provider-specific signature verification.
-
-        Only called when webhook_secret is configured.
-        """
+        """Provider-specific signature verification."""
         pass
 
     @abstractmethod
     def parse_webhook_event(
         self, headers: dict[str, str], payload: dict
     ) -> WebhookEvent:
-        """Parse webhook payload into normalized event.
-
-        Args:
-            headers: Request headers
-            payload: Parsed JSON payload
-
-        Returns:
-            Normalized WebhookEvent
-        """
+        """Parse webhook payload into normalized event."""
         pass
 
-    @abstractmethod
     def get_signature_header_name(self) -> str:
-        """Get the header name containing the webhook signature.
+        """Get the header name containing the webhook signature."""
+        return self.signature_header
 
-        Returns:
-            Header name (e.g., "X-Hub-Signature-256" for GitHub)
-        """
-        pass
-
-    @abstractmethod
     def get_event_header_name(self) -> str:
-        """Get the header name containing the event type.
-
-        Returns:
-            Header name (e.g., "X-GitHub-Event" for GitHub)
-        """
-        pass
+        """Get the header name containing the event type."""
+        return self.event_header
 
     def get_clone_url(self, repository: str) -> str:
         """Get clone URL for a repository.

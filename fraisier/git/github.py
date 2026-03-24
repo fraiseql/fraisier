@@ -16,17 +16,13 @@ class GitHubProvider(GitProvider):
     """
 
     name = "github"
+    signature_header = "X-Hub-Signature-256"
+    event_header = "X-GitHub-Event"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         # Support both naming conventions
         self.webhook_secret = config.get("webhook_secret") or config.get("secret")
-
-    def get_signature_header_name(self) -> str:
-        return "X-Hub-Signature-256"
-
-    def get_event_header_name(self) -> str:
-        return "X-GitHub-Event"
 
     def get_default_base_url(self) -> str:
         return "https://github.com"

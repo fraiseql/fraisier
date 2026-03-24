@@ -15,16 +15,12 @@ class GitLabProvider(GitProvider):
     """
 
     name = "gitlab"
+    signature_header = "X-Gitlab-Token"
+    event_header = "X-Gitlab-Event"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.webhook_secret = config.get("webhook_secret") or config.get("secret_token")
-
-    def get_signature_header_name(self) -> str:
-        return "X-Gitlab-Token"
-
-    def get_event_header_name(self) -> str:
-        return "X-Gitlab-Event"
 
     def get_default_base_url(self) -> str:
         return "https://gitlab.com"
