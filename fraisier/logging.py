@@ -100,7 +100,10 @@ class ContextualLogger:
             "secret",
             "token",
             "auth",
+            "key",
+            "credential",
         }
+        self._safe_keys = {"primary_key", "foreign_key", "sort_key", "cache_key"}
 
     def _get_context(self) -> dict[str, Any]:
         """Get merged context from all active scopes.
@@ -124,7 +127,10 @@ class ContextualLogger:
         """
         redacted = {}
         for key, value in data.items():
-            if any(sensitive in key.lower() for sensitive in self.redact_keys):
+            lower_key = key.lower()
+            if lower_key in self._safe_keys:
+                redacted[key] = value
+            elif any(s in lower_key for s in self.redact_keys):
                 redacted[key] = "***REDACTED***"
             elif isinstance(value, dict):
                 redacted[key] = self._redact_dict(value)

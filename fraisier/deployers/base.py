@@ -19,6 +19,7 @@ class DeploymentStatus(Enum):
     SUCCESS = "success"
     FAILED = "failed"
     ROLLED_BACK = "rolled_back"
+    ROLLBACK_FAILED = "rollback_failed"
 
 
 @dataclass

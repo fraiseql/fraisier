@@ -178,7 +178,6 @@ class TestHealthCheckManager:
         assert result.success is True
         assert checker.check.call_count == 1
 
-
     def test_manager_stops_after_max_retries(self):
         checker = MagicMock()
         fail = HealthCheckResult(
@@ -226,9 +225,7 @@ class TestHealthCheckManager:
         checker.check_type = "http"
 
         manager = HealthCheckManager(provider="test")
-        result = manager.check_with_retries(
-            checker, max_retries=5, initial_delay=0.01
-        )
+        result = manager.check_with_retries(checker, max_retries=5, initial_delay=0.01)
 
         assert result.success is True
         assert checker.check.call_count == 1
@@ -269,9 +266,7 @@ class TestHealthCheckManager:
             return True
 
         manager = HealthCheckManager(provider="test")
-        result = await manager.async_check_with_retries(
-            succeeding_check, max_retries=5
-        )
+        result = await manager.async_check_with_retries(succeeding_check, max_retries=5)
 
         assert result is True
         assert call_count == 1

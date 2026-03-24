@@ -188,6 +188,11 @@ class TestRestoreMigrateStrategy:
         )
         mock_up.assert_called_once()
 
+    def test_rejects_shell_metacharacters_in_restore_command(self):
+        """RestoreMigrateStrategy must reject commands with shell metacharacters."""
+        with pytest.raises(ValueError, match="metacharacter"):
+            RestoreMigrateStrategy("pg_restore dump.sql; rm -rf /")
+
     @patch("fraisier.strategies.migrate_up")
     @patch("fraisier.strategies.subprocess.run")
     def test_execute_uses_list_not_shell(self, mock_run, mock_up):
@@ -195,14 +200,13 @@ class TestRestoreMigrateStrategy:
         mock_run.return_value = MagicMock(returncode=0)
         mock_up.return_value = MigrationResult(success=True, steps_applied=0)
 
-        strategy = RestoreMigrateStrategy("pg_restore dump.sql; rm -rf /")
+        strategy = RestoreMigrateStrategy("pg_restore dump.sql")
         strategy.execute(CONFIG, migrations_dir=MDIR)
 
         call_args = mock_run.call_args
         cmd = call_args[0][0]
-        # Must be a list — semicolon becomes a literal arg, not shell separator
         assert isinstance(cmd, list)
-        assert "shell" not in call_args[1]  # shell kwarg must not be passed
+        assert "shell" not in call_args[1]
 
     @patch("fraisier.strategies.subprocess.run")
     def test_execute_restore_failure_raises(self, mock_run):

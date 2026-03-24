@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.2.0 (2026-03-24)
+
+Bulletproof deploy + migrate + rollback pipeline with security hardening.
+
+### Critical Fixes
+- **Git rollback on migration failure**: When migration fails after git checkout,
+  code is now automatically rolled back to the previous SHA and service restarted
+- **ROLLBACK_FAILED status**: When rollback itself fails, operators receive a
+  critical notification with both the original and rollback errors
+- **Timeout rollback failures** now correctly report `ROLLBACK_FAILED` status
+  instead of generic `FAILED`
+
+### Security Hardening
+- Webhook server **refuses to start** without `FRAISIER_WEBHOOK_SECRET` (minimum 32 chars)
+- Shell commands from config (`restore_command`, health check `command`) are validated
+  for metacharacters before execution — prevents command injection
+- Log redaction expanded: any key containing `password`, `secret`, `token`, `key`,
+  `auth`, or `credential` is redacted (safe keys like `primary_key` excluded)
+- `validate_file_path()` gains `strict` mode that rejects symlinks
+- Docker CP paths now require absolute container paths
+
+### Code Quality
+- Health check implementations (`_check_http`, `_check_tcp`, `_check_exec`)
+  extracted to `DeploymentProvider` base class — eliminated duplication between
+  bare metal and Docker Compose providers
+- Rate limiter extracted to `webhook_rate_limit.py`
+- `RestoreMigrateStrategy` validates restore_command at init, not at execution
+
+### Cleanup
+- Removed unused `DeploymentLock` (database-backed distributed locking) and
+  `DeploymentLockedError` — file-based `fcntl.flock` is the documented scope
+- `_restore_previous_state()` extracted as shared method in `APIDeployer`
+
+### Documentation
+- `docs/failure-modes.md`: Decision tree for every failure scenario
+- `docs/security.md`: Threat model, validation rules, log redaction
+- README: "When NOT to use Fraisier" and honest comparison table
+
+### Test Improvements
+- Integration test harness for confiture migrations (requires PostgreSQL)
+- Scaffold artifact validation (no unexpanded templates)
+- `pytest.mark.integration` marker for external-service tests
+
 ## v0.1.0 (2026-03-24)
 
 First published release. Atomic deploy + migrate with surgical rollback

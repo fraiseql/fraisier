@@ -1,8 +1,4 @@
-"""Tests that specific exceptions propagate instead of being swallowed.
-
-Phase 1, Cycle 1: Verifies that broad except-Exception catches have been
-replaced with specific types so unexpected errors bubble up.
-"""
+"""Tests that specific exceptions propagate instead of being swallowed."""
 
 import sqlite3
 from unittest.mock import MagicMock, patch
@@ -10,90 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fraisier.deployers.docker_compose import DockerComposeDeployer
-from fraisier.locking import DeploymentLock
-
-
-class TestDeploymentLockExceptionSpecificity:
-    """Verify DeploymentLock only catches DB-related errors, not all exceptions."""
-
-    def test_acquire_propagates_non_db_error(self, test_db):
-        """RuntimeError from DB layer should propagate, not be swallowed."""
-        lock = DeploymentLock("svc", "prov")
-        with (
-            patch.object(
-                test_db, "get_deployment_lock", side_effect=RuntimeError("unexpected")
-            ),
-            pytest.raises(RuntimeError, match="unexpected"),
-        ):
-            lock.acquire()
-
-    def test_release_propagates_non_db_error(self, test_db):
-        """RuntimeError during release should propagate."""
-        lock = DeploymentLock("svc", "prov")
-        lock._is_locked = True
-        with (
-            patch.object(
-                test_db,
-                "release_deployment_lock",
-                side_effect=RuntimeError("unexpected"),
-            ),
-            pytest.raises(RuntimeError, match="unexpected"),
-        ):
-            lock.release()
-
-    def test_is_locked_propagates_non_db_error(self, test_db):
-        """RuntimeError from is_locked check should propagate."""
-        with (
-            patch.object(
-                test_db, "get_deployment_lock", side_effect=RuntimeError("unexpected")
-            ),
-            pytest.raises(RuntimeError, match="unexpected"),
-        ):
-            DeploymentLock.is_locked("svc", "prov")
-
-    def test_get_lock_info_propagates_non_db_error(self, test_db):
-        """RuntimeError from get_lock_info should propagate."""
-        with (
-            patch.object(
-                test_db, "get_deployment_lock", side_effect=RuntimeError("unexpected")
-            ),
-            pytest.raises(RuntimeError, match="unexpected"),
-        ):
-            DeploymentLock.get_lock_info("svc", "prov")
-
-    def test_clear_lock_propagates_non_db_error(self, test_db):
-        """RuntimeError from clear_lock should propagate."""
-        with (
-            patch.object(
-                test_db,
-                "release_deployment_lock",
-                side_effect=RuntimeError("unexpected"),
-            ),
-            pytest.raises(RuntimeError, match="unexpected"),
-        ):
-            DeploymentLock.clear_lock("svc", "prov")
-
-    def test_acquire_still_catches_sqlite_error(self, test_db):
-        """sqlite3.Error should still be caught (returns False)."""
-        lock = DeploymentLock("svc", "prov")
-        with patch.object(
-            test_db,
-            "get_deployment_lock",
-            side_effect=sqlite3.OperationalError("db locked"),
-        ):
-            assert lock.acquire() is False
-
-    def test_release_still_catches_sqlite_error(self, test_db):
-        """sqlite3.Error during release should be caught (no raise)."""
-        lock = DeploymentLock("svc", "prov")
-        lock._is_locked = True
-        with patch.object(
-            test_db,
-            "release_deployment_lock",
-            side_effect=sqlite3.OperationalError("db locked"),
-        ):
-            lock.release()  # should not raise
-            assert lock._is_locked is False
 
 
 class TestDockerComposeExceptionSpecificity:

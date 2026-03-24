@@ -96,7 +96,12 @@ class NotificationDispatcher:
 
     def notify(self, event: DeployEvent) -> None:
         """Dispatch event to all matching notifiers. Never raises."""
-        notifiers = self._handlers.get(event.event_type, [])
+        # rollback_failed is critical — route to failure handlers
+        if event.event_type == "rollback_failed":
+            event_key = "failure"
+        else:
+            event_key = event.event_type
+        notifiers = self._handlers.get(event_key, [])
         for notifier in notifiers:
             try:
                 notifier.notify(event)

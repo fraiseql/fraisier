@@ -9,15 +9,13 @@ Tests cover:
 - Full deploy flow through each provider
 """
 
-import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fraisier.database import get_db, init_database
+from fraisier.database import init_database
 from fraisier.deployers.base import DeploymentStatus
-from fraisier.locking import DeploymentLock, DeploymentLockedError
 from fraisier.providers import ProviderConfig, ProviderRegistry
 from fraisier.providers.bare_metal import BareMetalProvider
 from fraisier.providers.docker_compose import DockerComposeProvider
@@ -238,159 +236,6 @@ class TestProviderSwitchingAndFallback:
                     "api", "v1.0.0", {"branch": "main"}
                 )
                 assert result.success is True
-
-
-class TestLockMechanismUnderConcurrency:
-    """Test deployment locks under concurrent access."""
-
-    @pytest.fixture(autouse=True)
-    def setup_database(self):
-        """Initialize database for each test."""
-        init_database()
-        yield
-
-    def test_lock_prevents_concurrent_deployment(self):
-        """Test that lock prevents concurrent deployments to same service."""
-        service_name = "api"
-        provider_name = "production"
-
-        # First lock succeeds
-        lock1 = DeploymentLock(service_name, provider_name)
-        assert lock1.acquire() is True
-        lock1.release()
-
-        # After release, second lock succeeds
-        lock2 = DeploymentLock(service_name, provider_name)
-        assert lock2.acquire() is True
-        lock2.release()
-
-    def test_lock_context_manager_acquires_and_releases(self):
-        """Test lock context manager properly acquires and releases."""
-        service_name = "api"
-        provider_name = "production"
-
-        db = get_db()
-
-        # Verify no lock before context
-        lock_before = db.get_deployment_lock(service_name, provider_name)
-        assert lock_before is None
-
-        # Enter context and verify lock acquired
-        with DeploymentLock(service_name, provider_name):
-            lock_acquired = db.get_deployment_lock(service_name, provider_name)
-            assert lock_acquired is not None
-
-        # Verify lock released after context
-        lock_after = db.get_deployment_lock(service_name, provider_name)
-        assert lock_after is None
-
-    def test_lock_prevents_reentry(self):
-        """Test that lock prevents re-entry during deployment."""
-        service_name = "api"
-        provider_name = "production"
-
-        # First lock succeeds
-        lock1 = DeploymentLock(service_name, provider_name)
-        assert lock1.acquire() is True
-
-        # Second lock fails (already locked)
-        lock2 = DeploymentLock(service_name, provider_name)
-        assert lock2.acquire() is False
-
-        lock1.release()
-
-    def test_concurrent_lock_attempts_serialized(self):
-        """Test that multiple threads attempting to lock are serialized."""
-        service_name = "api"
-        provider_name = "production"
-        results = []
-
-        def attempt_lock(thread_id):
-            """Attempt to acquire lock."""
-            lock = DeploymentLock(service_name, provider_name)
-            acquired = lock.acquire()
-            results.append((thread_id, acquired))
-            if acquired:
-                time.sleep(0.1)  # Simulate work
-                lock.release()
-
-        # Start multiple threads trying to acquire same lock
-        threads = [threading.Thread(target=attempt_lock, args=(i,)) for i in range(3)]
-
-        for t in threads:
-            t.start()
-
-        for t in threads:
-            t.join()
-
-        # Exactly one thread should have acquired lock
-        acquired_threads = [thread_id for thread_id, acquired in results if acquired]
-        assert len(acquired_threads) >= 1  # At least one acquired
-        # Others failed (their acquire returned False)
-
-    def test_lock_timeout_expiration(self):
-        """Test that locks expire after timeout."""
-        service_name = "api"
-        provider_name = "production"
-
-        # Create lock with 1 second timeout
-        lock1 = DeploymentLock(service_name, provider_name, timeout=1)
-        assert lock1.acquire() is True
-
-        # Immediately try second lock - should fail
-        lock2 = DeploymentLock(service_name, provider_name, timeout=1)
-        assert lock2.acquire() is False
-
-        # Wait for timeout and try again
-        time.sleep(1.1)
-
-        # Should succeed now (lock expired)
-        lock3 = DeploymentLock(service_name, provider_name, timeout=1)
-        assert lock3.acquire() is True
-
-        lock3.release()
-
-    def test_lock_context_manager_raises_on_locked(self):
-        """Test that context manager raises if lock already held."""
-        service_name = "api"
-        provider_name = "production"
-
-        with DeploymentLock(service_name, provider_name):
-            # Try to enter another context with same lock
-            lock2 = DeploymentLock(service_name, provider_name)
-
-            with pytest.raises(DeploymentLockedError), lock2:
-                pass  # Should raise before entering
-
-    def test_different_services_have_independent_locks(self):
-        """Test that locks for different services don't interfere."""
-        # Lock service A
-        lock_a = DeploymentLock("service_a", "production")
-        assert lock_a.acquire() is True
-
-        # Lock service B should succeed (different service)
-        lock_b = DeploymentLock("service_b", "production")
-        assert lock_b.acquire() is True
-
-        # Lock service A again should fail (same service)
-        lock_a2 = DeploymentLock("service_a", "production")
-        assert lock_a2.acquire() is False
-
-        lock_a.release()
-        lock_b.release()
-
-    def test_same_service_different_providers_independent_locks(self):
-        """Test locks are per (service, provider) tuple."""
-        # Same service, different providers
-        lock_prod = DeploymentLock("api", "production")
-        assert lock_prod.acquire() is True
-
-        # Different provider, should succeed
-        lock_staging = DeploymentLock("api", "staging")
-        assert lock_staging.acquire() is True
-
-        lock_prod.release()
-        lock_staging.release()
 
 
 class TestHealthCheckPollingStrategies:

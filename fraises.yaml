@@ -1,0 +1,31 @@
+# Fraisier Configuration
+# See https://github.com/your-org/fraisier for full documentation
+
+fraises:
+  my_app:
+    type: api
+    description: My application
+    environments:
+      development:
+        name: my-app-dev
+        branch: dev
+        app_path: /var/www/my-app-dev
+        systemd_service: my-app-dev.service
+        health_check:
+          url: http://localhost:8000/health
+          timeout: 30
+
+      production:
+        name: my-app
+        branch: main
+        app_path: /var/www/my-app
+        systemd_service: my-app.service
+        health_check:
+          url: http://localhost:8000/health
+          timeout: 30
+
+environments:
+  development:
+    server: dev.example.com
+  production:
+    server: prod.example.com

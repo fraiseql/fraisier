@@ -299,68 +299,8 @@ class BareMetalProvider(DeploymentProvider):
 
     def _health_check_dispatch(self):
         dispatch = super()._health_check_dispatch()
-        dispatch[HealthCheckType.EXEC] = self._check_exec
         dispatch[HealthCheckType.SYSTEMD] = self._check_systemd
         return dispatch
-
-    async def _check_http(self, health_check: HealthCheck) -> bool:
-        """Check HTTP endpoint."""
-        if not health_check.url:
-            logger.error("HTTP health check requires 'url'")
-            return False
-
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=health_check.timeout) as client:
-                response = await client.get(health_check.url)
-                return response.status_code < 400
-
-        except ImportError:
-            logger.error("httpx not installed. Install with: pip install httpx")
-            return False
-        except Exception as e:
-            logger.debug(f"HTTP health check failed: {e}")
-            return False
-
-    async def _check_tcp(self, health_check: HealthCheck) -> bool:
-        """Check TCP connectivity."""
-        if not health_check.port:
-            logger.error("TCP health check requires 'port'")
-            return False
-
-        try:
-            _reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", health_check.port),
-                timeout=health_check.timeout,
-            )
-            writer.close()
-            await writer.wait_closed()
-            return True
-
-        except TimeoutError:
-            logger.debug(f"TCP connection timeout on port {health_check.port}")
-            return False
-        except Exception as e:
-            logger.debug(f"TCP health check failed: {e}")
-            return False
-
-    async def _check_exec(self, health_check: HealthCheck) -> bool:
-        """Check using exec command."""
-        if not health_check.command:
-            logger.error("Exec health check requires 'command'")
-            return False
-
-        try:
-            exit_code, _, _ = await self.execute_command(
-                health_check.command,
-                timeout=health_check.timeout,
-            )
-            return exit_code == 0
-
-        except Exception as e:
-            logger.debug(f"Exec health check failed: {e}")
-            return False
 
     async def _check_systemd(self, health_check: HealthCheck) -> bool:
         """Check systemd service status."""

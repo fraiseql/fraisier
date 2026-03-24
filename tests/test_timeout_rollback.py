@@ -60,8 +60,8 @@ class TestTimeoutRollback:
         assert result.status == DeploymentStatus.FAILED
         assert result.success is False
 
-    def test_timeout_with_failed_rollback_returns_failed(self, test_db):
-        """When rollback also fails after timeout, result should be FAILED."""
+    def test_timeout_with_failed_rollback_returns_rollback_failed(self, test_db):
+        """When rollback also fails after timeout, result is ROLLBACK_FAILED."""
         deployer = _make_api_deployer()
         deployer._previous_sha = "abc123def456"
 
@@ -79,5 +79,5 @@ class TestTimeoutRollback:
         ):
             result = deployer.execute()
 
-        assert result.status == DeploymentStatus.FAILED
+        assert result.status == DeploymentStatus.ROLLBACK_FAILED
         assert "rollback" in (result.error_message or "").lower()

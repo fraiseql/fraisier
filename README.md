@@ -40,6 +40,22 @@ for migrations on bare metal or Docker Compose. You've been burned by:
 - A failed migration with no way to roll back the schema
 - A rollback that reverted the app but left the schema inconsistent
 
+### When NOT to use Fraisier
+
+- **Kubernetes**: Use Helm, ArgoCD, or Flux. Fraisier manages systemd services and Docker Compose, not pods.
+- **Multiple databases**: Fraisier is PostgreSQL-only via confiture. MySQL, MongoDB, etc. are not supported.
+- **Large fleets (10+ servers)**: Fraisier targets 1-3 servers. For larger fleets, use Ansible, Terraform, or a proper orchestrator.
+- **No database migrations**: If your app doesn't have a database or doesn't use confiture, fraisier's main value proposition doesn't apply.
+
+### Compared to
+
+| Tool | Strength | Fraisier's difference |
+|------|----------|----------------------|
+| **Kamal** | Zero-config Docker deploy | No migration awareness, no atomic rollback |
+| **Dokku** | Heroku-like git push | Migrations are manual, no preflight checks |
+| **Coolify** | Web UI, broad language support | Fraisier is CLI-first, PostgreSQL-deep |
+| **Ansible** | Infrastructure automation | Fraisier is deploy-only, not infra management |
+
 ---
 
 ## Quickstart

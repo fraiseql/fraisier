@@ -9,7 +9,6 @@ Three strategies:
 from __future__ import annotations
 
 import logging
-import shlex
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -129,7 +128,9 @@ class RestoreMigrateStrategy(Strategy):
     """Staging: restore from backup, then migrate up.  Rollback via migrate down."""
 
     def __init__(self, restore_command: str) -> None:
-        self.restore_command = restore_command
+        from fraisier.dbops._validation import validate_shell_command
+
+        self._restore_tokens = validate_shell_command(restore_command)
 
     def execute(
         self,
@@ -139,7 +140,7 @@ class RestoreMigrateStrategy(Strategy):
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
     ) -> StrategyResult:
-        subprocess.run(shlex.split(self.restore_command), check=True)
+        subprocess.run(self._restore_tokens, check=True)
 
         result = migrate_up(confiture_config, migrations_dir=migrations_dir)
         return StrategyResult(success=True, migrations_applied=result.steps_applied)

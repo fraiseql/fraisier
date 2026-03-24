@@ -16,7 +16,7 @@ class DeployEvent:
 
     fraise_name: str
     environment: str
-    event_type: str  # "failure" | "rollback" | "success"
+    event_type: str  # "failure" | "rollback" | "rollback_failed" | "success"
     error_message: str | None = None
     error_code: str | None = None
     recovery_hint: str | None = None
@@ -42,6 +42,8 @@ class DeployEvent:
             event_type = "success"
         elif result.status.value == "rolled_back":
             event_type = "rollback"
+        elif result.status.value == "rollback_failed":
+            event_type = "rollback_failed"
         else:
             event_type = "failure"
 

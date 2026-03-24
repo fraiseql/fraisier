@@ -13,11 +13,11 @@ from fraisier.database import FraisierDB
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """Clear rate limiter state between tests."""
-    import fraisier.webhook
+    from fraisier.webhook_rate_limit import reset
 
-    fraisier.webhook._request_times.clear()
+    reset()
     yield
-    fraisier.webhook._request_times.clear()
+    reset()
 
 
 @pytest.fixture(autouse=True)
