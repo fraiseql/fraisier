@@ -5,6 +5,35 @@ from unittest.mock import patch
 from fraisier.database import FraisierDB, get_connection
 
 
+class TestConnectionPragmas:
+    """SQLite connections must use WAL mode and busy_timeout."""
+
+    def test_connection_uses_wal_mode(self, tmp_db_path):
+        with (
+            patch("fraisier.database.get_db_path", return_value=tmp_db_path),
+            get_connection() as conn,
+        ):
+            result = conn.execute("PRAGMA journal_mode").fetchone()
+            assert result[0] == "wal"
+
+    def test_connection_has_busy_timeout(self, tmp_db_path):
+        with (
+            patch("fraisier.database.get_db_path", return_value=tmp_db_path),
+            get_connection() as conn,
+        ):
+            result = conn.execute("PRAGMA busy_timeout").fetchone()
+            assert result[0] >= 5000
+
+    def test_connection_uses_normal_sync(self, tmp_db_path):
+        with (
+            patch("fraisier.database.get_db_path", return_value=tmp_db_path),
+            get_connection() as conn,
+        ):
+            result = conn.execute("PRAGMA synchronous").fetchone()
+            # 1 = NORMAL
+            assert result[0] == 1
+
+
 class TestFraisierDB:
     """Tests for FraisierDB class."""
 
