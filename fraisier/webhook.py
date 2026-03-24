@@ -7,8 +7,6 @@ import hmac
 import json
 import logging
 import os
-import time
-from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +20,7 @@ from .errors import DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
 from .locking import file_deployment_lock, is_deployment_locked
 from .status import read_status
+from .webhook_rate_limit import check_rate_limit
 
 # Configure logging
 logging.basicConfig(
@@ -29,11 +28,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-# Rate limiting
-_MAX_TRACKED_IPS = 256
-_RATE_LIMIT = int(os.getenv("FRAISIER_WEBHOOK_RATE_LIMIT", "10"))
-_request_times: OrderedDict[str, list[float]] = OrderedDict()
 
 
 def _validate_env_config(port: int, rate_limit: int) -> None:
@@ -44,20 +38,6 @@ def _validate_env_config(port: int, rate_limit: int) -> None:
     if rate_limit < 1:
         msg = f"Invalid rate limit: {rate_limit} — must be >= 1"
         raise ValueError(msg)
-
-
-def _check_rate_limit(client_ip: str) -> bool:
-    """Return True if the request is within the rate limit (10/min)."""
-    now = time.time()
-    while len(_request_times) > _MAX_TRACKED_IPS:
-        _request_times.popitem(last=False)
-    window = [t for t in _request_times.get(client_ip, []) if now - t < 60]
-    _request_times[client_ip] = window
-    _request_times.move_to_end(client_ip)
-    if len(window) >= _RATE_LIMIT:
-        return False
-    _request_times[client_ip].append(now)
-    return True
 
 
 @asynccontextmanager
@@ -282,22 +262,76 @@ async def _run_deployment(
             )
 
 
+def _get_lock_dir(config: Any) -> Path | None:
+    """Extract lock directory from config."""
+    deployment_raw = config._config.get("deployment", {}) or {}
+    if deployment_raw.get("lock_dir"):
+        return Path(deployment_raw["lock_dir"])
+    return None
+
+
+def _dispatch_deployment(
+    event: WebhookEvent,
+    background_tasks: BackgroundTasks,
+    webhook_id: int,
+    config: Any,
+) -> dict[str, Any]:
+    """Find the matching fraise for a push event and trigger deployment."""
+    fraise_config = config.get_fraise_for_branch(event.branch)
+
+    if not fraise_config:
+        logger.info(f"No fraise configured for branch: {event.branch}")
+        return {
+            "status": "ignored",
+            "reason": f"No fraise configured for branch '{event.branch}'",
+            "provider": event.provider,
+            "webhook_id": webhook_id,
+        }
+
+    fraise_name = fraise_config["fraise_name"]
+    environment = fraise_config["environment"]
+
+    lock_dir = _get_lock_dir(config)
+    if is_deployment_locked(fraise_name, lock_dir=lock_dir):
+        logger.info(
+            f"Deploy already running for {fraise_name}/{environment}, returning 409"
+        )
+        return {
+            "status": "skipped",
+            "reason": "deployment already running",
+            "fraise": fraise_name,
+            "environment": environment,
+            "provider": event.provider,
+            "webhook_id": webhook_id,
+        }
+
+    logger.info(f"Triggering deployment: {fraise_name} -> {environment}")
+    background_tasks.add_task(
+        execute_deployment,
+        fraise_name=fraise_name,
+        environment=environment,
+        fraise_config=fraise_config,
+        webhook_id=webhook_id,
+        git_branch=event.branch,
+        git_commit=event.commit_sha,
+    )
+
+    return {
+        "status": "deployment_triggered",
+        "fraise": fraise_name,
+        "environment": environment,
+        "branch": event.branch,
+        "provider": event.provider,
+        "webhook_id": webhook_id,
+    }
+
+
 def process_webhook_event(
     event: WebhookEvent,
     background_tasks: BackgroundTasks,
     webhook_id: int,
 ) -> dict[str, Any]:
-    """Process a normalized webhook event.
-
-    Args:
-        event: Normalized webhook event
-        background_tasks: FastAPI background tasks
-        webhook_id: Database ID of recorded event
-
-    Returns:
-        Response dict
-    """
-    # Handle ping events first (no config needed)
+    """Process a normalized webhook event."""
     if event.is_ping:
         return {
             "status": "pong",
@@ -306,7 +340,6 @@ def process_webhook_event(
             "webhook_id": webhook_id,
         }
 
-    # Handle push events
     if event.is_push and event.branch:
         try:
             config = get_config()
@@ -318,67 +351,8 @@ def process_webhook_event(
                 "webhook_id": webhook_id,
             }
         logger.info(f"Push to branch: {event.branch} (provider: {event.provider})")
+        return _dispatch_deployment(event, background_tasks, webhook_id, config)
 
-        # Get fraise for this branch
-        fraise_config = config.get_fraise_for_branch(event.branch)
-
-        if fraise_config:
-            fraise_name = fraise_config["fraise_name"]
-            environment = fraise_config["environment"]
-
-            # Pre-check: reject early if a deploy is already running
-            lock_dir = None
-            try:
-                deployment_raw = get_config()._config.get("deployment", {}) or {}
-                if deployment_raw.get("lock_dir"):
-                    lock_dir = Path(deployment_raw["lock_dir"])
-            except FileNotFoundError:
-                pass
-            if is_deployment_locked(fraise_name, lock_dir=lock_dir):
-                logger.info(
-                    f"Deploy already running for {fraise_name}/{environment}, "
-                    "returning 409"
-                )
-                return {
-                    "status": "skipped",
-                    "reason": "deployment already running",
-                    "fraise": fraise_name,
-                    "environment": environment,
-                    "provider": event.provider,
-                    "webhook_id": webhook_id,
-                }
-
-            logger.info(f"Triggering deployment: {fraise_name} -> {environment}")
-
-            # Execute deployment in background
-            background_tasks.add_task(
-                execute_deployment,
-                fraise_name=fraise_name,
-                environment=environment,
-                fraise_config=fraise_config,
-                webhook_id=webhook_id,
-                git_branch=event.branch,
-                git_commit=event.commit_sha,
-            )
-
-            return {
-                "status": "deployment_triggered",
-                "fraise": fraise_name,
-                "environment": environment,
-                "branch": event.branch,
-                "provider": event.provider,
-                "webhook_id": webhook_id,
-            }
-        else:
-            logger.info(f"No fraise configured for branch: {event.branch}")
-            return {
-                "status": "ignored",
-                "reason": f"No fraise configured for branch '{event.branch}'",
-                "provider": event.provider,
-                "webhook_id": webhook_id,
-            }
-
-    # Ignore other events
     return {
         "status": "ignored",
         "event": event.event_type,
@@ -387,52 +361,33 @@ def process_webhook_event(
     }
 
 
-@app.post("/webhook")
-async def generic_webhook(
-    request: Request, background_tasks: BackgroundTasks
-) -> dict[str, Any]:
-    """Receive webhook from any Git provider.
+def _detect_git_provider(headers: dict[str, str], query_provider: str | None) -> str:
+    """Auto-detect git provider from headers or query parameter."""
+    if query_provider:
+        return query_provider
 
-    The provider is auto-detected from headers, or can be specified
-    via query parameter: /webhook?provider=gitlab
+    header_signatures: dict[str, str] = {
+        "x-github-event": "github",
+        "x-gitlab-event": "gitlab",
+        "x-gitea-event": "gitea",
+        "x-event-key": "bitbucket",
+    }
+    lower_headers = {k.lower() for k in headers}
+    for header, provider in header_signatures.items():
+        if header in lower_headers:
+            return provider
 
-    Returns:
-        Status of the webhook processing
-    """
-    from .database import get_db
+    try:
+        config = get_config()
+        return config._config.get("git", {}).get("provider", "github")
+    except FileNotFoundError:
+        return "github"
 
-    # Rate limit check
-    client_ip = request.client.host if request.client else "unknown"
-    if not _check_rate_limit(client_ip):
-        raise _structured_error(429, "rate_limited", "Too many requests")
 
-    # Get raw body for signature verification
-    body = await request.body()
-    headers = dict(request.headers)
-
-    # Auto-detect provider from headers or use configured default
-    provider_name = request.query_params.get("provider")
-
-    if not provider_name:
-        # Try to auto-detect from headers
-        if "X-GitHub-Event" in headers or "x-github-event" in headers:
-            provider_name = "github"
-        elif "X-Gitlab-Event" in headers or "x-gitlab-event" in headers:
-            provider_name = "gitlab"
-        elif "X-Gitea-Event" in headers or "x-gitea-event" in headers:
-            provider_name = "gitea"
-        elif "X-Event-Key" in headers or "x-event-key" in headers:
-            provider_name = "bitbucket"
-        else:
-            # Fall back to configured default
-            try:
-                config = get_config()
-                git_config = config._config.get("git", {})
-                provider_name = git_config.get("provider", "github")
-            except FileNotFoundError:
-                provider_name = "github"
-
-    # Get provider and verify signature
+def _verify_signature(
+    provider_name: str, body: bytes, headers: dict[str, str]
+) -> tuple[GitProvider, dict[str, str]]:
+    """Build provider, verify signature, return provider + headers."""
     try:
         try:
             git_config = get_config()._config.get("git", {})
@@ -446,59 +401,101 @@ async def generic_webhook(
     except ValueError as e:
         raise _structured_error(400, "validation_error", str(e)) from e
 
-    # Normalize headers to handle case variations
     normalized_headers = {k.title(): v for k, v in headers.items()}
 
-    # Verify signature
     if not provider.verify_webhook_signature(body, normalized_headers):
         logger.warning(f"Invalid webhook signature from {provider_name}")
         raise _structured_error(
             401, "authentication_error", "Invalid webhook signature"
         )
 
-    # Parse payload
+    return provider, normalized_headers
+
+
+async def _normalize_event(
+    provider: GitProvider,
+    request: Request,
+    normalized_headers: dict[str, str],
+) -> WebhookEvent:
+    """Parse request JSON and build a normalized WebhookEvent."""
     try:
         payload = await request.json()
     except json.JSONDecodeError as e:
         raise _structured_error(400, "validation_error", "Invalid JSON payload") from e
 
-    # Parse event
     event = provider.parse_webhook_event(normalized_headers, payload)
     logger.info(f"Received {event.provider} event: {event.event_type}")
+    return event
 
-    # Record webhook event in database
+
+@app.post("/webhook")
+async def generic_webhook(
+    request: Request, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
+    """Receive webhook from any Git provider.
+
+    The provider is auto-detected from headers, or can be specified
+    via query parameter: /webhook?provider=gitlab
+    """
+    from .database import get_db
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(client_ip):
+        raise _structured_error(429, "rate_limited", "Too many requests")
+
+    body = await request.body()
+    headers = dict(request.headers)
+
+    provider_name = _detect_git_provider(headers, request.query_params.get("provider"))
+    provider, normalized_headers = _verify_signature(provider_name, body, headers)
+    event = await _normalize_event(provider, request, normalized_headers)
+
     db = get_db()
     webhook_id = db.record_webhook_event(
         event_type=event.event_type,
-        payload=json.dumps(payload),
+        payload=json.dumps(await request.json()),
         branch=event.branch,
         commit_sha=event.commit_sha,
         sender=event.sender,
         git_provider=event.provider,
     )
 
-    # Process the event
     return process_webhook_event(event, background_tasks, webhook_id)
 
 
 def _get_webhook_secret() -> str:
-    """Get webhook secret from config for token authentication."""
-    config = get_config()
-    git_config = config.get_git_provider_config()
-    # Check environment variable first, then provider-specific config
+    """Get webhook secret from config for token authentication.
+
+    Raises RuntimeError if no secret is configured or if the secret
+    is shorter than 32 characters.
+    """
     secret = os.getenv("FRAISIER_WEBHOOK_SECRET")
-    if secret:
-        return secret
-    # Walk provider configs to find a webhook_secret
-    for provider_conf in git_config.values():
-        if isinstance(provider_conf, dict) and "webhook_secret" in provider_conf:
-            return provider_conf["webhook_secret"]
-    logger.critical(
-        "FRAISIER_WEBHOOK_SECRET is not set. "
-        "All incoming webhooks will be rejected. "
-        "Set the environment variable to enable webhook processing."
-    )
-    return ""
+    if not secret:
+        # Walk provider configs to find a webhook_secret
+        try:
+            config = get_config()
+            git_config = config.get_git_provider_config()
+            for provider_conf in git_config.values():
+                is_dict = isinstance(provider_conf, dict)
+                if is_dict and "webhook_secret" in provider_conf:
+                    secret = provider_conf["webhook_secret"]
+                    break
+        except FileNotFoundError:
+            pass
+    if not secret:
+        msg = (
+            "FRAISIER_WEBHOOK_SECRET must be set. "
+            "Generate one with: python -c "
+            '"import secrets; print(secrets.token_urlsafe(48))"'
+        )
+        raise RuntimeError(msg)
+    if len(secret) < 32:
+        msg = (
+            "FRAISIER_WEBHOOK_SECRET must be at least 32 characters. "
+            f"Current length: {len(secret)}"
+        )
+        raise RuntimeError(msg)
+    return secret
 
 
 @app.get("/api/status/{fraise_name}")

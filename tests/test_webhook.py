@@ -1,6 +1,7 @@
 """Tests for webhook handler and FastAPI routes."""
 
 import json
+import os
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -930,15 +931,7 @@ class TestPublicStatusEndpoint:
 class TestAuthenticatedDetailsEndpoint:
     """Tests for GET /api/status/{fraise_name}/details — requires X-Deployment-Token."""
 
-    def _make_config_mock(self, secret="test-secret"):
-        mock_config = MagicMock()
-        mock_config._config = {
-            "git": {"github": {"webhook_secret": secret}},
-        }
-        mock_config.get_git_provider_config.return_value = {
-            "github": {"webhook_secret": secret},
-        }
-        return mock_config
+    _SECRET = "a" * 32  # Minimum length for webhook secret
 
     def test_valid_token_returns_full_details_on_failure(self, webhook_client):
         """Authenticated details endpoint returns error_message and migration_report."""
@@ -954,11 +947,11 @@ class TestAuthenticatedDetailsEndpoint:
 
         with (
             patch("fraisier.webhook.read_status", return_value=status),
-            patch("fraisier.webhook.get_config", return_value=self._make_config_mock()),
+            patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": self._SECRET}),
         ):
             response = webhook_client.get(
                 "/api/status/my_api/details",
-                headers={"X-Deployment-Token": "test-secret"},
+                headers={"X-Deployment-Token": self._SECRET},
             )
 
         assert response.status_code == 200
@@ -981,7 +974,7 @@ class TestAuthenticatedDetailsEndpoint:
 
         with (
             patch("fraisier.webhook.read_status", return_value=status),
-            patch("fraisier.webhook.get_config", return_value=self._make_config_mock()),
+            patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": self._SECRET}),
         ):
             response = webhook_client.get("/api/status/my_api/details")
 
@@ -998,11 +991,11 @@ class TestAuthenticatedDetailsEndpoint:
 
         with (
             patch("fraisier.webhook.read_status", return_value=status),
-            patch("fraisier.webhook.get_config", return_value=self._make_config_mock()),
+            patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": self._SECRET}),
         ):
             response = webhook_client.get(
                 "/api/status/my_api/details",
-                headers={"X-Deployment-Token": "wrong-secret"},
+                headers={"X-Deployment-Token": "wrong-secret-that-is-long-enough!!"},
             )
 
         assert response.status_code == 403
@@ -1019,11 +1012,11 @@ class TestAuthenticatedDetailsEndpoint:
 
         with (
             patch("fraisier.webhook.read_status", return_value=status),
-            patch("fraisier.webhook.get_config", return_value=self._make_config_mock()),
+            patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": self._SECRET}),
         ):
             response = webhook_client.get(
                 "/api/status/my_api/details",
-                headers={"X-Deployment-Token": "test-secret"},
+                headers={"X-Deployment-Token": self._SECRET},
             )
 
         assert response.status_code == 200
@@ -1035,11 +1028,11 @@ class TestAuthenticatedDetailsEndpoint:
         """Unknown fraise returns 404 even with valid token."""
         with (
             patch("fraisier.webhook.read_status", return_value=None),
-            patch("fraisier.webhook.get_config", return_value=self._make_config_mock()),
+            patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": self._SECRET}),
         ):
             response = webhook_client.get(
                 "/api/status/nonexistent/details",
-                headers={"X-Deployment-Token": "test-secret"},
+                headers={"X-Deployment-Token": self._SECRET},
             )
 
         assert response.status_code == 404
@@ -1164,24 +1157,20 @@ class TestStructuredErrorResponses:
 
     def test_details_403_returns_structured_error(self, webhook_client):
         """403 for bad token returns structured error."""
+        valid_secret = "a" * 32
         status = DeploymentStatusFile(
             fraise_name="my_api",
             environment="production",
             state="failed",
         )
-        mock_config = MagicMock()
-        mock_config._config = {"git": {"github": {"webhook_secret": "s"}}}
-        mock_config.get_git_provider_config.return_value = {
-            "github": {"webhook_secret": "s"},
-        }
 
         with (
             patch("fraisier.webhook.read_status", return_value=status),
-            patch("fraisier.webhook.get_config", return_value=mock_config),
+            patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": valid_secret}),
         ):
             response = webhook_client.get(
                 "/api/status/my_api/details",
-                headers={"X-Deployment-Token": "wrong"},
+                headers={"X-Deployment-Token": "wrong-token-that-is-long-enough!!!"},
             )
 
         assert response.status_code == 403
