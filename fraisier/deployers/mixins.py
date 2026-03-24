@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -124,7 +125,7 @@ class GitDeployMixin:
                 git_commit=git_commit,
                 old_version=old_version,
             )
-        except Exception:
+        except (sqlite3.Error, OSError):
             logger.warning("Failed to record deployment start in DB")
             return None
 
@@ -148,7 +149,7 @@ class GitDeployMixin:
             )
             if result.status.value == "rolled_back":
                 db.mark_deployment_rolled_back(deployment_pk)
-        except Exception:
+        except (sqlite3.Error, OSError):
             logger.warning("Failed to record deployment completion in DB")
 
     def _write_incident(

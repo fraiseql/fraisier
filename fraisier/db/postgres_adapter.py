@@ -146,7 +146,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                                 self._last_insert_id = result[0]
                             else:
                                 self._last_insert_id = next(iter(result.values()))
-                    except Exception:
+                    except psycopg.Error:
                         logging.getLogger(__name__).warning(
                             "Failed to fetch last insert ID", exc_info=True
                         )
@@ -268,7 +268,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
             async with self._pool.connection() as conn:
                 await conn.execute("SELECT 1")
             return True
-        except Exception:
+        except psycopg.Error:
             return False
 
     def database_type(self) -> DatabaseType:
@@ -301,7 +301,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                 if hasattr(self._pool, "_waiting_queue")
                 else 0,
             )
-        except Exception:
+        except (psycopg.Error, AttributeError):
             # Fallback if metrics can't be retrieved
             return PoolMetrics(
                 total_connections=self.pool_max_size,

@@ -154,7 +154,7 @@ def bump_version(
 
         # Commit version.json last (atomic rename)
         tmp_version.rename(path)
-    except Exception:
+    except OSError:
         # Rollback: remove temp, leave originals untouched.
         # If pyproject was already written, restore from backup.
         tmp_version.unlink(missing_ok=True)

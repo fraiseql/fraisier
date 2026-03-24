@@ -1,5 +1,6 @@
 """Tests for fraisier.locking — database-backed deployment locks."""
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -46,7 +47,8 @@ class TestAcquire:
 
     def test_acquire_db_failure_returns_false(self):
         with patch(
-            "fraisier.locking.get_db", side_effect=RuntimeError("connection failed")
+            "fraisier.locking.get_db",
+            side_effect=sqlite3.OperationalError("connection failed"),
         ):
             lock = DeploymentLock("api", "prod")
             assert lock.acquire() is False

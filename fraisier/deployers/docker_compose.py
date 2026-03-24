@@ -1,7 +1,9 @@
 """Docker Compose deployer — pull, up, health check."""
 
+import json
 import logging
 import shlex
+import subprocess
 import time
 from typing import Any
 
@@ -50,13 +52,11 @@ class DockerComposeDeployer(BaseDeployer):
                 return None
             # Parse first line — JSON per service
             for line in result.stdout.strip().splitlines():
-                import json
-
                 svc = json.loads(line)
                 if svc.get("Service") == self.service_name:
                     image = svc.get("Image", "")
                     return image.split(":")[-1] if ":" in image else None
-        except Exception:
+        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
             pass
         return None
 
@@ -157,12 +157,10 @@ class DockerComposeDeployer(BaseDeployer):
             if result.returncode != 0:
                 return False
             for line in result.stdout.strip().splitlines():
-                import json
-
                 svc = json.loads(line)
                 state = svc.get("State", "")
                 if state != "running":
                     return False
             return True
-        except Exception:
+        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
             return False

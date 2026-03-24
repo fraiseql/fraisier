@@ -10,6 +10,7 @@ Provides two lock strategies:
 
 import fcntl
 import logging
+import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -173,7 +174,7 @@ class DeploymentLock:
             self._is_locked = True
             return True
 
-        except Exception:
+        except (sqlite3.Error, OSError):
             logger.warning(
                 "Failed to acquire deployment lock for %s:%s",
                 self.service_name,
@@ -191,7 +192,7 @@ class DeploymentLock:
             try:
                 db = get_db()
                 db.release_deployment_lock(self.service_name, self.provider_name)
-            except Exception:
+            except (sqlite3.Error, OSError):
                 logger.warning(
                     "Failed to release deployment lock for %s:%s",
                     self.service_name,
@@ -245,7 +246,7 @@ class DeploymentLock:
 
             return True
 
-        except Exception:
+        except (sqlite3.Error, OSError):
             logger.warning(
                 "Failed to check lock status for %s:%s",
                 service_name,
@@ -279,7 +280,7 @@ class DeploymentLock:
                 "expires_at": lock.get("expires_at"),
             }
 
-        except Exception:
+        except (sqlite3.Error, OSError):
             logger.warning(
                 "Failed to get lock info for %s:%s",
                 service_name,
@@ -305,7 +306,7 @@ class DeploymentLock:
             db = get_db()
             db.release_deployment_lock(service_name, provider_name)
             return True
-        except Exception:
+        except (sqlite3.Error, OSError):
             logger.warning(
                 "Failed to clear lock for %s:%s",
                 service_name,
