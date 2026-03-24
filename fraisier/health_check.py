@@ -9,6 +9,7 @@ Provides enhanced health checking capabilities:
 - Multi-service aggregate health
 """
 
+import asyncio
 import logging
 import shlex
 import subprocess
@@ -16,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -326,7 +328,7 @@ class HealthCheckManager:
 
                     self.logger.warning(
                         f"Health check failed on attempt {attempt + 1}",
-                        message=last_result.message,
+                        check_message=last_result.message,
                         duration=last_result.duration,
                     )
 
@@ -354,9 +356,59 @@ class HealthCheckManager:
 
         self.logger.error(
             f"Health check failed after {max_retries} attempts",
-            message=last_result.message,
+            check_message=last_result.message,
         )
         return last_result
+
+    async def async_check_with_retries(
+        self,
+        check_fn: Callable[[], Awaitable[bool]],
+        max_retries: int = 3,
+        initial_delay: float = 1.0,
+        backoff_factor: float = 2.0,
+        max_delay: float = 30.0,
+    ) -> bool:
+        """Async health check with exponential backoff retries.
+
+        Args:
+            check_fn: Async callable returning True (healthy) or False
+            max_retries: Maximum number of retry attempts
+            initial_delay: Initial delay between retries in seconds
+            backoff_factor: Multiplier for exponential backoff
+            max_delay: Maximum delay between retries
+
+        Returns:
+            True if any attempt succeeded, False otherwise
+        """
+        delay = initial_delay
+
+        for attempt in range(max_retries):
+            try:
+                if await check_fn():
+                    self.logger.info(
+                        f"Health check passed on attempt {attempt + 1}",
+                    )
+                    return True
+
+                self.logger.warning(
+                    f"Health check failed on attempt {attempt + 1}",
+                )
+
+            except Exception as e:
+                self.logger.error(
+                    f"Error during health check attempt {attempt + 1}: {e}",
+                    _exc_info=True,
+                )
+
+            if attempt < max_retries - 1:
+                wait_time = min(delay, max_delay)
+                await asyncio.sleep(wait_time)
+                delay *= backoff_factor
+
+        self.logger.error(
+            f"Health check failed after {max_retries} attempts",
+        )
+        return False
 
     def check_and_record_metrics(
         self,

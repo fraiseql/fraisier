@@ -179,6 +179,123 @@ class TestHealthCheckManager:
         assert checker.check.call_count == 1
 
 
+    def test_manager_stops_after_max_retries(self):
+        checker = MagicMock()
+        fail = HealthCheckResult(
+            success=False, check_type="http", duration=0.1, message="fail"
+        )
+        checker.check.return_value = fail
+        checker.check_type = "http"
+
+        with patch("time.sleep"):
+            manager = HealthCheckManager(provider="test")
+            result = manager.check_with_retries(
+                checker, max_retries=4, initial_delay=0.01
+            )
+
+        assert result.success is False
+        assert checker.check.call_count == 4
+
+    def test_manager_exponential_backoff_delays(self):
+        checker = MagicMock()
+        fail = HealthCheckResult(
+            success=False, check_type="http", duration=0.1, message="fail"
+        )
+        checker.check.return_value = fail
+        checker.check_type = "http"
+
+        with patch("time.sleep") as mock_sleep:
+            manager = HealthCheckManager(provider="test")
+            manager.check_with_retries(
+                checker,
+                max_retries=4,
+                initial_delay=1.0,
+                backoff_factor=2.0,
+                max_delay=10.0,
+            )
+
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [1.0, 2.0, 4.0]
+
+    def test_manager_returns_first_success(self):
+        checker = MagicMock()
+        ok = HealthCheckResult(
+            success=True, check_type="http", duration=0.1, message="ok"
+        )
+        checker.check.return_value = ok
+        checker.check_type = "http"
+
+        manager = HealthCheckManager(provider="test")
+        result = manager.check_with_retries(
+            checker, max_retries=5, initial_delay=0.01
+        )
+
+        assert result.success is True
+        assert checker.check.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_check_with_retries_exponential_backoff(self):
+        """Async retry uses same exponential backoff as sync version."""
+        call_count = 0
+
+        async def failing_check():
+            nonlocal call_count
+            call_count += 1
+            return False
+
+        with patch("asyncio.sleep") as mock_sleep:
+            mock_sleep.return_value = None
+            manager = HealthCheckManager(provider="test")
+            result = await manager.async_check_with_retries(
+                failing_check,
+                max_retries=4,
+                initial_delay=1.0,
+                backoff_factor=2.0,
+                max_delay=10.0,
+            )
+
+        assert result is False
+        assert call_count == 4
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [1.0, 2.0, 4.0]
+
+    @pytest.mark.asyncio
+    async def test_async_check_returns_first_success(self):
+        call_count = 0
+
+        async def succeeding_check():
+            nonlocal call_count
+            call_count += 1
+            return True
+
+        manager = HealthCheckManager(provider="test")
+        result = await manager.async_check_with_retries(
+            succeeding_check, max_retries=5
+        )
+
+        assert result is True
+        assert call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_check_stops_after_max_retries(self):
+        call_count = 0
+
+        async def failing_check():
+            nonlocal call_count
+            call_count += 1
+            return False
+
+        with patch("asyncio.sleep") as mock_sleep:
+            mock_sleep.return_value = None
+            manager = HealthCheckManager(provider="test")
+            result = await manager.async_check_with_retries(
+                failing_check, max_retries=3, initial_delay=0.01
+            )
+
+        assert result is False
+        assert call_count == 3
+
+
 class TestCompositeHealthChecker:
     """Tests for CompositeHealthChecker."""
 

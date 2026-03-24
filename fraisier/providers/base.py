@@ -107,7 +107,11 @@ class DeploymentProvider(ABC):
         Uses _health_check_dispatch() to resolve provider-specific check
         types.  Subclasses override _health_check_dispatch() to register
         additional check types (EXEC, SYSTEMD, etc.).
+
+        Retry logic is delegated to HealthCheckManager.async_check_with_retries().
         """
+        from fraisier.health_check import HealthCheckManager
+
         service_name = getattr(health_check, "service", "unknown")
         check_type = (
             health_check.type.value
@@ -123,48 +127,43 @@ class DeploymentProvider(ABC):
 
         start_time = time.time()
         dispatch = self._health_check_dispatch()
+        checker_fn = dispatch.get(health_check.type)
 
-        for attempt in range(health_check.retries):
-            try:
-                checker = dispatch.get(health_check.type)
-                if checker is None:
-                    logger.warning(
-                        "Unsupported health check type for %s: %s",
-                        type(self).__name__,
-                        health_check.type,
-                    )
-                    result = False
-                else:
-                    result = await checker(health_check)
+        if checker_fn is None:
+            logger.warning(
+                "Unsupported health check type for %s: %s",
+                type(self).__name__,
+                health_check.type,
+            )
+            return False
 
-                if result:
-                    duration_ms = int((time.time() - start_time) * 1000)
-                    await self.emit_health_check_passed(
-                        service_name=service_name,
-                        check_type=check_type,
-                        duration_ms=duration_ms,
-                    )
-                    return True
+        async def _do_check() -> bool:
+            return await checker_fn(health_check)
 
-            except Exception as e:
-                logger.warning(
-                    "Health check attempt %d/%d failed: %s",
-                    attempt + 1,
-                    health_check.retries,
-                    e,
-                )
-                if attempt < health_check.retries - 1:
-                    await asyncio.sleep(health_check.retry_delay)
-                continue
+        manager = HealthCheckManager(provider=type(self).__name__)
+        result = await manager.async_check_with_retries(
+            _do_check,
+            max_retries=health_check.retries,
+            initial_delay=health_check.retry_delay,
+            backoff_factor=1.0,
+            max_delay=float(health_check.retry_delay),
+        )
 
         duration_ms = int((time.time() - start_time) * 1000)
-        await self.emit_health_check_failed(
-            service_name=service_name,
-            check_type=check_type,
-            reason="Health check failed after all retries",
-            duration_ms=duration_ms,
-        )
-        return False
+        if result:
+            await self.emit_health_check_passed(
+                service_name=service_name,
+                check_type=check_type,
+                duration_ms=duration_ms,
+            )
+        else:
+            await self.emit_health_check_failed(
+                service_name=service_name,
+                check_type=check_type,
+                reason="Health check failed after all retries",
+                duration_ms=duration_ms,
+            )
+        return result
 
     def _health_check_dispatch(
         self,
@@ -172,14 +171,71 @@ class DeploymentProvider(ABC):
         """Return mapping of supported health check types to handlers.
 
         Override in subclasses to add provider-specific check types.
-        Base implementation auto-detects _check_http and _check_tcp.
         """
-        dispatch: dict[HealthCheckType, Callable[[HealthCheck], Awaitable[bool]]] = {}
-        if hasattr(self, "_check_http"):
-            dispatch[HealthCheckType.HTTP] = self._check_http
-        if hasattr(self, "_check_tcp"):
-            dispatch[HealthCheckType.TCP] = self._check_tcp
-        return dispatch
+        return {
+            HealthCheckType.HTTP: self._check_http,
+            HealthCheckType.TCP: self._check_tcp,
+            HealthCheckType.EXEC: self._check_exec,
+        }
+
+    async def _check_http(self, health_check: HealthCheck) -> bool:
+        """Check HTTP endpoint."""
+        if not health_check.url:
+            logger.error("HTTP health check requires 'url'")
+            return False
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=health_check.timeout) as client:
+                response = await client.get(health_check.url)
+                return response.status_code < 400
+
+        except ImportError:
+            logger.error("httpx not installed")
+            return False
+        except Exception as e:
+            logger.debug("HTTP health check failed: %s", e)
+            return False
+
+    async def _check_tcp(self, health_check: HealthCheck) -> bool:
+        """Check TCP connectivity."""
+        if not health_check.port:
+            logger.error("TCP health check requires 'port'")
+            return False
+
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", health_check.port),
+                timeout=health_check.timeout,
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+
+        except TimeoutError:
+            logger.debug("TCP connection timeout on port %s", health_check.port)
+            return False
+        except Exception as e:
+            logger.debug("TCP health check failed: %s", e)
+            return False
+
+    async def _check_exec(self, health_check: HealthCheck) -> bool:
+        """Check using exec command."""
+        if not health_check.command:
+            logger.error("Exec health check requires 'command'")
+            return False
+
+        try:
+            exit_code, _, _ = await self.execute_command(
+                health_check.command,
+                timeout=health_check.timeout,
+            )
+            return exit_code == 0
+
+        except Exception as e:
+            logger.debug("Exec health check failed: %s", e)
+            return False
 
     @abstractmethod
     async def get_service_status(self, service_name: str) -> dict[str, Any]:
