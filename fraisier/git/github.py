@@ -31,14 +31,9 @@ class GitHubProvider(GitProvider):
     def get_default_base_url(self) -> str:
         return "https://github.com"
 
-    def verify_webhook_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
+    def _verify_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
         """Verify GitHub webhook signature using HMAC-SHA256."""
         signature = headers.get(self.get_signature_header_name())
-
-        if not self.webhook_secret:
-            # If a signature is provided but no secret configured, reject
-            return signature is None
-
         if not signature:
             return False
 

@@ -29,14 +29,11 @@ class GitLabProvider(GitProvider):
     def get_default_base_url(self) -> str:
         return "https://gitlab.com"
 
-    def verify_webhook_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
+    def _verify_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
         """Verify GitLab webhook token.
 
         GitLab uses a simple token comparison, not HMAC.
         """
-        if not self.webhook_secret:
-            return True
-
         token = headers.get(self.get_signature_header_name())
         if not token:
             return False

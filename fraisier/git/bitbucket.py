@@ -33,15 +33,12 @@ class BitbucketProvider(GitProvider):
     def get_default_base_url(self) -> str:
         return "https://bitbucket.org"
 
-    def verify_webhook_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
+    def _verify_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
         """Verify Bitbucket webhook signature.
 
         Note: Bitbucket Cloud primarily uses IP allowlisting.
         Bitbucket Server supports HMAC signatures.
         """
-        if not self.webhook_secret:
-            return True
-
         signature = headers.get(self.get_signature_header_name())
         if not signature:
             # Bitbucket Cloud may not send signature

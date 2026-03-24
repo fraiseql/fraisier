@@ -31,11 +31,8 @@ class GiteaProvider(GitProvider):
         # No default - must be configured for self-hosted
         return self.config.get("base_url", "https://gitea.example.com")
 
-    def verify_webhook_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
+    def _verify_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
         """Verify Gitea webhook signature using HMAC-SHA256."""
-        if not self.webhook_secret:
-            return True
-
         # Gitea supports multiple signature headers
         signature = (
             headers.get("X-Gitea-Signature")

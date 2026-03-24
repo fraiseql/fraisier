@@ -530,11 +530,16 @@ class TestWebhookRoutes:
 
     def test_webhook_post_malformed_json(self, webhook_client):
         """Test webhook with malformed JSON is rejected."""
-        response = webhook_client.post(
-            "/webhook",
-            content=b"not json",
-            headers={"X-GitHub-Event": "push"},
-        )
+        with patch("fraisier.webhook.get_provider") as mock_get_provider:
+            mock_provider = MagicMock()
+            mock_provider.verify_webhook_signature.return_value = True
+            mock_get_provider.return_value = mock_provider
+
+            response = webhook_client.post(
+                "/webhook",
+                content=b"not json",
+                headers={"X-GitHub-Event": "push"},
+            )
         assert response.status_code == 400
         data = response.json()
         assert data["error_type"] == "validation_error"
@@ -1081,11 +1086,16 @@ class TestStructuredErrorResponses:
 
     def test_malformed_json_returns_structured_error(self, webhook_client):
         """400 for bad JSON returns structured error."""
-        response = webhook_client.post(
-            "/webhook",
-            content=b"not json",
-            headers={"X-GitHub-Event": "push"},
-        )
+        with patch("fraisier.webhook.get_provider") as mock_get_provider:
+            mock_provider = MagicMock()
+            mock_provider.verify_webhook_signature.return_value = True
+            mock_get_provider.return_value = mock_provider
+
+            response = webhook_client.post(
+                "/webhook",
+                content=b"not json",
+                headers={"X-GitHub-Event": "push"},
+            )
         assert response.status_code == 400
         data = response.json()
         assert "error_type" in data

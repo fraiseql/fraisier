@@ -65,9 +65,11 @@ class GitProvider(ABC):
         self.config = config
         self.webhook_secret = config.get("webhook_secret")
 
-    @abstractmethod
     def verify_webhook_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
         """Verify webhook signature.
+
+        Returns False when no secret is configured (secure default).
+        Subclasses implement _verify_signature for provider-specific HMAC logic.
 
         Args:
             payload: Raw request body
@@ -75,6 +77,16 @@ class GitProvider(ABC):
 
         Returns:
             True if signature is valid
+        """
+        if not self.webhook_secret:
+            return False
+        return self._verify_signature(payload, headers)
+
+    @abstractmethod
+    def _verify_signature(self, payload: bytes, headers: dict[str, str]) -> bool:
+        """Provider-specific signature verification.
+
+        Only called when webhook_secret is configured.
         """
         pass
 

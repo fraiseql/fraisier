@@ -426,6 +426,11 @@ def _get_webhook_secret() -> str:
     for provider_conf in git_config.values():
         if isinstance(provider_conf, dict) and "webhook_secret" in provider_conf:
             return provider_conf["webhook_secret"]
+    logger.critical(
+        "FRAISIER_WEBHOOK_SECRET is not set. "
+        "All incoming webhooks will be rejected. "
+        "Set the environment variable to enable webhook processing."
+    )
     return ""
 
 
