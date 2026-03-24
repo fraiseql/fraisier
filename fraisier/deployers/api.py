@@ -135,6 +135,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             duration = time.time() - start_time
             logger.exception(f"Deployment failed: {e}")
             wrapped = self._wrap_error(e)
+            self._restore_previous_state()
 
             self._write_status("failed", error_message=str(e))
             result = DeploymentResult(
@@ -180,13 +181,22 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             error_message=str(exc),
         )
 
-    def _run_strategy(self) -> None:
-        """Run database migrations via deployment strategy."""
+    def _restore_previous_state(self) -> None:
+        """Restore git and service to previous state after a failure."""
+        if not self._previous_sha:
+            return
+        try:
+            self._git_rollback(self._previous_sha)
+            if self.systemd_service:
+                self._restart_service()
+        except Exception as rollback_exc:
+            logger.critical("Git rollback after failure also failed: %s", rollback_exc)
+
+    def _resolve_strategy(self) -> tuple[Any, Path, Path]:
+        """Resolve database strategy, config path, and migrations dir from config."""
         from fraisier.strategies import get_strategy
 
         strategy_name = self.database_config.get("strategy", "apply")
-
-        # Map config names to strategy names
         strategy_map = {"apply": "migrate", "rebuild": "rebuild", "migrate": "migrate"}
         resolved = strategy_map.get(strategy_name, strategy_name)
 
@@ -197,6 +207,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         migrations_dir = Path(
             self.database_config.get("migrations_dir", "db/migrations")
         )
+        return strategy, confiture_config, migrations_dir
+
+    def _run_strategy(self) -> None:
+        """Run database migrations via deployment strategy."""
+        strategy, confiture_config, migrations_dir = self._resolve_strategy()
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
         result = strategy.execute(
@@ -212,7 +227,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             raise DeploymentError(
                 "; ".join(result.errors) or "Database migration failed",
                 context={
-                    "strategy": resolved,
+                    "strategy": strategy.__class__.__name__,
                     "fraise": self.fraise_name,
                 },
             )
@@ -254,9 +269,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             "ROLLBACK FAILED — service may be in broken state. Rollback error: %s",
             rollback_result.error_message,
         )
-        return DeploymentResult(
+        result = DeploymentResult(
             success=False,
-            status=DeploymentStatus.FAILED,
+            status=DeploymentStatus.ROLLBACK_FAILED,
             old_version=old_version,
             duration_seconds=duration,
             error_message=(
@@ -273,6 +288,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 },
             ),
         )
+        self._notify(result)
+        return result
 
     def _build_timeout_rollback_result(
         self,
@@ -305,9 +322,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             rollback_result.error_message,
         )
         self._write_status("failed", error_message=timeout_message)
-        return DeploymentResult(
+        result = DeploymentResult(
             success=False,
-            status=DeploymentStatus.FAILED,
+            status=DeploymentStatus.ROLLBACK_FAILED,
             old_version=old_version,
             duration_seconds=duration,
             error_message=(
@@ -322,6 +339,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 },
             ),
         )
+        self._notify(result)
+        return result
 
     def _wait_for_health(self) -> bool:
         """Wait for health check to pass with exponential backoff."""
@@ -353,6 +372,77 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         )
         return result.success
 
+    def _rollback_database(
+        self, current_version: str | None, target: str
+    ) -> DeploymentResult | None:
+        """Roll back database migrations. Returns failure result or None."""
+        strategy, confiture_config, migrations_dir = self._resolve_strategy()
+        db_result = strategy.rollback(
+            confiture_config,
+            migrations_dir=migrations_dir,
+            steps=self._migrations_applied,
+        )
+        if db_result.success:
+            return None
+
+        logger.critical("Database rollback failed: %s", db_result.errors)
+        error_msg = (
+            f"Database rollback failed — manual intervention required. "
+            f"Errors: {'; '.join(db_result.errors)}. "
+            f"Database may have {self._migrations_applied} unapplied "
+            f"down migrations. Do NOT restart the service until resolved."
+        )
+        self._write_incident(
+            error_msg,
+            current_version=current_version,
+            target_version=target,
+            db_errors=db_result.errors,
+        )
+        self._write_status("failed", error_message=error_msg)
+        return DeploymentResult(
+            success=False,
+            status=DeploymentStatus.FAILED,
+            old_version=current_version,
+            duration_seconds=0,
+            error_message=error_msg,
+        )
+
+    def _rollback_git(self, target: str) -> None:
+        """Check out a target SHA in the worktree."""
+        worktree = Path(self.app_path)
+        self.runner.run(
+            [
+                "git",
+                f"--work-tree={worktree}",
+                f"--git-dir={self.bare_repo}",
+                "checkout",
+                "-f",
+                target,
+            ],
+        )
+        self.runner.run(
+            ["git", "-C", str(worktree), "reset", "--soft", target],
+        )
+
+    def _finalize_rollback(
+        self, current_version: str | None, target: str, start_time: float
+    ) -> DeploymentResult:
+        """Restart service, health-check, and return success result."""
+        if self.systemd_service:
+            self._restart_service()
+        if self.health_check_url:
+            self._wait_for_health()
+
+        duration = time.time() - start_time
+        self._write_status("rolled_back", commit_sha=target)
+        return DeploymentResult(
+            success=True,
+            status=DeploymentStatus.ROLLED_BACK,
+            old_version=current_version,
+            new_version=target[:8],
+            duration_seconds=duration,
+        )
+
     def rollback(self, to_version: str | None = None) -> DeploymentResult:
         """Rollback to previous version: migrate down, then git checkout."""
         start_time = time.time()
@@ -363,84 +453,14 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             if not target:
                 raise ValueError("No previous SHA available for rollback")
 
-            # Step 0: Roll back database migrations if any were applied
             if self._migrations_applied > 0 and self.database_config:
-                from fraisier.strategies import get_strategy
+                failure = self._rollback_database(current_version, target)
+                if failure is not None:
+                    failure.duration_seconds = time.time() - start_time
+                    return failure
 
-                strategy_name = self.database_config.get("strategy", "apply")
-                strategy_map = {
-                    "apply": "migrate",
-                    "rebuild": "rebuild",
-                    "migrate": "migrate",
-                }
-                resolved = strategy_map.get(strategy_name, strategy_name)
-                strategy = get_strategy(resolved)
-                confiture_config = Path(
-                    self.database_config.get("confiture_config", "confiture.yaml")
-                )
-                migrations_dir = Path(
-                    self.database_config.get("migrations_dir", "db/migrations")
-                )
-                db_result = strategy.rollback(
-                    confiture_config,
-                    migrations_dir=migrations_dir,
-                    steps=self._migrations_applied,
-                )
-                if not db_result.success:
-                    logger.critical("Database rollback failed: %s", db_result.errors)
-                    duration = time.time() - start_time
-                    error_msg = (
-                        f"Database rollback failed — manual intervention required. "
-                        f"Errors: {'; '.join(db_result.errors)}. "
-                        f"Database may have {self._migrations_applied} unapplied "
-                        f"down migrations. Do NOT restart the service until resolved."
-                    )
-                    self._write_incident(
-                        error_msg,
-                        current_version=current_version,
-                        target_version=target,
-                        db_errors=db_result.errors,
-                    )
-                    self._write_status("failed", error_message=error_msg)
-                    return DeploymentResult(
-                        success=False,
-                        status=DeploymentStatus.FAILED,
-                        old_version=current_version,
-                        duration_seconds=duration,
-                        error_message=error_msg,
-                    )
-
-            worktree = Path(self.app_path)
-            self.runner.run(
-                [
-                    "git",
-                    f"--work-tree={worktree}",
-                    f"--git-dir={self.bare_repo}",
-                    "checkout",
-                    "-f",
-                    target,
-                ],
-            )
-            self.runner.run(
-                ["git", "-C", str(worktree), "reset", "--soft", target],
-            )
-
-            if self.systemd_service:
-                self._restart_service()
-            if self.health_check_url:
-                self._wait_for_health()
-
-            new_version = target[:8]
-            duration = time.time() - start_time
-
-            self._write_status("rolled_back", commit_sha=target)
-            return DeploymentResult(
-                success=True,
-                status=DeploymentStatus.ROLLED_BACK,
-                old_version=current_version,
-                new_version=new_version,
-                duration_seconds=duration,
-            )
+            self._rollback_git(target)
+            return self._finalize_rollback(current_version, target, start_time)
 
         except subprocess.CalledProcessError as e:
             duration = time.time() - start_time

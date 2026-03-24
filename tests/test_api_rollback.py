@@ -5,10 +5,11 @@ the previous SHA, and that the status file is updated at each
 state transition.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fraisier.deployers.api import APIDeployer
-from fraisier.deployers.base import DeploymentStatus
+from fraisier.deployers.base import DeploymentResult, DeploymentStatus
+from fraisier.errors import DeploymentError
 from fraisier.health_check import HealthCheckResult
 from fraisier.status import read_status
 from fraisier.strategies import StrategyResult
@@ -294,3 +295,159 @@ class TestStatusFileUpdates:
         status = read_status("myapi", status_dir=status_dir)
         assert status is not None
         assert status.state == "rolled_back"
+
+
+class TestMigrationFailureTriggersGitRollback:
+    """When migration fails after git checkout, git must be rolled back."""
+
+    def test_migration_failure_triggers_git_rollback(self, tmp_path):
+        """If _run_strategy() raises, git should be rolled back to old SHA."""
+        deployer = _make_deployer(
+            tmp_path,
+            database={"strategy": "migrate", "confiture_config": "confiture.yaml"},
+        )
+
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=("oldsha111111", "newsha222222"),
+            ),
+            patch.object(
+                deployer,
+                "_run_strategy",
+                side_effect=DeploymentError("Migration 003 failed"),
+            ),
+            patch.object(deployer, "_git_rollback") as mock_git_rollback,
+            patch.object(deployer, "_restart_service") as mock_restart,
+        ):
+            result = deployer.execute()
+
+        assert not result.success
+        mock_git_rollback.assert_called_once_with("oldsha111111")
+        mock_restart.assert_called_once()
+
+    def test_migration_failure_without_previous_sha_skips_rollback(self, tmp_path):
+        """If no previous SHA (first deploy), don't attempt git rollback."""
+        deployer = _make_deployer(
+            tmp_path,
+            database={"strategy": "migrate", "confiture_config": "confiture.yaml"},
+        )
+
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=(None, "newsha222222"),
+            ),
+            patch.object(
+                deployer,
+                "_run_strategy",
+                side_effect=DeploymentError("Migration failed"),
+            ),
+            patch.object(deployer, "_git_rollback") as mock_git_rollback,
+        ):
+            result = deployer.execute()
+
+        assert not result.success
+        mock_git_rollback.assert_not_called()
+
+    def test_migration_failure_result_preserves_old_version(self, tmp_path):
+        """Result should contain old_version for operator context."""
+        deployer = _make_deployer(
+            tmp_path,
+            database={"strategy": "migrate", "confiture_config": "confiture.yaml"},
+        )
+
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=("oldsha111111", "newsha222222"),
+            ),
+            patch.object(
+                deployer,
+                "_run_strategy",
+                side_effect=DeploymentError("Migration failed"),
+            ),
+            patch.object(deployer, "_git_rollback"),
+            patch.object(deployer, "_restart_service"),
+        ):
+            result = deployer.execute()
+
+        assert result.old_version == "oldsha11"
+        assert "Migration failed" in result.error_message
+
+
+class TestDoubleFailureSendsCriticalNotification:
+    """If rollback itself fails, notification must reach the operator."""
+
+    def test_double_failure_sends_critical_notification(self, tmp_path):
+        """When health check fails AND rollback fails, notify with ROLLBACK_FAILED."""
+        deployer = _make_deployer(tmp_path)
+        deployer._dispatcher = MagicMock()
+        deployer._dispatcher.is_configured = True
+
+        fail_health = HealthCheckResult(
+            success=False, check_type="http", duration=5.0, message="down"
+        )
+
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=("oldsha111111", "newsha222222"),
+            ),
+            patch("subprocess.run"),
+            patch("fraisier.deployers.api.HealthCheckManager") as MockMgr,
+            patch("fraisier.deployers.api.HTTPHealthChecker"),
+            patch.object(
+                deployer,
+                "rollback",
+                return_value=DeploymentResult(
+                    success=False,
+                    status=DeploymentStatus.FAILED,
+                    error_message="migrate down failed: file not found",
+                ),
+            ),
+        ):
+            MockMgr.return_value.check_with_retries.return_value = fail_health
+            result = deployer.execute()
+
+        assert result.status == DeploymentStatus.ROLLBACK_FAILED
+        deployer._dispatcher.notify.assert_called_once()
+        event = deployer._dispatcher.notify.call_args[0][0]
+        assert event.event_type == "rollback_failed"
+
+    def test_double_failure_includes_both_errors(self, tmp_path):
+        """ROLLBACK_FAILED result must include both original and rollback errors."""
+        deployer = _make_deployer(tmp_path)
+
+        fail_health = HealthCheckResult(
+            success=False, check_type="http", duration=5.0, message="down"
+        )
+
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=("oldsha111111", "newsha222222"),
+            ),
+            patch("subprocess.run"),
+            patch("fraisier.deployers.api.HealthCheckManager") as MockMgr,
+            patch("fraisier.deployers.api.HTTPHealthChecker"),
+            patch.object(
+                deployer,
+                "rollback",
+                return_value=DeploymentResult(
+                    success=False,
+                    status=DeploymentStatus.FAILED,
+                    error_message="migrate down failed",
+                ),
+            ),
+        ):
+            MockMgr.return_value.check_with_retries.return_value = fail_health
+            result = deployer.execute()
+
+        assert "Health check failed" in result.error_message
+        assert "migrate down failed" in result.error_message
