@@ -9,6 +9,7 @@ Three strategies:
 from __future__ import annotations
 
 import logging
+import shlex
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -129,7 +130,7 @@ class RestoreMigrateStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
     ) -> StrategyResult:
-        subprocess.run(self.restore_command, shell=True, check=True)
+        subprocess.run(shlex.split(self.restore_command), check=True)
 
         result = migrate_up(confiture_config, migrations_dir=migrations_dir)
         return StrategyResult(success=True, migrations_applied=result.steps_applied)

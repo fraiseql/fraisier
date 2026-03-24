@@ -160,12 +160,28 @@ class TestRestoreMigrateStrategy:
 
         assert result.success
         assert result.migrations_applied == 2
+        # Must use list (shlex.split) with shell=False
         mock_run.assert_called_once_with(
-            "pg_restore -d staging /backup/latest.dump",
-            shell=True,
+            ["pg_restore", "-d", "staging", "/backup/latest.dump"],
             check=True,
         )
         mock_up.assert_called_once()
+
+    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies.subprocess.run")
+    def test_execute_uses_list_not_shell(self, mock_run, mock_up):
+        """subprocess.run must receive a list, not a string with shell=True."""
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
+
+        strategy = RestoreMigrateStrategy("pg_restore dump.sql; rm -rf /")
+        strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        # Must be a list — semicolon becomes a literal arg, not shell separator
+        assert isinstance(cmd, list)
+        assert "shell" not in call_args[1]  # shell kwarg must not be passed
 
     @patch("fraisier.strategies.subprocess.run")
     def test_execute_restore_failure_raises(self, mock_run):
