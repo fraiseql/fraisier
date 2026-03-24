@@ -6,6 +6,8 @@ Follows factory pattern aligned with FraiseQL implementations.
 
 import os
 
+from fraisier._env import get_int_env
+
 from .adapter import DatabaseType, FraiserDatabaseAdapter
 
 
@@ -61,11 +63,11 @@ class DatabaseConfig:
         )
 
         # Pool configuration
-        self.pool_min_size = pool_min_size or int(
-            os.getenv("FRAISIER_DB_POOL_MIN", "1")
+        self.pool_min_size = pool_min_size or get_int_env(
+            "FRAISIER_DB_POOL_MIN", default=1, min_value=1
         )
-        self.pool_max_size = pool_max_size or int(
-            os.getenv("FRAISIER_DB_POOL_MAX", "10")
+        self.pool_max_size = pool_max_size or get_int_env(
+            "FRAISIER_DB_POOL_MAX", default=10, min_value=1
         )
 
         self._validate()

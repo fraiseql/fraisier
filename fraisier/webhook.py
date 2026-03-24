@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ._env import get_int_env
 from .config import get_config
 from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
@@ -606,7 +607,7 @@ def run_server() -> None:
     import uvicorn
 
     host = os.getenv("FRAISIER_HOST", "0.0.0.0")
-    port = int(os.getenv("FRAISIER_PORT", "8080"))
+    port = get_int_env("FRAISIER_PORT", default=8080, min_value=1)
 
     logger.info(f"Starting Fraisier webhook server on {host}:{port}")
 

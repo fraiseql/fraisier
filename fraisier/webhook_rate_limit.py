@@ -1,11 +1,12 @@
 """Rate limiter for webhook requests."""
 
-import os
 import time
 from collections import OrderedDict
 
+from fraisier._env import get_int_env
+
 _MAX_TRACKED_IPS = 256
-_RATE_LIMIT = int(os.getenv("FRAISIER_WEBHOOK_RATE_LIMIT", "10"))
+_RATE_LIMIT = get_int_env("FRAISIER_WEBHOOK_RATE_LIMIT", default=10, min_value=1)
 _request_times: OrderedDict[str, list[float]] = OrderedDict()
 
 
