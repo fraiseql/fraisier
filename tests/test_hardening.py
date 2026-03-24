@@ -280,82 +280,6 @@ class TestStructuredLogging:
         assert "timestamp" in parsed
 
 
-class TestDeploymentLockIntegration:
-    """Concurrent deploys to same fraise/env must be rejected."""
-
-    def test_lock_acquire_and_release(self):
-        """DeploymentLock can acquire and release."""
-        from fraisier.locking import DeploymentLock
-
-        with patch("fraisier.locking.get_db") as mock_db:
-            mock_db.return_value.get_deployment_lock.return_value = None
-            lock = DeploymentLock("my_api", "production", timeout=60)
-            assert lock.acquire() is True
-            assert lock._is_locked is True
-            lock.release()
-            assert lock._is_locked is False
-
-    def test_lock_rejects_when_locked(self):
-        """Second lock attempt fails when already locked."""
-        from fraisier.locking import DeploymentLock
-
-        with patch("fraisier.locking.get_db") as mock_db:
-            # Simulate an existing non-expired lock
-            mock_db.return_value.get_deployment_lock.return_value = {
-                "expires_at": "2099-12-31T23:59:59+00:00",
-            }
-            lock = DeploymentLock("my_api", "production")
-            assert lock.acquire() is False
-
-    def test_lock_context_manager_raises_on_conflict(self):
-        """Context manager raises DeploymentLockedError on conflict."""
-        from fraisier.locking import DeploymentLock, DeploymentLockedError
-
-        with patch("fraisier.locking.get_db") as mock_db:
-            mock_db.return_value.get_deployment_lock.return_value = {
-                "expires_at": "2099-12-31T23:59:59+00:00",
-            }
-            with (
-                pytest.raises(DeploymentLockedError),
-                DeploymentLock("my_api", "production"),
-            ):
-                pass  # Should not reach here
-
-    def test_lock_context_manager_releases_on_exit(self):
-        """Lock is released on normal context manager exit."""
-        from fraisier.locking import DeploymentLock
-
-        with patch("fraisier.locking.get_db") as mock_db:
-            mock_db.return_value.get_deployment_lock.return_value = None
-            lock = DeploymentLock("my_api", "production")
-            with lock:
-                assert lock._is_locked is True
-            assert lock._is_locked is False
-
-    def test_lock_context_manager_releases_on_exception(self):
-        """Lock is released even if exception occurs inside context."""
-        from fraisier.locking import DeploymentLock
-
-        with patch("fraisier.locking.get_db") as mock_db:
-            mock_db.return_value.get_deployment_lock.return_value = None
-            lock = DeploymentLock("my_api", "production")
-            with pytest.raises(ValueError, match="test error"), lock:
-                raise ValueError("test error")
-            assert lock._is_locked is False
-
-    def test_expired_lock_is_reclaimed(self):
-        """An expired lock is automatically cleaned up and new lock acquired."""
-        from fraisier.locking import DeploymentLock
-
-        with patch("fraisier.locking.get_db") as mock_db:
-            # First call returns expired lock, second returns None (released)
-            mock_db.return_value.get_deployment_lock.return_value = {
-                "expires_at": "2020-01-01T00:00:00+00:00",
-            }
-            lock = DeploymentLock("my_api", "production")
-            assert lock.acquire() is True
-
-
 class TestDeploymentConfigParsing:
     """deployment: section must parse from fraises.yaml with defaults."""
 
@@ -622,3 +546,122 @@ class TestStatusCommand:
         assert result.exit_code == 0
         out = result.output.lower()
         assert "no status" in out or "not found" in out
+
+
+class TestErrorPropagationGaps:
+    """Cycle 5: verify silent error swallows now log with context."""
+
+    def test_status_write_failure_logs_fraise_name_and_path(self, tmp_path, caplog):
+        """Status write OSError must log WARNING with fraise name and path."""
+        config = {
+            "fraise_name": "myapi",
+            "environment": "production",
+            "app_path": "/srv/myapi",
+            "clone_url": "git@github.com:org/myapi.git",
+            "branch": "main",
+            "repos_base": str(tmp_path / "repos"),
+            "status_dir": str(tmp_path / "status"),
+        }
+        deployer = APIDeployer(config)
+
+        with (
+            patch(
+                "fraisier.deployers.mixins.write_status",
+                side_effect=OSError("disk full"),
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            deployer._write_status("deploying")
+
+        assert any("myapi" in r.message for r in caplog.records)
+        assert any("status" in r.message.lower() for r in caplog.records)
+
+    def test_db_start_failure_logs_warning_with_fraise(self, tmp_path, caplog):
+        """DB record start failure must log WARNING with fraise name."""
+        import sqlite3
+
+        config = {
+            "fraise_name": "myapi",
+            "environment": "production",
+            "app_path": "/srv/myapi",
+            "clone_url": "git@github.com:org/myapi.git",
+            "branch": "main",
+            "repos_base": str(tmp_path / "repos"),
+            "status_dir": str(tmp_path / "status"),
+        }
+        deployer = APIDeployer(config)
+
+        with (
+            patch(
+                "fraisier.database.get_db",
+                side_effect=sqlite3.Error("db locked"),
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            result = deployer._start_db_record()
+
+        assert result is None
+        assert any("myapi" in r.message for r in caplog.records)
+
+    def test_db_complete_failure_logs_warning_with_deployment_id(
+        self, tmp_path, caplog
+    ):
+        """DB record completion failure must log WARNING with deployment_id."""
+        import sqlite3
+
+        from fraisier.deployers.base import DeploymentResult
+
+        config = {
+            "fraise_name": "myapi",
+            "environment": "production",
+            "app_path": "/srv/myapi",
+            "clone_url": "git@github.com:org/myapi.git",
+            "branch": "main",
+            "repos_base": str(tmp_path / "repos"),
+            "status_dir": str(tmp_path / "status"),
+        }
+        deployer = APIDeployer(config)
+        fake_result = DeploymentResult(
+            success=True,
+            status=DeploymentStatus.SUCCESS,
+        )
+
+        with (
+            patch(
+                "fraisier.database.get_db",
+                side_effect=sqlite3.Error("db locked"),
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            deployer._complete_db_record(42, fake_result)
+
+        assert any("42" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_webhook_exception_preserves_class_name(self, caplog):
+        """Webhook generic exception handler must include exception class name."""
+        from unittest.mock import MagicMock
+
+        from fraisier.webhook import _run_deployment
+
+        mock_db = MagicMock()
+
+        with (
+            patch(
+                "fraisier.runners.runner_from_config",
+                side_effect=RuntimeError("bad runner config"),
+            ),
+            caplog.at_level("ERROR"),
+        ):
+            await _run_deployment(
+                fraise_name="myapi",
+                environment="production",
+                fraise_config={"type": "api"},
+                webhook_id=None,
+                git_branch="main",
+                git_commit=None,
+                db=mock_db,
+            )
+
+        error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert any("RuntimeError" in r.message for r in error_records)

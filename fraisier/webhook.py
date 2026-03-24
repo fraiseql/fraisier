@@ -16,7 +16,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import get_config
-from .errors import DeploymentLockError
+from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
 from .locking import file_deployment_lock, is_deployment_locked
 from .status import read_status
@@ -252,13 +252,33 @@ async def _run_deployment(
                 f"- {result.error_message}"
             )
 
-    except Exception as e:
-        logger.exception(f"Deployment error for {fraise_name}/{environment}: {e}")
+    except (DeploymentError, ConfigurationError, OSError) as e:
+        logger.exception(
+            "Deployment error for %s/%s [%s]: %s",
+            fraise_name,
+            environment,
+            type(e).__name__,
+            e,
+        )
         if deployment_id:
             db.complete_deployment(
                 deployment_id=deployment_id,
                 success=False,
-                error_message=str(e),
+                error_message=f"{type(e).__name__}: {e}",
+            )
+    except Exception as e:
+        logger.exception(
+            "Unexpected deployment error for %s/%s [%s]: %s",
+            fraise_name,
+            environment,
+            type(e).__name__,
+            e,
+        )
+        if deployment_id:
+            db.complete_deployment(
+                deployment_id=deployment_id,
+                success=False,
+                error_message=f"{type(e).__name__}: {e}",
             )
 
 

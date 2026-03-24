@@ -152,7 +152,11 @@ class GitDeployMixin:
         try:
             write_status(status, status_dir=self.status_dir)
         except OSError:
-            logger.warning("Failed to write status file")
+            logger.warning(
+                "Failed to write status file for %s (dir=%s)",
+                self.fraise_name,
+                self.status_dir,
+            )
 
     def _start_db_record(
         self,
@@ -173,7 +177,11 @@ class GitDeployMixin:
                 old_version=old_version,
             )
         except (sqlite3.Error, OSError):
-            logger.warning("Failed to record deployment start in DB")
+            logger.warning(
+                "Failed to record deployment start in DB for %s/%s",
+                self.fraise_name,
+                self.environment,
+            )
             return None
 
     def _complete_db_record(
@@ -197,7 +205,10 @@ class GitDeployMixin:
             if result.status.value == "rolled_back":
                 db.mark_deployment_rolled_back(deployment_pk)
         except (sqlite3.Error, OSError):
-            logger.warning("Failed to record deployment completion in DB")
+            logger.warning(
+                "Failed to record deployment completion in DB (pk=%s)",
+                deployment_pk,
+            )
 
     def _write_incident(
         self,
