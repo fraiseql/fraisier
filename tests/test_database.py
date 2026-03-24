@@ -1,34 +1,23 @@
 """Tests for database operations."""
 
-from unittest.mock import patch
-
 from fraisier.database import FraisierDB, get_connection
 
 
 class TestConnectionPragmas:
     """SQLite connections must use WAL mode and busy_timeout."""
 
-    def test_connection_uses_wal_mode(self, tmp_db_path):
-        with (
-            patch("fraisier.database.get_db_path", return_value=tmp_db_path),
-            get_connection() as conn,
-        ):
+    def test_connection_uses_wal_mode(self):
+        with get_connection() as conn:
             result = conn.execute("PRAGMA journal_mode").fetchone()
             assert result[0] == "wal"
 
-    def test_connection_has_busy_timeout(self, tmp_db_path):
-        with (
-            patch("fraisier.database.get_db_path", return_value=tmp_db_path),
-            get_connection() as conn,
-        ):
+    def test_connection_has_busy_timeout(self):
+        with get_connection() as conn:
             result = conn.execute("PRAGMA busy_timeout").fetchone()
             assert result[0] >= 5000
 
-    def test_connection_uses_normal_sync(self, tmp_db_path):
-        with (
-            patch("fraisier.database.get_db_path", return_value=tmp_db_path),
-            get_connection() as conn,
-        ):
+    def test_connection_uses_normal_sync(self):
+        with get_connection() as conn:
             result = conn.execute("PRAGMA synchronous").fetchone()
             # 1 = NORMAL
             assert result[0] == 1
@@ -37,21 +26,17 @@ class TestConnectionPragmas:
 class TestFraisierDB:
     """Tests for FraisierDB class."""
 
-    def test_init_creates_tables(self, tmp_db_path):
+    def test_init_creates_tables(self):
         """Test that initialization creates database tables."""
-        with patch("fraisier.database.get_db_path", return_value=tmp_db_path):
-            _db = FraisierDB()
+        _db = FraisierDB()
 
-            # Verify tables exist by querying sqlite_master
-            with get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-                tables = {row[0] for row in cursor.fetchall()}
+        with get_connection() as conn:
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
 
-                assert "tb_fraise_state" in tables
-                assert "tb_deployment" in tables
-                assert "tb_webhook_event" in tables
+            assert "tb_fraise_state" in tables
+            assert "tb_deployment" in tables
+            assert "tb_webhook_event" in tables
 
     def test_update_fraise_state_new(self, test_db):
         """Test updating fraise state for new fraise."""

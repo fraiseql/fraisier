@@ -51,29 +51,21 @@ def _fast_strategy_time(monkeypatch, request):
 
 
 @pytest.fixture
-def tmp_db_path(tmp_path: Path) -> Path:
-    """Create temporary database file."""
-    db_path = tmp_path / "test.db"
-    return db_path
-
-
-@pytest.fixture
-def test_db(tmp_db_path: Path) -> FraisierDB:
+def test_db() -> FraisierDB:
     """Create test database with trinity schema.
 
     Initializes empty database with trinity pattern tables:
     - tb_fraise_state (pk_fraise_state, id UUID, identifier business key)
     - tb_deployment (pk_deployment, id UUID, identifier, fk_fraise_state)
     - tb_webhook_event (pk_webhook_event, id UUID, fk_deployment)
+
+    Uses the isolated DB path provided by _isolated_db autouse fixture.
     """
     import fraisier.database
 
-    # Patch get_db_path to use test database
-    with patch("fraisier.database.get_db_path", return_value=tmp_db_path):
-        db = FraisierDB()
-        # Set as global instance so get_db() returns this db
-        fraisier.database._db = db
-        yield db
+    db = FraisierDB()
+    fraisier.database._db = db
+    return db
 
 
 @pytest.fixture
@@ -164,10 +156,19 @@ def _reset_config_singleton():
 
 
 @pytest.fixture(autouse=True)
-def _reset_db_singleton():
-    """Reset global DB singleton between tests."""
+def _isolated_db(tmp_path, monkeypatch):
+    """Ensure every test gets a fresh, isolated SQLite database.
+
+    Patches get_db_path() so that any code path (get_db(), get_connection(),
+    FraisierDB()) uses a per-test temp directory.  Also resets the global _db
+    singleton so no state leaks between tests.
+    """
     import fraisier.database
 
-    old = fraisier.database._db
+    db_path = tmp_path / "test_fraisier.db"
+    monkeypatch.setattr(fraisier.database, "get_db_path", lambda: db_path)
+
+    old_db = fraisier.database._db
+    fraisier.database._db = None
     yield
-    fraisier.database._db = old
+    fraisier.database._db = old_db
