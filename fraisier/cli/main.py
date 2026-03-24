@@ -225,13 +225,13 @@ def deploy(
             console.print(f"Current version: {current}")
         return
 
-    # Execute deployment with file lock
-    from fraisier.locking import file_deployment_lock
+    # Execute deployment with lock (file or database backend)
+    from fraisier.locking import deployment_lock
 
     console.print(f"[green]Deploying {fraise} -> {environment}...[/green]")
 
     try:
-        with file_deployment_lock(fraise):
+        with deployment_lock(fraise):
             result = deployer.execute()
     except Exception as e:
         if "already running" in str(e).lower():

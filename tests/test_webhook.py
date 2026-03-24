@@ -65,16 +65,16 @@ class TestExecuteDeployment:
 
     @pytest.fixture(autouse=True)
     def _mock_lock(self, tmp_path):
-        """Auto-redirect file lock to tmp_path for all tests in this class."""
+        """Auto-redirect deployment lock to tmp_path for all tests in this class."""
 
         @contextmanager
-        def tmp_lock(fraise_name, lock_dir=None):
+        def tmp_lock(fraise_name):
             from fraisier.locking import file_deployment_lock as real_lock
 
             with real_lock(fraise_name, lock_dir=tmp_path) as path:
                 yield path
 
-        with patch("fraisier.webhook.file_deployment_lock", side_effect=tmp_lock):
+        with patch("fraisier.webhook.deployment_lock", side_effect=tmp_lock):
             yield
 
     @pytest.mark.asyncio
@@ -294,10 +294,10 @@ class TestExecuteDeployment:
             assert "Unknown fraise type" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_acquires_file_lock_during_deployment(
+    async def test_acquires_lock_during_deployment(
         self, test_db, mock_subprocess, tmp_path
     ):
-        """Deployment acquires file_deployment_lock for the fraise."""
+        """Deployment acquires deployment_lock for the fraise."""
         mock_subprocess.return_value = MagicMock(
             returncode=0, stdout="Deployment successful\n"
         )
@@ -314,8 +314,8 @@ class TestExecuteDeployment:
         from fraisier.locking import file_deployment_lock as real_lock
 
         @contextmanager
-        def tracking_lock(fraise_name, lock_dir=None):
-            with real_lock(fraise_name, lock_dir=lock_dir or tmp_path) as path:
+        def tracking_lock(fraise_name):
+            with real_lock(fraise_name, lock_dir=tmp_path) as path:
                 lock_acquired.append(fraise_name)
                 yield path
 
@@ -323,7 +323,7 @@ class TestExecuteDeployment:
             patch("fraisier.webhook.read_status", return_value=None),
             patch("fraisier.webhook.get_config") as mock_config,
             patch(
-                "fraisier.webhook.file_deployment_lock",
+                "fraisier.webhook.deployment_lock",
                 side_effect=tracking_lock,
             ),
         ):
@@ -354,7 +354,7 @@ class TestExecuteDeployment:
         with (
             patch("fraisier.webhook.read_status", return_value=None),
             patch(
-                "fraisier.webhook.file_deployment_lock",
+                "fraisier.webhook.deployment_lock",
                 side_effect=DeploymentLockError("Deploy already running for my_api"),
             ),
         ):
@@ -798,7 +798,7 @@ class TestMultiProviderRouting:
         """All four providers route push events through the same deployment path."""
 
         @contextmanager
-        def tmp_lock(fraise_name, lock_dir=None):
+        def tmp_lock(fraise_name):
             from fraisier.locking import file_deployment_lock as real_lock
 
             with real_lock(fraise_name, lock_dir=tmp_path) as path:
@@ -807,7 +807,7 @@ class TestMultiProviderRouting:
         with (
             patch("fraisier.webhook.get_provider") as mock_get_provider,
             patch("fraisier.webhook.get_config") as mock_get_config,
-            patch("fraisier.webhook.file_deployment_lock", side_effect=tmp_lock),
+            patch("fraisier.webhook.deployment_lock", side_effect=tmp_lock),
         ):
             self._mock_provider_push(provider_name, mock_get_provider)
 

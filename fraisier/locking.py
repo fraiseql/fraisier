@@ -1,10 +1,16 @@
 """Deployment lock mechanism to prevent concurrent deployments.
 
-Uses file-based fcntl.flock for single-machine deployment locking.
+Two backends:
+- **file**: ``fcntl.flock`` — fast, single-machine only (default).
+- **database**: SQLite with WAL — works across machines on shared storage.
 """
 
 import fcntl
 import logging
+import os
+import socket
+import sqlite3
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -90,3 +96,124 @@ def is_deployment_locked(
     finally:
         if fd is not None:
             fd.close()
+
+
+@contextmanager
+def deployment_lock(fraise_name: str) -> Generator[None]:
+    """Acquire a deployment lock using the configured backend.
+
+    Reads ``lock_backend`` from the deployment config:
+    - ``"file"`` (default): local fcntl flock.
+    - ``"database"``: SQLite-backed lock via :class:`DatabaseDeploymentLock`.
+    """
+    from fraisier.config import get_config
+
+    try:
+        cfg = get_config().deployment
+    except FileNotFoundError:
+        # No config file — fall back to file lock
+        with file_deployment_lock(fraise_name) as lp:
+            yield lp  # type: ignore[misc]
+            return
+
+    if cfg.lock_backend == "database":
+        db_lock = DatabaseDeploymentLock(
+            db_path=Path(cfg.lock_db_path),
+        )
+        with db_lock(fraise_name):
+            yield
+    else:
+        with file_deployment_lock(fraise_name, lock_dir=Path(cfg.lock_dir)):
+            yield  # type: ignore[misc]
+
+
+class DatabaseDeploymentLock:
+    """Database-backed deployment lock using SQLite with WAL mode.
+
+    Works across machines when the database file is on shared storage
+    (NFS/CIFS).  Stale locks are automatically reclaimed after ``ttl``
+    seconds.
+
+    Can be used directly via acquire/release or as a context manager::
+
+        lock = DatabaseDeploymentLock(db_path)
+        with lock("myfraise"):
+            ...  # deploy
+    """
+
+    _CREATE_TABLE = """\
+        CREATE TABLE IF NOT EXISTS deployment_locks (
+            fraise    TEXT PRIMARY KEY,
+            holder    TEXT NOT NULL,
+            acquired_at REAL NOT NULL
+        )
+    """
+
+    def __init__(self, db_path: Path, ttl: int = 600) -> None:
+        self.db_path = db_path
+        self.ttl = ttl
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(self._CREATE_TABLE)
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _holder_id() -> str:
+        return f"{socket.gethostname()}:{os.getpid()}"
+
+    def acquire(self, fraise: str) -> bool:
+        """Try to acquire a lock for *fraise*.
+
+        Returns True if the lock was acquired, False if already held
+        by a non-stale holder.  Stale locks (older than TTL) are
+        automatically reclaimed.
+        """
+        now = time.time()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT acquired_at FROM deployment_locks WHERE fraise = ?",
+                (fraise,),
+            ).fetchone()
+
+            if row is not None:
+                if now - row[0] < self.ttl:
+                    return False
+                # Stale — reclaim
+                logger.warning("Reclaiming stale lock for %s", fraise)
+                conn.execute("DELETE FROM deployment_locks WHERE fraise = ?", (fraise,))
+
+            conn.execute(
+                "INSERT INTO deployment_locks (fraise, holder, acquired_at) "
+                "VALUES (?, ?, ?)",
+                (fraise, self._holder_id(), now),
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def release(self, fraise: str) -> None:
+        """Release the lock for *fraise*."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("DELETE FROM deployment_locks WHERE fraise = ?", (fraise,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    @contextmanager
+    def __call__(self, fraise: str) -> Generator[None]:
+        """Context manager: acquire on entry, release on exit."""
+        if not self.acquire(fraise):
+            raise DeploymentLockError(f"Deploy already running for {fraise}")
+        try:
+            yield
+        finally:
+            self.release(fraise)

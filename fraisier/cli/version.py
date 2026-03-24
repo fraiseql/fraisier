@@ -210,7 +210,7 @@ def _trigger_deploy_for_current_branch() -> None:
     import subprocess as sp
 
     from fraisier.config import get_config
-    from fraisier.locking import file_deployment_lock
+    from fraisier.locking import deployment_lock
 
     from ._helpers import _get_deployer
 
@@ -249,7 +249,7 @@ def _trigger_deploy_for_current_branch() -> None:
 
     console.print(f"[green]Deploying {fraise_name} -> {environment}...[/green]")
     try:
-        with file_deployment_lock(fraise_name):
+        with deployment_lock(fraise_name):
             result = deployer.execute()
     except Exception as e:
         if "already running" in str(e).lower():

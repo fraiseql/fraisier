@@ -329,7 +329,7 @@ class TestShipDeploy:
                 "fraisier.cli._helpers._get_deployer",
                 return_value=mock_deployer,
             ),
-            patch("fraisier.locking.file_deployment_lock"),
+            patch("fraisier.locking.deployment_lock"),
         ):
             mock_cfg = MagicMock()
             mock_cfg.get_fraise_for_branch.return_value = {

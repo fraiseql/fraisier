@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from .config import get_config
 from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
-from .locking import file_deployment_lock, is_deployment_locked
+from .locking import deployment_lock, is_deployment_locked
 from .status import read_status
 from .webhook_rate_limit import check_rate_limit
 
@@ -148,17 +148,9 @@ async def execute_deployment(
 
     logger.info(f"Starting deployment: {fraise_name} -> {environment}")
 
-    # Acquire file lock to prevent concurrent deployments
+    # Acquire deployment lock (file or database backend per config)
     try:
-        lock_dir = None
-        try:
-            deployment_raw = get_config()._config.get("deployment", {}) or {}
-            if deployment_raw.get("lock_dir"):
-                lock_dir = Path(deployment_raw["lock_dir"])
-        except FileNotFoundError:
-            logger.warning("Config file not found, using default lock_dir")
-
-        with file_deployment_lock(fraise_name, lock_dir=lock_dir):
+        with deployment_lock(fraise_name):
             await _run_deployment(
                 fraise_name,
                 environment,

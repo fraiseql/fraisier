@@ -68,11 +68,16 @@ class ScaffoldConfig:
     )
 
 
+_VALID_LOCK_BACKENDS = {"file", "database"}
+
+
 @dataclass
 class DeploymentConfig:
     """Parsed deployment: section from fraises.yaml."""
 
     lock_dir: str = "/run/fraisier"
+    lock_backend: str = "file"
+    lock_db_path: str = "/var/lib/fraisier/locks.db"
     status_file: str = "deployment_status.json"
     webhook_secret_env: str = "DEPLOYMENT_TOKEN"
     poll_interval_seconds: int = 60
@@ -291,8 +296,17 @@ class FraisierConfig:
                 raise ValidationError(
                     f"Invalid strategy '{strat}' for {env}. Valid: {valid}",
                 )
+        lock_backend = raw.get("lock_backend", "file")
+        if lock_backend not in _VALID_LOCK_BACKENDS:
+            valid = ", ".join(sorted(_VALID_LOCK_BACKENDS))
+            raise ValidationError(
+                f"Invalid lock_backend '{lock_backend}'. Valid: {valid}",
+            )
+
         return DeploymentConfig(
             lock_dir=raw.get("lock_dir", "/run/fraisier"),
+            lock_backend=lock_backend,
+            lock_db_path=raw.get("lock_db_path", "/var/lib/fraisier/locks.db"),
             status_file=raw.get("status_file", "deployment_status.json"),
             webhook_secret_env=raw.get("webhook_secret_env", "DEPLOYMENT_TOKEN"),
             poll_interval_seconds=raw.get("poll_interval_seconds", 60),

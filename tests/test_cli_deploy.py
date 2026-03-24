@@ -71,7 +71,7 @@ class TestDeploy:
 
         with (
             patch("fraisier.cli.main._get_deployer", return_value=mock_deployer),
-            patch("fraisier.locking.file_deployment_lock"),
+            patch("fraisier.locking.deployment_lock"),
         ):
             result = runner.invoke(main, ["deploy", "my_api", "production"])
 
@@ -79,15 +79,15 @@ class TestDeploy:
         assert "successful" in result.output.lower()
         mock_deployer.execute.assert_called_once()
 
-    def test_deploy_acquires_file_lock(self, runner, mock_config):
-        """deploy acquires a file lock before executing."""
+    def test_deploy_acquires_lock(self, runner, mock_config):
+        """deploy acquires a deployment lock before executing."""
         mock_deployer = MagicMock()
         mock_deployer.is_deployment_needed.return_value = True
         mock_deployer.execute.return_value = _success_result()
 
         with (
             patch("fraisier.cli.main._get_deployer", return_value=mock_deployer),
-            patch("fraisier.locking.file_deployment_lock") as mock_lock,
+            patch("fraisier.locking.deployment_lock") as mock_lock,
         ):
             runner.invoke(main, ["deploy", "my_api", "production"])
 
@@ -121,7 +121,7 @@ class TestDeploy:
 
         with (
             patch("fraisier.cli.main._get_deployer", return_value=mock_deployer),
-            patch("fraisier.locking.file_deployment_lock"),
+            patch("fraisier.locking.deployment_lock"),
         ):
             result = runner.invoke(main, ["deploy", "my_api", "production"])
 
@@ -149,7 +149,7 @@ class TestDeploy:
 
         with (
             patch("fraisier.cli.main._get_deployer", return_value=mock_deployer),
-            patch("fraisier.locking.file_deployment_lock"),
+            patch("fraisier.locking.deployment_lock"),
         ):
             result = runner.invoke(main, ["deploy", "my_api", "production", "--force"])
 
@@ -179,7 +179,7 @@ class TestDeploy:
 
         with (
             patch("fraisier.cli.main._get_deployer", return_value=mock_deployer),
-            patch("fraisier.locking.file_deployment_lock"),
+            patch("fraisier.locking.deployment_lock"),
         ):
             result = runner.invoke(main, ["deploy", "my_api", "production"])
 
@@ -193,7 +193,7 @@ class TestDeploy:
 
         with (
             patch("fraisier.cli.main._get_deployer", return_value=mock_deployer) as m,
-            patch("fraisier.locking.file_deployment_lock"),
+            patch("fraisier.locking.deployment_lock"),
         ):
             runner.invoke(main, ["deploy", "my_api", "production", "--no-rollback"])
 
