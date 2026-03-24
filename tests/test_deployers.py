@@ -565,9 +565,7 @@ class TestScheduledDeployer:
         deployer = ScheduledDeployer(
             {"fraise_name": "backup", "systemd_timer": "backup.timer"}
         )
-        mock_subprocess.return_value = MagicMock(
-            stdout="timer:active\n", returncode=0
-        )
+        mock_subprocess.return_value = MagicMock(stdout="timer:active\n", returncode=0)
 
         with patch("fraisier.deployers.mixins.write_status"):
             result = deployer.rollback()
