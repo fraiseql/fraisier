@@ -11,6 +11,16 @@ from fraisier.database import FraisierDB
 
 
 @pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Clear rate limiter state between tests."""
+    import fraisier.webhook
+
+    fraisier.webhook._request_times.clear()
+    yield
+    fraisier.webhook._request_times.clear()
+
+
+@pytest.fixture(autouse=True)
 def _fast_strategy_time(monkeypatch, request):
     """Make asyncio.sleep advance time instantly for deployment strategy tests."""
     # Only apply to test files that test deployment strategies

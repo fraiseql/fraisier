@@ -7,6 +7,8 @@ import hmac
 import json
 import logging
 import os
+import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,6 +29,25 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Rate limiting
+_MAX_TRACKED_IPS = 256
+_RATE_LIMIT = int(os.getenv("FRAISIER_WEBHOOK_RATE_LIMIT", "10"))
+_request_times: OrderedDict[str, list[float]] = OrderedDict()
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Return True if the request is within the rate limit (10/min)."""
+    now = time.time()
+    while len(_request_times) > _MAX_TRACKED_IPS:
+        _request_times.popitem(last=False)
+    window = [t for t in _request_times.get(client_ip, []) if now - t < 60]
+    _request_times[client_ip] = window
+    _request_times.move_to_end(client_ip)
+    if len(window) >= _RATE_LIMIT:
+        return False
+    _request_times[client_ip].append(now)
+    return True
 
 
 @asynccontextmanager
@@ -338,6 +359,11 @@ async def generic_webhook(
         Status of the webhook processing
     """
     from .database import get_db
+
+    # Rate limit check
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise _structured_error(429, "rate_limited", "Too many requests")
 
     # Get raw body for signature verification
     body = await request.body()
