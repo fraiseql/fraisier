@@ -11,8 +11,12 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from fraisier.dbops._validation import validate_file_path, validate_service_name
-
-from .base import DeploymentProvider, HealthCheck, HealthCheckType, ProviderType
+from fraisier.providers.base import (
+    DeploymentProvider,
+    HealthCheck,
+    HealthCheckType,
+    ProviderType,
+)
 
 _DOCKER_CP_RE = re.compile(r"^[a-zA-Z0-9_.-]+:/[a-zA-Z0-9_./ -]+$")
 
