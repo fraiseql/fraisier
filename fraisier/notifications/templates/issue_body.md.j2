@@ -1,0 +1,34 @@
+## Deployment {{ event_type | title }}
+
+**Fraise:** `{{ fraise_name }}`
+**Environment:** `{{ environment }}`
+**Event:** {{ event_type }}
+**Time:** {{ timestamp }}
+{% if duration_seconds is not none %}**Duration:** {{ duration_human }}{% endif %}
+
+{% if old_version %}**Previous version:** `{{ old_version }}`{% endif %}
+
+{% if new_version %}**New version:** `{{ new_version }}`{% endif %}
+
+{% if error_message %}
+### Error
+
+```
+{{ error_message }}
+```
+{% endif %}
+{% if error_code %}**Error code:** `{{ error_code }}`{% endif %}
+
+{% if recovery_hint %}
+### Recovery
+
+{{ recovery_hint }}
+{% endif %}
+{% if incident_path %}
+### Incident file
+
+`{{ incident_path }}`
+{% endif %}
+
+---
+*Sent by [fraisier](https://github.com/fraiseql/fraisier) deployment orchestrator*
