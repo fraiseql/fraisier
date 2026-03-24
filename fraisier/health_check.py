@@ -206,7 +206,15 @@ class ExecHealthChecker(HealthChecker):
         Args:
             command: Command to execute (should return 0 on success)
             shell: If True, run via shell. Default False uses shlex.split().
+
+        Raises:
+            ValueError: If *shell* is False and *command* contains shell
+                metacharacters or is empty.
         """
+        if not shell:
+            from fraisier.dbops._validation import validate_shell_command
+
+            validate_shell_command(command)
         self.command = command
         self.use_shell = shell
         self.logger = logging.getLogger(__name__)
