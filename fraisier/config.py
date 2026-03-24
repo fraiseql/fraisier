@@ -8,7 +8,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
@@ -159,6 +159,7 @@ class FraisierConfig:
         with Path(self.config_path).open() as f:
             self._config = yaml.safe_load(f)
         self._validate_fraises()
+        self._validate_notifications()
 
     def _validate_fraises(self) -> None:
         """Validate all fraise configs at load time."""
@@ -223,6 +224,57 @@ class FraisierConfig:
             raise ValidationError(
                 f"Invalid fraise config: {'; '.join(errors)}",
             )
+
+    _VALID_NOTIFIER_TYPES = frozenset(
+        {
+            "slack",
+            "discord",
+            "webhook",
+            "github_issue",
+            "gitlab_issue",
+            "gitea_issue",
+            "bitbucket_issue",
+        }
+    )
+
+    _REQUIRED_FIELDS: ClassVar[dict[str, list[str]]] = {
+        "slack": ["webhook_url"],
+        "discord": ["webhook_url"],
+        "webhook": ["url"],
+        "github_issue": ["repo"],
+        "gitlab_issue": ["repo"],
+        "gitea_issue": ["repo"],
+        "bitbucket_issue": ["repo"],
+    }
+
+    def _validate_notifications(self) -> None:
+        """Validate the notifications: section."""
+        notifications = self._config.get("notifications", {})
+        if not notifications:
+            return
+        errors: list[str] = []
+        for event_key in ("on_failure", "on_rollback", "on_success"):
+            for notifier_cfg in notifications.get(event_key, []):
+                if not isinstance(notifier_cfg, dict):
+                    continue
+                ntype = notifier_cfg.get("type", "")
+                if ntype not in self._VALID_NOTIFIER_TYPES:
+                    valid = ", ".join(sorted(self._VALID_NOTIFIER_TYPES))
+                    errors.append(f"Unknown notifier type '{ntype}'. Valid: {valid}")
+                    continue
+                required = self._REQUIRED_FIELDS.get(ntype, [])
+                errors.extend(
+                    f"Notifier '{ntype}' missing required field '{req}'"
+                    for req in required
+                    if not notifier_cfg.get(req)
+                )
+        if errors:
+            raise ValidationError(f"Invalid notification config: {'; '.join(errors)}")
+
+    @property
+    def notifications(self) -> dict[str, Any]:
+        """Get notifications configuration."""
+        return self._config.get("notifications", {})
 
     def reload(self) -> None:
         """Reload configuration from file."""
