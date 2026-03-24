@@ -6,6 +6,7 @@ with systemd service management and TCP health checks.
 
 import asyncio
 import logging
+import shlex
 import subprocess
 from typing import Any
 
@@ -83,7 +84,7 @@ class BareMetalProvider(DeploymentProvider):
         if self.key_path:
             cmd.extend(["-i", self.key_path])
         cmd.append(f"{self.username}@{self.host}")
-        cmd.append(command)
+        cmd.append(shlex.quote(command))
         return cmd
 
     def run_command(self, command: str, timeout: int = 300) -> tuple[int, str, str]:

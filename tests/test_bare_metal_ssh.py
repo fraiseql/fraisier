@@ -284,7 +284,9 @@ class TestBuildSshCommand:
         return BareMetalProvider(config)
 
     def test_build_ssh_command_basic(self):
-        """_build_ssh_command() returns list-form command."""
+        """_build_ssh_command() returns list-form command with quoted remote cmd."""
+        import shlex
+
         provider = self._make_provider(
             host="server.example.com", username="deploy", port=22
         )
@@ -292,7 +294,25 @@ class TestBuildSshCommand:
 
         assert cmd[0] == "ssh"
         assert "deploy@server.example.com" in cmd
-        assert cmd[-1] == "ls /var/app"
+        assert cmd[-1] == shlex.quote("ls /var/app")
+
+    def test_build_ssh_command_quotes_command_for_remote_shell(self):
+        """_build_ssh_command() must shell-quote the command to prevent injection."""
+        import shlex
+
+        provider = self._make_provider()
+        cmd = provider._build_ssh_command("systemctl restart $(evil)")
+        # The command passed to SSH must be shell-quoted
+        remote_cmd = cmd[-1]
+        assert remote_cmd == shlex.quote("systemctl restart $(evil)")
+
+    def test_build_ssh_command_safe_commands_unquoted(self):
+        """Safe commands with no metacharacters pass through correctly."""
+        provider = self._make_provider()
+        cmd = provider._build_ssh_command("systemctl restart myapp.service")
+        remote_cmd = cmd[-1]
+        # Safe command — shlex.quote just returns the same string
+        assert "systemctl restart myapp.service" in remote_cmd
 
     def test_build_ssh_command_disables_strict_host_checking_by_default(self):
         """_build_ssh_command() disables strict host key checking."""
