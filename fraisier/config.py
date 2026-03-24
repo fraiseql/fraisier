@@ -193,7 +193,7 @@ class FraisierConfig:
                     )
 
         # Numeric fields at top level
-        for field in ("timeout",):
+        for field in ("timeout", "lock_timeout"):
             val = env.get(field)
             if val is not None and not isinstance(val, int | float):
                 errors.append(

@@ -56,6 +56,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.health_check_timeout = config.get("health_check", {}).get("timeout", 30)
         self.database_config = config.get("database", {})
         self.allow_irreversible = config.get("allow_irreversible", False)
+        self.lock_timeout = config.get("lock_timeout", 300)
         self._migrations_applied: int = 0
 
     def execute(self) -> DeploymentResult:

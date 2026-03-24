@@ -41,6 +41,7 @@ class GitDeployMixin:
         repos_base = config.get("repos_base", str(DEFAULT_REPOS_BASE))
         self.bare_repo = Path(repos_base) / f"{self.fraise_name}.git"
         self.status_dir = Path(config.get("status_dir", str(DEFAULT_STATUS_DIR)))
+        self.lock_timeout = config.get("lock_timeout", 300)
         self._previous_sha: str | None = None
 
     def get_current_version(self) -> str | None:
