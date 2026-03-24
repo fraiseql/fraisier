@@ -221,12 +221,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         """Restart systemd service."""
         if not self.systemd_service:
             return
-        from fraisier.dbops._validation import validate_service_name
+        from fraisier.systemd import SystemdServiceManager
 
-        validate_service_name(self.systemd_service)
-        self.runner.run(
-            ["sudo", "systemctl", "restart", self.systemd_service],
-        )
+        SystemdServiceManager(self.runner).restart(self.systemd_service)
 
     def _build_rollback_result(
         self,
