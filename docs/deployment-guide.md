@@ -227,47 +227,19 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-### 2. Create Deployment Watcher (Optional)
-
-For background deployment processing:
-
-```bash
-sudo vim /etc/systemd/system/fraisier-watcher.service
-```
-
-**Content**:
-
-```ini
-[Unit]
-Description=Fraisier Deployment Watcher
-After=fraisier.service
-
-[Service]
-Type=simple
-User=fraisier
-WorkingDirectory=/opt/fraisier
-EnvironmentFile=/opt/fraisier/config/.env
-
-# Watch for deployment requests and execute
-ExecStart=/usr/local/bin/fraisier-watcher
-
-StandardOutput=journal
-StandardError=journal
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### 3. Enable Services
+### 2. Enable Service
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable fraisier.service fraisier-watcher.service
+sudo systemctl enable fraisier.service
 sudo systemctl start fraisier.service
 sudo systemctl status fraisier.service
 ```
+
+> **Note**: Deployments triggered via webhook run asynchronously as
+> background tasks within the `fraisier-webhook` process. The HTTP 200
+> response does not indicate deployment success. Monitor via
+> `fraisier status` or the `/api/status/{fraise_name}` endpoint.
 
 ---
 
@@ -441,7 +413,7 @@ fraisier history --limit 5
 sudo journalctl -u fraisier.service -f
 
 # Deployment logs
-sudo journalctl -u fraisier-watcher.service -f
+sudo journalctl -u fraisier.service -f
 
 # Application logs
 tail -f /opt/fraisier/logs/fraisier.log
@@ -524,14 +496,14 @@ scp fraisier-config-*.tar.gz backup@backup.server:/backups/
 
 ```bash
 # Stop Fraisier
-sudo systemctl stop fraisier.service fraisier-watcher.service
+sudo systemctl stop fraisier.service
 
 # Restore database
 sudo cp /opt/fraisier/backups/fraisier.db.backup /opt/fraisier/data/fraisier.db
 sudo chown fraisier:fraisier /opt/fraisier/data/fraisier.db
 
 # Restart
-sudo systemctl start fraisier.service fraisier-watcher.service
+sudo systemctl start fraisier.service
 ```
 
 ---
@@ -542,7 +514,7 @@ sudo systemctl start fraisier.service fraisier-watcher.service
 
 ```bash
 # Check Fraisier logs
-sudo journalctl -u fraisier-watcher.service -n 50
+sudo journalctl -u fraisier.service -n 50
 
 # Check deployment details
 fraisier history --fraise my_api --limit 1
@@ -607,13 +579,13 @@ sudo -u fraisier cp /opt/fraisier/data/fraisier.db /opt/fraisier/backups/fraisie
 
 ```bash
 # Stop Fraisier
-sudo systemctl stop fraisier.service fraisier-watcher.service
+sudo systemctl stop fraisier.service
 
 # Upgrade
 pip install --upgrade fraisier
 
 # Restart
-sudo systemctl start fraisier.service fraisier-watcher.service
+sudo systemctl start fraisier.service
 
 # Verify
 fraisier --version
