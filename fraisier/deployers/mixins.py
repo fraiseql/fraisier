@@ -43,6 +43,7 @@ class GitDeployMixin:
         self.status_dir = Path(config.get("status_dir", str(DEFAULT_STATUS_DIR)))
         self.lock_timeout = config.get("lock_timeout", 300)
         self._previous_sha: str | None = None
+        self._init_notifications(config)
 
     def get_current_version(self) -> str | None:
         """Get currently deployed git commit from worktree."""
@@ -94,6 +95,29 @@ class GitDeployMixin:
             exc.context.update(ctx)
             return exc
         return DeploymentError(str(exc), context=ctx, cause=exc)
+
+    def _init_notifications(self, config: dict[str, Any]) -> None:
+        """Initialize notification dispatcher from config."""
+        from fraisier.notifications.dispatcher import NotificationDispatcher
+
+        notifications_config = config.get("notifications", {})
+        if notifications_config:
+            self._dispatcher = NotificationDispatcher.from_config(notifications_config)
+        else:
+            self._dispatcher = NotificationDispatcher()
+
+    def _notify(self, result: DeploymentResult) -> None:
+        """Send deployment notifications (fire-and-forget)."""
+        from fraisier.notifications.base import DeployEvent
+
+        if not self._dispatcher.is_configured:
+            return
+        event = DeployEvent.from_result(
+            result=result,
+            fraise_name=self.fraise_name,
+            environment=self.environment,
+        )
+        self._dispatcher.notify(event)
 
     def _write_status(self, state: str, **kwargs: Any) -> None:
         """Write deployment status file."""
@@ -221,6 +245,7 @@ class GitDeployMixin:
                 duration_seconds=duration,
             )
             self._complete_db_record(db_pk, result)
+            self._notify(result)
             return result
 
         except Exception as e:
@@ -238,4 +263,5 @@ class GitDeployMixin:
                 error=wrapped,
             )
             self._complete_db_record(db_pk, result)
+            self._notify(result)
             return result
