@@ -57,9 +57,17 @@ def _create_bare_repo_with_commits(
         sha = _git(work_repo, "rev-parse", "HEAD")
         shas.append(sha)
 
-    # Clone as bare repo
+    # Clone as bare repo and configure fetch refspec so
+    # "git fetch origin" + "git rev-parse origin/main" works
     bare_repo = tmp_path / "app.git"
     _git(tmp_path, "clone", "--bare", str(work_repo), str(bare_repo))
+    _git(
+        bare_repo,
+        "config",
+        "remote.origin.fetch",
+        "+refs/heads/*:refs/remotes/origin/*",
+    )
+    _git(bare_repo, "fetch", "origin")
 
     return bare_repo, shas
 
