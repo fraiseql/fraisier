@@ -1,0 +1,12 @@
+# Confiture configuration for database migrations
+# See https://github.com/your-org/confiture
+
+database:
+  host: ${DB_HOST:-localhost}
+  port: ${DB_PORT:-5432}
+  name: ${DB_NAME:-myapp_dev}
+  user: ${DB_USER:-postgres}
+
+migrations:
+  directory: migrations/
+  tracking_table: confiture_migrations

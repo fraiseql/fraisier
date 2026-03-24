@@ -1,0 +1,23 @@
+[Unit]
+Description=Poll-deploy checker for {{ project_name }}
+After=network.target
+
+[Service]
+Type=oneshot
+User={{ scaffold.deploy_user }}
+ExecStart=/usr/local/bin/fraisier deploy {{ fraise_names | first }} production --if-changed
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/fraisier /var/log/fraisier
+{% for fraise in fraises %}
+ReadWritePaths=/opt/{{ fraise.name }}
+{% endfor %}

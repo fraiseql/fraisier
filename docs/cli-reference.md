@@ -1,0 +1,585 @@
+# Fraisier CLI Reference
+
+Complete reference for all `fraisier` commands.
+
+```bash
+fraisier [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS]
+```
+
+## Global Options
+
+| Option | Description |
+|--------|-------------|
+| `-c`, `--config PATH` | Path to `fraises.yaml` configuration file |
+| `--help` | Show help and exit |
+
+---
+
+## Core Commands
+
+### fraisier list
+
+List all registered fraises and their environments.
+
+```bash
+fraisier list [--flat]
+```
+
+**Options:**
+
+- `--flat` -- Show a flat table instead of the default tree view.
+
+**Examples:**
+
+```bash
+# Tree view (default)
+fraisier list
+
+# Flat table view
+fraisier list --flat
+```
+
+---
+
+### fraisier deploy
+
+Deploy a fraise to an environment.
+
+```bash
+fraisier deploy FRAISE ENVIRONMENT [OPTIONS]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise to deploy.
+- `ENVIRONMENT` (required) -- Target environment.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Show what would happen without deploying |
+| `--force` | Deploy even if current and latest versions match |
+| `--skip-health` | Skip the post-deploy health check |
+| `--job NAME` | Specify a job name (for scheduled fraises) |
+
+**Examples:**
+
+```bash
+# Standard deploy
+fraisier deploy my_api production
+
+# Preview what would happen
+fraisier deploy my_api production --dry-run
+
+# Force redeploy even if versions match
+fraisier deploy my_api production --force
+
+# Deploy without health check
+fraisier deploy my_api staging --skip-health
+
+# Deploy a specific job within a scheduled fraise
+fraisier deploy my_etl production --job nightly_sync
+```
+
+---
+
+### fraisier status
+
+Check the status of a fraise in an environment: current version, latest version, health, and recent deployments.
+
+```bash
+fraisier status FRAISE ENVIRONMENT
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+- `ENVIRONMENT` (required) -- Target environment.
+
+**Examples:**
+
+```bash
+fraisier status my_api production
+fraisier status my_worker staging
+```
+
+---
+
+### fraisier status-all
+
+Show a table of all fraise states, with optional filters.
+
+```bash
+fraisier status-all [--environment ENV] [--type TYPE]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--environment ENV` | Filter by environment |
+| `--type TYPE` | Filter by fraise type |
+
+**Examples:**
+
+```bash
+# All fraises
+fraisier status-all
+
+# Only production
+fraisier status-all --environment production
+
+# Only API fraises
+fraisier status-all --type api
+```
+
+---
+
+### fraisier deploy-status
+
+Show the last deployment status from `deployment_status.json`.
+
+```bash
+fraisier deploy-status [--status-file PATH]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--status-file PATH` | Path to a custom `deployment_status.json` file |
+
+**Examples:**
+
+```bash
+fraisier deploy-status
+fraisier deploy-status --status-file /var/lib/fraisier/deployment_status.json
+```
+
+---
+
+## Database Commands
+
+### fraisier db reset
+
+Reset a database from its template. This is a sub-second operation. Fraises with `external_db` are skipped.
+
+```bash
+fraisier db reset FRAISE -e ENV [--force]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-e ENV` | Target environment (required) |
+| `--force` | Skip confirmation prompt |
+
+**Examples:**
+
+```bash
+fraisier db reset my_api -e development
+fraisier db reset my_api -e development --force
+```
+
+---
+
+### fraisier db migrate
+
+Run database migrations via confiture.
+
+```bash
+fraisier db migrate FRAISE -e ENV [-d up|down]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-e ENV` | Target environment (required) |
+| `-d up\|down` | Migration direction (default: `up`) |
+
+**Examples:**
+
+```bash
+fraisier db migrate my_api -e staging
+fraisier db migrate my_api -e staging -d down
+```
+
+---
+
+### fraisier db build
+
+Build the database schema.
+
+```bash
+fraisier db build FRAISE -e ENV [--rebuild]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-e ENV` | Target environment (required) |
+| `--rebuild` | Drop and rebuild the database schema |
+
+**Examples:**
+
+```bash
+fraisier db build my_api -e development
+fraisier db build my_api -e development --rebuild
+```
+
+---
+
+### fraisier db-check
+
+Check database health and connection pool metrics.
+
+```bash
+fraisier db-check
+```
+
+---
+
+### fraisier backup
+
+Run a `pg_dump` backup of a fraise's database. Slim mode excludes tables configured for exclusion.
+
+```bash
+fraisier backup FRAISE -e ENV [--mode full|slim]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-e ENV` | Target environment (required) |
+| `--mode full\|slim` | Backup mode (default: `full`). `slim` excludes configured tables. |
+
+**Examples:**
+
+```bash
+fraisier backup my_api -e production
+fraisier backup my_api -e production --mode slim
+```
+
+---
+
+## Infrastructure Commands
+
+### fraisier scaffold
+
+Generate infrastructure files from `fraises.yaml`. Outputs systemd units, nginx configuration, GitHub Actions workflows, sudoers rules, `install.sh`, `confiture.yaml`, and shell scripts.
+
+```bash
+fraisier scaffold [--dry-run]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Show what files would be generated without writing them |
+
+**Examples:**
+
+```bash
+fraisier scaffold
+fraisier scaffold --dry-run
+```
+
+---
+
+### fraisier validate
+
+Run pre-deploy validation checks: `config_valid`, `deploy_user`, and `fraises_have_environments`.
+
+```bash
+fraisier validate [--json]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output results as structured JSON |
+
+**Examples:**
+
+```bash
+fraisier validate
+fraisier validate --json
+```
+
+---
+
+### fraisier health
+
+Check health of all services. Displays a table by default.
+
+```bash
+fraisier health [--env ENV] [--json] [--wait]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--env ENV` | Filter by environment |
+| `--json` | Output as JSON |
+| `--wait` | Wait for services to become healthy |
+
+**Examples:**
+
+```bash
+fraisier health
+fraisier health --env production
+fraisier health --json
+fraisier health --env staging --wait
+```
+
+---
+
+## Version Commands
+
+### fraisier version
+
+Show the Fraisier package version.
+
+```bash
+fraisier version
+```
+
+---
+
+### fraisier version show
+
+Show contents of `version.json`: version, commit, branch, schema hash, and database version.
+
+```bash
+fraisier version show [--version-file PATH]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--version-file PATH` | Path to a custom `version.json` file |
+
+**Examples:**
+
+```bash
+fraisier version show
+fraisier version show --version-file /opt/my_api/version.json
+```
+
+---
+
+### fraisier version bump
+
+Bump the semantic version. Creates a `.bak` backup of the version file.
+
+```bash
+fraisier version bump major|minor|patch [--version-file PATH] [--dry-run] [--no-tag]
+```
+
+**Arguments:**
+
+- `major|minor|patch` (required) -- The version component to bump.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--version-file PATH` | Path to a custom `version.json` file |
+| `--dry-run` | Show what the new version would be without writing |
+| `--no-tag` | Skip creating a git tag |
+
+**Examples:**
+
+```bash
+fraisier version bump patch
+fraisier version bump minor --dry-run
+fraisier version bump major --no-tag
+```
+
+---
+
+## Observability Commands
+
+### fraisier history
+
+Show deployment history as a table.
+
+```bash
+fraisier history [--fraise NAME] [--environment ENV] [--limit N]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--fraise NAME` | Filter by fraise name |
+| `--environment ENV` | Filter by environment |
+| `--limit N` | Number of entries to show (default: 20) |
+
+**Examples:**
+
+```bash
+fraisier history
+fraisier history --fraise my_api
+fraisier history --fraise my_api --environment production --limit 50
+```
+
+---
+
+### fraisier stats
+
+Show deployment statistics: success rate, average duration, and more.
+
+```bash
+fraisier stats [--fraise NAME] [--days N]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--fraise NAME` | Filter by fraise name |
+| `--days N` | Number of days to include (default: 30) |
+
+**Examples:**
+
+```bash
+fraisier stats
+fraisier stats --fraise my_api
+fraisier stats --fraise my_api --days 7
+```
+
+---
+
+### fraisier webhooks
+
+Show recent webhook events.
+
+```bash
+fraisier webhooks [--limit N]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--limit N` | Number of events to show (default: 10) |
+
+**Examples:**
+
+```bash
+fraisier webhooks
+fraisier webhooks --limit 50
+```
+
+---
+
+### fraisier metrics
+
+Start a Prometheus metrics exporter endpoint.
+
+```bash
+fraisier metrics [--port PORT] [--address ADDR]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--port PORT` | Port to listen on |
+| `--address ADDR` | Address to bind to |
+
+**Examples:**
+
+```bash
+fraisier metrics
+fraisier metrics --port 9090
+fraisier metrics --port 9090 --address 0.0.0.0
+```
+
+---
+
+## Provider Commands
+
+### fraisier providers
+
+List all available deployment providers.
+
+```bash
+fraisier providers
+```
+
+The built-in providers are: `bare_metal` and `docker_compose`.
+
+---
+
+### fraisier provider-info
+
+Show detailed information about a specific provider.
+
+```bash
+fraisier provider-info TYPE
+```
+
+**Arguments:**
+
+- `TYPE` (required) -- Provider type (e.g., `bare_metal`, `docker_compose`).
+
+**Examples:**
+
+```bash
+fraisier provider-info bare_metal
+fraisier provider-info docker_compose
+```
+
+---
+
+### fraisier provider-test
+
+Run pre-flight checks for a provider to verify connectivity and configuration.
+
+```bash
+fraisier provider-test TYPE [-f CONFIG]
+```
+
+**Arguments:**
+
+- `TYPE` (required) -- Provider type.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-f CONFIG` | Path to a provider configuration file |
+
+**Examples:**
+
+```bash
+fraisier provider-test bare_metal
+fraisier provider-test docker_compose -f docker-provider.yaml
+```

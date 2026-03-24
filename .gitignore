@@ -1,0 +1,14 @@
+*.db
+tmp/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+*.egg-info/
+.env
+!.env.example
+*.key
+*.pem

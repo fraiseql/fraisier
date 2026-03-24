@@ -1,0 +1,47 @@
+[Unit]
+Description={{ fraise.name }} ({{ env_name }})
+After=network.target
+{% if fraise.get('type') == 'api' %}
+After=postgresql.service
+{% endif %}
+
+[Service]
+Type=notify
+User={{ scaffold.deploy_user }}
+Group={{ scaffold.deploy_user }}
+WorkingDirectory=/opt/{{ fraise.name }}
+ExecStart=/opt/{{ fraise.name }}/.venv/bin/uvicorn {{ fraise.name }}.main:app --host 0.0.0.0 --port 8000 --workers {{ worker_count }}
+Restart=on-failure
+RestartSec=5
+WatchdogSec=60
+
+# Resource limits
+MemoryMax={{ memory_max }}
+CPUAccounting=true
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=~@clock @debug @module @mount @obsolete @reboot @swap
+
+# Writable paths
+ReadWritePaths=/opt/{{ fraise.name }}
+{% if not fraise.get('external_db', false) %}
+ReadWritePaths=/var/lib/postgresql
+{% endif %}
+
+# Environment
+Environment=ENVIRONMENT={{ env_name }}
+{% if fraise.get('type') == 'api' %}
+Environment=WORKERS={{ worker_count }}
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target

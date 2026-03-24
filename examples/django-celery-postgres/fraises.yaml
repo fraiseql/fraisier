@@ -1,0 +1,67 @@
+# Fraisier Configuration — Django + Celery + PostgreSQL
+#
+# Two fraises: an API (Django + gunicorn) and a worker (Celery).
+# Both deploy to bare metal with atomic migration + rollback.
+
+fraises:
+  api:
+    type: api
+    description: Django REST API (gunicorn)
+    environments:
+      development:
+        name: myapp-api-dev
+        branch: dev
+        app_path: /var/www/myapp-dev
+        systemd_service: gunicorn-myapp-dev.service
+        database:
+          name: myapp_dev
+          strategy: rebuild
+        health_check:
+          url: http://localhost:8000/health
+          timeout: 30
+
+      production:
+        name: myapp-api
+        branch: main
+        app_path: /var/www/myapp
+        systemd_service: gunicorn-myapp.service
+        database:
+          name: myapp_production
+          strategy: migrate
+          backup_before_deploy: true
+        health_check:
+          url: http://localhost:8000/health
+          timeout: 30
+
+  worker:
+    type: api
+    description: Celery worker
+    environments:
+      development:
+        name: myapp-worker-dev
+        branch: dev
+        app_path: /var/www/myapp-dev
+        systemd_service: celery-myapp-dev.service
+
+      production:
+        name: myapp-worker
+        branch: main
+        app_path: /var/www/myapp
+        systemd_service: celery-myapp.service
+        health_check:
+          url: http://localhost:8001/health
+          timeout: 30
+
+environments:
+  development:
+    server: dev.example.com
+  production:
+    server: prod.example.com
+
+branch_mapping:
+  dev:
+    fraise: api
+    environment: development
+  main:
+    fraise: api
+    environment: production

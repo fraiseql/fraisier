@@ -1,0 +1,624 @@
+"""Production hardening tests.
+
+Tests for error handling, recovery integration, async bridge,
+metrics, logging, locking, deployment config, strategies, runner,
+CLI enhancements, and status command.
+"""
+
+from unittest.mock import patch
+
+import pytest
+
+from fraisier.deployers.api import APIDeployer
+from fraisier.deployers.base import DeploymentStatus
+from fraisier.deployers.etl import ETLDeployer
+from fraisier.deployers.scheduled import ScheduledDeployer
+from fraisier.errors import (
+    ConfigurationError,
+    DeploymentError,
+    DeploymentTimeoutError,
+    FraisierError,
+    HealthCheckError,
+)
+from fraisier.metrics import MetricsRecorder
+
+
+class TestErrorHandlingAudit:
+    """Deployment failures must produce structured FraisierError with context."""
+
+    def test_api_deployer_git_pull_failure_raises_deployment_error(self):
+        """APIDeployer._git_pull failure wraps as DeploymentError."""
+        deployer = APIDeployer(
+            {
+                "fraise_name": "my_api",
+                "environment": "production",
+                "app_path": "/nonexistent",
+                "systemd_service": "my_api.service",
+            }
+        )
+        result = deployer.execute()
+        assert not result.success
+        assert result.status == DeploymentStatus.FAILED
+        assert isinstance(result.error, FraisierError)
+        assert result.error.context.get("fraise") == "my_api"
+        assert result.error.context.get("environment") == "production"
+
+    def test_api_deployer_health_check_failure_raises_health_check_error(self):
+        """Health check failure produces HealthCheckError with context."""
+        from fraisier.health_check import HealthCheckResult
+
+        deployer = APIDeployer(
+            {
+                "fraise_name": "my_api",
+                "environment": "staging",
+                "app_path": "/tmp",
+                "health_check": {"url": "http://localhost:99999/health", "timeout": 1},
+            }
+        )
+        fail = HealthCheckResult(
+            success=False,
+            check_type="http",
+            duration=1.0,
+            message="refused",
+        )
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=(None, "abc123"),
+            ),
+            patch("fraisier.deployers.api.HealthCheckManager") as MockMgr,
+            patch("fraisier.deployers.api.HTTPHealthChecker"),
+        ):
+            MockMgr.return_value.check_with_retries.return_value = fail
+            result = deployer.execute()
+        assert not result.success
+        assert isinstance(result.error, HealthCheckError)
+        assert result.error.context.get("fraise") == "my_api"
+
+    def test_etl_deployer_failure_produces_structured_error(self):
+        """ETLDeployer failure wraps as DeploymentError with context."""
+        deployer = ETLDeployer(
+            {
+                "fraise_name": "etl_job",
+                "environment": "development",
+                "app_path": "/nonexistent",
+                "script_path": "run.py",
+            }
+        )
+        result = deployer.execute()
+        assert not result.success
+        assert isinstance(result.error, FraisierError)
+        assert result.error.context.get("fraise") == "etl_job"
+
+    def test_scheduled_deployer_failure_produces_structured_error(self):
+        """ScheduledDeployer failure wraps as DeploymentError with context."""
+        deployer = ScheduledDeployer(
+            {
+                "fraise_name": "cron_job",
+                "environment": "production",
+                "systemd_timer": "nonexistent.timer",
+            }
+        )
+        with patch(
+            "subprocess.run",
+            side_effect=FileNotFoundError("systemctl not found"),
+        ):
+            result = deployer.execute()
+        assert not result.success
+        assert isinstance(result.error, FraisierError)
+        assert result.error.context.get("fraise") == "cron_job"
+
+    def test_deployment_result_carries_error_object(self):
+        """DeploymentResult.error is always a FraisierError on failure."""
+        deployer = APIDeployer(
+            {
+                "fraise_name": "api",
+                "environment": "dev",
+                "app_path": "/nonexistent",
+            }
+        )
+        result = deployer.execute()
+        assert not result.success
+        assert result.error is not None
+        assert isinstance(result.error, FraisierError)
+        assert result.error.recoverable is not None  # explicit flag
+
+    def test_error_to_dict_includes_context(self):
+        """FraisierError.to_dict() includes context for structured logging."""
+        err = DeploymentError(
+            "deploy failed",
+            context={"fraise": "api", "environment": "prod"},
+        )
+        d = err.to_dict()
+        assert d["context"]["fraise"] == "api"
+        assert d["context"]["environment"] == "prod"
+        assert d["code"] == "DEPLOYMENT_ERROR"
+
+    def test_recoverable_flag_correct_on_timeout(self):
+        """DeploymentTimeoutError is recoverable."""
+        err = DeploymentTimeoutError("timed out", context={"timeout": 300})
+        assert err.recoverable is True
+
+    def test_recoverable_flag_correct_on_health_check(self):
+        """HealthCheckError is recoverable."""
+        err = HealthCheckError("unhealthy")
+        assert err.recoverable is True
+
+    def test_recoverable_flag_false_on_config_error(self):
+        """ConfigurationError is not recoverable."""
+        err = ConfigurationError("bad config")
+        assert err.recoverable is False
+
+
+class TestMetricsIntegration:
+    """Deploy, rollback, and health check must record Prometheus metrics."""
+
+    def test_record_deployment_start(self):
+        """record_deployment_start tracks active deployments."""
+        recorder = MetricsRecorder()
+        # Should not raise
+        recorder.record_deployment_start("bare_metal", "api")
+
+    def test_record_deployment_complete(self):
+        """record_deployment_complete records counter and histogram."""
+        recorder = MetricsRecorder()
+        recorder.record_deployment_start("bare_metal", "api")
+        recorder.record_deployment_complete("bare_metal", "api", "success", 42.5)
+
+    def test_record_deployment_error(self):
+        """record_deployment_error increments error counter."""
+        recorder = MetricsRecorder()
+        recorder.record_deployment_start("bare_metal", "api")
+        recorder.record_deployment_error("bare_metal", "timeout")
+
+    def test_record_rollback(self):
+        """record_rollback records rollback counter and duration."""
+        recorder = MetricsRecorder()
+        recorder.record_rollback("docker_compose", "health_check", 15.3)
+
+    def test_record_health_check(self):
+        """record_health_check records check counter and duration."""
+        recorder = MetricsRecorder()
+        recorder.record_health_check("bare_metal", "http", "pass", 0.234)
+
+    def test_set_provider_availability(self):
+        """set_provider_availability sets gauge."""
+        recorder = MetricsRecorder()
+        recorder.set_provider_availability("bare_metal", True)
+        recorder.set_provider_availability("docker_compose", False)
+
+    def test_record_lock_wait(self):
+        """record_lock_wait records wait time gauge."""
+        recorder = MetricsRecorder()
+        recorder.record_lock_wait("my_api", "bare_metal", 2.5)
+
+    def test_metrics_summary_reports_availability(self):
+        """get_metrics_summary returns status."""
+        recorder = MetricsRecorder()
+        summary = recorder.get_metrics_summary()
+        assert "prometheus_available" in summary
+
+    def test_db_metrics_recorded(self):
+        """Database metrics methods do not raise."""
+        recorder = MetricsRecorder()
+        recorder.record_db_query("sqlite", "select", "success", 0.01)
+        recorder.record_db_error("sqlite", "timeout")
+        recorder.record_db_transaction("sqlite", 0.5)
+        recorder.record_deployment_db_operation("sqlite", "record_start")
+        recorder.update_db_pool_metrics("sqlite", 5, 3, 0)
+
+
+class TestStructuredLogging:
+    """Deploy logs must include deployment_id, fraise, env in context."""
+
+    def test_contextual_logger_adds_context(self):
+        """ContextualLogger context manager adds keys to log context."""
+        from fraisier.logging import ContextualLogger
+
+        logger = ContextualLogger("test")
+        with logger.context(deployment_id="d-123", fraise="my_api", env="prod"):
+            ctx = logger._get_context()
+            assert ctx["deployment_id"] == "d-123"
+            assert ctx["fraise"] == "my_api"
+            assert ctx["env"] == "prod"
+
+    def test_context_nesting(self):
+        """Nested contexts accumulate keys."""
+        from fraisier.logging import ContextualLogger
+
+        logger = ContextualLogger("test")
+        with logger.context(deployment_id="d-123"):  # noqa: SIM117
+            with logger.context(fraise="api", env="staging"):
+                ctx = logger._get_context()
+                assert ctx["deployment_id"] == "d-123"
+                assert ctx["fraise"] == "api"
+                assert ctx["env"] == "staging"
+
+    def test_context_cleanup_on_exit(self):
+        """Context is removed after exiting context manager."""
+        from fraisier.logging import ContextualLogger
+
+        logger = ContextualLogger("test")
+        with logger.context(deployment_id="d-123"):
+            pass
+        assert logger._get_context() == {}
+
+    def test_redaction_of_sensitive_keys(self):
+        """Sensitive keys are redacted in log output."""
+        from fraisier.logging import ContextualLogger
+
+        logger = ContextualLogger("test")
+        redacted = logger._redact_dict(
+            {"api_key": "secret123", "user": "admin", "password": "pass"}
+        )
+        assert redacted["api_key"] == "***REDACTED***"
+        assert redacted["password"] == "***REDACTED***"
+        assert redacted["user"] == "admin"
+
+    def test_json_formatter_produces_json(self):
+        """JSONFormatter outputs valid JSON with expected fields."""
+        import json
+        import logging
+
+        from fraisier.logging import JSONFormatter
+
+        formatter = JSONFormatter()
+        record = logging.LogRecord(
+            name="fraisier.deploy",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Deployment started",
+            args=None,
+            exc_info=None,
+        )
+        output = formatter.format(record)
+        parsed = json.loads(output)
+        assert parsed["level"] == "INFO"
+        assert parsed["message"] == "Deployment started"
+        assert "timestamp" in parsed
+
+
+class TestDeploymentLockIntegration:
+    """Concurrent deploys to same fraise/env must be rejected."""
+
+    def test_lock_acquire_and_release(self):
+        """DeploymentLock can acquire and release."""
+        from fraisier.locking import DeploymentLock
+
+        with patch("fraisier.locking.get_db") as mock_db:
+            mock_db.return_value.get_deployment_lock.return_value = None
+            lock = DeploymentLock("my_api", "production", timeout=60)
+            assert lock.acquire() is True
+            assert lock._is_locked is True
+            lock.release()
+            assert lock._is_locked is False
+
+    def test_lock_rejects_when_locked(self):
+        """Second lock attempt fails when already locked."""
+        from fraisier.locking import DeploymentLock
+
+        with patch("fraisier.locking.get_db") as mock_db:
+            # Simulate an existing non-expired lock
+            mock_db.return_value.get_deployment_lock.return_value = {
+                "expires_at": "2099-12-31T23:59:59+00:00",
+            }
+            lock = DeploymentLock("my_api", "production")
+            assert lock.acquire() is False
+
+    def test_lock_context_manager_raises_on_conflict(self):
+        """Context manager raises DeploymentLockedError on conflict."""
+        from fraisier.locking import DeploymentLock, DeploymentLockedError
+
+        with patch("fraisier.locking.get_db") as mock_db:
+            mock_db.return_value.get_deployment_lock.return_value = {
+                "expires_at": "2099-12-31T23:59:59+00:00",
+            }
+            with (
+                pytest.raises(DeploymentLockedError),
+                DeploymentLock("my_api", "production"),
+            ):
+                pass  # Should not reach here
+
+    def test_lock_context_manager_releases_on_exit(self):
+        """Lock is released on normal context manager exit."""
+        from fraisier.locking import DeploymentLock
+
+        with patch("fraisier.locking.get_db") as mock_db:
+            mock_db.return_value.get_deployment_lock.return_value = None
+            lock = DeploymentLock("my_api", "production")
+            with lock:
+                assert lock._is_locked is True
+            assert lock._is_locked is False
+
+    def test_lock_context_manager_releases_on_exception(self):
+        """Lock is released even if exception occurs inside context."""
+        from fraisier.locking import DeploymentLock
+
+        with patch("fraisier.locking.get_db") as mock_db:
+            mock_db.return_value.get_deployment_lock.return_value = None
+            lock = DeploymentLock("my_api", "production")
+            with pytest.raises(ValueError, match="test error"), lock:
+                raise ValueError("test error")
+            assert lock._is_locked is False
+
+    def test_expired_lock_is_reclaimed(self):
+        """An expired lock is automatically cleaned up and new lock acquired."""
+        from fraisier.locking import DeploymentLock
+
+        with patch("fraisier.locking.get_db") as mock_db:
+            # First call returns expired lock, second returns None (released)
+            mock_db.return_value.get_deployment_lock.return_value = {
+                "expires_at": "2020-01-01T00:00:00+00:00",
+            }
+            lock = DeploymentLock("my_api", "production")
+            assert lock.acquire() is True
+
+
+class TestDeploymentConfigParsing:
+    """deployment: section must parse from fraises.yaml with defaults."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        """Write yaml_content to a temp file and return FraisierConfig."""
+        from fraisier.config import FraisierConfig
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_deployment_section_parses(self, tmp_path):
+        """Full deployment section parses correctly."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises: {}
+deployment:
+  lock_dir: /run/my-project
+  status_file: deployment_status.json
+  webhook_secret_env: DEPLOYMENT_TOKEN
+  poll_interval_seconds: 60
+  deploy_user: my_project_app
+  strategies:
+    development: rebuild
+    staging: restore_migrate
+    production: migrate
+  timeouts:
+    development: 420
+    staging: 1800
+    production: 900
+""",
+        )
+        dep = config.deployment
+        assert dep.lock_dir == "/run/my-project"
+        assert dep.status_file == "deployment_status.json"
+        assert dep.webhook_secret_env == "DEPLOYMENT_TOKEN"
+        assert dep.poll_interval_seconds == 60
+        assert dep.deploy_user == "my_project_app"
+        assert dep.strategies["development"] == "rebuild"
+        assert dep.strategies["production"] == "migrate"
+        assert dep.timeouts["staging"] == 1800
+
+    def test_deployment_section_defaults(self, tmp_path):
+        """Missing deployment section uses sensible defaults."""
+        config = self._make_config(tmp_path, "fraises: {}\n")
+        dep = config.deployment
+        assert dep.lock_dir == "/run/fraisier"
+        assert dep.status_file == "deployment_status.json"
+        assert dep.strategies == {}
+        assert dep.timeouts == {}
+        assert dep.deploy_user == "fraisier"
+
+    def test_get_strategy_for_environment(self, tmp_path):
+        """get_strategy_for_environment returns strategy name or None."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises: {}
+deployment:
+  strategies:
+    development: rebuild
+    production: migrate
+""",
+        )
+        assert config.deployment.get_strategy("development") == "rebuild"
+        assert config.deployment.get_strategy("production") == "migrate"
+        assert config.deployment.get_strategy("staging") is None
+
+    def test_get_timeout_for_environment(self, tmp_path):
+        """get_timeout returns per-env timeout or default."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises: {}
+deployment:
+  timeouts:
+    production: 900
+""",
+        )
+        assert config.deployment.get_timeout("production") == 900
+        assert config.deployment.get_timeout("development") == 600
+
+    def test_invalid_strategy_name_raises(self, tmp_path):
+        """Invalid strategy name raises ValidationError."""
+        from fraisier.errors import ValidationError
+
+        config = self._make_config(
+            tmp_path,
+            """
+fraises: {}
+deployment:
+  strategies:
+    production: yolo_deploy
+""",
+        )
+        with pytest.raises(ValidationError, match="yolo_deploy"):
+            config.deployment  # noqa: B018
+
+
+class TestDeployCLI:
+    """fraisier deploy supports --dry-run, --skip-health, --force."""
+
+    def _make_config_file(self, tmp_path):
+        """Create a minimal fraises.yaml for CLI testing."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            """
+fraises:
+  my_api:
+    type: api
+    description: "Test API"
+    environments:
+      development:
+        name: dev_api
+        app_path: /opt/my_api
+        systemd_service: my_api.service
+deployment:
+  strategies:
+    development: rebuild
+"""
+        )
+        return str(cfg)
+
+    def test_deploy_dry_run_exits_cleanly(self, tmp_path):
+        """--dry-run shows what would happen without deploying."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = self._make_config_file(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-c", cfg, "deploy", "my_api", "development", "--dry-run"],
+        )
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+
+    def test_deploy_skip_health_flag_accepted(self, tmp_path):
+        """--skip-health flag is accepted by the CLI."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = self._make_config_file(tmp_path)
+        runner = CliRunner()
+        # Just check the flag is accepted (deploy will fail since no real app)
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "deploy",
+                "my_api",
+                "development",
+                "--skip-health",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0
+
+    def test_deploy_force_flag_accepted(self, tmp_path):
+        """--force flag overrides version check."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = self._make_config_file(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "deploy",
+                "my_api",
+                "development",
+                "--force",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0
+
+    def test_deploy_nonexistent_fraise_fails(self, tmp_path):
+        """Deploying unknown fraise fails with error message."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = self._make_config_file(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-c", cfg, "deploy", "nonexistent", "production"],
+        )
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+
+class TestStatusCommand:
+    """fraisier deploy-status reads deployment_status.json."""
+
+    def test_deploy_status_reads_json(self, tmp_path):
+        """deploy-status command reads and displays status file."""
+        import json
+
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text("fraises: {}\n")
+
+        status_file = tmp_path / "deployment_status.json"
+        status_file.write_text(
+            json.dumps(
+                {
+                    "fraise": "my_api",
+                    "environment": "production",
+                    "status": "success",
+                    "duration_seconds": 42.5,
+                    "timestamp": "2026-03-22T10:00:00+00:00",
+                }
+            )
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                str(cfg),
+                "deploy-status",
+                "--status-file",
+                str(status_file),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "my_api" in result.output
+        assert "production" in result.output
+        assert "success" in result.output
+
+    def test_deploy_status_missing_file(self, tmp_path):
+        """deploy-status handles missing status file gracefully."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text("fraises: {}\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                str(cfg),
+                "deploy-status",
+                "--status-file",
+                str(tmp_path / "nonexistent.json"),
+            ],
+        )
+        assert result.exit_code == 0
+        out = result.output.lower()
+        assert "no status" in out or "not found" in out

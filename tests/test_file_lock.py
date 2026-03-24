@@ -1,0 +1,86 @@
+"""Tests for file-based deployment locking (fcntl.flock)."""
+
+import multiprocessing
+
+import pytest
+
+from fraisier.errors import DeploymentLockError
+from fraisier.locking import file_deployment_lock
+
+
+class TestFileDeploymentLock:
+    """Test the file-based flock mutex."""
+
+    def test_acquire_succeeds_when_unlocked(self, tmp_path):
+        """Lock acquisition succeeds when no other process holds it."""
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):
+            lock_file = tmp_path / "myfraise.lock"
+            assert lock_file.exists()
+
+    def test_raises_when_already_held(self, tmp_path):
+        """Acquiring the lock raises DeploymentLockError when already held."""
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):  # noqa: SIM117
+            with pytest.raises(DeploymentLockError, match="myfraise"):
+                with file_deployment_lock("myfraise", lock_dir=tmp_path):
+                    pass  # Should not reach here
+
+    def test_lock_released_after_context_exit(self, tmp_path):
+        """Lock is released after context manager exits normally."""
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):
+            pass
+
+        # Should be able to acquire again
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):
+            pass
+
+    def test_lock_released_on_exception(self, tmp_path):
+        """Lock is released even when an exception occurs inside the block."""
+        with (
+            pytest.raises(ValueError, match="boom"),
+            file_deployment_lock("myfraise", lock_dir=tmp_path),
+        ):
+            raise ValueError("boom")
+
+        # Should be able to acquire again after exception
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):
+            pass
+
+    def test_different_fraises_dont_conflict(self, tmp_path):
+        """Locks for different fraises are independent."""
+        with (
+            file_deployment_lock("fraise_a", lock_dir=tmp_path),
+            file_deployment_lock("fraise_b", lock_dir=tmp_path),
+        ):
+            pass
+
+    def test_lock_file_created_in_lock_dir(self, tmp_path):
+        """Lock file is created with correct name in lock_dir."""
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):
+            assert (tmp_path / "myfraise.lock").exists()
+
+    def test_cross_process_lock_contention(self, tmp_path):
+        """A second process cannot acquire a lock held by the first."""
+
+        def hold_lock(lock_dir, ready_event, release_event):
+            with file_deployment_lock("myfraise", lock_dir=lock_dir):
+                ready_event.set()
+                release_event.wait(timeout=5)
+
+        ready = multiprocessing.Event()
+        release = multiprocessing.Event()
+        proc = multiprocessing.Process(
+            target=hold_lock, args=(tmp_path, ready, release)
+        )
+        proc.start()
+
+        try:
+            ready.wait(timeout=5)
+            # Process holds the lock — we should fail to acquire
+            with (
+                pytest.raises(DeploymentLockError),
+                file_deployment_lock("myfraise", lock_dir=tmp_path),
+            ):
+                pass
+        finally:
+            release.set()
+            proc.join(timeout=5)

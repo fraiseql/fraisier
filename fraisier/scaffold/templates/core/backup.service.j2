@@ -1,0 +1,19 @@
+[Unit]
+Description=Database backup for {{ project_name }}
+
+[Service]
+Type=oneshot
+User={{ scaffold.deploy_user }}
+ExecStart={{ scaffold.output_dir }}/backup.sh
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/backups/{{ project_name }}

@@ -1,0 +1,90 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[project]
+authors = [
+  {name = "FraiseQL Team"}
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Systems Administration"
+]
+dependencies = [
+  "fraiseql-confiture>=0.8.0",
+  "fastapi>=0.109.0",
+  "uvicorn>=0.27.0",
+  "pyyaml>=6.0",
+  "click>=8.1.0",
+  "rich>=13.0.0",
+  "jinja2>=3.1.0"
+]
+description = "Fraisier - Deployment orchestrator for the FraiseQL ecosystem. Any language, any database, any deployment target."
+keywords = ["deployment", "orchestration", "devops", "graphql", "fraiseql"]
+license = {text = "MIT"}
+name = "fraisier"
+readme = "README.md"
+requires-python = ">=3.11"
+version = "0.3.0"
+
+[project.optional-dependencies]
+all-databases = [
+  "aiosqlite>=0.19.0",
+  "psycopg[binary]>=3.1.0",
+  "aiomysql>=0.2.0"
+]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "ruff>=0.3.0",
+  "aiosqlite>=0.19.0",
+  "httpx>=0.27.0"
+]
+graphql = [
+  "strawberry-graphql>=0.220.0"
+]
+postgres = [
+  "psycopg[binary]>=3.1.0"
+]
+
+[project.scripts]
+fraisier = "fraisier.cli:main"
+fraisier-webhook = "fraisier.webhook:run_server"
+
+[project.urls]
+Documentation = "https://fraisier.fraiseql.com"
+Homepage = "https://github.com/fraiseql/fraisier"
+Issues = "https://github.com/fraiseql/fraisier/issues"
+Repository = "https://github.com/fraiseql/fraisier"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fraisier"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM",
+    "TCH", "PTH", "ERA", "PL", "RUF", "PERF", "FURB",
+]
+ignore = [
+    "PLC0415",  # Lazy imports are intentional for optional deps
+    "PLR0913",  # Many args needed for DB/provider methods
+    "PLW0603",  # Global singletons are intentional
+    "ARG002",   # Abstract/override method args unused by design
+    "PLR2004",  # Magic values are acceptable in this codebase
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "ARG001"]

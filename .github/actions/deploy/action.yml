@@ -1,0 +1,188 @@
+name: "Fraisier Deploy"
+description: "Trigger a Fraisier deployment via webhook and poll for completion"
+
+inputs:
+  webhook_url:
+    description: "Fraisier webhook URL (e.g., https://deploy.example.com/webhook)"
+    required: true
+  webhook_secret:
+    description: "Webhook HMAC secret for signature verification"
+    required: true
+  fraise_name:
+    description: "Name of the fraise to deploy"
+    required: true
+  status_url:
+    description: "Base URL for status endpoint (e.g., https://deploy.example.com)"
+    required: true
+  environment:
+    description: "Target environment (development, staging, production)"
+    required: false
+    default: "production"
+  timeout:
+    description: "Max seconds to wait for deployment (0 = use environment default)"
+    required: false
+    default: "0"
+  poll_interval:
+    description: "Seconds between status polls"
+    required: false
+    default: "10"
+  create_issue:
+    description: "Create GitHub Issue on failure (true/false)"
+    required: false
+    default: "true"
+
+outputs:
+  version:
+    description: "Deployed version after successful deployment"
+    value: ${{ steps.poll.outputs.version }}
+  state:
+    description: "Final deployment state"
+    value: ${{ steps.poll.outputs.state }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Trigger deployment
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook_url }}
+        WEBHOOK_SECRET: ${{ inputs.webhook_secret }}
+        COMMIT_SHA: ${{ github.sha }}
+        BRANCH: ${{ github.ref_name }}
+      run: |
+        # Compute HMAC-SHA256 signature
+        PAYLOAD='{"ref":"refs/heads/'"$BRANCH"'","after":"'"$COMMIT_SHA"'"}'
+        SIGNATURE="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | cut -d' ' -f2)"
+
+        HTTP_CODE=$(curl -sf -o /dev/null -w '%{http_code}' \
+          -X POST "$WEBHOOK_URL" \
+          -H "Content-Type: application/json" \
+          -H "X-GitHub-Event: push" \
+          -H "X-Hub-Signature-256: $SIGNATURE" \
+          -d "$PAYLOAD")
+
+        if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+          echo "::error::Webhook trigger failed with HTTP $HTTP_CODE"
+          exit 1
+        fi
+        echo "Webhook triggered successfully (HTTP $HTTP_CODE)"
+
+    - name: Poll for completion
+      id: poll
+      shell: bash
+      env:
+        STATUS_URL: ${{ inputs.status_url }}/api/status/${{ inputs.fraise_name }}
+        EXPECTED_SHA: ${{ github.sha }}
+        TIMEOUT: ${{ inputs.timeout }}
+        POLL_INTERVAL: ${{ inputs.poll_interval }}
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: |
+        # Use environment default if timeout is 0
+        if [ "$TIMEOUT" = "0" ]; then
+          case "$ENVIRONMENT" in
+            development) TIMEOUT=120 ;;
+            staging)     TIMEOUT=600 ;;
+            *)           TIMEOUT=300 ;;
+          esac
+        fi
+
+        echo "Polling $STATUS_URL (timeout: ${TIMEOUT}s, interval: ${POLL_INTERVAL}s)"
+        DEADLINE=$((SECONDS + TIMEOUT))
+
+        while [ "$SECONDS" -lt "$DEADLINE" ]; do
+          RESPONSE=$(curl -sf "$STATUS_URL" 2>/dev/null) || {
+            echo "Status endpoint unreachable, retrying in ${POLL_INTERVAL}s..."
+            sleep "$POLL_INTERVAL"
+            continue
+          }
+
+          STATE=$(echo "$RESPONSE" | jq -r '.state // empty')
+          SHA=$(echo "$RESPONSE" | jq -r '.commit_sha // empty')
+          VERSION=$(echo "$RESPONSE" | jq -r '.version // empty')
+
+          # Check FAILURE first (key insight: fail fast, don't wait for SHA match)
+          if [ "$STATE" = "failed" ]; then
+            echo "::error::Deployment failed"
+            echo "state=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Check SUCCESS with SHA match
+          if [ "$STATE" = "success" ] && [ "$SHA" = "$EXPECTED_SHA" ]; then
+            echo "Deployment succeeded: version=$VERSION"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Waiting: state=$STATE sha=${SHA:0:7}..."
+          sleep "$POLL_INTERVAL"
+        done
+
+        echo "::error::Deployment timed out after ${TIMEOUT}s"
+        echo "state=timeout" >> "$GITHUB_OUTPUT"
+        exit 1
+
+    - name: Create issue on failure
+      if: failure() && inputs.create_issue == 'true'
+      shell: bash
+      env:
+        STATUS_URL: ${{ inputs.status_url }}/api/status/${{ inputs.fraise_name }}
+        WEBHOOK_SECRET: ${{ inputs.webhook_secret }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        COMMIT_SHA: ${{ github.sha }}
+        BRANCH: ${{ github.ref_name }}
+        ACTOR: ${{ github.actor }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Fetch failure details from authenticated endpoint
+        DETAILS=$(curl -sf "${STATUS_URL}/details" \
+          -H "X-Deployment-Token: ${WEBHOOK_SECRET}" 2>/dev/null) || DETAILS="{}"
+
+        ERROR_MSG=$(echo "$DETAILS" | jq -r '.error_message // "No error details available"')
+        MIGRATION=$(echo "$DETAILS" | jq -r '.migration_report // empty')
+
+        SHORT_SHA="${COMMIT_SHA:0:7}"
+
+        # Build issue body
+        BODY="## Deployment Failure
+
+        | Field | Value |
+        | --- | --- |
+        | Environment | \`${ENVIRONMENT}\` |
+        | Commit | \`${SHORT_SHA}\` (${COMMIT_SHA}) |
+        | Branch | \`${BRANCH}\` |
+        | Triggered by | @${ACTOR} |
+        | Workflow run | [View logs](${RUN_URL}) |
+
+        ## Error Details
+
+        \`\`\`
+        ${ERROR_MSG}
+        \`\`\`"
+
+        if [ -n "$MIGRATION" ] && [ "$MIGRATION" != "null" ]; then
+          BODY="${BODY}
+
+        ## Migration Report
+
+        \`\`\`json
+        ${MIGRATION}
+        \`\`\`"
+        fi
+
+        BODY="${BODY}
+
+        ## Remediation Checklist
+
+        - [ ] Review error details and workflow logs above
+        - [ ] Check database state and migration status
+        - [ ] Fix the root cause in a new commit
+        - [ ] Verify fix deploys successfully
+        - [ ] Close this issue"
+
+        gh issue create \
+          --title "Deploy failed: ${ENVIRONMENT} @ ${SHORT_SHA}" \
+          --label "deployment-failure" \
+          --body "$BODY"

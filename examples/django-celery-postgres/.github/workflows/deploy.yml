@@ -1,0 +1,48 @@
+# Deploy via Fraisier on push to main
+#
+# Uses push-then-poll pattern:
+# 1. Push the commit (webhook triggers deploy on the server)
+# 2. Poll the deployment status endpoint until done or timeout
+
+name: Deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for deploy to complete
+        env:
+          DEPLOY_STATUS_URL: ${{ secrets.DEPLOY_STATUS_URL }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          echo "Commit pushed — webhook will trigger deploy on server."
+          echo "Polling deployment status..."
+
+          for i in $(seq 1 60); do
+            STATUS=$(curl -sf \
+              -H "Authorization: Bearer $DEPLOY_TOKEN" \
+              "$DEPLOY_STATUS_URL" | jq -r '.status')
+
+            case "$STATUS" in
+              success)
+                echo "Deploy succeeded!"
+                exit 0
+                ;;
+              failed|rolled_back)
+                echo "Deploy failed (status: $STATUS)"
+                exit 1
+                ;;
+              *)
+                echo "Status: $STATUS (attempt $i/60)"
+                sleep 10
+                ;;
+            esac
+          done
+
+          echo "Deploy timed out"
+          exit 1
