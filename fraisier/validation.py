@@ -8,12 +8,16 @@ Also provides drift detection for scaffolded files.
 """
 
 import hashlib
+import logging
 import pwd
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fraisier.config import FraisierConfig
+
+logger = logging.getLogger(__name__)
 
 VALID_STRATEGIES = {"rebuild", "migrate", "apply", "restore_migrate"}
 
@@ -206,6 +210,155 @@ class ValidationRunner:
                     )
         if not results:
             results.append(ValidationCheckResult(name="database_strategy", passed=True))
+        return results
+
+    def run_operational(
+        self,
+        *,
+        skip_ssh: bool = False,
+        skip_db: bool = False,
+        skip_git: bool = False,
+    ) -> list[ValidationCheckResult]:
+        """Run operational pre-flight checks (SSH, git, DB, etc.)."""
+        results: list[ValidationCheckResult] = []
+
+        if not skip_git:
+            results.extend(self._check_git_reachability())
+        if not skip_ssh:
+            results.extend(self._check_ssh_connectivity())
+        if not skip_db:
+            results.extend(self._check_db_connectivity())
+
+        return results
+
+    def _check_git_reachability(self) -> list[ValidationCheckResult]:
+        """Check that clone_urls are reachable via git ls-remote."""
+        results: list[ValidationCheckResult] = []
+        seen_urls: set[str] = set()
+        for name in self.config.list_fraises():
+            for env_name in self.config.list_environments(name):
+                env = self.config.get_environment(name, env_name) or {}
+                url = env.get("clone_url")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                try:
+                    subprocess.run(
+                        ["git", "ls-remote", "--exit-code", url],
+                        capture_output=True,
+                        timeout=15,
+                        check=True,
+                    )
+                    results.append(
+                        ValidationCheckResult(
+                            name="git_reachability",
+                            passed=True,
+                            message=f"Git repo reachable: {url}",
+                        )
+                    )
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    results.append(
+                        ValidationCheckResult(
+                            name="git_reachability",
+                            passed=False,
+                            message=(
+                                f"Cannot reach git repo: {url}. "
+                                "Check the URL, credentials, and network."
+                            ),
+                        )
+                    )
+        return results
+
+    def _check_ssh_connectivity(self) -> list[ValidationCheckResult]:
+        """Check SSH connectivity to configured hosts."""
+        results: list[ValidationCheckResult] = []
+        seen_hosts: set[str] = set()
+        for name in self.config.list_fraises():
+            for env_name in self.config.list_environments(name):
+                env = self.config.get_environment(name, env_name) or {}
+                host = env.get("ssh_host")
+                if not host or host in seen_hosts:
+                    continue
+                seen_hosts.add(host)
+                user = env.get("ssh_user", "fraisier")
+                port = env.get("ssh_port", 22)
+                try:
+                    subprocess.run(
+                        [
+                            "ssh",
+                            "-o",
+                            "BatchMode=yes",
+                            "-o",
+                            "ConnectTimeout=5",
+                            "-p",
+                            str(port),
+                            f"{user}@{host}",
+                            "true",
+                        ],
+                        capture_output=True,
+                        timeout=10,
+                        check=True,
+                    )
+                    results.append(
+                        ValidationCheckResult(
+                            name="ssh_connectivity",
+                            passed=True,
+                            message=f"SSH to {user}@{host}:{port} OK",
+                        )
+                    )
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    results.append(
+                        ValidationCheckResult(
+                            name="ssh_connectivity",
+                            passed=False,
+                            message=(
+                                f"Cannot SSH to {user}@{host}:{port}. "
+                                "Check host, key, and firewall."
+                            ),
+                        )
+                    )
+        return results
+
+    def _check_db_connectivity(self) -> list[ValidationCheckResult]:
+        """Check database connectivity for fraises with database config."""
+        results: list[ValidationCheckResult] = []
+        for name in self.config.list_fraises():
+            for env_name in self.config.list_environments(name):
+                env = self.config.get_environment(name, env_name) or {}
+                db = env.get("database")
+                if not db:
+                    continue
+                db_host = db.get("host", "localhost")
+                db_port = db.get("port", 5432)
+                try:
+                    subprocess.run(
+                        ["pg_isready", "-h", str(db_host), "-p", str(db_port)],
+                        capture_output=True,
+                        timeout=10,
+                        check=True,
+                    )
+                    results.append(
+                        ValidationCheckResult(
+                            name="db_connectivity",
+                            passed=True,
+                            message=f"DB at {db_host}:{db_port} OK",
+                        )
+                    )
+                except (
+                    subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired,
+                    FileNotFoundError,
+                ):
+                    results.append(
+                        ValidationCheckResult(
+                            name="db_connectivity",
+                            passed=False,
+                            message=(
+                                f"Cannot reach DB at {db_host}:{db_port}. "
+                                "Check that PostgreSQL is running."
+                            ),
+                        )
+                    )
         return results
 
     def _check_missing_health_checks(self) -> list[ValidationCheckResult]:
