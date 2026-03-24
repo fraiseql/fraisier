@@ -359,14 +359,25 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             steps=self._migrations_applied,
         )
         if db_result.success:
-            return None
+            return DeploymentResult(
+                success=True,
+                status=DeploymentStatus.ROLLED_BACK,
+                old_version=current_version,
+                duration_seconds=0,
+                details={
+                    "migrations_rolled_back": db_result.migrations_applied,
+                },
+            )
 
+        rolled_back = db_result.migrations_applied
+        remaining = self._migrations_applied - rolled_back
         logger.critical("Database rollback failed: %s", db_result.errors)
         error_msg = (
             f"Database rollback failed — manual intervention required. "
             f"Errors: {'; '.join(db_result.errors)}. "
-            f"Database may have {self._migrations_applied} unapplied "
-            f"down migrations. Do NOT restart the service until resolved."
+            f"Rolled back {rolled_back} of {self._migrations_applied} "
+            f"migrations; {remaining} still applied. "
+            f"Do NOT restart the service until resolved."
         )
         self._write_incident(
             error_msg,
@@ -429,14 +440,18 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             if not target:
                 raise ValueError("No previous SHA available for rollback")
 
+            db_details: dict[str, int] = {}
             if self._migrations_applied > 0 and self.database_config:
-                failure = self._rollback_database(current_version, target)
-                if failure is not None:
-                    failure.duration_seconds = time.time() - start_time
-                    return failure
+                db_result = self._rollback_database(current_version, target)
+                if not db_result.success:
+                    db_result.duration_seconds = time.time() - start_time
+                    return db_result
+                db_details = db_result.details
 
             self._rollback_git(target)
-            return self._finalize_rollback(current_version, target, start_time)
+            result = self._finalize_rollback(current_version, target, start_time)
+            result.details.update(db_details)
+            return result
 
         except subprocess.CalledProcessError as e:
             duration = time.time() - start_time
