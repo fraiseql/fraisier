@@ -13,7 +13,7 @@ import yaml
 
 from fraisier.errors import ValidationError
 
-_VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate"}
+_VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
 
 
@@ -148,6 +148,63 @@ class FraisierConfig:
         """Load configuration from YAML file."""
         with Path(self.config_path).open() as f:
             self._config = yaml.safe_load(f)
+        self._validate_fraises()
+
+    def _validate_fraises(self) -> None:
+        """Validate all fraise configs at load time."""
+        fraises = self._config.get("fraises", {})
+        if not fraises:
+            return
+        for name, fraise in fraises.items():
+            if not isinstance(fraise, dict):
+                continue
+            for env_config in fraise.get("environments", {}).values():
+                if not isinstance(env_config, dict):
+                    continue
+                self._validate_environment(name, env_config)
+
+    def _validate_environment(self, fraise_name: str, env: dict) -> None:
+        """Validate a single fraise environment config."""
+        errors: list[str] = []
+
+        # app_path is required when health_check is configured (needs a deploy target)
+        if env.get("health_check") and not env.get("app_path"):
+            errors.append(f"{fraise_name}: 'app_path' is required")
+
+        # Numeric fields in health_check
+        hc = env.get("health_check", {})
+        if isinstance(hc, dict):
+            for field in ("timeout", "retries"):
+                val = hc.get(field)
+                if val is not None and not isinstance(val, int | float):
+                    errors.append(
+                        f"{fraise_name}: health_check.{field} must be a number, "
+                        f"got {type(val).__name__}"
+                    )
+
+        # Numeric fields at top level
+        for field in ("timeout",):
+            val = env.get(field)
+            if val is not None and not isinstance(val, int | float):
+                errors.append(
+                    f"{fraise_name}: '{field}' must be a number, "
+                    f"got {type(val).__name__}"
+                )
+
+        # Strategy validation
+        db = env.get("database", {})
+        if isinstance(db, dict):
+            strategy = db.get("strategy")
+            if strategy and strategy not in _VALID_STRATEGIES:
+                valid = ", ".join(sorted(_VALID_STRATEGIES))
+                errors.append(
+                    f"{fraise_name}: unknown strategy '{strategy}'. Valid: {valid}"
+                )
+
+        if errors:
+            raise ValidationError(
+                f"Invalid fraise config: {'; '.join(errors)}",
+            )
 
     def reload(self) -> None:
         """Reload configuration from file."""

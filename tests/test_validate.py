@@ -143,7 +143,7 @@ class TestValidateUnknownStrategy:
     """Test validation catches unknown migration strategy."""
 
     def test_unknown_database_strategy(self, tmp_path):
-        """Test validation catches unknown database strategy."""
+        """Test validation catches unknown database strategy at load time."""
         cfg = _write_config(
             tmp_path,
             {
@@ -166,10 +166,10 @@ class TestValidateUnknownStrategy:
         )
         runner = CliRunner()
         result = runner.invoke(main, ["-c", cfg, "validate", "--json"])
-        data = json.loads(result.output, strict=False)
-        checks = data["checks"]
-        strat_checks = [c for c in checks if "strategy" in c["name"]]
-        assert any(not c["passed"] for c in strat_checks)
+        # Config load-time validation catches this before CLI validate runs
+        assert result.exit_code != 0
+        assert result.exception is not None
+        assert "yolo_deploy" in str(result.exception)
 
     def test_valid_strategy_passes(self, tmp_path):
         """Test known strategies pass validation."""
