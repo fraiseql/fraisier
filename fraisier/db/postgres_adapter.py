@@ -162,9 +162,16 @@ class PostgresAdapter(FraiserDatabaseAdapter):
     ) -> str | int:
         """Insert a record and return its ID.
 
+        **Safety invariant:** Table and column names are interpolated via
+        f-string but are safe because they come from ``data.keys()`` which
+        is always supplied by application code (e.g. ``DeploymentRecord``
+        field names).  User-controlled values are passed via parameterized
+        ``$N`` placeholders and never touch the query template.  Do NOT
+        pass user-controlled strings as dict keys.
+
         Args:
-            table: Table name
-            data: Column-value pairs
+            table: Table name (application-controlled, never user input)
+            data: Column-value pairs (keys = column names from app code)
 
         Returns:
             ID of inserted record
