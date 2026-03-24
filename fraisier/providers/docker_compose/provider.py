@@ -261,6 +261,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             Dict with status information
         """
+        validate_service_name(service_name)
         try:
             # Get container status
             exit_code, stdout, stderr = await self.execute_command(
@@ -613,6 +614,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             True if successful
         """
+        validate_service_name(service_name)
         if timeout is None:
             timeout = self.timeout
 
@@ -642,6 +644,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             True if successful
         """
+        validate_service_name(service_name)
         if timeout is None:
             timeout = self.timeout
 
@@ -673,6 +676,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             True if successful
         """
+        validate_service_name(service_name)
         if timeout is None:
             timeout = self.timeout
 
@@ -702,6 +706,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             True if successful
         """
+        validate_service_name(service_name)
         if timeout is None:
             timeout = self.timeout
 
@@ -735,6 +740,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             Log output as string
         """
+        validate_service_name(service_name)
         try:
             exit_code, stdout, stderr = await self.execute_command(
                 self._compose_cmd(f"logs --tail {lines} {service_name}")
@@ -756,6 +762,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             Dict of environment variables
         """
+        validate_service_name(service_name)
         try:
             exit_code, stdout, stderr = await self.execute_command(
                 self._compose_cmd(f"exec {service_name} env")
@@ -792,6 +799,7 @@ class DockerComposeProvider(DeploymentProvider):
         Returns:
             True if successful
         """
+        validate_service_name(service_name)
         if timeout is None:
             timeout = self.timeout
 

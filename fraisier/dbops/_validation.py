@@ -30,6 +30,25 @@ def validate_service_name(name: str) -> str:
     return name
 
 
+def validate_docker_cp_path(cp_path: str) -> str:
+    """Validate a docker cp path (container:path).
+
+    Rejects path traversal via ``..`` components.
+    Raises ValueError if invalid.
+    """
+    if ":" not in cp_path:
+        msg = f"Invalid docker cp path (missing ':'): {cp_path!r}"
+        raise ValueError(msg)
+    container, path = cp_path.split(":", 1)
+    if not container:
+        msg = f"Invalid docker cp path (empty container): {cp_path!r}"
+        raise ValueError(msg)
+    if ".." in path:
+        msg = f"Path traversal detected in docker cp path: {cp_path!r}"
+        raise ValueError(msg)
+    return cp_path
+
+
 def validate_file_path(path: str, base_dir: Path | None = None) -> str:
     """Validate a file path for use in shell commands.
 

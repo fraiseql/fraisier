@@ -36,6 +36,16 @@ _RATE_LIMIT = int(os.getenv("FRAISIER_WEBHOOK_RATE_LIMIT", "10"))
 _request_times: OrderedDict[str, list[float]] = OrderedDict()
 
 
+def _validate_env_config(port: int, rate_limit: int) -> None:
+    """Validate webhook server environment configuration."""
+    if not 1 <= port <= 65535:
+        msg = f"Invalid port: {port} — must be 1-65535"
+        raise ValueError(msg)
+    if rate_limit < 1:
+        msg = f"Invalid rate limit: {rate_limit} — must be >= 1"
+        raise ValueError(msg)
+
+
 def _check_rate_limit(client_ip: str) -> bool:
     """Return True if the request is within the rate limit (10/min)."""
     now = time.time()
