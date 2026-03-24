@@ -28,16 +28,6 @@ class PoolMetrics:
     waiting_requests: int = 0
 
 
-@dataclass
-class QueryResult:
-    """Typed result wrapper for query results."""
-
-    rows: list[dict[str, Any]]
-    row_count: int
-    columns: list[str] | None = None
-    execution_time_ms: float = 0.0
-
-
 class FraiserDatabaseAdapter(ABC):
     """Abstract adapter for database operations.
 
@@ -242,5 +232,4 @@ __all__ = [
     "DatabaseType",
     "FraiserDatabaseAdapter",
     "PoolMetrics",
-    "QueryResult",
 ]

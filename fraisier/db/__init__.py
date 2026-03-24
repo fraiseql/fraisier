@@ -12,7 +12,6 @@ from .adapter import (
     DatabaseType,
     FraiserDatabaseAdapter,
     PoolMetrics,
-    QueryResult,
 )
 from .factory import create_adapter_from_url, get_database_adapter
 from .migrations import (
@@ -36,7 +35,6 @@ __all__ = [
     "MigrationError",
     "MigrationRunner",
     "PoolMetrics",
-    "QueryResult",
     "create_adapter_from_url",
     "get_audit_logger",
     "get_database_adapter",
