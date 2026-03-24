@@ -357,7 +357,7 @@ sudo -u fraisier bash
 source /opt/fraisier/config/.env
 
 # Validate config
-fraisier config validate
+fraisier validate
 
 # List fraises
 fraisier list
@@ -523,7 +523,7 @@ fraisier history --fraise my_api --limit 1
 fraisier status my_api production
 
 # Try manual deployment
-fraisier deploy my_api production -v  # Verbose output
+fraisier deploy my_api production  # Check deployment output
 ```
 
 ### Webhook Not Triggering

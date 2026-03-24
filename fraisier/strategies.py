@@ -43,6 +43,7 @@ class Strategy(ABC):
         *,
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
+        pre_migrate_verify: bool = False,
     ) -> StrategyResult: ...
 
     @abstractmethod
@@ -64,6 +65,7 @@ class MigrateStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
+        pre_migrate_verify: bool = False,
     ) -> StrategyResult:
         preflight(
             confiture_config,
@@ -71,7 +73,12 @@ class MigrateStrategy(Strategy):
             allow_irreversible=allow_irreversible,
         )
 
-        result = migrate_up(confiture_config, migrations_dir=migrations_dir)
+        result = migrate_up(
+            confiture_config,
+            migrations_dir=migrations_dir,
+            pre_migrate_verify=pre_migrate_verify,
+            require_reversible=not allow_irreversible,
+        )
         return StrategyResult(success=True, migrations_applied=result.steps_applied)
 
     def rollback(
@@ -100,6 +107,7 @@ class RebuildStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
+        pre_migrate_verify: bool = False,
     ) -> StrategyResult:
         from confiture.core.migrator import Migrator
 
@@ -129,6 +137,7 @@ class RestoreMigrateStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
+        pre_migrate_verify: bool = False,
     ) -> StrategyResult:
         subprocess.run(shlex.split(self.restore_command), check=True)
 

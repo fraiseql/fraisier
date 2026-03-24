@@ -5,7 +5,7 @@ import multiprocessing
 import pytest
 
 from fraisier.errors import DeploymentLockError
-from fraisier.locking import file_deployment_lock
+from fraisier.locking import file_deployment_lock, is_deployment_locked
 
 
 class TestFileDeploymentLock:
@@ -57,6 +57,25 @@ class TestFileDeploymentLock:
         """Lock file is created with correct name in lock_dir."""
         with file_deployment_lock("myfraise", lock_dir=tmp_path):
             assert (tmp_path / "myfraise.lock").exists()
+
+    def test_is_deployment_locked_returns_false_when_unlocked(self, tmp_path):
+        """is_deployment_locked returns False when no lock is held."""
+        assert is_deployment_locked("myfraise", lock_dir=tmp_path) is False
+
+    def test_is_deployment_locked_returns_false_no_lock_file(self, tmp_path):
+        """is_deployment_locked returns False when lock file does not exist."""
+        assert is_deployment_locked("nonexistent", lock_dir=tmp_path) is False
+
+    def test_is_deployment_locked_returns_true_when_held(self, tmp_path):
+        """is_deployment_locked returns True when another context holds the lock."""
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):
+            assert is_deployment_locked("myfraise", lock_dir=tmp_path) is True
+
+    def test_is_deployment_locked_returns_false_after_release(self, tmp_path):
+        """is_deployment_locked returns False after the lock is released."""
+        with file_deployment_lock("myfraise", lock_dir=tmp_path):
+            pass
+        assert is_deployment_locked("myfraise", lock_dir=tmp_path) is False
 
     def test_cross_process_lock_contention(self, tmp_path):
         """A second process cannot acquire a lock held by the first."""

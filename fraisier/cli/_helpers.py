@@ -72,16 +72,30 @@ def _print_dry_run(
 
 
 def _get_deployer(fraise_type: str, fraise_config: dict, job: str | None = None):
-    """Get appropriate deployer for fraise type."""
+    """Get appropriate deployer for fraise type.
+
+    When the fraise_config contains an ``ssh`` key, the deployer is
+    configured with an ``SSHRunner`` so that commands execute on the
+    remote host.  Otherwise a local ``LocalRunner`` is used.
+    """
+    from fraisier.runners import runner_from_config
+
+    runner = runner_from_config(fraise_config.get("ssh"))
+
     if fraise_type == "api":
         from fraisier.deployers.api import APIDeployer
 
-        return APIDeployer(fraise_config)
+        return APIDeployer(fraise_config, runner=runner)
 
     elif fraise_type == "etl":
         from fraisier.deployers.etl import ETLDeployer
 
-        return ETLDeployer(fraise_config)
+        return ETLDeployer(fraise_config, runner=runner)
+
+    elif fraise_type == "docker_compose":
+        from fraisier.deployers.docker_compose import DockerComposeDeployer
+
+        return DockerComposeDeployer(fraise_config, runner=runner)
 
     elif fraise_type in ("scheduled", "backup"):
         from fraisier.deployers.scheduled import ScheduledDeployer
@@ -95,8 +109,9 @@ def _get_deployer(fraise_type: str, fraise_config: dict, job: str | None = None)
                         **fraise_config,
                         **job_config,
                         "job_name": job,
-                    }
+                    },
+                    runner=runner,
                 )
-        return ScheduledDeployer(fraise_config)
+        return ScheduledDeployer(fraise_config, runner=runner)
 
     return None

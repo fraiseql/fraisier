@@ -603,7 +603,7 @@ class AggregateHealthChecker:
                         status="healthy",
                         response_time_ms=round(duration_ms, 1),
                     )
-            except Exception:
+            except (urllib.error.URLError, OSError, TimeoutError):
                 continue
 
         duration_ms = (time.time() - start) * 1000

@@ -87,7 +87,8 @@ fraisier deploy my_api production
 ### 5. Ship (bump + commit + push + deploy)
 
 ```bash
-fraisier ship patch    # 1.0.0 -> 1.0.1, git commit, git push
+fraisier ship patch              # 1.0.0 -> 1.0.1, commit, push, deploy
+fraisier ship patch --no-deploy  # Skip deploy after push
 ```
 
 ---
@@ -154,6 +155,7 @@ fraisier init                                    Scaffold fraises.yaml
 fraisier deploy <fraise> <env> [--dry-run]       Deploy a fraise
 fraisier deploy <fraise> <env> --no-rollback     Allow irreversible migrations
 fraisier ship patch|minor|major [--dry-run]      Bump, commit, push, deploy
+fraisier ship patch --no-deploy                  Ship without deploying
 fraisier list [--flat]                           List all fraises
 fraisier status <fraise> <env>                   Check fraise status
 fraisier rollback <fraise> <env>                 Roll back to previous version

@@ -64,6 +64,42 @@ def file_deployment_lock(
         lock_file.close()
 
 
+def is_deployment_locked(
+    fraise_name: str,
+    lock_dir: Path | None = None,
+) -> bool:
+    """Non-blocking check whether a file-based deployment lock is held.
+
+    Attempts to acquire the lock with LOCK_NB; if it succeeds the lock is
+    immediately released and False is returned.  If blocked, returns True.
+
+    Args:
+        fraise_name: Name of the fraise to check
+        lock_dir: Directory for lock files. Defaults to /run/fraisier.
+
+    Returns:
+        True if a deployment is currently locked, False otherwise
+    """
+    if lock_dir is None:
+        lock_dir = DEFAULT_LOCK_DIR
+
+    lock_path = lock_dir / f"{fraise_name}.lock"
+    if not lock_path.exists():
+        return False
+
+    fd = None
+    try:
+        fd = lock_path.open("w")
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        if fd is not None:
+            fd.close()
+
+
 class DeploymentLockedError(Exception):
     """Raised when a deployment lock cannot be acquired."""
 

@@ -102,19 +102,85 @@ def preflight(
                     )
 
 
+def dry_run_execute(
+    config_path: Path | str,
+    *,
+    migrations_dir: Path | str = "db/migrations",
+) -> MigrationResult:
+    """Run migrations inside a SAVEPOINT, then rollback.
+
+    Uses confiture's native ``dry_run_execute`` parameter (v0.8.11+)
+    to catch real SQL errors without making permanent changes.
+    """
+    start = time.monotonic()
+
+    try:
+        mdir = Path(migrations_dir)
+        with Migrator.from_config(config_path, migrations_dir=mdir) as m:
+            result = m.up(dry_run_execute=True)
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+
+        if result.has_errors:
+            return MigrationResult(
+                success=False,
+                steps_applied=0,
+                errors=[result.error_summary or "dry-run-execute failed"],
+                execution_time_ms=elapsed_ms,
+            )
+
+        log.info("Dry-run-execute passed")
+        return MigrationResult(
+            success=True,
+            steps_applied=0,
+            execution_time_ms=elapsed_ms,
+        )
+    except Exception as e:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return MigrationResult(
+            success=False,
+            steps_applied=0,
+            errors=[str(e)],
+            execution_time_ms=elapsed_ms,
+        )
+
+
 def migrate_up(
     config_path: Path | str,
     *,
     migrations_dir: Path | str = "db/migrations",
     lock_timeout: int = 30_000,
+    pre_migrate_verify: bool = False,
+    require_reversible: bool = False,
 ) -> MigrationResult:
-    """Apply pending migrations with lock retry."""
+    """Apply pending migrations with lock retry.
+
+    Args:
+        config_path: Path to confiture.yaml.
+        migrations_dir: Path to migrations directory.
+        lock_timeout: Lock timeout in milliseconds.
+        pre_migrate_verify: When True, run a dry-run-execute first to
+            catch SQL errors before applying for real.
+        require_reversible: When True, abort if any pending migration
+            lacks a .down.sql file (confiture v0.8.11+).
+    """
+    if pre_migrate_verify:
+        verify_result = dry_run_execute(config_path, migrations_dir=migrations_dir)
+        if not verify_result.success:
+            raise MigrationError(
+                "Pre-migration verification failed: " + "; ".join(verify_result.errors)
+            )
+        log.info("Pre-migration verification passed")
+
     start = time.monotonic()
 
     with Migrator.from_config(config_path, migrations_dir=Path(migrations_dir)) as m:
         for attempt in range(MAX_LOCK_RETRIES):
             try:
-                result: MigrateUpResult = m.up(lock_timeout=lock_timeout)
+                result: MigrateUpResult = m.up(
+                    lock_timeout=lock_timeout,
+                    require_reversible=require_reversible,
+                )
                 break
             except LockAcquisitionError:
                 if attempt == MAX_LOCK_RETRIES - 1:

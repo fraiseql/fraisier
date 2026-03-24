@@ -314,12 +314,18 @@ class TestBuildSshCommand:
         # Safe command — shlex.quote just returns the same string
         assert "systemctl restart myapp.service" in remote_cmd
 
-    def test_build_ssh_command_disables_strict_host_checking_by_default(self):
-        """_build_ssh_command() disables strict host key checking."""
+    def test_build_ssh_command_uses_accept_new_by_default(self):
+        """_build_ssh_command() uses accept-new host key policy."""
         provider = self._make_provider()
         cmd = provider._build_ssh_command("date")
 
         assert "-o" in cmd
-        host_check_idx = cmd.index("StrictHostKeyChecking=no")
-        # The -o flag should precede it
-        assert cmd[host_check_idx - 1] == "-o"
+        idx = cmd.index("StrictHostKeyChecking=accept-new")
+        assert cmd[idx - 1] == "-o"
+
+    def test_build_ssh_command_strict_host_key_off(self):
+        """strict_host_key=False falls back to StrictHostKeyChecking=no."""
+        provider = self._make_provider(strict_host_key=False)
+        cmd = provider._build_ssh_command("date")
+
+        assert "StrictHostKeyChecking=no" in cmd

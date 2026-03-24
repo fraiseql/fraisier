@@ -47,8 +47,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     - Health check verification
     """
 
-    def __init__(self, config: dict[str, Any]):
-        super().__init__(config)
+    def __init__(self, config: dict[str, Any], runner: Any = None):
+        super().__init__(config, runner=runner)
         self._init_git_deploy(config)
         self.git_repo = config.get("git_repo")
         self.systemd_service = config.get("systemd_service")
@@ -177,10 +177,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             self.database_config.get("migrations_dir", "db/migrations")
         )
 
+        pre_verify = self.database_config.get("pre_migrate_verify", False)
         result = strategy.execute(
             confiture_config,
             migrations_dir=migrations_dir,
             allow_irreversible=self.allow_irreversible,
+            pre_migrate_verify=pre_verify,
         )
 
         self._migrations_applied = result.migrations_applied
@@ -201,10 +203,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         from fraisier.dbops._validation import validate_service_name
 
         validate_service_name(self.systemd_service)
-        subprocess.run(
+        self.runner.run(
             ["sudo", "systemctl", "restart", self.systemd_service],
-            check=True,
-            capture_output=True,
         )
 
     def _build_rollback_result(
@@ -328,6 +328,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                         f"Database may have {self._migrations_applied} unapplied "
                         f"down migrations. Do NOT restart the service until resolved."
                     )
+                    self._write_incident(
+                        error_msg,
+                        current_version=current_version,
+                        target_version=target,
+                        db_errors=db_result.errors,
+                    )
                     self._write_status("failed", error_message=error_msg)
                     return DeploymentResult(
                         success=False,
@@ -338,7 +344,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     )
 
             worktree = Path(self.app_path)
-            subprocess.run(
+            self.runner.run(
                 [
                     "git",
                     f"--work-tree={worktree}",
@@ -347,15 +353,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     "-f",
                     target,
                 ],
-                check=True,
-                capture_output=True,
-                text=True,
             )
-            subprocess.run(
+            self.runner.run(
                 ["git", "-C", str(worktree), "reset", "--soft", target],
-                check=True,
-                capture_output=True,
-                text=True,
             )
 
             if self.systemd_service:

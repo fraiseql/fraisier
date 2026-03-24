@@ -44,7 +44,12 @@ class TestMigrateStrategy:
         mock_preflight.assert_called_once_with(
             CONFIG, migrations_dir=MDIR, allow_irreversible=False
         )
-        mock_up.assert_called_once_with(CONFIG, migrations_dir=MDIR)
+        mock_up.assert_called_once_with(
+            CONFIG,
+            migrations_dir=MDIR,
+            pre_migrate_verify=False,
+            require_reversible=True,
+        )
 
     @patch("fraisier.strategies.preflight")
     def test_execute_preflight_blocks_irreversible(self, mock_preflight):
@@ -98,6 +103,22 @@ class TestMigrateStrategy:
 
         assert not result.success
         assert "constraint violation" in result.errors
+
+    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies.preflight")
+    def test_execute_with_pre_migrate_verify(self, mock_preflight, mock_up):
+        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+
+        strategy = MigrateStrategy()
+        result = strategy.execute(CONFIG, migrations_dir=MDIR, pre_migrate_verify=True)
+
+        assert result.success
+        mock_up.assert_called_once_with(
+            CONFIG,
+            migrations_dir=MDIR,
+            pre_migrate_verify=True,
+            require_reversible=True,
+        )
 
 
 # ---------------------------------------------------------------------------

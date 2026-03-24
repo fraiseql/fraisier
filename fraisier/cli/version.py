@@ -120,6 +120,7 @@ def version_bump(
 @main.command(name="ship")
 @click.argument("bump_type", type=click.Choice(["patch", "minor", "major"]))
 @click.option("--dry-run", is_flag=True, help="Show what would happen")
+@click.option("--no-deploy", is_flag=True, help="Skip deploy after push")
 @click.option(
     "--version-file",
     type=click.Path(),
@@ -135,6 +136,7 @@ def version_bump(
 def ship(
     bump_type: str,
     dry_run: bool,
+    no_deploy: bool,
     version_file: str,
     pyproject: str,
 ) -> None:
@@ -144,6 +146,7 @@ def ship(
     Examples:
         fraisier ship patch
         fraisier ship minor --dry-run
+        fraisier ship patch --no-deploy
         fraisier ship major --pyproject path/to/pyproject.toml
     """
     import subprocess
@@ -175,6 +178,8 @@ def ship(
         console.print(f"  Bump: {current.version} -> {new} ({bump_type})")
         console.print(f"  Files: {version_path}, {pyproject_path}")
         console.print("  Git: add, commit, push")
+        if not no_deploy:
+            console.print("  Deploy: trigger for branch-mapped fraises")
         return
 
     # Bump version atomically
@@ -194,3 +199,69 @@ def ship(
     )
     subprocess.run(["git", "push"], check=True)
     console.print(f"[green]Shipped v{info.version}[/green]")
+
+    # Deploy for branch-mapped fraises
+    if not no_deploy:
+        _trigger_deploy_for_current_branch()
+
+
+def _trigger_deploy_for_current_branch() -> None:
+    """Deploy all fraises mapped to the current git branch."""
+    import subprocess as sp
+
+    from fraisier.config import get_config
+    from fraisier.locking import file_deployment_lock
+
+    from ._helpers import _get_deployer
+
+    try:
+        branch = sp.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except sp.CalledProcessError:
+        console.print("[yellow]Could not detect branch, skipping deploy[/yellow]")
+        return
+
+    try:
+        config = get_config()
+    except FileNotFoundError:
+        console.print("[yellow]No fraises.yaml found, skipping deploy[/yellow]")
+        return
+
+    fraise_config = config.get_fraise_for_branch(branch)
+    if not fraise_config:
+        console.print(
+            f"[yellow]No fraise mapped to branch '{branch}', skipping deploy[/yellow]"
+        )
+        return
+
+    fraise_name = fraise_config["fraise_name"]
+    environment = fraise_config["environment"]
+    fraise_type = fraise_config.get("type")
+
+    deployer = _get_deployer(fraise_type, fraise_config)
+    if deployer is None:
+        console.print(f"[red]Error:[/red] Unknown fraise type '{fraise_type}'")
+        raise SystemExit(1)
+
+    console.print(f"[green]Deploying {fraise_name} -> {environment}...[/green]")
+    try:
+        with file_deployment_lock(fraise_name):
+            result = deployer.execute()
+    except Exception as e:
+        if "already running" in str(e).lower():
+            console.print(f"[red]Deploy already running for '{fraise_name}'[/red]")
+            raise SystemExit(1) from None
+        raise
+
+    if result.success:
+        console.print(
+            f"[green]Deploy successful![/green] "
+            f"{result.old_version} -> {result.new_version}"
+        )
+    else:
+        console.print(f"[red]Deploy failed:[/red] {result.error_message}")
+        raise SystemExit(1)

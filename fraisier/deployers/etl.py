@@ -1,7 +1,6 @@
 """ETL fraise deployer - for data pipeline jobs."""
 
 import logging
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -18,8 +17,8 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
     Uses bare repo pattern for git operations, then runs configured scripts.
     """
 
-    def __init__(self, config: dict[str, Any]):
-        super().__init__(config)
+    def __init__(self, config: dict[str, Any], runner: Any = None):
+        super().__init__(config, runner=runner)
         self._init_git_deploy(config)
         self.script_path = config.get("script_path")
         self.database_config = config.get("database", {})
@@ -30,61 +29,27 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
         1. Pull code via bare repo
         2. Run configured script (if any)
         """
-        start_time = time.time()
-        old_version = None
-        self._write_status("deploying")
-        db_pk = self._start_db_record()
 
-        try:
-            # Step 1: Git pull via bare repo
+        def _steps() -> tuple[str | None, str | None]:
+            new_sha = None
+            old_version = None
+
             if self.app_path:
                 logger.info(f"Deploying ETL via bare repo to {self.app_path}")
                 old_sha, new_sha = self._git_pull()
                 old_version = old_sha[:8] if old_sha else None
-            else:
-                new_sha = None
 
-            # Step 2: Run configured script
             if self.script_path and self.app_path:
                 logger.info(f"Running ETL script: {self.script_path}")
-                subprocess.run(
+                self.runner.run(
                     ["python", self.script_path],
                     cwd=self.app_path,
-                    check=True,
-                    capture_output=True,
-                    text=True,
                 )
 
             new_version = new_sha[:8] if new_sha else None
-            duration = time.time() - start_time
+            return old_version, new_version
 
-            self._write_status("success", commit_sha=new_sha)
-            result = DeploymentResult(
-                success=True,
-                status=DeploymentStatus.SUCCESS,
-                old_version=old_version,
-                new_version=new_version,
-                duration_seconds=duration,
-            )
-            self._complete_db_record(db_pk, result)
-            return result
-
-        except Exception as e:
-            duration = time.time() - start_time
-            logger.exception(f"ETL deployment failed: {e}")
-            wrapped = self._wrap_error(e)
-
-            self._write_status("failed", error_message=str(e))
-            result = DeploymentResult(
-                success=False,
-                status=DeploymentStatus.FAILED,
-                old_version=old_version,
-                duration_seconds=duration,
-                error_message=str(e),
-                error=wrapped,
-            )
-            self._complete_db_record(db_pk, result)
-            return result
+        return self._execute_with_lifecycle(_steps)
 
     def rollback(self, to_version: str | None = None) -> DeploymentResult:
         """Rollback ETL deployment via bare repo checkout."""
@@ -97,7 +62,7 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
                 raise ValueError("No previous SHA available for rollback")
 
             worktree = Path(self.app_path)
-            subprocess.run(
+            self.runner.run(
                 [
                     "git",
                     f"--work-tree={worktree}",
@@ -106,15 +71,9 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
                     "-f",
                     target,
                 ],
-                check=True,
-                capture_output=True,
-                text=True,
             )
-            subprocess.run(
+            self.runner.run(
                 ["git", "-C", str(worktree), "reset", "--soft", target],
-                check=True,
-                capture_output=True,
-                text=True,
             )
 
             new_version = target[:8]

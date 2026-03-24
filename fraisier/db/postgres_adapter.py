@@ -6,6 +6,7 @@ proper parameter substitution ($1, $2, etc.), and comprehensive metrics.
 Aligns with FraiseQL's PostgreSQL implementation patterns.
 """
 
+import logging
 from typing import Any
 
 import psycopg
@@ -146,7 +147,10 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                             else:
                                 self._last_insert_id = next(iter(result.values()))
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).warning(
+                            "Failed to fetch last insert ID", exc_info=True
+                        )
+                        self._last_insert_id = None
                 return rows_affected
         except psycopg.Error as e:
             raise RuntimeError(f"Update execution failed: {e}") from e

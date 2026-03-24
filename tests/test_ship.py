@@ -252,3 +252,129 @@ class TestShipBumpTypes:
             ],
         )
         assert "2.0.0" in result.output
+
+
+class TestShipDeploy:
+    """Test ship triggers deploy after push."""
+
+    @patch("subprocess.run")
+    def test_ship_no_deploy_skips_deploy(self, mock_run, tmp_path):
+        """ship --no-deploy does not trigger deployment."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Shipped" in result.output
+        # No deploy output
+        assert "Deploying" not in result.output
+
+    @patch("subprocess.run")
+    def test_ship_triggers_deploy_for_mapped_branch(self, mock_run, tmp_path):
+        """ship triggers deploy when branch has a mapped fraise."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="main\n", stderr="")
+        cfg_data = {
+            "fraises": {
+                "my_api": {
+                    "type": "api",
+                    "environments": {
+                        "production": {
+                            "name": "my-api",
+                            "app_path": "/var/www/api",
+                        },
+                    },
+                },
+            },
+            "branch_mapping": {
+                "main": {
+                    "fraise": "my_api",
+                    "environment": "production",
+                },
+            },
+        }
+        cfg_file = tmp_path / "fraises.yaml"
+        cfg_file.write_text(yaml.dump(cfg_data))
+        _setup_project(tmp_path)
+
+        from fraisier.deployers.base import DeploymentResult, DeploymentStatus
+
+        mock_deployer = MagicMock()
+        mock_deployer.is_deployment_needed.return_value = True
+        mock_deployer.execute.return_value = DeploymentResult(
+            success=True,
+            status=DeploymentStatus.SUCCESS,
+            old_version="v1",
+            new_version="v2",
+            duration_seconds=1.0,
+        )
+
+        runner = CliRunner()
+        with (
+            patch("fraisier.config.get_config") as mock_gc,
+            patch(
+                "fraisier.cli._helpers._get_deployer",
+                return_value=mock_deployer,
+            ),
+            patch("fraisier.locking.file_deployment_lock"),
+        ):
+            mock_cfg = MagicMock()
+            mock_cfg.get_fraise_for_branch.return_value = {
+                "fraise_name": "my_api",
+                "environment": "production",
+                "type": "api",
+                "app_path": "/var/www/api",
+            }
+            mock_gc.return_value = mock_cfg
+
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(cfg_file),
+                    "ship",
+                    "patch",
+                    "--version-file",
+                    str(tmp_path / "version.json"),
+                    "--pyproject",
+                    str(tmp_path / "pyproject.toml"),
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_deployer.execute.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_ship_dry_run_shows_deploy_info(self, mock_run, tmp_path):
+        """ship --dry-run mentions deploy in plan."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--dry-run",
+                "--version-file",
+                str(tmp_path / "version.json"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Deploy" in result.output

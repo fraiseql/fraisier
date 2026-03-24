@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,8 @@ from fraisier.git.operations import (
 from fraisier.status import DEFAULT_STATUS_DIR, DeploymentStatusFile, write_status
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from fraisier.deployers.base import DeploymentResult
 
 logger = logging.getLogger("fraisier")
@@ -147,3 +150,90 @@ class GitDeployMixin:
                 db.mark_deployment_rolled_back(deployment_pk)
         except Exception:
             logger.warning("Failed to record deployment completion in DB")
+
+    def _write_incident(
+        self,
+        error_message: str,
+        *,
+        current_version: str | None = None,
+        target_version: str | None = None,
+        db_errors: list[str] | None = None,
+    ) -> None:
+        """Write an incident file for manual recovery.
+
+        Creates a JSON file in ``/var/lib/fraisier/incidents/`` with full
+        context for operators to diagnose and recover from failed rollbacks.
+        """
+        import json
+        from datetime import UTC, datetime
+
+        incidents_dir = Path("/var/lib/fraisier/incidents")
+        try:
+            incidents_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            filename = f"{self.fraise_name}_{timestamp}.json"
+            incident = {
+                "fraise": self.fraise_name,
+                "environment": self.environment,
+                "timestamp": timestamp,
+                "error": error_message,
+                "current_version": current_version,
+                "target_version": target_version,
+                "db_errors": db_errors or [],
+                "branch": getattr(self, "branch", None),
+            }
+            (incidents_dir / filename).write_text(json.dumps(incident, indent=2))
+            logger.info("Incident file written: %s/%s", incidents_dir, filename)
+        except OSError:
+            logger.warning("Failed to write incident file")
+
+    def _execute_with_lifecycle(
+        self,
+        steps_fn: Callable[[], tuple[str | None, str | None]],
+    ) -> DeploymentResult:
+        """Run deployment steps with timing, status tracking, and DB recording.
+
+        Args:
+            steps_fn: Callable that executes the service-specific deployment
+                steps.  Must return ``(old_version, new_version)``.
+
+        Returns:
+            DeploymentResult with success/failure status and timing.
+        """
+        from fraisier.deployers.base import DeploymentResult, DeploymentStatus
+
+        start_time = time.time()
+        self._write_status("deploying")
+        db_pk = self._start_db_record()
+
+        try:
+            old_version, new_version = steps_fn()
+            duration = time.time() - start_time
+
+            self._write_status("success", commit_sha=new_version)
+            result = DeploymentResult(
+                success=True,
+                status=DeploymentStatus.SUCCESS,
+                old_version=old_version,
+                new_version=new_version,
+                duration_seconds=duration,
+            )
+            self._complete_db_record(db_pk, result)
+            return result
+
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.exception(f"Deployment failed: {e}")
+            wrapped = self._wrap_error(e)
+
+            self._write_status("failed", error_message=str(e))
+            result = DeploymentResult(
+                success=False,
+                status=DeploymentStatus.FAILED,
+                old_version=None,
+                duration_seconds=duration,
+                error_message=str(e),
+                error=wrapped,
+            )
+            self._complete_db_record(db_pk, result)
+            return result

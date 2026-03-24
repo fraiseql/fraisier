@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from .config import get_config
 from .errors import DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
-from .locking import file_deployment_lock
+from .locking import file_deployment_lock, is_deployment_locked
 from .status import read_status
 
 # Configure logging
@@ -166,7 +166,7 @@ async def execute_deployment(
             if deployment_raw.get("lock_dir"):
                 lock_dir = Path(deployment_raw["lock_dir"])
         except FileNotFoundError:
-            pass
+            logger.warning("Config file not found, using default lock_dir")
 
         with file_deployment_lock(fraise_name, lock_dir=lock_dir):
             await _run_deployment(
@@ -209,14 +209,22 @@ async def _run_deployment(
         }
 
         # Get deployer
+        from .runners import runner_from_config
+
+        runner = runner_from_config(deploy_config.get("ssh"))
+
         if fraise_type == "api":
             from .deployers.api import APIDeployer
 
-            deployer = APIDeployer(deploy_config)
+            deployer = APIDeployer(deploy_config, runner=runner)
         elif fraise_type == "etl":
             from .deployers.etl import ETLDeployer
 
-            deployer = ETLDeployer(deploy_config)
+            deployer = ETLDeployer(deploy_config, runner=runner)
+        elif fraise_type == "docker_compose":
+            from .deployers.docker_compose import DockerComposeDeployer
+
+            deployer = DockerComposeDeployer(deploy_config, runner=runner)
         else:
             logger.error(f"Unknown fraise type: {fraise_type}")
             return
@@ -307,6 +315,29 @@ def process_webhook_event(
         if fraise_config:
             fraise_name = fraise_config["fraise_name"]
             environment = fraise_config["environment"]
+
+            # Pre-check: reject early if a deploy is already running
+            lock_dir = None
+            try:
+                deployment_raw = get_config()._config.get("deployment", {}) or {}
+                if deployment_raw.get("lock_dir"):
+                    lock_dir = Path(deployment_raw["lock_dir"])
+            except FileNotFoundError:
+                pass
+            if is_deployment_locked(fraise_name, lock_dir=lock_dir):
+                logger.info(
+                    f"Deploy already running for {fraise_name}/{environment}, "
+                    "returning 409"
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "deployment already running",
+                    "fraise": fraise_name,
+                    "environment": environment,
+                    "provider": event.provider,
+                    "webhook_id": webhook_id,
+                }
+
             logger.info(f"Triggering deployment: {fraise_name} -> {environment}")
 
             # Execute deployment in background

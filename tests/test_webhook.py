@@ -407,6 +407,42 @@ class TestProcessWebhookEvent:
             assert result["branch"] == "main"
             assert result["provider"] == "github"
 
+    def test_process_push_returns_skipped_when_deploy_locked(self, test_db):
+        """Webhook returns 'skipped' when a deploy is already running."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+            is_ping=False,
+        )
+
+        with (
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch("fraisier.webhook.is_deployment_locked", return_value=True),
+        ):
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraise_for_branch.return_value = {
+                "fraise_name": "my_api",
+                "environment": "production",
+                "type": "api",
+                "app_path": "/tmp/api",
+            }
+            mock_config_obj._config = {"deployment": {}}
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            background_tasks = BackgroundTasks()
+
+            result = process_webhook_event(event, background_tasks, webhook_id=1)
+
+            assert result["status"] == "skipped"
+            assert result["reason"] == "deployment already running"
+            assert result["fraise"] == "my_api"
+
     def test_process_push_event_no_configured_fraise(self):
         """Test push event with no configured fraise."""
         event = WebhookEvent(

@@ -17,8 +17,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
     Pulls code via bare repo pattern, then manages systemd timers.
     """
 
-    def __init__(self, config: dict[str, Any]):
-        super().__init__(config)
+    def __init__(self, config: dict[str, Any], runner: Any = None):
+        super().__init__(config, runner=runner)
         self._init_git_deploy(config)
         self.systemd_service = config.get("systemd_service")
         self.systemd_timer = config.get("systemd_timer")
@@ -38,10 +38,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             return False
 
         try:
-            result = subprocess.run(
+            result = self.runner.run(
                 ["systemctl", "is-active", self.systemd_timer],
-                capture_output=True,
-                text=True,
                 check=False,
             )
             return result.returncode != 0
@@ -54,79 +52,45 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
         1. Pull code via bare repo (if app_path configured)
         2. Enable and start systemd timer
         """
-        start_time = time.time()
-        old_version = None
-        self._write_status("deploying")
-        db_pk = self._start_db_record()
 
-        try:
-            # Step 1: Git pull via bare repo (if configured)
+        def _steps() -> tuple[str | None, str | None]:
             new_sha = None
+            old_version = None
+
             if self.app_path:
                 logger.info(f"Pulling code for scheduled job to {self.app_path}")
                 old_sha, new_sha = self._git_pull()
                 old_version = old_sha[:8] if old_sha else None
 
-            # Step 2: Manage systemd timer
             if self.systemd_timer:
                 logger.info(f"Enabling timer: {self.systemd_timer}")
-                subprocess.run(
+                self.runner.run(
                     ["sudo", "systemctl", "enable", self.systemd_timer],
-                    check=True,
-                    capture_output=True,
                 )
-                subprocess.run(
+                self.runner.run(
                     ["sudo", "systemctl", "start", self.systemd_timer],
-                    check=True,
-                    capture_output=True,
                 )
-                subprocess.run(
+                self.runner.run(
                     ["sudo", "systemctl", "daemon-reload"],
-                    check=True,
-                    capture_output=True,
                 )
 
             new_version = new_sha[:8] if new_sha else self._get_timer_state()
-            duration = time.time() - start_time
+            return old_version, new_version
 
-            self._write_status("success", commit_sha=new_sha)
-            result = DeploymentResult(
-                success=True,
-                status=DeploymentStatus.SUCCESS,
-                old_version=old_version,
-                new_version=new_version,
-                duration_seconds=duration,
-            )
-            self._complete_db_record(db_pk, result)
-            return result
-
-        except Exception as e:
-            duration = time.time() - start_time
-            logger.exception(f"Scheduled job deployment failed: {e}")
-            wrapped = self._wrap_error(e)
-
-            self._write_status("failed", error_message=str(e))
-            result = DeploymentResult(
-                success=False,
-                status=DeploymentStatus.FAILED,
-                old_version=old_version,
-                duration_seconds=duration,
-                error_message=str(e),
-                error=wrapped,
-            )
-            self._complete_db_record(db_pk, result)
-            return result
+        return self._execute_with_lifecycle(_steps)
 
     def _get_timer_state(self) -> str | None:
         """Get timer active state as version proxy."""
         if not self.systemd_timer:
             return None
         try:
-            result = subprocess.run(
-                ["systemctl", "show", self.systemd_timer, "--property=ActiveState"],
-                capture_output=True,
-                text=True,
-                check=True,
+            result = self.runner.run(
+                [
+                    "systemctl",
+                    "show",
+                    self.systemd_timer,
+                    "--property=ActiveState",
+                ],
             )
             parts = result.stdout.strip().split("=")
             state = parts[1] if len(parts) > 1 else "unknown"
@@ -139,10 +103,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
         if not self.systemd_timer:
             return True
         try:
-            result = subprocess.run(
+            result = self.runner.run(
                 ["systemctl", "is-active", self.systemd_timer],
-                capture_output=True,
-                text=True,
                 check=False,
             )
             return result.returncode == 0
@@ -157,15 +119,11 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
         try:
             if self.systemd_timer:
                 logger.info(f"Stopping timer: {self.systemd_timer}")
-                subprocess.run(
+                self.runner.run(
                     ["sudo", "systemctl", "stop", self.systemd_timer],
-                    check=True,
-                    capture_output=True,
                 )
-                subprocess.run(
+                self.runner.run(
                     ["sudo", "systemctl", "disable", self.systemd_timer],
-                    check=True,
-                    capture_output=True,
                 )
 
             new_version = self._get_timer_state()

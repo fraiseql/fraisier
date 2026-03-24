@@ -50,6 +50,7 @@ class BareMetalProvider(DeploymentProvider):
         self.username = self.config.get("username", "root")
         self.key_path = self.config.get("key_path")
         self.known_hosts_path = self.config.get("known_hosts_path")
+        self.strict_host_key = self.config.get("strict_host_key", True)
         self.ssh_client = None
         self._connection_timeout = 10
 
@@ -72,10 +73,11 @@ class BareMetalProvider(DeploymentProvider):
         Returns:
             List of command arguments for subprocess.run
         """
+        host_key_policy = "accept-new" if self.strict_host_key else "no"
         cmd = [
             "ssh",
             "-o",
-            "StrictHostKeyChecking=no",
+            f"StrictHostKeyChecking={host_key_policy}",
             "-o",
             "BatchMode=yes",
             "-p",
@@ -130,8 +132,8 @@ class BareMetalProvider(DeploymentProvider):
                 options.client_keys = [self.key_path]
             if self.known_hosts_path:
                 options.known_hosts = self.known_hosts_path
-            else:
-                options.known_hosts = None  # Accept unknown hosts
+            elif not self.strict_host_key:
+                options.known_hosts = None
 
             # Establish connection
             self.ssh_client = await asyncssh.connect(

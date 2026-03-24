@@ -624,3 +624,74 @@ class TestDeploymentResult:
         )
 
         assert result.details == details
+
+
+class TestWriteIncident:
+    """Tests for _write_incident mixin method."""
+
+    def test_writes_incident_file(self, tmp_path):
+        deployer = APIDeployer({"app_path": "/var/www/api", "fraise_name": "my_api"})
+
+        incidents_dir = tmp_path / "incidents"
+        with patch(
+            "fraisier.deployers.mixins.Path",
+            return_value=incidents_dir,
+        ):
+            deployer._write_incident(
+                "rollback failed",
+                current_version="abc123",
+                target_version="def456",
+                db_errors=["constraint violation"],
+            )
+
+        # Should have created a JSON file
+        files = list(incidents_dir.glob("*.json"))
+        assert len(files) == 1
+
+        import json
+
+        data = json.loads(files[0].read_text())
+        assert data["fraise"] == "my_api"
+        assert data["error"] == "rollback failed"
+        assert "constraint violation" in data["db_errors"]
+
+
+class TestExecuteWithLifecycle:
+    """Tests for _execute_with_lifecycle mixin method."""
+
+    def _make_deployer(self):
+        """Create a minimal ETLDeployer for lifecycle testing."""
+        config = {"app_path": "/tmp/etl", "script_path": "run.py"}
+        return ETLDeployer(config)
+
+    def test_records_timing_and_success(self):
+        """Lifecycle records timing and writes success status."""
+        deployer = self._make_deployer()
+        with patch.object(deployer, "_write_status") as ws:
+            result = deployer._execute_with_lifecycle(
+                lambda: ("v1", "v2"),
+            )
+
+        assert result.success is True
+        assert result.status == DeploymentStatus.SUCCESS
+        assert result.old_version == "v1"
+        assert result.new_version == "v2"
+        assert result.duration_seconds > 0
+        ws.assert_any_call("deploying")
+        ws.assert_any_call("success", commit_sha="v2")
+
+    def test_handles_exception_and_records_failure(self):
+        """Lifecycle catches exceptions and writes failure."""
+        deployer = self._make_deployer()
+
+        def boom():
+            raise RuntimeError("kaboom")
+
+        with patch.object(deployer, "_write_status") as ws:
+            result = deployer._execute_with_lifecycle(boom)
+
+        assert result.success is False
+        assert result.status == DeploymentStatus.FAILED
+        assert "kaboom" in result.error_message
+        ws.assert_any_call("deploying")
+        ws.assert_any_call("failed", error_message="kaboom")

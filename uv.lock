@@ -243,8 +243,8 @@ wheels = [
 
 [[package]]
 name = "fraiseql-confiture"
-version = "0.8.9"
-source = { registry = "https://pypi.org/simple" }
+version = "0.8.11"
+source = { editable = "../confiture" }
 dependencies = [
     { name = "cryptography" },
     { name = "psycopg", extra = ["binary", "pool"] },
@@ -255,18 +255,40 @@ dependencies = [
     { name = "sqlparse" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/a2/f36fe4a347179c3374b29486c7e0da73af2694be00bc34f01ced3c269ed1/fraiseql_confiture-0.8.9.tar.gz", hash = "sha256:b5903b412e7c7357281be726ac4bea67650984c566cccdbb32249e970295d44f", size = 1436298, upload-time = "2026-03-23T15:36:11.464Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/18/97/049a731823aba49e0dcba429a00952068941ea1b8a667dde54a605a2cc94/fraiseql_confiture-0.8.9-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:78f124afa94ac86b3ce44d72898f24cd12464965919913f5943f76e939fbff32", size = 780548, upload-time = "2026-03-23T15:36:18.495Z" },
-    { url = "https://files.pythonhosted.org/packages/b7/f2/ee44a8cfc17b65c26d7274eb9b35413aa7fb0f4f1d953e1404cbc1647d1c/fraiseql_confiture-0.8.9-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:98321d2d52d839197da8aeb853e57b40ce075a44b59c0b013f89564dcffde7a1", size = 827762, upload-time = "2026-03-23T15:36:12.716Z" },
-    { url = "https://files.pythonhosted.org/packages/b0/fc/1988c8eb887893ff0d628a9eeb0ebab791c0ee32472a4effa6d1f277abb8/fraiseql_confiture-0.8.9-cp311-cp311-win_amd64.whl", hash = "sha256:eb4d69df9d56b6199dfba5e18ec5156464c524260c806ab06f48e4250a87c185", size = 734041, upload-time = "2026-03-23T15:36:10.381Z" },
-    { url = "https://files.pythonhosted.org/packages/31/b6/a33b9c95cfbd4098cb040f960058b034b43362cb46e89e1575ee1f0b27dd/fraiseql_confiture-0.8.9-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:13acb69b5bfcd4ac8f68818d1627cdc98d7a9e8e0bfe789e499a0b8b719b4fa8", size = 780191, upload-time = "2026-03-23T15:36:15.395Z" },
-    { url = "https://files.pythonhosted.org/packages/7c/13/81127c9ae982db01cd3394c9382162bcceaf9d2a06d41e6a67994d2929fd/fraiseql_confiture-0.8.9-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:d5587a67ffd3254150571cd49b8d9a5b6231afcc1d167d8cc558e9899228b903", size = 826306, upload-time = "2026-03-23T15:36:16.953Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/01/c44a03aaaa1935d59e28ed5c18d70865371612a9ef2c557b296a8e0e7ea0/fraiseql_confiture-0.8.9-cp312-cp312-win_amd64.whl", hash = "sha256:59ae82d2472b4ce22454380fdc2a34aa6335aaf1b12ecacad11101ed3961871e", size = 734272, upload-time = "2026-03-23T15:36:13.954Z" },
-    { url = "https://files.pythonhosted.org/packages/18/97/a2c5050ead58a87f5124a1e541356090f65e65169e47cab2ed8547316124/fraiseql_confiture-0.8.9-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:1887a86e76b47834b58729a04e5ba096d7f639f43173e3c38984dfae84c90534", size = 780253, upload-time = "2026-03-23T15:36:08.982Z" },
-    { url = "https://files.pythonhosted.org/packages/36/06/b4f74c3e6a1a831f6424296f505185cf30042d643b8cfba18ba83f1ca538/fraiseql_confiture-0.8.9-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:f81c37ac85237f0992e7798c7cbe61a981d10c307fc9bdd94eba2ba50c973fff", size = 826211, upload-time = "2026-03-23T15:36:06.393Z" },
-    { url = "https://files.pythonhosted.org/packages/35/4e/58a6f15f67d6a3f566218550c17bd1ab5af468d1ec43c7171f69ae5ae237/fraiseql_confiture-0.8.9-cp313-cp313-win_amd64.whl", hash = "sha256:8e85fee3fc8b8f65dbcdfee99709015210acb0bc8c89b8635215961ed88d5bef", size = 734336, upload-time = "2026-03-23T15:36:07.675Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/4d/58ae36933e66db71bf7d8eea7215b257ce2a84aaa78b77461cdac0585f29/fraiseql_confiture-0.8.9-cp314-cp314-win_amd64.whl", hash = "sha256:1f84594d9eb719670193b8aad157d391a58250c50f174fce5259c393c1dd05ae", size = 734332, upload-time = "2026-03-23T15:36:04.99Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=42.0.0" },
+    { name = "fastapi", marker = "extra == 'mcp-http'", specifier = ">=0.111" },
+    { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.7.0" },
+    { name = "pglast", marker = "extra == 'ast'", specifier = ">=6.0" },
+    { name = "pglast", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.1.0" },
+    { name = "pydantic", specifier = ">=2.5.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-asyncio", marker = "extra == 'testing'", specifier = ">=0.23.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "pytest-cov", marker = "extra == 'testing'", specifier = ">=4.1.0" },
+    { name = "pytest-json-report", marker = "extra == 'dev'", specifier = ">=1.5.0" },
+    { name = "pytest-json-report", marker = "extra == 'testing'", specifier = ">=1.5.0" },
+    { name = "pytest-watch", marker = "extra == 'dev'", specifier = ">=4.2.0" },
+    { name = "pyyaml", specifier = ">=6.0.1" },
+    { name = "rich", specifier = ">=13.7.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
+    { name = "sqlglot", specifier = ">=28.0" },
+    { name = "sqlparse", specifier = ">=0.5.0" },
+    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.7" },
+    { name = "typer", specifier = ">=0.12.0" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'mcp-http'", specifier = ">=0.29" },
+]
+provides-extras = ["testing", "dev", "fraiseql", "ast", "mcp-http"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "maturin", specifier = ">=1.9.6" },
+    { name = "ruff", specifier = "==0.14.5" },
 ]
 
 [[package]]
@@ -310,7 +332,7 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.19.0,<1.0" },
     { name = "click", specifier = ">=8.1.0,<9.0" },
     { name = "fastapi", specifier = ">=0.109.0,<1.0" },
-    { name = "fraiseql-confiture", specifier = ">=0.8.0,<1.0" },
+    { name = "fraiseql-confiture", editable = "../confiture" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0,<1.0" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'all-databases'", specifier = ">=3.1.0,<4.0" },

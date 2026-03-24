@@ -42,15 +42,20 @@ class BaseDeployer(ABC):
     that implements this interface.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any], runner: Any = None):
         """Initialize deployer with fraise configuration.
 
         Args:
             config: Fraise configuration from fraises.yaml
+            runner: Optional CommandRunner for executing shell commands.
+                Defaults to LocalRunner (local subprocess execution).
         """
+        from fraisier.runners import LocalRunner
+
         self.config = config
         self.fraise_name = config.get("fraise_name", "unknown")
         self.environment = config.get("environment", "unknown")
+        self.runner = runner or LocalRunner()
 
     @abstractmethod
     def get_current_version(self) -> str | None:

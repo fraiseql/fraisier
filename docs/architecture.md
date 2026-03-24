@@ -1,6 +1,6 @@
 # Fraisier Architecture
 
-Fraisier is a deployment orchestrator built as the reference implementation of a FraiseQL application.
+Fraisier is a deployment orchestrator for PostgreSQL-backed applications.
 
 ---
 
@@ -14,13 +14,13 @@ Fraisier is a deployment orchestrator built as the reference implementation of a
                               │
                 ┌─────────────┼─────────────┐
                 ▼             ▼             ▼
-        ┌───────────────┐ ┌──────────┐ ┌─────────────┐
-        │      CLI      │ │ Webhook  │ │  GraphQL    │
-        │   (Click)     │ │ (FastAPI)│ │   API       │
-        │               │ │          │ │ (FraiseQL)  │
-        └───────────────┘ └──────────┘ └─────────────┘
-                │             │             │
-                └─────────────┼─────────────┘
+        ┌───────────────┐ ┌──────────┐
+        │      CLI      │ │ Webhook  │
+        │   (Click)     │ │ (FastAPI)│
+        │               │ │          │
+        └───────────────┘ └──────────┘
+                │             │
+                └──────┬──────┘
                               │
                         ┌─────▼──────┐
                         │ Deployers  │
@@ -596,8 +596,8 @@ class ConfigurationError(FraisierError): ...
 ### Webhook Verification
 
 - ✅ All providers verify signatures
-- ✅ Replay attack prevention via timestamps
-- ⚠️ Need: Rate limiting, request ID tracking
+- ✅ Rate limiting (10 requests/min per IP)
+- ⚠️ Need: Replay attack prevention via timestamps, request ID tracking
 
 ### Configuration
 
@@ -616,10 +616,7 @@ class ConfigurationError(FraisierError): ...
 ## Related Documents
 
 - **Reference Implementation**: `../README.md`
-- **Development Guide**: `../.claude/CLAUDE.md`
-- **Roadmap**: `../roadmap.md`
 - **Setup Instructions**: `../development.md`
-- **Product Requirements**: `./prd.md`
 
 ---
 
