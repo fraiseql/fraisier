@@ -8,6 +8,7 @@ import pytest
 
 from fraisier.config import FraisierConfig
 from fraisier.database import FraisierDB
+from tests.fixtures.git_env import git_deploy_env as git_deploy_env  # noqa: PLC0414
 
 
 @pytest.fixture(autouse=True)
