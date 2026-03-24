@@ -1,7 +1,6 @@
 """API fraise deployer - for web services and APIs."""
 
 import logging
-import signal
 import subprocess
 import time
 from pathlib import Path
@@ -9,32 +8,12 @@ from typing import Any
 
 from fraisier.errors import DeploymentError, HealthCheckError
 from fraisier.health_check import HealthCheckManager, HTTPHealthChecker
+from fraisier.timeout import DeploymentTimeoutExpired, deployment_timeout
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
 from .mixins import GitDeployMixin
 
 logger = logging.getLogger("fraisier")
-
-
-class _DeploymentTimeout(Exception):
-    """Raised when deployment exceeds configured timeout."""
-
-
-def _arm_timeout(timeout: int) -> Any:
-    """Set a SIGALRM timeout, returning the previous handler."""
-
-    def _handler(_signum: int, _frame: Any) -> None:
-        raise _DeploymentTimeout(f"Deployment timed out after {timeout} seconds")
-
-    old_handler = signal.signal(signal.SIGALRM, _handler)
-    signal.alarm(timeout)
-    return old_handler
-
-
-def _disarm_timeout(old_handler: Any) -> None:
-    """Cancel any pending SIGALRM and restore the previous handler."""
-    signal.alarm(0)
-    signal.signal(signal.SIGALRM, old_handler)
 
 
 class APIDeployer(GitDeployMixin, BaseDeployer):
@@ -67,66 +46,66 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         db_pk = self._start_db_record()
 
         timeout = self.config.get("timeout", 600)
-        old_handler = _arm_timeout(timeout)
 
         try:
-            # Step 1: Git pull via bare repo
-            logger.info(f"Deploying via bare repo to {self.app_path}")
-            old_sha, new_sha = self._git_pull()
-            old_version = old_sha[:8] if old_sha else None
+            with deployment_timeout(timeout):
+                # Step 1: Git pull via bare repo
+                logger.info(f"Deploying via bare repo to {self.app_path}")
+                old_sha, new_sha = self._git_pull()
+                old_version = old_sha[:8] if old_sha else None
 
-            # Step 2: Run database migrations via strategy if configured
-            if self.database_config:
-                logger.info("Running database migrations")
-                self._run_strategy()
+                # Step 2: Run database migrations via strategy if configured
+                if self.database_config:
+                    logger.info("Running database migrations")
+                    self._run_strategy()
 
-            # Step 3: Restart service
-            if self.systemd_service:
-                logger.info(f"Restarting service: {self.systemd_service}")
-                self._restart_service()
+                # Step 3: Restart service
+                if self.systemd_service:
+                    logger.info(f"Restarting service: {self.systemd_service}")
+                    self._restart_service()
 
-            # Step 4: Health check
-            if self.health_check_url:
-                logger.info(f"Running health check: {self.health_check_url}")
-                if not self._wait_for_health():
-                    if self._previous_sha:
-                        logger.warning(
-                            "Health check failed, rolling back to "
-                            f"{self._previous_sha[:8]}"
+                # Step 4: Health check
+                if self.health_check_url:
+                    logger.info(f"Running health check: {self.health_check_url}")
+                    if not self._wait_for_health():
+                        if self._previous_sha:
+                            logger.warning(
+                                "Health check failed, rolling back to "
+                                f"{self._previous_sha[:8]}"
+                            )
+                            rollback_result = self.rollback()
+                            duration = time.time() - start_time
+                            result = self._build_rollback_result(
+                                rollback_result,
+                                old_version,
+                                duration,
+                            )
+                            self._complete_db_record(db_pk, result)
+                            return result
+                        raise HealthCheckError(
+                            "Health check failed after deployment",
+                            context={
+                                "fraise": self.fraise_name,
+                                "environment": self.environment,
+                                "url": self.health_check_url,
+                            },
                         )
-                        rollback_result = self.rollback()
-                        duration = time.time() - start_time
-                        result = self._build_rollback_result(
-                            rollback_result,
-                            old_version,
-                            duration,
-                        )
-                        self._complete_db_record(db_pk, result)
-                        return result
-                    raise HealthCheckError(
-                        "Health check failed after deployment",
-                        context={
-                            "fraise": self.fraise_name,
-                            "environment": self.environment,
-                            "url": self.health_check_url,
-                        },
-                    )
 
-            new_version = new_sha[:8] if new_sha else None
-            duration = time.time() - start_time
+                new_version = new_sha[:8] if new_sha else None
+                duration = time.time() - start_time
 
-            self._write_status("success", commit_sha=new_sha)
-            result = DeploymentResult(
-                success=True,
-                status=DeploymentStatus.SUCCESS,
-                old_version=old_version,
-                new_version=new_version,
-                duration_seconds=duration,
-            )
-            self._complete_db_record(db_pk, result)
-            return result
+                self._write_status("success", commit_sha=new_sha)
+                result = DeploymentResult(
+                    success=True,
+                    status=DeploymentStatus.SUCCESS,
+                    old_version=old_version,
+                    new_version=new_version,
+                    duration_seconds=duration,
+                )
+                self._complete_db_record(db_pk, result)
+                return result
 
-        except _DeploymentTimeout as e:
+        except DeploymentTimeoutExpired as e:
             result = self._handle_timeout(e, old_version, start_time)
             self._complete_db_record(db_pk, result)
             return result
@@ -149,12 +128,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             self._complete_db_record(db_pk, result)
             return result
 
-        finally:
-            _disarm_timeout(old_handler)
-
     def _handle_timeout(
         self,
-        exc: _DeploymentTimeout,
+        exc: DeploymentTimeoutExpired,
         old_version: str | None,
         start_time: float,
     ) -> DeploymentResult:

@@ -2,8 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
-from fraisier.deployers.api import APIDeployer, _DeploymentTimeout
+from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentResult, DeploymentStatus
+from fraisier.timeout import DeploymentTimeoutExpired
 
 
 def _make_api_deployer(**overrides) -> APIDeployer:
@@ -35,7 +36,11 @@ class TestTimeoutRollback:
         )
 
         with (
-            patch.object(deployer, "_git_pull", side_effect=_DeploymentTimeout("boom")),
+            patch.object(
+                deployer,
+                "_git_pull",
+                side_effect=DeploymentTimeoutExpired("boom"),
+            ),
             patch.object(deployer, "rollback", return_value=rollback_result) as mock_rb,
             patch.object(deployer, "_write_status"),
             patch.object(deployer, "_start_db_record", return_value=None),
@@ -51,7 +56,11 @@ class TestTimeoutRollback:
         deployer._previous_sha = None
 
         with (
-            patch.object(deployer, "_git_pull", side_effect=_DeploymentTimeout("boom")),
+            patch.object(
+                deployer,
+                "_git_pull",
+                side_effect=DeploymentTimeoutExpired("boom"),
+            ),
             patch.object(deployer, "_write_status"),
             patch.object(deployer, "_start_db_record", return_value=None),
         ):
@@ -72,7 +81,11 @@ class TestTimeoutRollback:
         )
 
         with (
-            patch.object(deployer, "_git_pull", side_effect=_DeploymentTimeout("boom")),
+            patch.object(
+                deployer,
+                "_git_pull",
+                side_effect=DeploymentTimeoutExpired("boom"),
+            ),
             patch.object(deployer, "rollback", return_value=rollback_result),
             patch.object(deployer, "_write_status"),
             patch.object(deployer, "_start_db_record", return_value=None),
