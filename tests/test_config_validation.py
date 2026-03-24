@@ -83,6 +83,70 @@ fraises:
         config = FraisierConfig(config_file)
         assert config.get_fraise("my_api") is not None
 
+    def test_rejects_invalid_clone_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        clone_url: "not a url"
+""",
+        )
+        with pytest.raises(ValidationError, match=r"clone_url.*valid git URL"):
+            FraisierConfig(config_file)
+
+    def test_accepts_ssh_clone_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        clone_url: "git@github.com:org/repo.git"
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
+    def test_accepts_https_clone_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        clone_url: "https://github.com/org/repo.git"
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
+    def test_accepts_local_path_clone_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        clone_url: "/var/repos/myapi.git"
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
     def test_rejects_unknown_strategy(self, tmp_path):
         config_file = _write_config(
             tmp_path,

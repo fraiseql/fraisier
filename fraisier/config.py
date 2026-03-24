@@ -4,6 +4,7 @@ Loads fraise definitions from fraises.yaml.
 Supports hierarchical fraise -> environment structure.
 """
 
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,15 @@ from typing import Any
 import yaml
 
 from fraisier.errors import ValidationError
+
+_GIT_URL_RE = re.compile(
+    r"^("
+    r"https?://[^\s]+"
+    r"|git@[\w.\-]+:[\w./-]+"
+    r"|ssh://[^\s]+"
+    r"|/[\w./-]+"
+    r")$"
+)
 
 _VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
@@ -190,6 +200,14 @@ class FraisierConfig:
                     f"{fraise_name}: '{field}' must be a number, "
                     f"got {type(val).__name__}"
                 )
+
+        # clone_url format validation
+        clone_url = env.get("clone_url")
+        if clone_url and not _GIT_URL_RE.match(str(clone_url)):
+            errors.append(
+                f"{fraise_name}: clone_url must be a valid git URL "
+                f"(SSH, HTTPS, or absolute path), got: {clone_url!r}"
+            )
 
         # Strategy validation
         db = env.get("database", {})
