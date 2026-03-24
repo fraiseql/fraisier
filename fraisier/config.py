@@ -6,6 +6,7 @@ Supports hierarchical fraise -> environment structure.
 
 import re
 import threading
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -302,6 +303,23 @@ class FraisierConfig:
             raise ValidationError(
                 f"Invalid lock_backend '{lock_backend}'. Valid: {valid}",
             )
+
+        _DEPRECATED_DEPLOYMENT_KEYS = {
+            "poll_interval_seconds": (
+                "deployment.poll_interval_seconds is deprecated "
+                "and ignored by the deployment pipeline. "
+                "Use health.deploy_poll_interval_seconds instead."
+            ),
+            "webhook_secret_env": (
+                "deployment.webhook_secret_env is deprecated "
+                "and ignored. The webhook reads "
+                "FRAISIER_WEBHOOK_SECRET from the environment "
+                "directly."
+            ),
+        }
+        for key, message in _DEPRECATED_DEPLOYMENT_KEYS.items():
+            if key in raw:
+                warnings.warn(message, DeprecationWarning, stacklevel=2)
 
         return DeploymentConfig(
             lock_dir=raw.get("lock_dir", "/run/fraisier"),

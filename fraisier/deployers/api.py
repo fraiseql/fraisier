@@ -31,8 +31,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self._init_git_deploy(config)
         self.git_repo = config.get("git_repo")
         self.systemd_service = config.get("systemd_service")
-        self.health_check_url = config.get("health_check", {}).get("url")
-        self.health_check_timeout = config.get("health_check", {}).get("timeout", 30)
+        hc = config.get("health_check", {})
+        self.health_check_url = hc.get("url")
+        self.health_check_timeout = hc.get("timeout", 30)
+        self.health_check_retries = hc.get("retries", 5)
         self.database_config = config.get("database", {})
         self.allow_irreversible = config.get("allow_irreversible", False)
         self.lock_timeout = config.get("lock_timeout", 300)
@@ -329,7 +331,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         )
         result = manager.check_with_retries(
             checker,
-            max_retries=10,
+            max_retries=self.health_check_retries,
             initial_delay=1.0,
             backoff_factor=2.0,
             max_delay=30.0,
