@@ -396,23 +396,6 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             error_message=error_msg,
         )
 
-    def _rollback_git(self, target: str) -> None:
-        """Check out a target SHA in the worktree."""
-        worktree = Path(self.app_path)
-        self.runner.run(
-            [
-                "git",
-                f"--work-tree={worktree}",
-                f"--git-dir={self.bare_repo}",
-                "checkout",
-                "-f",
-                target,
-            ],
-        )
-        self.runner.run(
-            ["git", "-C", str(worktree), "reset", "--soft", target],
-        )
-
     def _finalize_rollback(
         self, current_version: str | None, target: str, start_time: float
     ) -> DeploymentResult:
@@ -450,7 +433,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     return db_result
                 db_details = db_result.details
 
-            self._rollback_git(target)
+            self._git_rollback(target)
             result = self._finalize_rollback(current_version, target, start_time)
             result.details.update(db_details)
             return result

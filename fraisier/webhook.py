@@ -609,6 +609,9 @@ def run_server() -> None:
     host = os.getenv("FRAISIER_HOST", "0.0.0.0")
     port = get_int_env("FRAISIER_PORT", default=8080, min_value=1)
 
+    rate_limit = get_int_env("FRAISIER_RATE_LIMIT", default=10, min_value=1)
+    _validate_env_config(port, rate_limit)
+
     logger.info(f"Starting Fraisier webhook server on {host}:{port}")
 
     config = uvicorn.Config(
