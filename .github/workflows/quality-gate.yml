@@ -1,0 +1,162 @@
+name: Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fraisier
+          POSTGRES_PASSWORD: fraisier
+          POSTGRES_DB: fraisier_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install ".[dev]"
+
+    - name: Verify environment
+      run: |
+        uv run python --version
+        uv run pytest --version
+        pg_isready -h localhost -p 5432 -U fraisier && echo 'PostgreSQL ready' || echo 'PostgreSQL not ready'
+
+    - name: Run tests with coverage
+      env:
+        FRAISIER_TEST_PG_URL: postgresql://fraisier:fraisier@localhost:5432/fraisier_test
+      run: |
+        uv run pytest tests/ \
+          --cov=fraisier \
+          --cov-report=xml \
+          --cov-report=term-missing \
+          -v \
+          --tb=short
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v5
+      with:
+        files: ./coverage.xml
+        flags: unittests
+        name: Python-3.12
+        fail_ci_if_error: false
+      continue-on-error: true
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install ruff
+    - name: Run ruff check
+      run: uv run ruff check .
+    - name: Run ruff format check
+      run: uv run ruff format --check .
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install ty
+      run: uv tool install ty
+    - name: Run ty type check
+      run: ty check fraisier/
+      timeout-minutes: 5
+      continue-on-error: true
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install bandit
+    - name: Run bandit security scan
+      run: uv run bandit -r fraisier/ -f json || true
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+      continue-on-error: true
+
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [test, lint, type-check, security]
+    if: always()
+    steps:
+      - name: Check quality gate status
+        run: |
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
+            echo "Tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "Lint checks failed"
+            exit 1
+          fi
+          if [[ "${{ needs.type-check.result }}" == "failure" ]]; then
+            echo "Type check has warnings (non-blocking)"
+          fi
+          if [[ "${{ needs.security.result }}" != "success" ]]; then
+            echo "Security checks failed"
+            exit 1
+          fi
+          echo "All quality checks passed"

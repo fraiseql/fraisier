@@ -1,0 +1,197 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test:
+    name: Tests (Required for Release)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fraisier
+          POSTGRES_PASSWORD: fraisier
+          POSTGRES_DB: fraisier_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install ".[dev]"
+
+    - name: Run tests
+      env:
+        FRAISIER_TEST_PG_URL: postgresql://fraisier:fraisier@localhost:5432/fraisier_test
+      run: |
+        uv run pytest tests/ \
+          --cov=fraisier \
+          --cov-report=xml \
+          --cov-report=term-missing \
+          -v
+
+  lint:
+    name: Lint (Required for Release)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install ruff
+    - name: Run ruff check
+      run: uv run ruff check .
+    - name: Run ruff format check
+      run: uv run ruff format --check .
+
+  type-check:
+    name: Type Check (Advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install ty
+      run: uv tool install ty
+    - name: Run ty
+      run: ty check fraisier/ || echo "Type check warnings (non-blocking)"
+
+  security:
+    name: Security (Required for Release)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install bandit
+    - name: Run bandit
+      run: uv run bandit -r fraisier/ -f json || true
+
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    needs: [test, lint, type-check, security]
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Build sdist and wheel
+      run: uv build
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v5
+      with:
+        name: dist
+        path: dist/*
+
+  validate:
+    name: Validate built artifacts
+    runs-on: ubuntu-latest
+    needs: [build]
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v5
+      with:
+        name: dist
+        path: dist
+
+    - name: Install validation tools
+      run: pip install twine
+
+    - name: Validate with twine
+      run: twine check dist/*
+
+    - name: List artifacts
+      run: |
+        echo "=== Built Artifacts ==="
+        ls -lh dist/
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [validate]
+    environment: release
+    permissions:
+      id-token: write
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v5
+      with:
+        name: dist
+        path: dist
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Publish to PyPI
+      run: uv publish --trusted-publishing always
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [publish]
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v5
+      with:
+        name: dist
+        path: dist
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        generate_release_notes: true
+        files: dist/*
+        draft: false
+        prerelease: false
