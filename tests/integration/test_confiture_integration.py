@@ -11,6 +11,7 @@ import os
 import textwrap
 from pathlib import Path
 
+import psycopg
 import pytest
 
 # Skip if no PostgreSQL available
@@ -23,11 +24,10 @@ def _write_confiture_config(tmp_path: Path, db_url: str) -> Path:
     config_path = tmp_path / "confiture.yaml"
     config_path.write_text(
         textwrap.dedent(f"""\
-        database:
-          url: "{db_url}"
-        migrations:
-          directory: "{tmp_path / "migrations"}"
-          schema: public
+        name: test
+        database_url: "{db_url}"
+        include_dirs:
+          - "{tmp_path / "migrations"}"
         """)
     )
     return config_path
@@ -51,7 +51,20 @@ def pg_url():
 
 @pytest.fixture
 def migration_env(tmp_path, pg_url):
-    """Set up a migration environment with confiture config and migration dir."""
+    """Set up a clean migration environment with confiture config and migration dir.
+
+    Drops all user tables and confiture's tracking table before each test
+    to ensure complete isolation.
+    """
+    with psycopg.connect(pg_url) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            # Drop all user tables and the tracking table
+            cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+            tables = [row[0] for row in cur.fetchall()]
+            for table in tables:
+                cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+
     migrations_dir = tmp_path / "migrations"
     config_path = _write_confiture_config(tmp_path, pg_url)
     return config_path, migrations_dir
