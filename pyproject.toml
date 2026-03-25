@@ -4,7 +4,7 @@ requires = ["hatchling"]
 
 [project]
 authors = [
-  {name = "FraiseQL Team"}
+  {name = "Lionel Hamayon", email = "lionel.hamayon@evolution-digitale.fr"}
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
