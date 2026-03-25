@@ -1,8 +1,9 @@
 # Changelog
 
-## v0.2.0 (2026-03-24)
+## v0.2.0 (2026-03-25)
 
-Bulletproof deploy + migrate + rollback pipeline with security hardening.
+Bulletproof deploy + migrate + rollback pipeline with security hardening,
+production safety, and comprehensive test coverage (1256 tests).
 
 ### Critical Fixes
 - **Git rollback on migration failure**: When migration fails after git checkout,
@@ -11,22 +12,36 @@ Bulletproof deploy + migrate + rollback pipeline with security hardening.
   critical notification with both the original and rollback errors
 - **Timeout rollback failures** now correctly report `ROLLBACK_FAILED` status
   instead of generic `FAILED`
+- Exact migration rollback count tracked in incident files
+
+### Production Safety
+- **Database-backed deployment lock** with SQLite WAL — replaces local-only
+  file locking for multi-server environments
+- **Thread-based deployment timeout** replaces `SIGALRM` — works correctly
+  in multi-threaded contexts and on non-Unix platforms
+- Health check retries wired from config (`health.retries`), no longer hardcoded
+- Deprecation warnings for `deployment.poll_interval_seconds` and
+  `deployment.webhook_secret_env` (superseded by `health.*` and env vars)
 
 ### Security Hardening
 - Webhook server **refuses to start** without `FRAISIER_WEBHOOK_SECRET` (minimum 32 chars)
 - Shell commands from config (`restore_command`, health check `command`) are validated
   for metacharacters before execution — prevents command injection
+- **Safe integer parsing** (`get_int_env`) for all environment variables —
+  rejects non-numeric and out-of-range values with fallback to defaults
+- Webhook port and rate-limit validated at server startup
 - Log redaction expanded: any key containing `password`, `secret`, `token`, `key`,
   `auth`, or `credential` is redacted (safe keys like `primary_key` excluded)
 - `validate_file_path()` gains `strict` mode that rejects symlinks
 - Docker CP paths now require absolute container paths
 
-### Code Quality
-- Health check implementations (`_check_http`, `_check_tcp`, `_check_exec`)
-  extracted to `DeploymentProvider` base class — eliminated duplication between
-  bare metal and Docker Compose providers
-- Rate limiter extracted to `webhook_rate_limit.py`
-- `RestoreMigrateStrategy` validates restore_command at init, not at execution
+### Refactoring
+- `SystemdServiceManager` extracted from deployers — single responsibility
+- `HealthCheckManager` consolidates retry logic from duplicated implementations
+- Webhook helpers extracted, long handler functions reduced to orchestrators
+- Rollback helpers extracted from `APIDeployer`, strategy resolution deduplicated
+- Silent `except Exception` catches replaced with specific types and logged context
+- Duplicate `_rollback_git` removed from `APIDeployer` — uses `GitDeployMixin`
 
 ### Cleanup
 - Removed unused `DeploymentLock` (database-backed distributed locking) and
@@ -36,9 +51,16 @@ Bulletproof deploy + migrate + rollback pipeline with security hardening.
 ### Documentation
 - `docs/failure-modes.md`: Decision tree for every failure scenario
 - `docs/security.md`: Threat model, validation rules, log redaction
+- SQL construction safety invariant documented in `insert()`
 - README: "When NOT to use Fraisier" and honest comparison table
 
 ### Test Improvements
+- **Integration test fixtures**: `git_deploy_env` creates real bare repo +
+  worktree for deploy/rollback testing without mocks
+- **Database isolation**: autouse fixture ensures per-test DB state
+- **Deploy→rollback integration tests** with real git operations
+- **Webhook→deployment chain** integration tests
+- Coverage for all previously untested public functions
 - Integration test harness for confiture migrations (requires PostgreSQL)
 - Scaffold artifact validation (no unexpanded templates)
 - `pytest.mark.integration` marker for external-service tests
