@@ -504,11 +504,11 @@ class TestWebhookToDeployIntegration:
 
         with patch("fraisier.webhook.get_config") as mock_config:
             mock_cfg = MagicMock()
-            mock_cfg.get_fraise_for_branch.return_value = {
+            mock_cfg.get_fraises_for_branch.return_value = [{
                 "fraise_name": "my_api",
                 "environment": "production",
                 "type": "api",
-            }
+            }]
             mock_config.return_value = mock_cfg
 
             result = process_webhook_event(event, background_tasks, webhook_id=1)
@@ -545,7 +545,7 @@ class TestWebhookToDeployIntegration:
 
         with patch("fraisier.webhook.get_config") as mock_config:
             mock_cfg = MagicMock()
-            mock_cfg.get_fraise_for_branch.return_value = None
+            mock_cfg.get_fraises_for_branch.return_value = []
             mock_config.return_value = mock_cfg
 
             result = process_webhook_event(event, background_tasks, webhook_id=2)

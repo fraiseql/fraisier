@@ -275,10 +275,10 @@ def _dispatch_deployment(
     webhook_id: int,
     config: Any,
 ) -> dict[str, Any]:
-    """Find the matching fraise for a push event and trigger deployment."""
-    fraise_config = config.get_fraise_for_branch(event.branch)
+    """Find matching fraises for a push event and trigger deployments."""
+    fraise_configs = config.get_fraises_for_branch(event.branch)
 
-    if not fraise_config:
+    if not fraise_configs:
         logger.info(f"No fraise configured for branch: {event.branch}")
         return {
             "status": "ignored",
@@ -287,38 +287,56 @@ def _dispatch_deployment(
             "webhook_id": webhook_id,
         }
 
-    fraise_name = fraise_config["fraise_name"]
-    environment = fraise_config["environment"]
-
     lock_dir = _get_lock_dir(config)
-    if is_deployment_locked(fraise_name, lock_dir=lock_dir):
-        logger.info(
-            f"Deploy already running for {fraise_name}/{environment}, returning 409"
+    deployments: list[dict[str, Any]] = []
+
+    for fraise_config in fraise_configs:
+        fraise_name = fraise_config["fraise_name"]
+        environment = fraise_config["environment"]
+
+        if is_deployment_locked(fraise_name, lock_dir=lock_dir):
+            logger.info(
+                "Deploy already running for %s/%s, skipping",
+                fraise_name,
+                environment,
+            )
+            deployments.append({
+                "status": "skipped",
+                "reason": "deployment already running",
+                "fraise": fraise_name,
+                "environment": environment,
+            })
+            continue
+
+        logger.info(f"Triggering deployment: {fraise_name} -> {environment}")
+        background_tasks.add_task(
+            execute_deployment,
+            fraise_name=fraise_name,
+            environment=environment,
+            fraise_config=fraise_config,
+            webhook_id=webhook_id,
+            git_branch=event.branch,
+            git_commit=event.commit_sha,
         )
-        return {
-            "status": "skipped",
-            "reason": "deployment already running",
+        deployments.append({
+            "status": "deployment_triggered",
             "fraise": fraise_name,
             "environment": environment,
+        })
+
+    # Single-fraise backward compatibility: return flat response
+    if len(fraise_configs) == 1:
+        d = deployments[0]
+        return {
+            **d,
+            "branch": event.branch,
             "provider": event.provider,
             "webhook_id": webhook_id,
         }
 
-    logger.info(f"Triggering deployment: {fraise_name} -> {environment}")
-    background_tasks.add_task(
-        execute_deployment,
-        fraise_name=fraise_name,
-        environment=environment,
-        fraise_config=fraise_config,
-        webhook_id=webhook_id,
-        git_branch=event.branch,
-        git_commit=event.commit_sha,
-    )
-
     return {
-        "status": "deployment_triggered",
-        "fraise": fraise_name,
-        "environment": environment,
+        "status": "deployments_triggered",
+        "deployments": deployments,
         "branch": event.branch,
         "provider": event.provider,
         "webhook_id": webhook_id,

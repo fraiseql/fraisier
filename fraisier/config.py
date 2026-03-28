@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 
 import yaml
 
-from fraisier.errors import ValidationError
+from fraisier.errors import ConfigurationError, ValidationError
 
 _GIT_URL_RE = re.compile(
     r"^("
@@ -418,6 +418,7 @@ class FraisierConfig:
         with Path(self.config_path).open() as f:
             self._config = yaml.safe_load(f)
         self._validate_fraises()
+        self._validate_branch_mapping()
         self._validate_notifications()
 
     def _validate_fraises(self) -> None:
@@ -505,6 +506,57 @@ class FraisierConfig:
         "gitea_issue": ["repo"],
         "bitbucket_issue": ["repo"],
     }
+
+    def _validate_branch_mapping(self) -> None:
+        """Validate branch_mapping entries at load time."""
+        raw = self._config.get("branch_mapping", {})
+        if not raw:
+            return
+
+        fraises = self._config.get("fraises", {})
+
+        for branch, mapping in raw.items():
+            entries = [mapping] if isinstance(mapping, dict) else mapping
+            if not isinstance(entries, list):
+                continue
+
+            seen: set[tuple[str, str]] = set()
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                fraise_name = entry.get("fraise") or entry.get("fraise_name")
+                environment = entry.get("environment")
+
+                if not fraise_name:
+                    raise ConfigurationError(
+                        f"branch_mapping[{branch}]: entry missing 'fraise' key",
+                    )
+                if not environment:
+                    raise ConfigurationError(
+                        f"branch_mapping[{branch}]: entry missing 'environment' key",
+                    )
+
+                if fraise_name not in fraises:
+                    raise ConfigurationError(
+                        f"branch_mapping[{branch}]: fraise '{fraise_name}' "
+                        f"not found in fraises config",
+                    )
+
+                fraise_cfg = fraises[fraise_name]
+                envs = fraise_cfg.get("environments", {})
+                if environment not in envs:
+                    raise ConfigurationError(
+                        f"branch_mapping[{branch}]: environment '{environment}' "
+                        f"not found for fraise '{fraise_name}'",
+                    )
+
+                pair = (fraise_name, environment)
+                if pair in seen:
+                    raise ConfigurationError(
+                        f"branch_mapping[{branch}]: duplicate "
+                        f"({fraise_name}, {environment})",
+                    )
+                seen.add(pair)
 
     def _validate_notifications(self) -> None:
         """Validate the notifications: section."""
@@ -653,9 +705,23 @@ class FraisierConfig:
         return self._config.get("environments", {})
 
     @property
-    def branch_mapping(self) -> dict[str, dict[str, str]]:
-        """Get branch to fraise/environment mapping."""
-        return self._config.get("branch_mapping", {})
+    def branch_mapping(self) -> dict[str, list[dict[str, str]]]:
+        """Get branch to fraise/environment mapping.
+
+        Normalizes both single-dict and list-of-dicts syntax to always
+        return lists, enabling monorepo workflows where one branch
+        deploys multiple fraises.
+        """
+        raw = self._config.get("branch_mapping", {})
+        result: dict[str, list[dict[str, str]]] = {}
+        for branch, mapping in raw.items():
+            if isinstance(mapping, dict):
+                result[branch] = [mapping]
+            elif isinstance(mapping, list):
+                result[branch] = mapping
+            else:
+                result[branch] = []
+        return result
 
     def get_fraise(self, fraise_name: str) -> dict[str, Any] | None:
         """Get configuration for a fraise (all environments)."""
@@ -690,26 +756,43 @@ class FraisierConfig:
             **env_config,
         }
 
-    def get_fraise_for_branch(self, branch: str) -> dict[str, Any] | None:
-        """Get fraise configuration for a git branch (webhook routing).
+    def get_fraises_for_branch(self, branch: str) -> list[dict[str, Any]]:
+        """Get fraise configurations for a git branch (webhook routing).
+
+        Supports monorepo workflows where one branch maps to multiple fraises.
 
         Args:
             branch: Git branch name (e.g., "dev", "main")
 
         Returns:
-            Full fraise+environment config for the branch
+            List of fraise+environment configs for the branch
         """
-        mapping = self.branch_mapping.get(branch)
-        if not mapping:
-            return None
+        mappings = self.branch_mapping.get(branch)
+        if not mappings:
+            return []
 
-        fraise_name = mapping.get("fraise")
-        environment = mapping.get("environment")
+        results = []
+        for mapping in mappings:
+            fraise_name = mapping.get("fraise") or mapping.get("fraise_name")
+            environment = mapping.get("environment")
+            if not fraise_name or not environment:
+                continue
+            config = self.get_fraise_environment(fraise_name, environment)
+            if config:
+                results.append(config)
+        return results
 
-        if not fraise_name or not environment:
-            return None
+    def get_fraise_for_branch(self, branch: str) -> dict[str, Any] | None:
+        """Get fraise configuration for a git branch (webhook routing).
 
-        return self.get_fraise_environment(fraise_name, environment)
+        .. deprecated::
+            Use :meth:`get_fraises_for_branch` for multi-fraise support.
+
+        Returns:
+            Full fraise+environment config for the first mapped fraise
+        """
+        results = self.get_fraises_for_branch(branch)
+        return results[0] if results else None
 
     def list_fraises(self) -> list[str]:
         """List all fraise names.

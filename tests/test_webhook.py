@@ -472,12 +472,12 @@ class TestProcessWebhookEvent:
 
         with patch("fraisier.webhook.get_config") as mock_config:
             mock_config_obj = MagicMock()
-            mock_config_obj.get_fraise_for_branch.return_value = {
+            mock_config_obj.get_fraises_for_branch.return_value = [{
                 "fraise_name": "my_api",
                 "environment": "production",
                 "type": "api",
                 "app_path": "/tmp/api",
-            }
+            }]
             mock_config.return_value = mock_config_obj
 
             from fastapi import BackgroundTasks
@@ -509,12 +509,12 @@ class TestProcessWebhookEvent:
             patch("fraisier.webhook.is_deployment_locked", return_value=True),
         ):
             mock_config_obj = MagicMock()
-            mock_config_obj.get_fraise_for_branch.return_value = {
+            mock_config_obj.get_fraises_for_branch.return_value = [{
                 "fraise_name": "my_api",
                 "environment": "production",
                 "type": "api",
                 "app_path": "/tmp/api",
-            }
+            }]
             mock_config_obj._config = {"deployment": {}}
             mock_config.return_value = mock_config_obj
 
@@ -542,7 +542,7 @@ class TestProcessWebhookEvent:
 
         with patch("fraisier.webhook.get_config") as mock_config:
             mock_config_obj = MagicMock()
-            mock_config_obj.get_fraise_for_branch.return_value = None
+            mock_config_obj.get_fraises_for_branch.return_value = []
             mock_config.return_value = mock_config_obj
 
             from fastapi import BackgroundTasks
@@ -597,6 +597,106 @@ class TestProcessWebhookEvent:
 
         assert result["status"] == "ignored"
         assert result["event"] == "pull_request"
+
+
+class TestMultiFraiseDispatch:
+    """Tests for multi-fraise branch mapping dispatch."""
+
+    def test_multi_fraise_branch_creates_multiple_tasks(self, test_db):
+        """Push to branch with 3 mapped fraises creates 3 background tasks."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+        )
+
+        configs = [
+            {"fraise_name": "api_a", "environment": "prod", "type": "api"},
+            {"fraise_name": "api_b", "environment": "prod", "type": "api"},
+            {"fraise_name": "worker", "environment": "prod", "type": "etl"},
+        ]
+
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = configs
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            background_tasks = MagicMock(spec=BackgroundTasks)
+
+            result = process_webhook_event(event, background_tasks, webhook_id=1)
+
+        assert result["status"] == "deployments_triggered"
+        assert len(result["deployments"]) == 3
+        assert background_tasks.add_task.call_count == 3
+
+    def test_single_fraise_branch_still_works(self, test_db):
+        """Push to branch with 1 mapped fraise creates 1 background task."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+        )
+
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {"fraise_name": "my_api", "environment": "prod", "type": "api"},
+            ]
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            background_tasks = MagicMock(spec=BackgroundTasks)
+
+            result = process_webhook_event(event, background_tasks, webhook_id=1)
+
+        assert result["status"] == "deployment_triggered"
+        assert background_tasks.add_task.call_count == 1
+
+    def test_locked_fraise_skipped_others_still_deploy(self, test_db):
+        """If one fraise is locked, others still deploy."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+        )
+
+        configs = [
+            {"fraise_name": "api_a", "environment": "prod", "type": "api"},
+            {"fraise_name": "api_b", "environment": "prod", "type": "api"},
+        ]
+
+        def locked_check(name, lock_dir=None):
+            return name == "api_a"
+
+        with (
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch("fraisier.webhook.is_deployment_locked", side_effect=locked_check),
+        ):
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = configs
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            background_tasks = MagicMock(spec=BackgroundTasks)
+
+            result = process_webhook_event(event, background_tasks, webhook_id=1)
+
+        # api_b should deploy, api_a should be skipped
+        assert background_tasks.add_task.call_count == 1
+        assert len(result["deployments"]) == 2
 
 
 class TestWebhookRoutes:
@@ -896,12 +996,12 @@ class TestMultiProviderRouting:
             self._mock_provider_push(provider_name, mock_get_provider)
 
             mock_config = MagicMock()
-            mock_config.get_fraise_for_branch.return_value = {
+            mock_config.get_fraises_for_branch.return_value = [{
                 "fraise_name": "my_api",
                 "environment": "production",
                 "type": "api",
                 "app_path": "/tmp/api",
-            }
+            }]
             mock_config._config = {"git": {}}
             mock_get_config.return_value = mock_config
 
@@ -939,11 +1039,11 @@ class TestMultiProviderRouting:
 
         with patch("fraisier.webhook.get_config") as mock_config:
             mock_config_obj = MagicMock()
-            mock_config_obj.get_fraise_for_branch.return_value = {
+            mock_config_obj.get_fraises_for_branch.return_value = [{
                 "fraise_name": "my_api",
                 "environment": "production",
                 "type": "api",
-            }
+            }]
             mock_config.return_value = mock_config_obj
 
             from fastapi import BackgroundTasks
@@ -1147,7 +1247,7 @@ class TestWebhookIntegration:
 
             # Setup config mock (no fraise configured for this branch)
             mock_config = MagicMock()
-            mock_config.get_fraise_for_branch.return_value = None
+            mock_config.get_fraises_for_branch.return_value = []
             mock_get_config.return_value = mock_config
 
             payload = {
