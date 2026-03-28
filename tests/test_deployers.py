@@ -618,6 +618,65 @@ class TestScheduledDeployer:
         assert any("restart" in c for c in calls)
 
 
+class TestAPIDeployerChdirForStrategy:
+    """Deployer must chdir to app_path before running confiture."""
+
+    def test_strategy_runs_in_app_path_cwd(
+        self, mock_subprocess, mock_requests, tmp_path
+    ):
+        """_run_strategy() executes with cwd set to app_path."""
+        app_dir = tmp_path / "my-app"
+        app_dir.mkdir()
+        config = {
+            "app_path": str(app_dir),
+            "database": {"strategy": "apply"},
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        cwd_during_strategy = []
+
+        with patch("fraisier.strategies.get_strategy") as mock_factory:
+            mock_strategy = MagicMock()
+
+            def capture_cwd(*args, **kwargs):
+
+                cwd_during_strategy.append(str(Path.cwd()))
+                return StrategyResult(success=True)
+
+            mock_strategy.execute.side_effect = capture_cwd
+            mock_factory.return_value = mock_strategy
+
+            deployer.execute()
+
+        assert cwd_during_strategy
+        assert cwd_during_strategy[0] == str(app_dir)
+
+    def test_cwd_restored_after_strategy(
+        self, mock_subprocess, mock_requests, tmp_path
+    ):
+        """Original cwd is restored after strategy runs (even on failure)."""
+
+        app_dir = tmp_path / "my-app"
+        app_dir.mkdir()
+        original_cwd = str(Path.cwd())
+        config = {
+            "app_path": str(app_dir),
+            "database": {"strategy": "apply"},
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        with patch("fraisier.strategies.get_strategy") as mock_factory:
+            mock_strategy = MagicMock()
+            mock_strategy.execute.return_value = StrategyResult(success=True)
+            mock_factory.return_value = mock_strategy
+
+            deployer.execute()
+
+        assert str(Path.cwd()) == original_cwd
+
+
 class TestAPIDeployerNotifications:
     """Tests for notification wiring in APIDeployer.execute()."""
 

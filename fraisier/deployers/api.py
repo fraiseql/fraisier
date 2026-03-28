@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -207,16 +208,27 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         return strategy, confiture_config, migrations_dir
 
     def _run_strategy(self) -> None:
-        """Run database migrations via deployment strategy."""
+        """Run database migrations via deployment strategy.
+
+        Changes cwd to app_path so confiture resolves relative paths
+        (db/migrations/, db/environments/) correctly.
+        """
         strategy, confiture_config, migrations_dir = self._resolve_strategy()
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
-        result = strategy.execute(
-            confiture_config,
-            migrations_dir=migrations_dir,
-            allow_irreversible=self.allow_irreversible,
-            pre_migrate_verify=pre_verify,
-        )
+        old_cwd = Path.cwd()
+        app_dir = Path(self.app_path) if self.app_path else None
+        if app_dir and app_dir.is_dir():
+            os.chdir(app_dir)
+        try:
+            result = strategy.execute(
+                confiture_config,
+                migrations_dir=migrations_dir,
+                allow_irreversible=self.allow_irreversible,
+                pre_migrate_verify=pre_verify,
+            )
+        finally:
+            os.chdir(old_cwd)
 
         self._migrations_applied = result.migrations_applied
 
