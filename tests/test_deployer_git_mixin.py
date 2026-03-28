@@ -45,7 +45,6 @@ class TestGitDeployMixin:
         deployer = ETLDeployer({})
         assert deployer.get_current_version() is None
 
-
     def test_git_repo_config_overrides_repos_base(self):
         """git_repo from config takes precedence over repos_base construction."""
         config = {
