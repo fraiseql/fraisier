@@ -8,14 +8,26 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from fraisier.errors import ValidationError
+
 logger = logging.getLogger("fraisier")
 
 DEFAULT_STATUS_DIR = Path("/var/lib/fraisier/status")
+
+_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
+
+def _validate_fraise_name(name: str) -> None:
+    """Reject fraise names that could cause path traversal."""
+    if not _SAFE_NAME_RE.match(name):
+        msg = f"Invalid fraise name: {name!r} — must match [a-zA-Z0-9_-]+"
+        raise ValidationError(msg)
 
 
 @dataclass
@@ -50,6 +62,7 @@ def write_status(
     Returns:
         Path to the written status file.
     """
+    _validate_fraise_name(status.fraise_name)
     status_dir.mkdir(parents=True, exist_ok=True)
     path = status_dir / f"{status.fraise_name}.status.json"
 
@@ -81,6 +94,7 @@ def read_status(
     Returns:
         DeploymentStatusFile or None if no status file exists.
     """
+    _validate_fraise_name(fraise_name)
     path = status_dir / f"{fraise_name}.status.json"
     if not path.exists():
         return None

@@ -4,6 +4,7 @@ Supports full and slim backup modes, disk space checks, retention
 cleanup, and per-destination schedule matching.
 """
 
+import re
 import shutil
 import subprocess
 import time
@@ -11,7 +12,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fraisier.dbops._validation import validate_pg_identifier
+from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
+
+_COMPRESSION_RE = re.compile(r"^(zstd|lz4|gzip|none)(:\d+)?$")
+
+
+def _validate_compression(value: str) -> None:
+    """Validate pg_dump compression spec."""
+    if not _COMPRESSION_RE.match(value):
+        msg = (
+            f"Invalid compression: {value!r} — "
+            "must match (zstd|lz4|gzip|none)[:<level>]"
+        )
+        raise ValueError(msg)
 
 
 @dataclass
@@ -43,6 +56,9 @@ def run_backup(
         sudo_user: OS user to run pg_dump as.
     """
     validate_pg_identifier(db_name, "database name")
+    _validate_compression(compression)
+    validate_file_path(output_dir)
+
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M")
     filename = f"{db_name}_{mode}_{timestamp}.dump"
     backup_path = f"{output_dir}/{filename}"
@@ -60,6 +76,7 @@ def run_backup(
 
     if mode == "slim" and excluded_tables:
         for table in excluded_tables:
+            validate_pg_identifier(table, "excluded table")
             cmd.extend(["-T", table])
 
     cmd.append(db_name)

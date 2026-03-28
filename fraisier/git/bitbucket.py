@@ -35,8 +35,11 @@ class BitbucketProvider(GitProvider):
         """
         signature = headers.get(self.get_signature_header_name())
         if not signature:
-            # Bitbucket Cloud may not send signature
-            return not self.is_server
+            # Reject unsigned requests when a secret is configured,
+            # regardless of Cloud vs Server mode.  Bitbucket Cloud uses
+            # IP allowlisting as its primary auth mechanism — that should
+            # be enforced at the network layer (e.g. nginx), not here.
+            return False
 
         # Remove prefix if present
         signature = signature.removeprefix("sha256=")

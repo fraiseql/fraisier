@@ -500,6 +500,12 @@ def _get_webhook_secret() -> str:
 @app.get("/api/status/{fraise_name}")
 async def get_deploy_status(fraise_name: str) -> dict[str, Any]:
     """Public deployment status — safe fields only."""
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", fraise_name):
+        raise _structured_error(
+            400, "validation_error", f"Invalid fraise name: {fraise_name!r}"
+        )
     status = read_status(fraise_name)
     if status is None:
         raise _structured_error(404, "not_found", f"Fraise '{fraise_name}' not found")
@@ -514,6 +520,12 @@ async def get_deploy_status(fraise_name: str) -> dict[str, Any]:
 @app.get("/api/status/{fraise_name}/details")
 async def get_deploy_details(fraise_name: str, request: Request) -> dict[str, Any]:
     """Authenticated deployment details — includes error info."""
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", fraise_name):
+        raise _structured_error(
+            400, "validation_error", f"Invalid fraise name: {fraise_name!r}"
+        )
     token = request.headers.get("X-Deployment-Token")
     expected = _get_webhook_secret()
     if not token or not hmac.compare_digest(token, expected):

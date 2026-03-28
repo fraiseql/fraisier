@@ -443,6 +443,33 @@ class TestNginxTemplate:
         p.write_text(yaml_content)
         return FraisierConfig(p)
 
+    def test_nginx_gateway_has_acme_challenge(self, tmp_path):
+        """Port 80 block includes ACME challenge location for Let's Encrypt."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        nginx_path = tmp_path / "output" / "nginx" / "gateway.conf"
+        content = nginx_path.read_text()
+        assert "listen 80;" in content
+        assert "/.well-known/acme-challenge/" in content
+        assert "root /var/www/html;" in content
+        assert "return 301 https://$host$request_uri;" in content
+
     def test_nginx_config_has_upstream_and_cors(self, tmp_path):
         """Rendered nginx config has upstream, CORS, security headers."""
         config = self._make_config(
@@ -476,6 +503,35 @@ scaffold:
         assert "Access-Control-Allow-Origin" in content
         assert "X-Frame-Options" in content
         assert "/admin/" in content
+
+    def test_nginx_cors_uses_map_not_if(self, tmp_path):
+        """CORS uses map directive instead of if blocks."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+  nginx:
+    cors_origins:
+      - '^https://app\\.example\\.com$'
+      - '^https?://localhost(:[0-9]+)?$'
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "gateway.conf").read_text()
+        assert "map $http_origin $cors_origin" in content
+        assert "if ($http_origin" not in content
+        assert "Access-Control-Allow-Origin $cors_origin" in content
 
 
 _SCAFFOLD_YAML = """
@@ -1080,6 +1136,151 @@ scaffold:
         )
         assert "--port 8000" in content
 
+    def test_service_type_configurable(self, tmp_path):
+        """service.type overrides default Type=notify."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          type: exec
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "Type=exec" in content
+        assert "Type=notify" not in content
+
+    def test_service_type_defaults_to_notify(self, tmp_path):
+        """Without service.type, defaults to Type=notify."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "Type=notify" in content
+
+    def test_service_type_invalid_raises(self, tmp_path):
+        """Invalid service.type raises ValidationError."""
+        import pytest
+
+        from fraisier.config import ServiceConfig
+
+        with pytest.raises(Exception, match=r"service\.type"):
+            ServiceConfig(type="bogus")
+
+    def test_exec_start_pre(self, tmp_path):
+        """service.exec_start_pre renders ExecStartPre directives."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          exec_start_pre:
+            - "/bin/sh -c 'echo hello'"
+            - "/usr/bin/env-gen /run/myapp/pg.env"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "ExecStartPre=/bin/sh -c 'echo hello'" in content
+        assert "ExecStartPre=/usr/bin/env-gen /run/myapp/pg.env" in content
+
+    def test_exec_start_pre_absent_when_not_configured(self, tmp_path):
+        """ExecStartPre is absent when not configured."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "ExecStartPre" not in content
+
+    def test_runtime_directory(self, tmp_path):
+        """service.runtime_directory renders RuntimeDirectory directive."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          runtime_directory: myapp
+          runtime_directory_mode: "0755"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "RuntimeDirectory=myapp" in content
+        assert "RuntimeDirectoryMode=0755" in content
+
+    def test_logs_directory(self, tmp_path):
+        """service.logs_directory renders LogsDirectory directive."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          logs_directory: myapp
+          logs_directory_mode: "0755"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "LogsDirectory=myapp" in content
+        assert "LogsDirectoryMode=0755" in content
+
+    def test_runtime_logs_directory_absent_when_not_configured(self, tmp_path):
+        """RuntimeDirectory/LogsDirectory absent when not configured."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "RuntimeDirectory" not in content
+        assert "LogsDirectory" not in content
+
 
 class TestNginxPerEnvConfig:
     """Issue #4: per-environment nginx config files."""
@@ -1088,6 +1289,34 @@ class TestNginxPerEnvConfig:
         p = tmp_path / "fraises.yaml"
         p.write_text(yaml_content)
         return FraisierConfig(p)
+
+    def test_per_env_nginx_has_acme_redirect(self, tmp_path):
+        """Per-env nginx includes port 80 ACME challenge + HTTPS redirect."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "listen 80;" in content
+        assert "server_name api.myapp.io" in content
+        assert "/.well-known/acme-challenge/" in content
+        assert "return 301 https://$host$request_uri;" in content
 
     def test_per_env_nginx_files_generated(self, tmp_path):
         """Environments with nginx: blocks get their own config files."""
@@ -1179,6 +1408,35 @@ scaffold:
         assert "/etc/letsencrypt/live/api.myapp.io/fullchain.pem" in content
         assert "/etc/letsencrypt/live/api.myapp.io/privkey.pem" in content
 
+    def test_per_env_cors_uses_map_not_if(self, tmp_path):
+        """Per-env CORS uses map directive instead of if blocks."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+          cors_origins:
+            - '^https://app\\.myapp\\.io$'
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "map $http_origin $cors_origin" in content
+        assert "if ($http_origin" not in content
+        assert "Access-Control-Allow-Origin $cors_origin" in content
+
     def test_per_env_cors_origins(self, tmp_path):
         """Per-env cors_origins used instead of global ones."""
         config = self._make_config(
@@ -1206,8 +1464,8 @@ scaffold:
         renderer.render()
 
         content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
-        assert "https://app.myapp.io" in content
-        assert "https://global.example.com" not in content
+        assert r"https://app\.myapp\.io" in content
+        assert "global" not in content
 
     def test_per_env_cors_falls_back_to_global(self, tmp_path):
         """Without per-env cors_origins, global ones are used."""
@@ -1234,7 +1492,7 @@ scaffold:
         renderer.render()
 
         content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
-        assert "https://global.example.com" in content
+        assert r"https://global\.example\.com" in content
 
     def test_per_env_structured_restricted_paths(self, tmp_path):
         """Per-env restricted_paths with allow/deny rules."""
@@ -1587,7 +1845,7 @@ scaffold:
         prod_nginx = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
         assert "server_name api.example.com" in prod_nginx
         assert "ssl_certificate /etc/ssl/api/cert.pem" in prod_nginx
-        assert "https://app.example.com" in prod_nginx
+        assert r"https://app\.example\.com" in prod_nginx
         assert "location /admin/" in prod_nginx
         assert "allow 10.0.0.0/8;" in prod_nginx
 

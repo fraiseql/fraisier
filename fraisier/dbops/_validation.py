@@ -73,6 +73,9 @@ def validate_file_path(
     if not _PATH_RE.match(path):
         msg = f"Invalid file path: {path!r}"
         raise ValueError(msg)
+    if ".." in Path(path).parts:
+        msg = f"Path traversal detected: {path!r}"
+        raise ValueError(msg)
     if base_dir is not None:
         resolved = Path(base_dir, path).resolve()
         if not resolved.is_relative_to(base_dir.resolve()):

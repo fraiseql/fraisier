@@ -67,6 +67,17 @@ DEFAULT_SECURITY: dict[str, str | bool] = {
 # Valid memory size pattern (e.g., "4G", "512M", "2T")
 _MEMORY_SIZE_RE = re.compile(r"^\d+[KMGT]$")
 
+_VALID_SERVICE_TYPES = {
+    "simple",
+    "exec",
+    "forking",
+    "oneshot",
+    "dbus",
+    "notify",
+    "notify-reload",
+    "idle",
+}
+
 
 @dataclass
 class ServiceConfig:
@@ -77,9 +88,15 @@ class ServiceConfig:
     port: int | None = None
     workers: int = 1
     exec: str | None = None
+    type: str = "notify"
+    exec_start_pre: list[str] = field(default_factory=list)
     memory_max: str | None = None
     memory_high: str | None = None
     cpu_quota: str | None = None
+    runtime_directory: str | None = None
+    runtime_directory_mode: str | None = None
+    logs_directory: str | None = None
+    logs_directory_mode: str | None = None
     environment_file: str | None = None
     credentials: dict[str, str] = field(default_factory=dict)
     environment: dict[str, str] = field(default_factory=dict)
@@ -89,6 +106,11 @@ class ServiceConfig:
         if self.port is not None and not (1 <= self.port <= 65535):
             raise ValidationError(
                 f"service.port must be 1-65535, got {self.port}",
+            )
+        if self.type not in _VALID_SERVICE_TYPES:
+            raise ValidationError(
+                f"service.type must be one of {sorted(_VALID_SERVICE_TYPES)}, "
+                f"got {self.type!r}",
             )
         for size_field in ("memory_max", "memory_high"):
             val = getattr(self, size_field)
@@ -101,6 +123,24 @@ class ServiceConfig:
                 raise ValidationError(
                     f"service.credentials.{cred_name} must be an absolute path, "
                     f"got {cred_path!r}",
+                )
+        # Reject newlines in environment variable names and values — they
+        # would inject extra directives into the rendered systemd unit.
+        for key, val in self.environment.items():
+            if "\n" in key:
+                raise ValidationError(
+                    f"Newline in environment variable name: {key!r}",
+                )
+            if "\n" in str(val):
+                raise ValidationError(
+                    f"Newline in environment variable value for {key!r}",
+                )
+        # Validate exec command to prevent shell metacharacter injection
+        if self.exec is not None:
+            _SHELL_META_RE = re.compile(r"[;|&`$()]")
+            if _SHELL_META_RE.search(self.exec):
+                raise ValidationError(
+                    f"Shell metacharacter detected in service.exec: {self.exec!r}",
                 )
 
     @property
@@ -136,9 +176,15 @@ class ServiceConfig:
             port=_get("port"),
             workers=_get("workers", "worker_count", 1),
             exec=_get("exec", "exec_command"),
+            type=svc.get("type", "notify"),
+            exec_start_pre=svc.get("exec_start_pre", []),
             memory_max=_get("memory_max", "memory_max"),
             memory_high=svc.get("memory_high"),
             cpu_quota=svc.get("cpu_quota"),
+            runtime_directory=svc.get("runtime_directory"),
+            runtime_directory_mode=svc.get("runtime_directory_mode"),
+            logs_directory=svc.get("logs_directory"),
+            logs_directory_mode=svc.get("logs_directory_mode"),
             environment_file=svc.get("environment_file"),
             credentials=svc.get("credentials", {}),
             environment=svc.get("environment", {}),
@@ -153,6 +199,16 @@ class RestrictedPath:
     path: str
     allow: list[str] = field(default_factory=lambda: ["127.0.0.1"])
     deny: str = "all"
+
+
+def _escape_cors_dots(origin: str) -> str:
+    """Escape unescaped literal dots in a CORS origin for nginx regex.
+
+    Dots that are already escaped (``\\.``) or part of regex
+    metachar sequences (e.g. ``.*``, ``.+``) are left untouched.
+    """
+    # Match dots not preceded by backslash and not followed by regex quantifiers
+    return re.sub(r"(?<!\\)\.(?![*+?])", r"\\.", origin)
 
 
 @dataclass
@@ -174,6 +230,19 @@ class NginxEnvConfig:
             raise ValidationError(
                 "nginx.ssl_key requires nginx.ssl_cert to also be set",
             )
+        # Validate CORS origins and warn about unescaped dots
+        for origin in self.cors_origins:
+            if re.search(r"(?<!\\)\.(?![*+?])", origin):
+                warnings.warn(
+                    f"CORS origin {origin!r} contains unescaped dots — "
+                    "use cors_origins_escaped for nginx regex rendering",
+                    stacklevel=2,
+                )
+
+    @property
+    def cors_origins_escaped(self) -> list[str]:
+        """Return CORS origins with literal dots escaped for nginx regex."""
+        return [_escape_cors_dots(o) for o in self.cors_origins]
 
     @classmethod
     def from_env_dict(cls, env: dict[str, Any]) -> "NginxEnvConfig | None":
@@ -223,6 +292,11 @@ class NginxScaffoldConfig:
     cors_origins: list[str] = field(default_factory=list)
     rate_limit: str = "10r/s"
     restricted_paths: list[str] = field(default_factory=list)
+
+    @property
+    def cors_origins_escaped(self) -> list[str]:
+        """Return CORS origins with literal dots escaped for nginx regex."""
+        return [_escape_cors_dots(o) for o in self.cors_origins]
 
 
 @dataclass

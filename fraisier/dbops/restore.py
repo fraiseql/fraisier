@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from fraisier.dbops._validation import validate_pg_identifier
+from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
 from fraisier.dbops.operations import _pg_cmd
 
 
@@ -33,6 +33,7 @@ def restore_backup(
     Optionally reassigns ownership to *db_owner* after restore.
     """
     validate_pg_identifier(db_name, "database name")
+    validate_file_path(backup_path)
     if db_owner:
         validate_pg_identifier(db_owner, "database owner")
 
@@ -44,15 +45,17 @@ def restore_backup(
     if code != 0:
         return RestoreResult(success=False, error=stderr.strip())
 
-    # Fix ownership if requested
+    # Fix ownership if requested — use psql variable binding to prevent injection
     if db_owner:
         _pg_cmd(
             [
                 "psql",
                 "-d",
                 db_name,
+                "-v",
+                f"owner={db_owner}",
                 "-c",
-                f"REASSIGN OWNED BY CURRENT_USER TO {db_owner}",
+                'REASSIGN OWNED BY CURRENT_USER TO :"owner"',
             ],
             sudo_user=sudo_user,
         )
