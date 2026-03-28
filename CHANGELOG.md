@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.3 (2026-03-28)
+
+Per-environment systemd and nginx configuration (#4).
+1317 tests, zero lint warnings.
+
+### Infrastructure Scaffolding
+
+- **feat(scaffold):** per-environment `service:` block in fraises.yaml — configurable `user`, `group`, `port`, `workers`, `exec`, `memory_max`, `memory_high`, `cpu_quota`, `environment_file`, `credentials` (LoadCredential), `environment` (arbitrary env vars), and `security` directives
+- **feat(scaffold):** per-environment `nginx:` block — `server_name`, custom `ssl_cert`/`ssl_key`, per-env `cors_origins`, and structured `restricted_paths` with `allow`/`deny` rules
+- **feat(scaffold):** configurable systemd security hardening — override individual directives (e.g., `protect_home: read-only`) while keeping defaults for the rest
+- **feat(scaffold):** per-environment nginx config files (`nginx/{fraise}_{env}.conf`) generated alongside shared `gateway.conf`
+- **feat(scaffold):** port resolution priority: `service.port` > `health_check.url` > default 8000
+- **feat(scaffold):** backward compatible — legacy flat fields (`worker_count`, `memory_max`, `exec_command`) still work alongside nested `service:` key
+
 ## v0.1.1 (2026-03-28)
 
 Bug-fix release addressing scaffold generation issues (#1, #2).
