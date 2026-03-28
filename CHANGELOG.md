@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.6 (2026-03-28)
+
+Deployment fix. 1411 tests, zero lint warnings.
+
+### Deployment (#10)
+
+- **fix:** `chdir` to `app_path` before running confiture migrations so relative paths resolve correctly when running as a systemd service
+
 ## v0.1.5 (2026-03-28)
 
 Git deployment fix. 1409 tests, zero lint warnings.
