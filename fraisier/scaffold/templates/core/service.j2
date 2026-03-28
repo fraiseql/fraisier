@@ -6,10 +6,13 @@ After=postgresql.service
 {% endif %}
 
 [Service]
-Type=notify
+Type={{ service.type }}
 User={{ service.user or scaffold.deploy_user }}
 Group={{ service.group or scaffold.deploy_user }}
 WorkingDirectory={{ app_path }}
+{% for cmd in service.exec_start_pre %}
+ExecStartPre={{ cmd }}
+{% endfor %}
 {% if exec_command %}
 ExecStart={{ exec_command }}
 {% else %}
@@ -28,6 +31,21 @@ MemoryHigh={{ service.memory_high }}
 CPUQuota={{ service.cpu_quota }}
 {% endif %}
 CPUAccounting=true
+
+{% if service.runtime_directory %}
+# Runtime directory
+RuntimeDirectory={{ service.runtime_directory }}
+{% if service.runtime_directory_mode %}
+RuntimeDirectoryMode={{ service.runtime_directory_mode }}
+{% endif %}
+{% endif %}
+{% if service.logs_directory %}
+# Logs directory
+LogsDirectory={{ service.logs_directory }}
+{% if service.logs_directory_mode %}
+LogsDirectoryMode={{ service.logs_directory_mode }}
+{% endif %}
+{% endif %}
 
 {% if service.environment_file %}
 # Environment file
