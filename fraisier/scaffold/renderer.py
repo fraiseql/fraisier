@@ -10,6 +10,7 @@ to the configured output_dir.
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import jinja2
 
@@ -36,13 +37,46 @@ _PROVIDER_TEMPLATES = [
 ]
 
 
+def _extract_port(health_check_url: str) -> int | None:
+    """Extract port from a health check URL.
+
+    Returns None if no explicit port is found.
+    """
+    try:
+        parsed = urlparse(health_check_url)
+        return parsed.port
+    except (ValueError, AttributeError):
+        return None
+
+
+def _resolve_fraise_port(fraise: dict[str, Any]) -> int:
+    """Resolve the port for a fraise from its first environment's health_check.url.
+
+    Falls back to 8000 if no health_check URL is configured.
+    """
+    for env_config in fraise.get("environments", {}).values():
+        hc = env_config.get("health_check", {})
+        if isinstance(hc, dict):
+            url = hc.get("url", "")
+            if url:
+                port = _extract_port(url)
+                if port:
+                    return port
+    return 8000
+
+
 def _build_context(config: FraisierConfig) -> dict[str, Any]:
     """Build the Jinja2 template context from config."""
     fraises_list = []
     for name in config.list_fraises():
         fraise = config.get_fraise(name)
         if fraise:
-            fraises_list.append({"name": name, **fraise})
+            entry = {"name": name, **fraise}
+            entry["port"] = _resolve_fraise_port(entry)
+            # Resolve server_name from routing config if present
+            entry.setdefault("server_name", None)
+            entry.setdefault("location", None)
+            fraises_list.append(entry)
 
     return {
         "scaffold": config.scaffold,
@@ -184,6 +218,18 @@ class ScaffoldRenderer:
     ) -> None:
         """Render a per-fraise systemd service unit."""
         env_config = fraise.get("environments", {}).get(env_name, {})
+
+        # Extract port from health_check.url if available
+        hc = env_config.get("health_check", {})
+        hc_url = hc.get("url", "") if isinstance(hc, dict) else ""
+        port = _extract_port(hc_url) if hc_url else None
+
+        # Resolve app_path: env_config > fallback /opt/<name>
+        app_path = env_config.get("app_path", f"/opt/{fraise['name']}")
+
+        # Resolve exec_command: fraise-level > env-level > default uvicorn
+        exec_command = env_config.get("exec_command", fraise.get("exec_command"))
+
         ctx = {
             **self.context,
             "fraise": fraise,
@@ -194,6 +240,9 @@ class ScaffoldRenderer:
                 "memory_max",
                 self.config.scaffold.systemd.memory_max_default,
             ),
+            "app_path": app_path,
+            "port": port or 8000,
+            "exec_command": exec_command,
         }
         try:
             template = self.env.get_template("core/service.j2")

@@ -513,6 +513,292 @@ def _make_full_config(tmp_path):
     return FraisierConfig(p)
 
 
+class TestSystemdServiceUsesConfig:
+    """Issue #1: systemd units must read paths, ports, exec from fraises.yaml."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_working_directory_uses_app_path(self, tmp_path):
+        """WorkingDirectory comes from env app_path, not hardcoded /opt/."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  management_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/management.printoptim.com
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc = tmp_path / "output" / "systemd" / "management_api_production.service"
+        content = svc.read_text()
+        assert "WorkingDirectory=/var/www/management.printoptim.com" in content
+        assert "/opt/management_api" not in content
+
+    def test_port_extracted_from_health_check_url(self, tmp_path):
+        """ExecStart port comes from health_check.url, not hardcoded 8000."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  management_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/management
+        worker_count: 2
+        health_check:
+          url: http://127.0.0.1:8042/health
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc = tmp_path / "output" / "systemd" / "management_api_production.service"
+        content = svc.read_text()
+        assert "--port 8042" in content
+        assert "--port 8000" not in content
+
+    def test_exec_command_overrides_default_uvicorn(self, tmp_path):
+        """exec_command on fraise replaces default uvicorn ExecStart."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  graphql_gateway:
+    type: api
+    exec_command: /usr/local/bin/fraiseql-cli serve --port 4000
+    environments:
+      production:
+        app_path: /var/www/graphql
+        worker_count: 1
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc = tmp_path / "output" / "systemd" / "graphql_gateway_production.service"
+        content = svc.read_text()
+        assert "ExecStart=/usr/local/bin/fraiseql-cli serve --port 4000" in content
+        assert "uvicorn" not in content
+
+    def test_defaults_when_no_app_path_or_health_check(self, tmp_path):
+        """Falls back to /opt/<name> and port 8000 when not configured."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc = tmp_path / "output" / "systemd" / "my_api_production.service"
+        content = svc.read_text()
+        assert "WorkingDirectory=/opt/my_api" in content
+        assert "--port 8000" in content
+
+
+class TestNginxPerFraiseRouting:
+    """Issue #2: nginx must not generate duplicate location / blocks."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_multi_fraise_no_duplicate_location_root(self, tmp_path):
+        """Multiple API fraises must NOT produce duplicate location / blocks."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api_a:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+  api_b:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        nginx = tmp_path / "output" / "nginx" / "gateway.conf"
+        content = nginx.read_text()
+        # Should NOT have multiple "location /" — should use /api_a/ and /api_b/
+        assert content.count("location /") >= 2
+        assert "location /api_a/" in content
+        assert "location /api_b/" in content
+
+    def test_multi_fraise_distinct_upstream_ports(self, tmp_path):
+        """Each upstream uses the fraise's own port from health_check.url."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api_a:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api_a
+        health_check:
+          url: http://127.0.0.1:8001/health
+  api_b:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api_b
+        health_check:
+          url: http://127.0.0.1:8002/health
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        nginx = tmp_path / "output" / "nginx" / "gateway.conf"
+        content = nginx.read_text()
+        assert "127.0.0.1:8001" in content
+        assert "127.0.0.1:8002" in content
+        assert content.count("127.0.0.1:8000") == 0
+
+    def test_server_name_generates_separate_server_blocks(self, tmp_path):
+        """Fraises with server_name get their own server {} blocks."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  management_api:
+    type: api
+    server_name: management.example.com
+    environments:
+      production:
+        app_path: /var/www/management
+        health_check:
+          url: http://127.0.0.1:8042/health
+  backend_api:
+    type: api
+    server_name: backend.example.com
+    environments:
+      production:
+        app_path: /var/www/backend
+        health_check:
+          url: http://127.0.0.1:8043/health
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        nginx = tmp_path / "output" / "nginx" / "gateway.conf"
+        content = nginx.read_text()
+        assert "server_name management.example.com" in content
+        assert "server_name backend.example.com" in content
+        assert "management_api_backend" in content
+        assert "backend_api_backend" in content
+
+    def test_single_fraise_uses_location_root(self, tmp_path):
+        """Single API fraise still gets location / (no prefix needed)."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        nginx = tmp_path / "output" / "nginx" / "gateway.conf"
+        content = nginx.read_text()
+        assert "location / {" in content
+        assert "proxy_pass http://my_api_backend" in content
+
+    def test_custom_location_prefix(self, tmp_path):
+        """Fraises with explicit location field use that path."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  management_api:
+    type: api
+    location: /api/management/
+    environments:
+      production:
+        worker_count: 2
+  backend_api:
+    type: api
+    location: /api/backend/
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        nginx = tmp_path / "output" / "nginx" / "gateway.conf"
+        content = nginx.read_text()
+        assert "location /api/management/" in content
+        assert "location /api/backend/" in content
+
+
 class TestGithubActionsTemplates:
     """GitHub Actions workflow templates."""
 

@@ -4,7 +4,7 @@
 {% for fraise in fraises %}
 {% if fraise.type == 'api' %}
 upstream {{ fraise.name }}_backend {
-    server 127.0.0.1:8000;
+    server 127.0.0.1:{{ fraise.port }};
 }
 {% endif %}
 {% endfor %}
@@ -21,6 +21,64 @@ server {
     return 301 https://$host$request_uri;
 }
 
+{% set api_fraises = [] %}
+{% for fraise in fraises %}
+{% if fraise.type == 'api' %}
+{% if api_fraises.append(fraise) %}{% endif %}
+{% endif %}
+{% endfor %}
+{% set has_server_names = api_fraises | selectattr('server_name') | list | length > 0 %}
+{% if has_server_names %}
+{% for fraise in api_fraises %}
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {{ fraise.server_name }};
+
+{% if scaffold.nginx.ssl_provider == 'letsencrypt' %}
+    ssl_certificate /etc/letsencrypt/live/{{ fraise.server_name }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ fraise.server_name }}/privkey.pem;
+{% endif %}
+
+    # SSL hardening
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'" always;
+
+    # CORS
+{% if scaffold.nginx.cors_origins %}
+    set $cors_origin "";
+    {% for origin in scaffold.nginx.cors_origins %}
+    if ($http_origin ~* "{{ origin }}") {
+        set $cors_origin $http_origin;
+    }
+    {% endfor %}
+    add_header Access-Control-Allow-Origin $cors_origin always;
+    add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Authorization, Content-Type" always;
+    add_header Access-Control-Max-Age 86400 always;
+{% endif %}
+
+    location / {
+        limit_req zone=api_limit burst=20 nodelay;
+        proxy_pass http://{{ fraise.name }}_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+{% endfor %}
+{% else %}
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
@@ -67,9 +125,27 @@ server {
     }
 {% endfor %}
 
-{% for fraise in fraises %}
-{% if fraise.type == 'api' %}
+{% for fraise in api_fraises %}
+{% if fraise.location %}
+    location {{ fraise.location }} {
+        limit_req zone=api_limit burst=20 nodelay;
+        proxy_pass http://{{ fraise.name }}_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+{% elif api_fraises | length == 1 %}
     location / {
+        limit_req zone=api_limit burst=20 nodelay;
+        proxy_pass http://{{ fraise.name }}_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+{% else %}
+    location /{{ fraise.name }}/ {
         limit_req zone=api_limit burst=20 nodelay;
         proxy_pass http://{{ fraise.name }}_backend;
         proxy_set_header Host $host;
@@ -80,3 +156,4 @@ server {
 {% endif %}
 {% endfor %}
 }
+{% endif %}

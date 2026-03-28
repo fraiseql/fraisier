@@ -9,8 +9,12 @@ After=postgresql.service
 Type=notify
 User={{ scaffold.deploy_user }}
 Group={{ scaffold.deploy_user }}
-WorkingDirectory=/opt/{{ fraise.name }}
-ExecStart=/opt/{{ fraise.name }}/.venv/bin/uvicorn {{ fraise.name }}.main:app --host 0.0.0.0 --port 8000 --workers {{ worker_count }}
+WorkingDirectory={{ app_path }}
+{% if exec_command %}
+ExecStart={{ exec_command }}
+{% else %}
+ExecStart={{ app_path }}/.venv/bin/uvicorn {{ fraise.name }}.main:app --host 0.0.0.0 --port {{ port }} --workers {{ worker_count }}
+{% endif %}
 Restart=on-failure
 RestartSec=5
 WatchdogSec=60
@@ -32,7 +36,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallFilter=~@clock @debug @module @mount @obsolete @reboot @swap
 
 # Writable paths
-ReadWritePaths=/opt/{{ fraise.name }}
+ReadWritePaths={{ app_path }}
 {% if not fraise.get('external_db', false) %}
 ReadWritePaths=/var/lib/postgresql
 {% endif %}

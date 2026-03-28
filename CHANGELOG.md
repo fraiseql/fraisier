@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.1 (2026-03-28)
+
+Bug-fix release addressing scaffold generation issues (#1, #2).
+1265 tests, zero lint warnings.
+
+### Infrastructure Scaffolding
+
+- **fix(scaffold):** systemd `WorkingDirectory` now reads `app_path` from fraises.yaml instead of hardcoding `/opt/<name>` (#1)
+- **fix(scaffold):** systemd `ExecStart` port extracted from `health_check.url` instead of hardcoded 8000 (#1)
+- **fix(scaffold):** new `exec_command` field on fraises overrides the default uvicorn command for non-Python services (#1)
+- **fix(scaffold):** nginx no longer generates duplicate `location /` blocks for multi-fraise setups (#2)
+- **fix(scaffold):** nginx upstream blocks use per-fraise ports from `health_check.url` (#2)
+- **fix(scaffold):** `server_name` field on fraises generates separate `server {}` blocks with per-domain SSL (#2)
+- **fix(scaffold):** `location` field on fraises allows custom URL prefixes; auto-prefixes with `/<name>/` when multiple fraises share one server block (#2)
+
 ## v0.1.0 (2026-03-25)
 
 First published release. Atomic deploy + migrate with surgical rollback
