@@ -16,9 +16,7 @@ class TestPoolCreation:
         """AsyncConnectionPool must receive kwargs={'row_factory': dict_row}."""
         adapter = PostgresAdapter("postgresql://localhost/test")
 
-        with patch(
-            "fraisier.db.postgres_adapter.AsyncConnectionPool"
-        ) as MockPool:
+        with patch("fraisier.db.postgres_adapter.AsyncConnectionPool") as MockPool:
             mock_pool = AsyncMock()
             MockPool.return_value = mock_pool
 

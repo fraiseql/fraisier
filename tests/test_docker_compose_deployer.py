@@ -111,9 +111,7 @@ class TestRollback:
 
         assert result.success
         # The up command should have been called with env containing IMAGE_TAG
-        up_calls = [
-            c for c in runner.run.call_args_list if "up" in c[0][0]
-        ]
+        up_calls = [c for c in runner.run.call_args_list if "up" in c[0][0]]
         assert up_calls, "Expected a 'compose up' call during rollback"
         up_call = up_calls[0]
         env = up_call[1].get("env") or up_call.kwargs.get("env")

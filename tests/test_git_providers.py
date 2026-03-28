@@ -290,9 +290,7 @@ class TestCommitShaNormalization:
             {},
             {
                 "push": {
-                    "changes": [
-                        {"new": {"name": "main", "target": {"hash": FULL_SHA}}}
-                    ]
+                    "changes": [{"new": {"name": "main", "target": {"hash": FULL_SHA}}}]
                 },
             },
         )

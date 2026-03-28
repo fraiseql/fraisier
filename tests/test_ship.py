@@ -332,12 +332,14 @@ class TestShipDeploy:
             patch("fraisier.locking.deployment_lock"),
         ):
             mock_cfg = MagicMock()
-            mock_cfg.get_fraises_for_branch.return_value = [{
-                "fraise_name": "my_api",
-                "environment": "production",
-                "type": "api",
-                "app_path": "/var/www/api",
-            }]
+            mock_cfg.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                    "app_path": "/var/www/api",
+                }
+            ]
             mock_gc.return_value = mock_cfg
 
             result = runner.invoke(

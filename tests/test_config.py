@@ -190,7 +190,9 @@ class TestBranchMappingValidation:
 
     def _make_config(self, tmp_path, branch_mapping_yaml, fraises_yaml=None):
         cfg = tmp_path / "f.yaml"
-        fraises = fraises_yaml or """
+        fraises = (
+            fraises_yaml
+            or """
 fraises:
   my_api:
     type: api
@@ -198,58 +200,74 @@ fraises:
       production:
         app_path: /var/www/api
 """
+        )
         cfg.write_text(f"{fraises}\n{branch_mapping_yaml}")
         return FraisierConfig(str(cfg))
 
     def test_list_entry_missing_fraise_key(self, tmp_path):
         """List entry without 'fraise' key raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="fraise"):
-            self._make_config(tmp_path, """
+            self._make_config(
+                tmp_path,
+                """
 branch_mapping:
   main:
     - environment: production
-""")
+""",
+            )
 
     def test_list_entry_missing_environment_key(self, tmp_path):
         """List entry without 'environment' key raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="environment"):
-            self._make_config(tmp_path, """
+            self._make_config(
+                tmp_path,
+                """
 branch_mapping:
   main:
     - fraise: my_api
-""")
+""",
+            )
 
     def test_duplicate_fraise_environment_pair(self, tmp_path):
         """Duplicate (fraise, environment) in same branch raises error."""
         with pytest.raises(ConfigurationError, match="duplicate"):
-            self._make_config(tmp_path, """
+            self._make_config(
+                tmp_path,
+                """
 branch_mapping:
   main:
     - fraise: my_api
       environment: production
     - fraise: my_api
       environment: production
-""")
+""",
+            )
 
     def test_nonexistent_fraise_raises(self, tmp_path):
         """Reference to non-existent fraise raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="nonexistent"):
-            self._make_config(tmp_path, """
+            self._make_config(
+                tmp_path,
+                """
 branch_mapping:
   main:
     - fraise: nonexistent
       environment: production
-""")
+""",
+            )
 
     def test_nonexistent_environment_raises(self, tmp_path):
         """Reference to non-existent environment raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="staging"):
-            self._make_config(tmp_path, """
+            self._make_config(
+                tmp_path,
+                """
 branch_mapping:
   main:
     - fraise: my_api
       environment: staging
-""")
+""",
+            )
 
 
 class TestGetFraisesForBranch:

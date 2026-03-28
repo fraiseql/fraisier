@@ -472,12 +472,14 @@ class TestProcessWebhookEvent:
 
         with patch("fraisier.webhook.get_config") as mock_config:
             mock_config_obj = MagicMock()
-            mock_config_obj.get_fraises_for_branch.return_value = [{
-                "fraise_name": "my_api",
-                "environment": "production",
-                "type": "api",
-                "app_path": "/tmp/api",
-            }]
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                    "app_path": "/tmp/api",
+                }
+            ]
             mock_config.return_value = mock_config_obj
 
             from fastapi import BackgroundTasks
@@ -509,12 +511,14 @@ class TestProcessWebhookEvent:
             patch("fraisier.webhook.is_deployment_locked", return_value=True),
         ):
             mock_config_obj = MagicMock()
-            mock_config_obj.get_fraises_for_branch.return_value = [{
-                "fraise_name": "my_api",
-                "environment": "production",
-                "type": "api",
-                "app_path": "/tmp/api",
-            }]
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                    "app_path": "/tmp/api",
+                }
+            ]
             mock_config_obj._config = {"deployment": {}}
             mock_config.return_value = mock_config_obj
 
@@ -996,12 +1000,14 @@ class TestMultiProviderRouting:
             self._mock_provider_push(provider_name, mock_get_provider)
 
             mock_config = MagicMock()
-            mock_config.get_fraises_for_branch.return_value = [{
-                "fraise_name": "my_api",
-                "environment": "production",
-                "type": "api",
-                "app_path": "/tmp/api",
-            }]
+            mock_config.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                    "app_path": "/tmp/api",
+                }
+            ]
             mock_config._config = {"git": {}}
             mock_get_config.return_value = mock_config
 
@@ -1039,11 +1045,13 @@ class TestMultiProviderRouting:
 
         with patch("fraisier.webhook.get_config") as mock_config:
             mock_config_obj = MagicMock()
-            mock_config_obj.get_fraises_for_branch.return_value = [{
-                "fraise_name": "my_api",
-                "environment": "production",
-                "type": "api",
-            }]
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                }
+            ]
             mock_config.return_value = mock_config_obj
 
             from fastapi import BackgroundTasks

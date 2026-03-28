@@ -443,9 +443,7 @@ class TestRestorePreviousStateRollsMigrationsBack:
             )
 
         with (
-            patch.object(
-                deployer, "_rollback_database", side_effect=fake_db_rollback
-            ),
+            patch.object(deployer, "_rollback_database", side_effect=fake_db_rollback),
             patch.object(
                 deployer,
                 "_git_rollback",

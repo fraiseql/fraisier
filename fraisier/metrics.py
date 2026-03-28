@@ -459,8 +459,7 @@ class MetricsRecorder:
             "message": (
                 "Metrics are being recorded. Export with Prometheus exporter endpoint."
                 if PROMETHEUS_AVAILABLE
-                else "Prometheus not installed. "
-                "Install with: uv add prometheus-client"
+                else "Prometheus not installed. Install with: uv add prometheus-client"
             ),
         }
 

@@ -300,12 +300,14 @@ def _dispatch_deployment(
                 fraise_name,
                 environment,
             )
-            deployments.append({
-                "status": "skipped",
-                "reason": "deployment already running",
-                "fraise": fraise_name,
-                "environment": environment,
-            })
+            deployments.append(
+                {
+                    "status": "skipped",
+                    "reason": "deployment already running",
+                    "fraise": fraise_name,
+                    "environment": environment,
+                }
+            )
             continue
 
         logger.info(f"Triggering deployment: {fraise_name} -> {environment}")
@@ -318,11 +320,13 @@ def _dispatch_deployment(
             git_branch=event.branch,
             git_commit=event.commit_sha,
         )
-        deployments.append({
-            "status": "deployment_triggered",
-            "fraise": fraise_name,
-            "environment": environment,
-        })
+        deployments.append(
+            {
+                "status": "deployment_triggered",
+                "fraise": fraise_name,
+                "environment": environment,
+            }
+        )
 
     # Single-fraise backward compatibility: return flat response
     if len(fraise_configs) == 1:

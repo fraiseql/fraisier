@@ -103,9 +103,7 @@ class SSHRunner:
         # Build the remote command string; prepend env exports for SSH
         remote_cmd = shlex.join(cmd)
         if env:
-            exports = " ".join(
-                f"{k}={shlex.quote(v)}" for k, v in env.items()
-            )
+            exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
             remote_cmd = f"{exports} {remote_cmd}"
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"

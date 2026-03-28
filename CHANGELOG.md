@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.1.4 (2026-03-28)
+
+Quality review and monorepo support (#6).
+1402 tests, zero lint warnings.
+
+### Error Handling & Robustness
+
+- **fix:** wire `_notify()` into APIDeployer success and failure paths (was only called on rollback failure)
+- **fix:** `UnboundLocalError` when health check endpoints list is empty
+- **fix:** TCP health check socket leak when `connect_ex` raises
+- **fix:** check `PyThreadState_SetAsyncExc` return value (log warning on 0, undo on >1)
+- **fix:** Docker Compose rollback now passes `IMAGE_TAG` env to `compose up`
+- **fix:** `daemon-reload` runs before `enable`/`start` in scheduled deployer
+- **fix:** file lock handle leak on unexpected `OSError`
+- **fix:** `REASSIGN OWNED BY` failure now reported in `RestoreResult`
+
+### API Design & Consistency
+
+- **feat:** `reset_config()` for clean config singleton replacement
+- **fix:** normalize commit SHA to full length across all git providers (Gitea/Bitbucket were truncating)
+- **fix:** `status-all --type` filter checks each fraise individually (was only checking first)
+- **fix:** CLI commands that need config show helpful error instead of `AttributeError`
+- **refactor:** type deployer `runner` parameter as `CommandRunner | None`
+- **refactor:** pool metrics use `psycopg_pool` public `get_stats()` API
+- **refactor:** eliminate all `config._config` private access from webhook.py
+- **fix:** `pip install` → `uv add` in error messages
+
+### Monorepo Branch Mapping (#6)
+
+- **feat:** `branch_mapping` accepts list-of-dicts syntax for one branch → multiple fraises
+- **feat:** `get_fraises_for_branch()` returns all mapped fraises for a branch
+- **feat:** webhook dispatch fires one deployment per mapped fraise (locked ones skipped independently)
+- **feat:** config validation rejects missing keys and duplicate fraise+environment pairs
+- **deprecate:** `get_fraise_for_branch()` (returns first match only)
+
 ## v0.1.3 (2026-03-28)
 
 Per-environment systemd and nginx configuration (#4).

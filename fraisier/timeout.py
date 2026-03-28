@@ -52,12 +52,8 @@ def _interrupt_main_thread(
             )
         elif rc > 1:
             # Multiple threads affected — undo to avoid corruption
-            ctypes.pythonapi.PyThreadState_SetAsyncExc(
-                ctypes.c_ulong(main_tid), None
-            )
-            logger.error(
-                "PyThreadState_SetAsyncExc affected %d threads, undone", rc
-            )
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(main_tid), None)
+            logger.error("PyThreadState_SetAsyncExc affected %d threads, undone", rc)
 
 
 @contextmanager
