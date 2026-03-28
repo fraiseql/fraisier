@@ -140,9 +140,11 @@ def mock_subprocess():
 
 @pytest.fixture
 def mock_requests():
-    """Mock requests.get for health checks."""
-    with patch("requests.get") as mock:
-        mock.return_value = MagicMock(status_code=200)
+    """Mock urllib health checks used by HTTPHealthChecker."""
+    with patch("urllib.request.urlopen") as mock:
+        response = MagicMock()
+        response.status = 200
+        mock.return_value = response
         yield mock
 
 
