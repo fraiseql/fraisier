@@ -46,6 +46,28 @@ class TestGitDeployMixin:
         assert deployer.get_current_version() is None
 
 
+    def test_git_repo_config_overrides_repos_base(self):
+        """git_repo from config takes precedence over repos_base construction."""
+        config = {
+            "fraise_name": "myapp",
+            "app_path": "/var/www/myapp",
+            "git_repo": "/var/git/myapp.git",
+            "repos_base": "/var/lib/fraisier/repos",
+        }
+        deployer = ETLDeployer(config)
+        assert deployer.bare_repo == Path("/var/git/myapp.git")
+
+    def test_git_repo_absent_falls_back_to_repos_base(self):
+        """Without git_repo, bare_repo is constructed from repos_base."""
+        config = {
+            "fraise_name": "myapp",
+            "app_path": "/var/www/myapp",
+            "repos_base": "/var/lib/fraisier/repos",
+        }
+        deployer = ETLDeployer(config)
+        assert deployer.bare_repo == Path("/var/lib/fraisier/repos/myapp.git")
+
+
 class TestETLDeployerBareRepo:
     """Tests for ETLDeployer using bare repo pattern."""
 

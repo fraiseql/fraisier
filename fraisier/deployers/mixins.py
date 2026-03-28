@@ -38,8 +38,12 @@ class GitDeployMixin:
         self.clone_url = config.get("clone_url")
         self.app_path = config.get("app_path")
         self.branch = config.get("branch", "main")
-        repos_base = config.get("repos_base", str(DEFAULT_REPOS_BASE))
-        self.bare_repo = Path(repos_base) / f"{self.fraise_name}.git"
+        git_repo = config.get("git_repo")
+        if git_repo:
+            self.bare_repo = Path(git_repo)
+        else:
+            repos_base = config.get("repos_base", str(DEFAULT_REPOS_BASE))
+            self.bare_repo = Path(repos_base) / f"{self.fraise_name}.git"
         self.status_dir = Path(config.get("status_dir", str(DEFAULT_STATUS_DIR)))
         self.lock_timeout = config.get("lock_timeout", 300)
         self._previous_sha: str | None = None
@@ -107,7 +111,14 @@ class GitDeployMixin:
             ],
         )
         r.run(
-            ["git", "-C", str(worktree), "reset", "--soft", target],
+            [
+                "git",
+                f"--work-tree={worktree}",
+                f"--git-dir={self.bare_repo}",
+                "reset",
+                "--soft",
+                target,
+            ],
         )
 
     def _wrap_error(self, exc: Exception) -> FraisierError:

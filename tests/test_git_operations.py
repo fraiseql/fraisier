@@ -143,8 +143,8 @@ class TestFetchAndCheckout:
         reset_call = call(
             [
                 "git",
-                "-C",
-                str(self.worktree),
+                f"--work-tree={self.worktree}",
+                f"--git-dir={self.bare_repo}",
                 "reset",
                 "--soft",
                 "bbb2222",
@@ -182,6 +182,26 @@ class TestFetchAndCheckout:
 
         assert old is None
         assert new == "bbb2222"
+
+    def test_reset_uses_git_dir_not_worktree(self):
+        """reset --soft must use --git-dir, not git -C worktree."""
+        with patch("subprocess.run", side_effect=self._mock_run()) as mock_run:
+            fetch_and_checkout(self.bare_repo, self.worktree, self.branch)
+
+        reset_call = call(
+            [
+                "git",
+                f"--work-tree={self.worktree}",
+                f"--git-dir={self.bare_repo}",
+                "reset",
+                "--soft",
+                "bbb2222",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert reset_call in mock_run.call_args_list
 
     def test_previous_sha_available_for_rollback(self):
         """The old SHA returned can be used for rollback."""

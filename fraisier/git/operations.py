@@ -84,9 +84,18 @@ def fetch_and_checkout(
         text=True,
     )
 
-    # Critical: update worktree HEAD so git reports correct state
+    # Critical: update worktree HEAD so git reports correct state.
+    # Use --git-dir/--work-tree to support bare repo + worktree pattern
+    # where the worktree has no .git directory.
     subprocess.run(
-        ["git", "-C", str(worktree), "reset", "--soft", new_sha],
+        [
+            "git",
+            f"--work-tree={worktree}",
+            f"--git-dir={bare_repo}",
+            "reset",
+            "--soft",
+            new_sha,
+        ],
         check=True,
         capture_output=True,
         text=True,
