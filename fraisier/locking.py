@@ -54,6 +54,9 @@ def file_deployment_lock(
     except BlockingIOError:
         lock_file.close()
         raise DeploymentLockError(f"Deploy already running for {fraise_name}") from None
+    except BaseException:
+        lock_file.close()
+        raise
 
     try:
         yield lock_path

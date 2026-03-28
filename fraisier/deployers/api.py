@@ -105,6 +105,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     duration_seconds=duration,
                 )
                 self._complete_db_record(db_pk, result)
+                self._notify(result)
                 return result
 
         except DeploymentTimeoutExpired as e:
@@ -128,6 +129,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 error=wrapped,
             )
             self._complete_db_record(db_pk, result)
+            self._notify(result)
             return result
 
     def _handle_timeout(

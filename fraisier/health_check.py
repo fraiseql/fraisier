@@ -168,11 +168,10 @@ class TCPHealthChecker(HealthChecker):
         import socket
 
         start = time.time()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
             result = sock.connect_ex((self.host, self.port))
-            sock.close()
 
             duration = time.time() - start
             success = result == 0
@@ -193,6 +192,8 @@ class TCPHealthChecker(HealthChecker):
                 duration=duration,
                 message=f"TCP check error: {e}",
             )
+        finally:
+            sock.close()
 
 
 class ExecHealthChecker(HealthChecker):
@@ -650,6 +651,7 @@ class AggregateHealthChecker:
     def _check_service(self, name: str, base_url: str) -> ServiceHealthResult:
         """Check a single service, trying endpoints in order."""
         base_url = base_url.rstrip("/")
+        start = time.time()
         for endpoint in self.health_config.endpoints:
             url = f"{base_url}{endpoint}"
             start = time.time()

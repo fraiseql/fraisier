@@ -33,6 +33,7 @@ class TestLocalRunner:
             text=True,
             timeout=300,
             check=True,
+            env=None,
         )
 
     def test_run_passes_cwd(self):
@@ -50,6 +51,7 @@ class TestLocalRunner:
             text=True,
             timeout=300,
             check=True,
+            env=None,
         )
 
 

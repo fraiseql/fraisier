@@ -9,6 +9,7 @@ Unlike SIGALRM, this approach:
 from __future__ import annotations
 
 import ctypes
+import logging
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
+
+logger = logging.getLogger(__name__)
 
 
 class DeploymentTimeoutExpired(Exception):
@@ -39,10 +42,22 @@ def _interrupt_main_thread(
     # Inject exception into the main thread
     main_tid = threading.main_thread().ident
     if main_tid is not None:
-        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        rc = ctypes.pythonapi.PyThreadState_SetAsyncExc(
             ctypes.c_ulong(main_tid),
             ctypes.py_object(DeploymentTimeoutExpired),
         )
+        if rc == 0:
+            logger.warning(
+                "PyThreadState_SetAsyncExc: thread not found (tid=%s)", main_tid
+            )
+        elif rc > 1:
+            # Multiple threads affected — undo to avoid corruption
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                ctypes.c_ulong(main_tid), None
+            )
+            logger.error(
+                "PyThreadState_SetAsyncExc affected %d threads, undone", rc
+            )
 
 
 @contextmanager

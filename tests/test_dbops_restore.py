@@ -55,6 +55,23 @@ class TestRestoreBackup:
         assert any("REASSIGN OWNED" in arg for arg in reassign_cmd)
         assert any("appuser" in arg for arg in reassign_cmd)
 
+    def test_restore_owner_fix_failure_reported(self):
+        """REASSIGN OWNED BY failure sets success=False with error."""
+        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+            # pg_restore succeeds, REASSIGN fails
+            mock_cmd.side_effect = [
+                (0, "", ""),
+                (1, "", "ERROR: role does not exist"),
+            ]
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                db_owner="baduser",
+            )
+
+        assert result.success is False
+        assert "baduser" in result.error or "role" in result.error
+
     def test_restore_rejects_bad_db_name(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             restore_backup(backup_path="/backups/prod.dump", db_name="bad name!")

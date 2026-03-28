@@ -87,6 +87,18 @@ class TestTCPHealthChecker:
 
         assert result.success is False
 
+    def test_tcp_checker_socket_closed_on_connect_error(self):
+        """Socket is closed even when connect_ex raises OSError."""
+        mock_sock = MagicMock()
+        mock_sock.connect_ex.side_effect = OSError("Network unreachable")
+
+        with patch("socket.socket", return_value=mock_sock):
+            checker = TCPHealthChecker("localhost", 5432)
+            result = checker.check(timeout=5.0)
+
+        assert result.success is False
+        mock_sock.close.assert_called_once()
+
     def test_tcp_checker_timeout(self):
         mock_sock = MagicMock()
         mock_sock.connect_ex.side_effect = TimeoutError("timed out")
@@ -289,6 +301,24 @@ class TestHealthCheckManager:
 
         assert result is False
         assert call_count == 3
+
+
+class TestAggregateHealthChecker:
+    """Tests for AggregateHealthChecker edge cases."""
+
+    def test_check_service_empty_endpoints_no_unbound_error(self):
+        """Empty endpoints returns unhealthy, not UnboundLocalError."""
+        from fraisier.config import HealthConfig
+        from fraisier.health_check import AggregateHealthChecker
+
+        health_config = HealthConfig(endpoints=[])
+        checker = AggregateHealthChecker(
+            services={"api": "http://localhost:4001"},
+            health_config=health_config,
+        )
+
+        result = checker._check_service("api", "http://localhost:4001")
+        assert result.status == "unhealthy"
 
 
 class TestCompositeHealthChecker:

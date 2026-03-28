@@ -544,6 +544,46 @@ class TestScheduledDeployer:
         assert any("start" in c for c in calls)
         assert any("daemon-reload" in c for c in calls)
 
+    def test_daemon_reload_before_enable_and_start(self):
+        """daemon-reload must run before enable and start."""
+        config = {
+            "fraise_name": "backup",
+            "systemd_timer": "backup.timer",
+        }
+
+        deployer = ScheduledDeployer(config)
+
+        with (
+            patch("fraisier.deployers.mixins.write_status"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="timer:active\n")
+            deployer.execute()
+
+        # Extract the systemctl subcommands in call order
+        systemctl_cmds = []
+        for call in mock_run.call_args_list:
+            args = call[0][0]
+            if "systemctl" in args:
+                # The subcommand is after "systemctl" (may have "sudo" prefix)
+                idx = args.index("systemctl")
+                if idx + 1 < len(args):
+                    systemctl_cmds.append(args[idx + 1])
+
+        assert "daemon-reload" in systemctl_cmds
+        assert "enable" in systemctl_cmds
+        assert "start" in systemctl_cmds
+
+        reload_idx = systemctl_cmds.index("daemon-reload")
+        enable_idx = systemctl_cmds.index("enable")
+        start_idx = systemctl_cmds.index("start")
+        assert reload_idx < enable_idx, (
+            f"daemon-reload at {reload_idx} should be before enable at {enable_idx}"
+        )
+        assert reload_idx < start_idx, (
+            f"daemon-reload at {reload_idx} should be before start at {start_idx}"
+        )
+
     def test_health_check_returns_true_when_active(self, mock_subprocess):
         """Test health check returns true when timer is active."""
         mock_subprocess.return_value = MagicMock(returncode=0)
@@ -576,6 +616,39 @@ class TestScheduledDeployer:
         # Should call restart
         calls = [str(c) for c in mock_subprocess.call_args_list]
         assert any("restart" in c for c in calls)
+
+
+class TestAPIDeployerNotifications:
+    """Tests for notification wiring in APIDeployer.execute()."""
+
+    def test_notify_called_on_success(self, mock_subprocess, mock_requests):
+        """Successful deploy calls _notify with success result."""
+        config = {
+            "app_path": "/var/www/api",
+            "health_check": {"url": "http://localhost:8000/health"},
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        with patch.object(deployer, "_notify") as mock_notify:
+            result = deployer.execute()
+
+        assert result.success is True
+        mock_notify.assert_called_once_with(result)
+
+    def test_notify_called_on_failure(self, mock_subprocess):
+        """Deploy failure (exception, no rollback) calls _notify with failure result."""
+        from subprocess import CalledProcessError
+
+        config = {"app_path": "/var/www/api"}
+        deployer = APIDeployer(config)
+        mock_subprocess.side_effect = CalledProcessError(1, "git pull")
+
+        with patch.object(deployer, "_notify") as mock_notify:
+            result = deployer.execute()
+
+        assert result.success is False
+        mock_notify.assert_called_once_with(result)
 
 
 class TestDeploymentResult:

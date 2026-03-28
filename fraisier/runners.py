@@ -26,6 +26,7 @@ class CommandRunner(Protocol):
         cwd: str | None = None,
         timeout: int = 300,
         check: bool = True,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]: ...
 
 
@@ -39,6 +40,7 @@ class LocalRunner:
         cwd: str | None = None,
         timeout: int = 300,
         check: bool = True,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             cmd,
@@ -47,6 +49,7 @@ class LocalRunner:
             text=True,
             timeout=timeout,
             check=check,
+            env=env,
         )
 
 
@@ -95,9 +98,15 @@ class SSHRunner:
         cwd: str | None = None,
         timeout: int = 300,
         check: bool = True,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        # Build the remote command string
+        # Build the remote command string; prepend env exports for SSH
         remote_cmd = shlex.join(cmd)
+        if env:
+            exports = " ".join(
+                f"{k}={shlex.quote(v)}" for k, v in env.items()
+            )
+            remote_cmd = f"{exports} {remote_cmd}"
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
 

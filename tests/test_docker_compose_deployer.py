@@ -102,6 +102,24 @@ class TestRollback:
 
         assert result.success
 
+    def test_rollback_passes_image_tag_env(self):
+        """Rollback sets IMAGE_TAG env var so compose uses the target tag."""
+        deployer, runner = _make_deployer()
+        deployer._previous_tag = "v1.0.0"
+
+        result = deployer.rollback()
+
+        assert result.success
+        # The up command should have been called with env containing IMAGE_TAG
+        up_calls = [
+            c for c in runner.run.call_args_list if "up" in c[0][0]
+        ]
+        assert up_calls, "Expected a 'compose up' call during rollback"
+        up_call = up_calls[0]
+        env = up_call[1].get("env") or up_call.kwargs.get("env")
+        assert env is not None, "Expected env kwarg with IMAGE_TAG"
+        assert env.get("IMAGE_TAG") == "v1.0.0"
+
     def test_rollback_no_previous_tag(self):
         deployer, _runner = _make_deployer()
         deployer._previous_tag = None

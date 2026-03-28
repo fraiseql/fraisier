@@ -65,13 +65,13 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             if self.systemd_timer:
                 logger.info(f"Enabling timer: {self.systemd_timer}")
                 self.runner.run(
+                    ["sudo", "systemctl", "daemon-reload"],
+                )
+                self.runner.run(
                     ["sudo", "systemctl", "enable", self.systemd_timer],
                 )
                 self.runner.run(
                     ["sudo", "systemctl", "start", self.systemd_timer],
-                )
-                self.runner.run(
-                    ["sudo", "systemctl", "daemon-reload"],
                 )
 
             new_version = new_sha[:8] if new_sha else self._get_timer_state()

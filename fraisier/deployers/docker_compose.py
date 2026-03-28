@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import shlex
 import subprocess
 import time
@@ -123,10 +124,9 @@ class DockerComposeDeployer(BaseDeployer):
             if self.service_name:
                 up_args.append(self.service_name)
 
-            # We can't pass env through the runner easily, so use
-            # compose's --env approach or set via config
             logger.info(f"Rolling back to tag: {target}")
-            self.runner.run(self._compose_cmd(*up_args))
+            env = {**os.environ, "IMAGE_TAG": target}
+            self.runner.run(self._compose_cmd(*up_args), env=env)
 
             duration = time.time() - start_time
             return DeploymentResult(

@@ -1,6 +1,7 @@
 """Tests for file-based deployment locking (fcntl.flock)."""
 
 import multiprocessing
+from unittest.mock import patch
 
 import pytest
 
@@ -76,6 +77,23 @@ class TestFileDeploymentLock:
         with file_deployment_lock("myfraise", lock_dir=tmp_path):
             pass
         assert is_deployment_locked("myfraise", lock_dir=tmp_path) is False
+
+    def test_lock_file_closed_on_flock_oserror(self, tmp_path):
+        """File handle is closed when flock raises OSError (not BlockingIOError)."""
+        from unittest.mock import MagicMock
+
+        mock_file = MagicMock()
+        mock_file.fileno.return_value = 999
+
+        with (
+            patch("fraisier.locking.fcntl.flock", side_effect=OSError("I/O error")),
+            patch.object(type(tmp_path / "x"), "open", return_value=mock_file),
+            pytest.raises(OSError, match="I/O error"),
+            file_deployment_lock("myfraise", lock_dir=tmp_path),
+        ):
+            pass
+
+        mock_file.close.assert_called()
 
     def test_cross_process_lock_contention(self, tmp_path):
         """A second process cannot acquire a lock held by the first."""

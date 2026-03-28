@@ -47,7 +47,7 @@ def restore_backup(
 
     # Fix ownership if requested — use psql variable binding to prevent injection
     if db_owner:
-        _pg_cmd(
+        rc, _, stderr = _pg_cmd(
             [
                 "psql",
                 "-d",
@@ -59,6 +59,11 @@ def restore_backup(
             ],
             sudo_user=sudo_user,
         )
+        if rc != 0:
+            return RestoreResult(
+                success=False,
+                error=f"Ownership reassignment to {db_owner} failed: {stderr.strip()}",
+            )
 
     return RestoreResult(success=True)
 

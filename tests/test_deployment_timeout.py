@@ -1,9 +1,15 @@
 """Tests for thread-based deployment timeout (replaces SIGALRM)."""
 
+import logging
 import threading
 import time
+from unittest.mock import patch
 
-from fraisier.timeout import DeploymentTimeoutExpired, deployment_timeout
+from fraisier.timeout import (
+    DeploymentTimeoutExpired,
+    _interrupt_main_thread,
+    deployment_timeout,
+)
 
 
 class TestDeploymentTimeout:
@@ -72,3 +78,31 @@ class TestDeploymentTimeout:
         with deployment_timeout(10), deployment_timeout(10):
             result = 42
         assert result == 42
+
+
+class TestInterruptMainThread:
+    """Tests for _interrupt_main_thread return value handling."""
+
+    def test_logs_warning_when_thread_not_found(self, caplog):
+        """Return value 0 means thread not found — should log warning."""
+        with patch(
+            "fraisier.timeout.ctypes.pythonapi.PyThreadState_SetAsyncExc",
+            return_value=0,
+        ):
+            with caplog.at_level(logging.WARNING, logger="fraisier.timeout"):
+                _interrupt_main_thread(None)
+
+            assert any("thread not found" in r.message.lower() for r in caplog.records)
+
+    def test_undoes_when_multiple_threads_affected(self):
+        """Return value >1 means multiple threads affected — should undo."""
+        with patch(
+            "fraisier.timeout.ctypes.pythonapi.PyThreadState_SetAsyncExc",
+        ) as mock_exc:
+            mock_exc.return_value = 2
+            _interrupt_main_thread(None)
+
+            # Second call should undo (pass None as exception type)
+            assert mock_exc.call_count == 2
+            second_call = mock_exc.call_args_list[1]
+            assert second_call[0][1] is None
