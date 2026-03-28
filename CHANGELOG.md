@@ -3,7 +3,7 @@
 ## v0.1.4 (2026-03-28)
 
 Quality review and monorepo support (#6).
-1404 tests, zero lint warnings.
+1406 tests, zero lint warnings.
 
 ### Error Handling & Robustness
 
@@ -26,6 +26,10 @@ Quality review and monorepo support (#6).
 - **refactor:** pool metrics use `psycopg_pool` public `get_stats()` API
 - **refactor:** eliminate all `config._config` private access from webhook.py
 - **fix:** `pip install` → `uv add` in error messages
+
+### Webhook Header Normalization (#7)
+
+- **fix:** use lowercase header normalization instead of `.title()` — fixes GitHub event detection silently failing (`X-Github-Event` vs `X-GitHub-Event`)
 
 ### Config Resolution (#8)
 
