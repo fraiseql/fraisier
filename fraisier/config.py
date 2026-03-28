@@ -27,6 +27,185 @@ _GIT_URL_RE = re.compile(
 _VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
 
+# snake_case -> systemd PascalCase mapping for security directives
+SECURITY_DIRECTIVE_MAP: dict[str, str] = {
+    "no_new_privileges": "NoNewPrivileges",
+    "protect_system": "ProtectSystem",
+    "protect_home": "ProtectHome",
+    "private_tmp": "PrivateTmp",
+    "private_devices": "PrivateDevices",
+    "protect_kernel_tunables": "ProtectKernelTunables",
+    "protect_kernel_modules": "ProtectKernelModules",
+    "protect_control_groups": "ProtectControlGroups",
+    "restrict_address_families": "RestrictAddressFamilies",
+    "system_call_filter": "SystemCallFilter",
+    "protect_clock": "ProtectClock",
+    "restrict_namespaces": "RestrictNamespaces",
+    "restrict_realtime": "RestrictRealtime",
+    "restrict_suid_sgid": "RestrictSUIDSGID",
+    "lock_personality": "LockPersonality",
+    "memory_deny_write_execute": "MemoryDenyWriteExecute",
+    "remove_ipc": "RemoveIPC",
+    "private_users": "PrivateUsers",
+    "protect_hostname": "ProtectHostname",
+    "protect_kernel_logs": "ProtectKernelLogs",
+}
+
+DEFAULT_SECURITY: dict[str, str | bool] = {
+    "no_new_privileges": True,
+    "protect_system": "strict",
+    "protect_home": True,
+    "private_tmp": True,
+    "private_devices": True,
+    "protect_kernel_tunables": True,
+    "protect_kernel_modules": True,
+    "protect_control_groups": True,
+    "restrict_address_families": "AF_INET AF_INET6 AF_UNIX",
+    "system_call_filter": "~@clock @debug @module @mount @obsolete @reboot @swap",
+}
+
+# Valid memory size pattern (e.g., "4G", "512M", "2T")
+_MEMORY_SIZE_RE = re.compile(r"^\d+[KMGT]$")
+
+
+@dataclass
+class ServiceConfig:
+    """Per-environment systemd service configuration."""
+
+    user: str | None = None
+    group: str | None = None
+    port: int | None = None
+    workers: int = 1
+    exec: str | None = None
+    memory_max: str | None = None
+    memory_high: str | None = None
+    cpu_quota: str | None = None
+    environment_file: str | None = None
+    credentials: dict[str, str] = field(default_factory=dict)
+    environment: dict[str, str] = field(default_factory=dict)
+    security: dict[str, str | bool] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.port is not None and not (1 <= self.port <= 65535):
+            raise ValidationError(
+                f"service.port must be 1-65535, got {self.port}",
+            )
+        for size_field in ("memory_max", "memory_high"):
+            val = getattr(self, size_field)
+            if val is not None and not _MEMORY_SIZE_RE.match(val):
+                raise ValidationError(
+                    f"service.{size_field} must match \\d+[KMGT], got {val!r}",
+                )
+        for cred_name, cred_path in self.credentials.items():
+            if not cred_path.startswith("/"):
+                raise ValidationError(
+                    f"service.credentials.{cred_name} must be an absolute path, "
+                    f"got {cred_path!r}",
+                )
+
+    @property
+    def resolved_security(self) -> dict[str, str | bool]:
+        """Return merged security directives (user overrides on top of defaults)."""
+        merged = {**DEFAULT_SECURITY}
+        merged.update(self.security)
+        return merged
+
+    @classmethod
+    def from_env_dict(cls, env: dict[str, Any]) -> "ServiceConfig":
+        """Parse ServiceConfig from an environment dict.
+
+        Supports both nested ``service:`` key and legacy flat fields.
+        The nested ``service:`` key takes precedence.
+        """
+        svc = env.get("service", {}) or {}
+
+        # Legacy flat-field mapping (only used when service: key doesn't set them)
+        def _get(key: str, legacy_key: str | None = None, default: Any = None) -> Any:
+            val = svc.get(key)
+            if val is not None:
+                return val
+            if legacy_key:
+                val = env.get(legacy_key)
+                if val is not None:
+                    return val
+            return default
+
+        return cls(
+            user=svc.get("user"),
+            group=svc.get("group"),
+            port=_get("port"),
+            workers=_get("workers", "worker_count", 1),
+            exec=_get("exec", "exec_command"),
+            memory_max=_get("memory_max", "memory_max"),
+            memory_high=svc.get("memory_high"),
+            cpu_quota=svc.get("cpu_quota"),
+            environment_file=svc.get("environment_file"),
+            credentials=svc.get("credentials", {}),
+            environment=svc.get("environment", {}),
+            security=svc.get("security", {}),
+        )
+
+
+@dataclass
+class RestrictedPath:
+    """Nginx restricted path with allow/deny rules."""
+
+    path: str
+    allow: list[str] = field(default_factory=lambda: ["127.0.0.1"])
+    deny: str = "all"
+
+
+@dataclass
+class NginxEnvConfig:
+    """Per-environment nginx configuration."""
+
+    server_name: str | None = None
+    ssl_cert: str | None = None
+    ssl_key: str | None = None
+    cors_origins: list[str] = field(default_factory=list)
+    restricted_paths: list[RestrictedPath] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.ssl_cert and not self.ssl_key:
+            raise ValidationError(
+                "nginx.ssl_cert requires nginx.ssl_key to also be set",
+            )
+        if self.ssl_key and not self.ssl_cert:
+            raise ValidationError(
+                "nginx.ssl_key requires nginx.ssl_cert to also be set",
+            )
+
+    @classmethod
+    def from_env_dict(cls, env: dict[str, Any]) -> "NginxEnvConfig | None":
+        """Parse NginxEnvConfig from an environment dict.
+
+        Returns None if no ``nginx:`` key is present.
+        """
+        raw = env.get("nginx")
+        if not raw or not isinstance(raw, dict):
+            return None
+
+        restricted = []
+        for item in raw.get("restricted_paths", []):
+            if isinstance(item, str):
+                restricted.append(RestrictedPath(path=item))
+            elif isinstance(item, dict):
+                restricted.append(
+                    RestrictedPath(
+                        path=item["path"],
+                        allow=item.get("allow", ["127.0.0.1"]),
+                        deny=item.get("deny", "all"),
+                    )
+                )
+
+        return cls(
+            server_name=raw.get("server_name"),
+            ssl_cert=raw.get("ssl_cert"),
+            ssl_key=raw.get("ssl_key"),
+            cors_origins=raw.get("cors_origins", []),
+            restricted_paths=restricted,
+        )
+
 
 @dataclass
 class SystemdScaffoldConfig:

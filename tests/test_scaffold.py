@@ -799,6 +799,556 @@ scaffold:
         assert "location /api/backend/" in content
 
 
+class TestSystemdServiceEnvConfig:
+    """Issue #4: per-environment service config in systemd units."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def _render_service(
+        self, tmp_path, yaml_content, fraise="my_api", env="production"
+    ):
+        config = self._make_config(tmp_path, yaml_content)
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+        svc = tmp_path / "output" / "systemd" / f"{fraise}_{env}.service"
+        return svc.read_text()
+
+    def test_user_group_override(self, tmp_path):
+        """service.user and service.group override scaffold.deploy_user."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          user: myapp_user
+          group: www-data
+scaffold:
+  output_dir: {output}
+  deploy_user: fraisier
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "User=myapp_user" in content
+        assert "Group=www-data" in content
+        assert "User=fraisier" not in content
+        assert "Group=fraisier" not in content
+
+    def test_user_group_fallback_to_deploy_user(self, tmp_path):
+        """Without service.user/group, falls back to scaffold.deploy_user."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+  deploy_user: my_app
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "User=my_app" in content
+        assert "Group=my_app" in content
+
+    def test_memory_high(self, tmp_path):
+        """service.memory_high renders MemoryHigh directive."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          memory_high: "3G"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "MemoryHigh=3G" in content
+
+    def test_memory_high_absent_when_not_configured(self, tmp_path):
+        """MemoryHigh is absent when service.memory_high is not set."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "MemoryHigh" not in content
+
+    def test_cpu_quota(self, tmp_path):
+        """service.cpu_quota renders CPUQuota directive."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          cpu_quota: "200%"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "CPUQuota=200%" in content
+
+    def test_cpu_quota_absent_when_not_configured(self, tmp_path):
+        """CPUQuota is absent when service.cpu_quota is not set."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "CPUQuota" not in content
+
+    def test_environment_file(self, tmp_path):
+        """service.environment_file renders EnvironmentFile directive."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          environment_file: /etc/myapp/api.env
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "EnvironmentFile=/etc/myapp/api.env" in content
+
+    def test_load_credential(self, tmp_path):
+        """service.credentials renders LoadCredential directives."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          credentials:
+            pg_password: /etc/creds/pg
+            api_key: /etc/creds/api
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "LoadCredential=pg_password:/etc/creds/pg" in content
+        assert "LoadCredential=api_key:/etc/creds/api" in content
+
+    def test_extra_environment_vars(self, tmp_path):
+        """service.environment renders extra Environment lines."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          environment:
+            DB_NAME: myapp_db
+            REDIS_URL: redis://localhost
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "Environment=DB_NAME=myapp_db" in content
+        assert "Environment=REDIS_URL=redis://localhost" in content
+        # Built-in env vars still present
+        assert "Environment=ENVIRONMENT=production" in content
+
+    def test_security_override(self, tmp_path):
+        """service.security overrides individual security directives."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          security:
+            protect_home: "read-only"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "ProtectHome=read-only" in content
+        assert "ProtectHome=true" not in content
+        # Other defaults still present
+        assert "NoNewPrivileges=true" in content
+        assert "ProtectSystem=strict" in content
+
+    def test_port_from_service_overrides_health_check(self, tmp_path):
+        """service.port takes precedence over health_check.url port."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        health_check:
+          url: http://127.0.0.1:8042/health
+        service:
+          port: 9000
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "--port 9000" in content
+        assert "--port 8042" not in content
+
+    def test_port_fallback_to_health_check(self, tmp_path):
+        """Without service.port, port comes from health_check.url."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        health_check:
+          url: http://127.0.0.1:8042/health
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "--port 8042" in content
+
+    def test_port_fallback_to_default(self, tmp_path):
+        """Without service.port or health_check, port defaults to 8000."""
+        content = self._render_service(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "--port 8000" in content
+
+
+class TestNginxPerEnvConfig:
+    """Issue #4: per-environment nginx config files."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_per_env_nginx_files_generated(self, tmp_path):
+        """Environments with nginx: blocks get their own config files."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/api-dev
+        nginx:
+          server_name: api.myapp.dev
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render()
+
+        assert "nginx/api_development.conf" in files
+        assert "nginx/api_production.conf" in files
+
+        dev_conf = (tmp_path / "output" / "nginx" / "api_development.conf").read_text()
+        assert "server_name api.myapp.dev" in dev_conf
+
+        prod_conf = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "server_name api.myapp.io" in prod_conf
+
+    def test_per_env_custom_ssl_paths(self, tmp_path):
+        """Per-env nginx uses custom SSL cert/key paths."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+          ssl_cert: /etc/ssl/custom/cert.pem
+          ssl_key: /etc/ssl/custom/key.pem
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "ssl_certificate /etc/ssl/custom/cert.pem" in content
+        assert "ssl_certificate_key /etc/ssl/custom/key.pem" in content
+        assert "letsencrypt" not in content
+
+    def test_per_env_letsencrypt_fallback(self, tmp_path):
+        """Without custom SSL paths, uses letsencrypt convention."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "/etc/letsencrypt/live/api.myapp.io/fullchain.pem" in content
+        assert "/etc/letsencrypt/live/api.myapp.io/privkey.pem" in content
+
+    def test_per_env_cors_origins(self, tmp_path):
+        """Per-env cors_origins used instead of global ones."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+          cors_origins:
+            - https://app.myapp.io
+scaffold:
+  output_dir: {output}
+  nginx:
+    cors_origins: ["https://global.example.com"]
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "https://app.myapp.io" in content
+        assert "https://global.example.com" not in content
+
+    def test_per_env_cors_falls_back_to_global(self, tmp_path):
+        """Without per-env cors_origins, global ones are used."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+scaffold:
+  output_dir: {output}
+  nginx:
+    cors_origins: ["https://global.example.com"]
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "https://global.example.com" in content
+
+    def test_per_env_structured_restricted_paths(self, tmp_path):
+        """Per-env restricted_paths with allow/deny rules."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+          restricted_paths:
+            - path: /admin/
+              allow: ["10.0.0.0/8", "127.0.0.1"]
+              deny: all
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "location /admin/" in content
+        assert "allow 10.0.0.0/8;" in content
+        assert "allow 127.0.0.1;" in content
+        assert "deny all;" in content
+
+    def test_no_per_env_nginx_when_no_nginx_key(self, tmp_path):
+        """Without nginx: key, no per-env nginx files generated."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render()
+
+        # gateway.conf still generated
+        assert "nginx/gateway.conf" in files
+        # No per-env file
+        per_env = [
+            f for f in files if f.startswith("nginx/") and f != "nginx/gateway.conf"
+        ]
+        assert per_env == []
+
+    def test_per_env_upstream_port_from_service(self, tmp_path):
+        """Per-env nginx upstream uses service.port."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        service:
+          port: 9000
+        nginx:
+          server_name: api.myapp.io
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "127.0.0.1:9000" in content
+
+    def test_dry_run_includes_per_env_nginx(self, tmp_path):
+        """Dry-run lists per-env nginx files."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        nginx:
+          server_name: api.myapp.io
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render(dry_run=True)
+
+        assert "nginx/api_production.conf" in files
+        assert not (tmp_path / "output").exists()
+
+
 class TestGithubActionsTemplates:
     """GitHub Actions workflow templates."""
 
@@ -909,6 +1459,184 @@ class TestShellScriptTemplates:
         content = path.read_text()
         assert "#!/" in content
         assert "confiture" in content or "migrate" in content.lower()
+
+
+class TestPerEnvIntegration:
+    """Issue #4: full integration tests for per-env service + nginx config."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_full_round_trip_all_new_fields(self, tmp_path):
+        """Comprehensive YAML with all new fields renders all files correctly."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/api-dev
+        service:
+          user: myapp_dev
+          group: www-data
+          port: 8000
+          workers: 2
+          memory_max: "2G"
+          memory_high: "1G"
+          environment_file: /etc/myapp/dev.env
+          credentials:
+            pg_password: /etc/creds/pg_dev
+          environment:
+            DB_NAME: myapp_dev
+          security:
+            protect_home: "read-only"
+        nginx:
+          server_name: api.dev.example.com
+          cors_origins: ["https://app.dev.example.com"]
+      production:
+        app_path: /var/www/api
+        service:
+          user: myapp_prod
+          group: www-data
+          port: 8000
+          workers: 4
+          memory_max: "8G"
+          memory_high: "6G"
+          cpu_quota: "200%"
+          environment_file: /etc/myapp/prod.env
+          credentials:
+            pg_password: /etc/creds/pg_prod
+            api_key: /etc/creds/api_key
+          environment:
+            DB_NAME: myapp_prod
+            REDIS_URL: redis://localhost
+        nginx:
+          server_name: api.example.com
+          ssl_cert: /etc/ssl/api/cert.pem
+          ssl_key: /etc/ssl/api/key.pem
+          cors_origins: ["https://app.example.com"]
+          restricted_paths:
+            - path: /admin/
+              allow: ["10.0.0.0/8"]
+              deny: all
+  worker:
+    type: etl
+    environments:
+      production:
+        app_path: /var/www/worker
+        service:
+          user: worker_user
+          workers: 1
+          memory_max: "4G"
+scaffold:
+  output_dir: {output}
+  deploy_user: fallback_user
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render()
+
+        # Systemd files for all fraise+env combos
+        assert "systemd/api_development.service" in files
+        assert "systemd/api_production.service" in files
+        assert "systemd/worker_production.service" in files
+
+        # Per-env nginx for api (has nginx: blocks)
+        assert "nginx/api_development.conf" in files
+        assert "nginx/api_production.conf" in files
+
+        # No per-env nginx for worker (no nginx: block)
+        worker_nginx = [f for f in files if f.startswith("nginx/worker_")]
+        assert worker_nginx == []
+
+        # Verify dev systemd content
+        dev_svc = (
+            tmp_path / "output" / "systemd" / "api_development.service"
+        ).read_text()
+        assert "User=myapp_dev" in dev_svc
+        assert "Group=www-data" in dev_svc
+        assert "MemoryMax=2G" in dev_svc
+        assert "MemoryHigh=1G" in dev_svc
+        assert "EnvironmentFile=/etc/myapp/dev.env" in dev_svc
+        assert "LoadCredential=pg_password:/etc/creds/pg_dev" in dev_svc
+        assert "Environment=DB_NAME=myapp_dev" in dev_svc
+        assert "ProtectHome=read-only" in dev_svc
+
+        # Verify prod systemd content
+        prod_svc = (
+            tmp_path / "output" / "systemd" / "api_production.service"
+        ).read_text()
+        assert "User=myapp_prod" in prod_svc
+        assert "CPUQuota=200%" in prod_svc
+        assert "LoadCredential=api_key:/etc/creds/api_key" in prod_svc
+        assert "Environment=REDIS_URL=redis://localhost" in prod_svc
+
+        # Verify worker uses fallback deploy_user
+        worker_svc = (
+            tmp_path / "output" / "systemd" / "worker_production.service"
+        ).read_text()
+        assert "User=worker_user" in worker_svc
+
+        # Verify prod nginx content
+        prod_nginx = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        assert "server_name api.example.com" in prod_nginx
+        assert "ssl_certificate /etc/ssl/api/cert.pem" in prod_nginx
+        assert "https://app.example.com" in prod_nginx
+        assert "location /admin/" in prod_nginx
+        assert "allow 10.0.0.0/8;" in prod_nginx
+
+    def test_mixed_new_and_legacy_config(self, tmp_path):
+        """One fraise uses service: blocks, another uses flat fields."""
+        config = self._make_config(
+            tmp_path,
+            """
+fraises:
+  new_style:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/new
+        service:
+          user: new_user
+          workers: 4
+          memory_max: "8G"
+  legacy_style:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/legacy
+        worker_count: 2
+        memory_max: "4G"
+        exec_command: /usr/bin/custom-server
+scaffold:
+  output_dir: {output}
+  deploy_user: default_user
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        new_svc = (
+            tmp_path / "output" / "systemd" / "new_style_production.service"
+        ).read_text()
+        assert "User=new_user" in new_svc
+        assert "--workers 4" in new_svc
+        assert "MemoryMax=8G" in new_svc
+
+        legacy_svc = (
+            tmp_path / "output" / "systemd" / "legacy_style_production.service"
+        ).read_text()
+        assert "User=default_user" in legacy_svc
+        assert "MemoryMax=4G" in legacy_svc
+        assert "ExecStart=/usr/bin/custom-server" in legacy_svc
 
 
 class TestScaffoldCLI:

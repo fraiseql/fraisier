@@ -14,7 +14,12 @@ from urllib.parse import urlparse
 
 import jinja2
 
-from fraisier.config import FraisierConfig
+from fraisier.config import (
+    SECURITY_DIRECTIVE_MAP,
+    FraisierConfig,
+    NginxEnvConfig,
+    ServiceConfig,
+)
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -35,6 +40,16 @@ _CORE_TEMPLATES = [
 _PROVIDER_TEMPLATES = [
     "provider/deploy.yml.j2",
 ]
+
+
+def _format_security_value(value: str | bool) -> str:
+    """Format a security directive value for systemd.
+
+    Booleans become lowercase 'true'/'false', strings pass through.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _extract_port(health_check_url: str) -> int | None:
@@ -180,11 +195,14 @@ class ScaffoldRenderer:
                 if not dry_run:
                     self._render_systemd_service(fraise, env_name, svc_name)
 
-        # Nginx template
+        # Nginx: shared gateway.conf (always generated)
         nginx_out = "nginx/gateway.conf"
         rendered_files.append(nginx_out)
         if not dry_run:
             self._render_template("core/gateway.conf.j2", nginx_out)
+
+        # Nginx: per-environment configs (only when nginx: key is present)
+        rendered_files.extend(self._collect_per_env_nginx(dry_run))
 
         # Systemd timer and backup service templates
         for timer_tpl, timer_out in [
@@ -218,37 +236,109 @@ class ScaffoldRenderer:
     ) -> None:
         """Render a per-fraise systemd service unit."""
         env_config = fraise.get("environments", {}).get(env_name, {})
+        service = ServiceConfig.from_env_dict(env_config)
 
         # Extract port from health_check.url if available
         hc = env_config.get("health_check", {})
         hc_url = hc.get("url", "") if isinstance(hc, dict) else ""
-        port = _extract_port(hc_url) if hc_url else None
+        hc_port = _extract_port(hc_url) if hc_url else None
+
+        # Port resolution: service.port > health_check URL > 8000
+        port = service.port or hc_port or 8000
 
         # Resolve app_path: env_config > fallback /opt/<name>
         app_path = env_config.get("app_path", f"/opt/{fraise['name']}")
 
-        # Resolve exec_command: fraise-level > env-level > default uvicorn
-        exec_command = env_config.get("exec_command", fraise.get("exec_command"))
+        # Resolve exec_command: service.exec > fraise-level > None (template default)
+        exec_command = service.exec or fraise.get("exec_command")
+
+        # Resolve memory_max: service > scaffold default
+        memory_max = (
+            service.memory_max or self.config.scaffold.systemd.memory_max_default
+        )
+
+        # Build resolved security directives for template
+        security_directives = {
+            SECURITY_DIRECTIVE_MAP[k]: _format_security_value(v)
+            for k, v in service.resolved_security.items()
+            if k in SECURITY_DIRECTIVE_MAP
+        }
 
         ctx = {
             **self.context,
             "fraise": fraise,
             "env_name": env_name,
             "env_config": env_config,
-            "worker_count": env_config.get("worker_count", 1),
-            "memory_max": env_config.get(
-                "memory_max",
-                self.config.scaffold.systemd.memory_max_default,
-            ),
+            "service": service,
+            "worker_count": service.workers,
+            "memory_max": memory_max,
             "app_path": app_path,
-            "port": port or 8000,
+            "port": port,
             "exec_command": exec_command,
+            "security_directives": security_directives,
         }
         try:
             template = self.env.get_template("core/service.j2")
             content = template.render(**ctx)
         except jinja2.TemplateNotFound:
             content = f"# Placeholder: core/service.j2 for {fraise['name']}\n"
+
+        self._write_output(out_name, content)
+
+    def _collect_per_env_nginx(self, dry_run: bool) -> list[str]:
+        """Discover and render per-environment nginx configs.
+
+        Returns list of rendered file paths.
+        """
+        files: list[str] = []
+        for fraise in self.context["fraises"]:
+            name = fraise["name"]
+            for env_name, env_config in fraise.get("environments", {}).items():
+                if not isinstance(env_config, dict):
+                    continue
+                nginx_config = NginxEnvConfig.from_env_dict(env_config)
+                if nginx_config is None:
+                    continue
+                out_name = f"nginx/{name}_{env_name}.conf"
+                files.append(out_name)
+                if not dry_run:
+                    self._render_nginx_env(
+                        fraise, env_name, env_config, nginx_config, out_name
+                    )
+        return files
+
+    def _render_nginx_env(
+        self,
+        fraise: dict[str, Any],
+        env_name: str,
+        env_config: dict[str, Any],
+        nginx_config: NginxEnvConfig,
+        out_name: str,
+    ) -> None:
+        """Render a per-environment nginx config file."""
+        service = ServiceConfig.from_env_dict(env_config)
+
+        # Resolve port: service.port > health_check URL > 8000
+        hc = env_config.get("health_check", {})
+        hc_url = hc.get("url", "") if isinstance(hc, dict) else ""
+        hc_port = _extract_port(hc_url) if hc_url else None
+        port = service.port or hc_port or 8000
+
+        ctx = {
+            **self.context,
+            "fraise": fraise,
+            "env_name": env_name,
+            "nginx_config": nginx_config,
+            "port": port,
+        }
+        try:
+            template = self.env.get_template("core/gateway_env.conf.j2")
+            content = template.render(**ctx)
+        except jinja2.TemplateNotFound:
+            content = (
+                f"# Placeholder: core/gateway_env.conf.j2"
+                f" for {fraise['name']} ({env_name})\n"
+            )
 
         self._write_output(out_name, content)
 

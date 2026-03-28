@@ -7,8 +7,8 @@ After=postgresql.service
 
 [Service]
 Type=notify
-User={{ scaffold.deploy_user }}
-Group={{ scaffold.deploy_user }}
+User={{ service.user or scaffold.deploy_user }}
+Group={{ service.group or scaffold.deploy_user }}
 WorkingDirectory={{ app_path }}
 {% if exec_command %}
 ExecStart={{ exec_command }}
@@ -21,19 +21,29 @@ WatchdogSec=60
 
 # Resource limits
 MemoryMax={{ memory_max }}
+{% if service.memory_high %}
+MemoryHigh={{ service.memory_high }}
+{% endif %}
+{% if service.cpu_quota %}
+CPUQuota={{ service.cpu_quota }}
+{% endif %}
 CPUAccounting=true
 
+{% if service.environment_file %}
+# Environment file
+EnvironmentFile={{ service.environment_file }}
+{% endif %}
+{% if service.credentials %}
+# Credentials
+{% for name, path in service.credentials.items() %}
+LoadCredential={{ name }}:{{ path }}
+{% endfor %}
+{% endif %}
+
 # Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-SystemCallFilter=~@clock @debug @module @mount @obsolete @reboot @swap
+{% for directive, value in security_directives.items() %}
+{{ directive }}={{ value }}
+{% endfor %}
 
 # Writable paths
 ReadWritePaths={{ app_path }}
@@ -46,6 +56,9 @@ Environment=ENVIRONMENT={{ env_name }}
 {% if fraise.get('type') == 'api' %}
 Environment=WORKERS={{ worker_count }}
 {% endif %}
+{% for key, val in service.environment.items() %}
+Environment={{ key }}={{ val }}
+{% endfor %}
 
 [Install]
 WantedBy=multi-user.target
