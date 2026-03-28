@@ -158,6 +158,7 @@ class DatabaseDeploymentLock:
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(self._CREATE_TABLE)
             conn.commit()
         finally:
@@ -173,10 +174,19 @@ class DatabaseDeploymentLock:
         Returns True if the lock was acquired, False if already held
         by a non-stale holder.  Stale locks (older than TTL) are
         automatically reclaimed.
+
+        Uses BEGIN IMMEDIATE to take a write lock before the SELECT,
+        preventing TOCTOU races where two concurrent callers both see
+        no row and both try to INSERT.
         """
         now = time.time()
         conn = sqlite3.connect(self.db_path)
         try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            # BEGIN IMMEDIATE acquires a write lock upfront, serializing
+            # concurrent acquire() calls at the database level.
+            conn.execute("BEGIN IMMEDIATE")
+
             row = conn.execute(
                 "SELECT acquired_at FROM deployment_locks WHERE fraise = ?",
                 (fraise,),
@@ -184,6 +194,7 @@ class DatabaseDeploymentLock:
 
             if row is not None:
                 if now - row[0] < self.ttl:
+                    conn.rollback()
                     return False
                 # Stale — reclaim
                 logger.warning("Reclaiming stale lock for %s", fraise)
@@ -196,6 +207,10 @@ class DatabaseDeploymentLock:
             )
             conn.commit()
             return True
+        except sqlite3.IntegrityError:
+            # Another process won the race — this is the safety net.
+            conn.rollback()
+            return False
         finally:
             conn.close()
 

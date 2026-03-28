@@ -160,15 +160,27 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         )
 
     def _restore_previous_state(self) -> None:
-        """Restore git and service to previous state after a failure."""
+        """Restore database, git, and service to previous state after a failure.
+
+        Order matters: database first (to avoid running old code against new
+        schema), then git checkout, then service restart.
+        """
         if not self._previous_sha:
             return
         try:
+            if self._migrations_applied > 0 and self.database_config:
+                db_result = self._rollback_database(None, self._previous_sha)
+                if not db_result.success:
+                    logger.critical(
+                        "Database rollback failed during restore: %s",
+                        db_result.error_message,
+                    )
+                    return
             self._git_rollback(self._previous_sha)
             if self.systemd_service:
                 self._restart_service()
         except Exception as rollback_exc:
-            logger.critical("Git rollback after failure also failed: %s", rollback_exc)
+            logger.critical("Rollback after failure also failed: %s", rollback_exc)
 
     def _resolve_strategy(self) -> tuple[Any, Path, Path]:
         """Resolve database strategy, config path, and migrations dir from config."""

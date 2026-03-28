@@ -379,6 +379,89 @@ class TestMigrationFailureTriggersGitRollback:
         assert "Migration failed" in result.error_message
 
 
+class TestRestorePreviousStateRollsMigrationsBack:
+    """_restore_previous_state must roll back DB migrations when they were applied."""
+
+    def test_restore_rolls_back_migrations_when_applied(self, tmp_path):
+        """If migrations were applied, _restore_previous_state must call
+        _rollback_database before git rollback."""
+        deployer = _make_deployer(
+            tmp_path,
+            database={"strategy": "migrate", "confiture_config": "confiture.yaml"},
+        )
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 2
+
+        mock_strategy = MagicMock()
+        mock_strategy.rollback.return_value = StrategyResult(
+            success=True,
+            migrations_applied=2,
+        )
+
+        with (
+            patch("fraisier.strategies.get_strategy", return_value=mock_strategy),
+            patch.object(deployer, "_git_rollback") as mock_git_rollback,
+            patch.object(deployer, "_restart_service"),
+        ):
+            deployer._restore_previous_state()
+
+        mock_strategy.rollback.assert_called_once()
+        mock_git_rollback.assert_called_once_with("prev123")
+
+    def test_restore_skips_db_rollback_when_no_migrations(self, tmp_path):
+        """If no migrations were applied, skip database rollback."""
+        deployer = _make_deployer(tmp_path)
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 0
+
+        with (
+            patch.object(deployer, "_git_rollback") as mock_git_rollback,
+            patch.object(deployer, "_restart_service"),
+        ):
+            deployer._restore_previous_state()
+
+        mock_git_rollback.assert_called_once_with("prev123")
+
+    def test_restore_order_db_before_git(self, tmp_path):
+        """Database rollback must happen before git rollback."""
+        deployer = _make_deployer(
+            tmp_path,
+            database={"strategy": "migrate", "confiture_config": "confiture.yaml"},
+        )
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 1
+
+        call_order = []
+
+        def fake_db_rollback(current_version, target):
+            call_order.append("db_rollback")
+            return DeploymentResult(
+                success=True,
+                status=DeploymentStatus.ROLLED_BACK,
+                duration_seconds=0,
+                details={"migrations_rolled_back": 1},
+            )
+
+        with (
+            patch.object(
+                deployer, "_rollback_database", side_effect=fake_db_rollback
+            ),
+            patch.object(
+                deployer,
+                "_git_rollback",
+                side_effect=lambda _sha: call_order.append("git_rollback"),
+            ),
+            patch.object(
+                deployer,
+                "_restart_service",
+                side_effect=lambda: call_order.append("restart"),
+            ),
+        ):
+            deployer._restore_previous_state()
+
+        assert call_order == ["db_rollback", "git_rollback", "restart"]
+
+
 class TestDoubleFailureSendsCriticalNotification:
     """If rollback itself fails, notification must reach the operator."""
 

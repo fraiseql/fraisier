@@ -110,6 +110,56 @@ class TestDatabaseDeploymentLockTTL:
         assert lock.acquire("myfraise") is False
 
 
+class TestDatabaseDeploymentLockConcurrency:
+    """Concurrent acquire must not crash — one wins, other returns False."""
+
+    def test_concurrent_acquire_one_wins_other_loses(self, tmp_path):
+        """Two threads racing acquire(): exactly one True, one False, no crash."""
+        import threading
+
+        db_path = tmp_path / "locks.db"
+        lock = DatabaseDeploymentLock(db_path=db_path)
+
+        results: list[bool] = []
+        errors: list[Exception] = []
+        barrier = threading.Barrier(2)
+
+        def try_acquire():
+            try:
+                barrier.wait(timeout=5)
+                results.append(lock.acquire("myfraise"))
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=try_acquire)
+        t2 = threading.Thread(target=try_acquire)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors, f"Concurrent acquire crashed: {errors}"
+        assert sorted(results) == [False, True]
+
+    def test_integrity_error_returns_false_not_crash(self, tmp_path):
+        """If INSERT hits IntegrityError (race safety net), return False."""
+        db_path = tmp_path / "locks.db"
+        lock = DatabaseDeploymentLock(db_path=db_path)
+
+        # Pre-insert a row to force IntegrityError on next acquire
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO deployment_locks (fraise, holder, acquired_at) "
+            "VALUES (?, ?, ?)",
+            ("myfraise", "other:999", time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+        # acquire should return False (not crash with IntegrityError)
+        assert lock.acquire("myfraise") is False
+
+
 class TestDatabaseDeploymentLockContextManager:
     """Test context manager interface."""
 

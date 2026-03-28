@@ -52,6 +52,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
         self.pool_min_size = pool_min_size
         self.pool_max_size = pool_max_size
         self._pool: AsyncConnectionPool | None = None
+        self._tx_conn: psycopg.AsyncConnection | None = None
         self._last_insert_id: str | int | None = None
 
     async def connect(self) -> None:
@@ -65,7 +66,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                 self.connection_string,
                 min_size=self.pool_min_size,
                 max_size=self.pool_max_size,
-                rows_factory=dict_row,
+                kwargs={"row_factory": dict_row},
             )
             await self._pool.open()
         except Exception as e:
@@ -317,22 +318,32 @@ class PostgresAdapter(FraiserDatabaseAdapter):
             )
 
     async def begin_transaction(self) -> None:
-        """Begin a transaction."""
+        """Begin a transaction by acquiring a dedicated connection."""
         if self._pool is None:
             raise RuntimeError("Not connected to database")
-        # Connection-specific, handled via cursor in transaction context
+        self._tx_conn = await self._pool.getconn()
 
     async def commit_transaction(self) -> None:
-        """Commit current transaction."""
+        """Commit current transaction and return connection to pool."""
         if self._pool is None:
             raise RuntimeError("Not connected to database")
-        # Connection-specific, handled via cursor in transaction context
+        if self._tx_conn is None:
+            raise RuntimeError("No active transaction")
+        conn = self._tx_conn
+        self._tx_conn = None
+        await conn.commit()
+        await self._pool.putconn(conn)
 
     async def rollback_transaction(self) -> None:
-        """Rollback current transaction."""
+        """Rollback current transaction and return connection to pool."""
         if self._pool is None:
             raise RuntimeError("Not connected to database")
-        # Connection-specific, handled via cursor in transaction context
+        if self._tx_conn is None:
+            raise RuntimeError("No active transaction")
+        conn = self._tx_conn
+        self._tx_conn = None
+        await conn.rollback()
+        await self._pool.putconn(conn)
 
     @property
     def last_insert_id(self) -> str | int | None:

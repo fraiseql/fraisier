@@ -177,8 +177,6 @@ async def _run_deployment(
     db: Any,
 ) -> None:
     """Run the actual deployment within a lock."""
-    deployment_id = None
-
     try:
         fraise_type = fraise_config.get("type")
 
@@ -253,12 +251,6 @@ async def _run_deployment(
             type(e).__name__,
             e,
         )
-        if deployment_id:
-            db.complete_deployment(
-                deployment_id=deployment_id,
-                success=False,
-                error_message=f"{type(e).__name__}: {e}",
-            )
     except Exception as e:
         logger.exception(
             "Unexpected deployment error for %s/%s [%s]: %s",
@@ -267,12 +259,6 @@ async def _run_deployment(
             type(e).__name__,
             e,
         )
-        if deployment_id:
-            db.complete_deployment(
-                deployment_id=deployment_id,
-                success=False,
-                error_message=f"{type(e).__name__}: {e}",
-            )
 
 
 def _get_lock_dir(config: Any) -> Path | None:

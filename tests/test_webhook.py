@@ -371,6 +371,90 @@ class TestExecuteDeployment:
         assert len(deployments) == 0
 
 
+class TestRunDeploymentErrorRecording:
+    """Exception handlers in _run_deployment log errors properly."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_lock(self, tmp_path):
+        @contextmanager
+        def tmp_lock(fraise_name):
+            from fraisier.locking import file_deployment_lock as real_lock
+
+            with real_lock(fraise_name, lock_dir=tmp_path) as path:
+                yield path
+
+        with patch("fraisier.webhook.deployment_lock", side_effect=tmp_lock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_deployment_error_is_logged(self, test_db, caplog):
+        """DeploymentError during _run_deployment is logged with context."""
+        from fraisier.errors import DeploymentError
+
+        caplog.set_level("ERROR")
+        fraise_config = {
+            "type": "api",
+            "app_path": "/tmp/test-api",
+            "systemd_service": "test-api.service",
+        }
+
+        mock_deployer = MagicMock()
+        mock_deployer.execute.side_effect = DeploymentError("migration failed")
+
+        with (
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch("fraisier.runners.runner_from_config"),
+            patch(
+                "fraisier.deployers.api.APIDeployer",
+                return_value=mock_deployer,
+            ),
+        ):
+            mock_config.return_value._config = {"git": {}}
+
+            await execute_deployment(
+                fraise_name="my_api",
+                environment="production",
+                fraise_config=fraise_config,
+                git_branch="main",
+            )
+
+        assert "migration failed" in caplog.text
+        assert "my_api" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_is_logged(self, test_db, caplog):
+        """Unexpected exceptions during _run_deployment are logged."""
+        caplog.set_level("ERROR")
+        fraise_config = {
+            "type": "api",
+            "app_path": "/tmp/test-api",
+            "systemd_service": "test-api.service",
+        }
+
+        mock_deployer = MagicMock()
+        mock_deployer.execute.side_effect = RuntimeError("segfault")
+
+        with (
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch("fraisier.runners.runner_from_config"),
+            patch(
+                "fraisier.deployers.api.APIDeployer",
+                return_value=mock_deployer,
+            ),
+        ):
+            mock_config.return_value._config = {"git": {}}
+
+            await execute_deployment(
+                fraise_name="my_api",
+                environment="production",
+                fraise_config=fraise_config,
+                git_branch="main",
+            )
+
+        assert "segfault" in caplog.text
+        assert "Unexpected" in caplog.text
+
+
 class TestProcessWebhookEvent:
     """Tests for process_webhook_event function."""
 
