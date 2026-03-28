@@ -4,6 +4,7 @@ Loads fraise definitions from fraises.yaml.
 Supports hierarchical fraise -> environment structure.
 """
 
+import os
 import re
 import threading
 import warnings
@@ -396,6 +397,11 @@ class FraisierConfig:
         """Resolve configuration file path."""
         if config_path:
             return Path(config_path)
+
+        # Check FRAISIER_CONFIG environment variable
+        env_path = os.environ.get("FRAISIER_CONFIG")
+        if env_path:
+            return Path(env_path)
 
         # Check standard locations
         locations = [

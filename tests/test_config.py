@@ -363,6 +363,31 @@ branch_mapping:
         assert result["fraise_name"] == "api_a"
 
 
+class TestFraisierConfigEnvVar:
+    """FRAISIER_CONFIG environment variable support."""
+
+    def test_resolves_from_env_var(self, tmp_path, monkeypatch):
+        """FRAISIER_CONFIG env var is used when no explicit path given."""
+        cfg = tmp_path / "custom.yaml"
+        cfg.write_text("fraises:\n  env_api:\n    type: api\n")
+        monkeypatch.setenv("FRAISIER_CONFIG", str(cfg))
+
+        config = FraisierConfig()
+        assert config.get_fraise("env_api") is not None
+
+    def test_explicit_path_takes_precedence_over_env(self, tmp_path, monkeypatch):
+        """Explicit config_path takes precedence over FRAISIER_CONFIG."""
+        env_cfg = tmp_path / "env.yaml"
+        env_cfg.write_text("fraises:\n  env_svc:\n    type: api\n")
+        explicit_cfg = tmp_path / "explicit.yaml"
+        explicit_cfg.write_text("fraises:\n  explicit_svc:\n    type: api\n")
+
+        monkeypatch.setenv("FRAISIER_CONFIG", str(env_cfg))
+        config = FraisierConfig(str(explicit_cfg))
+        assert config.get_fraise("explicit_svc") is not None
+        assert config.get_fraise("env_svc") is None
+
+
 class TestConfigSingleton:
     """Tests for config singleton lifecycle."""
 
