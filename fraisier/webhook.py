@@ -422,7 +422,7 @@ def _verify_signature(
     except ValueError as e:
         raise _structured_error(400, "validation_error", str(e)) from e
 
-    normalized_headers = {k.title(): v for k, v in headers.items()}
+    normalized_headers = {k.lower(): v for k, v in headers.items()}
 
     if not provider.verify_webhook_signature(body, normalized_headers):
         logger.warning(f"Invalid webhook signature from {provider_name}")

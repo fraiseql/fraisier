@@ -1283,6 +1283,58 @@ class TestWebhookIntegration:
             assert webhooks[0]["processed"] == 0  # Not linked (no deployment)
 
 
+class TestHeaderNormalization:
+    """Headers must be case-insensitive — .title() breaks X-GitHub-Event (#7)."""
+
+    def test_github_event_detected_from_lowercase_headers(self, test_db):
+        """FastAPI lowercases headers; GitHub event must still be detected."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+        )
+
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                }
+            ]
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            background_tasks = MagicMock(spec=BackgroundTasks)
+
+            result = process_webhook_event(event, background_tasks, webhook_id=1)
+
+        # Must NOT be "ignored" with event="unknown"
+        assert result["status"] == "deployment_triggered"
+
+    def test_github_signature_verified_with_lowercase_headers(self):
+        """Signature verification works with lowercase header keys."""
+        import hashlib
+        import hmac as hmac_mod
+
+        from fraisier.git.github import GitHub
+
+        secret = b"test-secret"
+        payload = b'{"test": "data"}'
+        sig = "sha256=" + hmac_mod.new(secret, payload, hashlib.sha256).hexdigest()
+
+        provider = GitHub({"webhook_secret": "test-secret"})
+
+        # Simulate FastAPI lowercase headers
+        headers = {"x-hub-signature-256": sig}
+        assert provider.verify_webhook_signature(payload, headers) is True
+
+
 class TestStructuredErrorResponses:
     """Tests for structured JSON error responses."""
 

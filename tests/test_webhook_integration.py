@@ -45,7 +45,7 @@ def _mock_github_provider(*, verify: bool = True):
         branch = (
             ref.removeprefix("refs/heads/") if ref.startswith("refs/heads/") else None
         )
-        event_type = headers.get("X-Github-Event", "unknown")
+        event_type = headers.get("x-github-event", "unknown")
         commits = payload.get("commits", [])
         commit_sha = commits[0].get("id") if commits else None
         return WebhookEvent(

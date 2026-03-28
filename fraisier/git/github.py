@@ -16,8 +16,8 @@ class GitHubProvider(GitProvider):
     """
 
     name = "github"
-    signature_header = "X-Hub-Signature-256"
-    event_header = "X-GitHub-Event"
+    signature_header = "x-hub-signature-256"
+    event_header = "x-github-event"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)

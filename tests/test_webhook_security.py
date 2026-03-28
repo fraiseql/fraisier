@@ -57,7 +57,7 @@ class TestProviderAcceptsValidSignature:
         sig = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
         provider = GitHubProvider({"webhook_secret": secret})
         assert (
-            provider.verify_webhook_signature(payload, {"X-Hub-Signature-256": sig})
+            provider.verify_webhook_signature(payload, {"x-hub-signature-256": sig})
             is True
         )
 
@@ -65,7 +65,7 @@ class TestProviderAcceptsValidSignature:
         secret = "test-secret"
         provider = GitLabProvider({"webhook_secret": secret})
         assert (
-            provider.verify_webhook_signature(b"payload", {"X-Gitlab-Token": secret})
+            provider.verify_webhook_signature(b"payload", {"x-gitlab-token": secret})
             is True
         )
 
@@ -78,7 +78,7 @@ class TestProviderAcceptsValidSignature:
         sig = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
         provider = GiteaProvider({"webhook_secret": secret})
         assert (
-            provider.verify_webhook_signature(payload, {"X-Gitea-Signature": sig})
+            provider.verify_webhook_signature(payload, {"x-gitea-signature": sig})
             is True
         )
 
@@ -91,5 +91,5 @@ class TestProviderAcceptsValidSignature:
         sig = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
         provider = BitbucketProvider({"webhook_secret": secret, "server": True})
         assert (
-            provider.verify_webhook_signature(payload, {"X-Hub-Signature": sig}) is True
+            provider.verify_webhook_signature(payload, {"x-hub-signature": sig}) is True
         )

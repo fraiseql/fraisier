@@ -32,7 +32,7 @@ class TestGitHubProvider:
 
         # Verify signature
         result = provider.verify_webhook_signature(
-            payload, {"X-Hub-Signature-256": signature}
+            payload, {"x-hub-signature-256": signature}
         )
 
         assert result is True
@@ -42,7 +42,7 @@ class TestGitHubProvider:
         provider = GitHub({"webhook_secret": "correct-secret"})
 
         result = provider.verify_webhook_signature(
-            b'{"test": "data"}', {"X-Hub-Signature-256": "sha256=invalidsignature"}
+            b'{"test": "data"}', {"x-hub-signature-256": "sha256=invalidsignature"}
         )
 
         assert result is False
@@ -65,7 +65,7 @@ class TestGitHubProvider:
             "pusher": {"name": "user"},
             "head_commit": {"id": "abc123def456"},
         }
-        headers = {"X-GitHub-Event": "push"}
+        headers = {"x-github-event": "push"}
 
         event = provider.parse_webhook_event(headers, payload)
 
@@ -79,7 +79,7 @@ class TestGitHubProvider:
         provider = GitHub({"webhook_secret": "secret"})
 
         payload = {"zen": "Design for failure"}
-        headers = {"X-GitHub-Event": "ping"}
+        headers = {"x-github-event": "ping"}
 
         event = provider.parse_webhook_event(headers, payload)
 
@@ -99,7 +99,7 @@ class TestGitHubProvider:
                 "user": {"login": "developer"},
             },
         }
-        headers = {"X-GitHub-Event": "pull_request"}
+        headers = {"x-github-event": "pull_request"}
 
         event = provider.parse_webhook_event(headers, payload)
 
@@ -125,7 +125,7 @@ class TestGitLabProvider:
         # GitLab uses X-Gitlab-Token header
         provider = GitLab({"webhook_secret": secret})
 
-        result = provider.verify_webhook_signature(payload, {"X-Gitlab-Token": secret})
+        result = provider.verify_webhook_signature(payload, {"x-gitlab-token": secret})
 
         assert result is True
 
@@ -134,7 +134,7 @@ class TestGitLabProvider:
         provider = GitLab({"webhook_secret": "correct-secret"})
 
         result = provider.verify_webhook_signature(
-            b'{"test": "data"}', {"X-Gitlab-Token": "wrong-token"}
+            b'{"test": "data"}', {"x-gitlab-token": "wrong-token"}
         )
 
         assert result is False
@@ -149,7 +149,7 @@ class TestGitLabProvider:
             "checkout_sha": "abc123",
             "project": {"name": "my-project"},
         }
-        headers = {"X-Gitlab-Event": "Push Hook"}
+        headers = {"x-gitlab-event": "Push Hook"}
 
         event = provider.parse_webhook_event(headers, payload)
 
@@ -179,7 +179,7 @@ class TestGiteaProvider:
         provider = Gitea({"webhook_secret": secret.decode()})
 
         result = provider.verify_webhook_signature(
-            payload, {"X-Gitea-Signature": signature}
+            payload, {"x-gitea-signature": signature}
         )
 
         assert result is True
@@ -193,7 +193,7 @@ class TestGiteaProvider:
             "pusher": {"username": "developer"},
             "after": "abc123def456",
         }
-        headers = {"X-Gitea-Event": "push"}
+        headers = {"x-gitea-event": "push"}
 
         event = provider.parse_webhook_event(headers, payload)
 
@@ -223,7 +223,7 @@ class TestBitbucketProvider:
         provider = Bitbucket({"webhook_secret": secret.decode()})
 
         result = provider.verify_webhook_signature(
-            payload, {"X-Hub-Signature": signature}
+            payload, {"x-hub-signature": signature}
         )
 
         assert result is True
@@ -263,7 +263,7 @@ class TestCommitShaNormalization:
     def test_github_returns_full_sha(self):
         provider = GitHub({"webhook_secret": "s"})
         event = provider.parse_webhook_event(
-            {"X-GitHub-Event": "push"},
+            {"x-github-event": "push"},
             {"ref": "refs/heads/main", "head_commit": {"id": FULL_SHA}},
         )
         assert event.commit_sha == FULL_SHA
@@ -271,7 +271,7 @@ class TestCommitShaNormalization:
     def test_gitlab_returns_full_sha(self):
         provider = GitLab({"webhook_secret": "s"})
         event = provider.parse_webhook_event(
-            {"X-Gitlab-Event": "Push Hook"},
+            {"x-gitlab-event": "Push Hook"},
             {"ref": "refs/heads/main", "checkout_sha": FULL_SHA},
         )
         assert event.commit_sha == FULL_SHA
@@ -279,7 +279,7 @@ class TestCommitShaNormalization:
     def test_gitea_returns_full_sha(self):
         provider = Gitea({"webhook_secret": "s"})
         event = provider.parse_webhook_event(
-            {"X-Gitea-Event": "push"},
+            {"x-gitea-event": "push"},
             {"ref": "refs/heads/main", "after": FULL_SHA},
         )
         assert event.commit_sha == FULL_SHA

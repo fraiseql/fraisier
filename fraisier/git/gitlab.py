@@ -15,8 +15,8 @@ class GitLabProvider(GitProvider):
     """
 
     name = "gitlab"
-    signature_header = "X-Gitlab-Token"
-    event_header = "X-Gitlab-Event"
+    signature_header = "x-gitlab-token"
+    event_header = "x-gitlab-event"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)

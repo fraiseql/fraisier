@@ -562,7 +562,7 @@ class TestWebhookToDeployIntegration:
         providers_configs = {
             "github": {
                 "webhook_secret": "test",
-                "headers": {"X-GitHub-Event": "push"},
+                "headers": {"x-github-event": "push"},
                 "payload": {
                     "ref": "refs/heads/main",
                     "after": "abc123",
@@ -572,7 +572,7 @@ class TestWebhookToDeployIntegration:
             },
             "gitlab": {
                 "webhook_secret": "test",
-                "headers": {"X-Gitlab-Event": "Push Hook"},
+                "headers": {"x-gitlab-event": "Push Hook"},
                 "payload": {
                     "ref": "refs/heads/main",
                     "after": "abc123",
@@ -582,7 +582,7 @@ class TestWebhookToDeployIntegration:
             },
             "gitea": {
                 "webhook_secret": "test",
-                "headers": {"X-Gitea-Event": "push"},
+                "headers": {"x-gitea-event": "push"},
                 "payload": {
                     "ref": "refs/heads/main",
                     "after": "abc123",
@@ -592,7 +592,7 @@ class TestWebhookToDeployIntegration:
             },
             "bitbucket": {
                 "webhook_secret": "test",
-                "headers": {"X-Event-Key": "repo:push"},
+                "headers": {"x-event-key": "repo:push"},
                 "payload": {
                     "push": {
                         "changes": [

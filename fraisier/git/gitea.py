@@ -15,8 +15,8 @@ class GiteaProvider(GitProvider):
     """
 
     name = "gitea"
-    signature_header = "X-Gitea-Signature"
-    event_header = "X-Gitea-Event"
+    signature_header = "x-gitea-signature"
+    event_header = "x-gitea-event"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
@@ -30,9 +30,9 @@ class GiteaProvider(GitProvider):
         """Verify Gitea webhook signature using HMAC-SHA256."""
         # Gitea supports multiple signature headers
         signature = (
-            headers.get("X-Gitea-Signature")
-            or headers.get("X-Gogs-Signature")
-            or headers.get("X-Hub-Signature-256")  # GitHub-compatible mode
+            headers.get("x-gitea-signature")
+            or headers.get("x-gogs-signature")
+            or headers.get("x-hub-signature-256")  # GitHub-compatible mode
         )
 
         if not signature:
@@ -57,8 +57,8 @@ class GiteaProvider(GitProvider):
         Gitea webhooks are similar to GitHub's format.
         """
         event_type = (
-            headers.get("X-Gitea-Event")
-            or headers.get("X-Gogs-Event")
+            headers.get("x-gitea-event")
+            or headers.get("x-gogs-event")
             or headers.get("X-GitHub-Event")
             or "unknown"
         )

@@ -16,8 +16,8 @@ class BitbucketProvider(GitProvider):
     """
 
     name = "bitbucket"
-    signature_header = "X-Hub-Signature"
-    event_header = "X-Event-Key"
+    signature_header = "x-hub-signature"
+    event_header = "x-event-key"
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
