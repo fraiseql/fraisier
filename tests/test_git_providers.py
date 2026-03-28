@@ -198,7 +198,7 @@ class TestGiteaProvider:
         event = provider.parse_webhook_event(headers, payload)
 
         assert event.branch == "main"
-        assert event.commit_sha == "abc123de"
+        assert event.commit_sha == "abc123def456"
         assert event.sender == "developer"
 
 
@@ -250,8 +250,53 @@ class TestBitbucketProvider:
         event = provider.parse_webhook_event(headers, payload)
 
         assert event.branch == "main"
-        assert event.commit_sha == "abc123de"
+        assert event.commit_sha == "abc123def456"
         assert event.sender == "developer"
+
+
+FULL_SHA = "abc123def456789012345678901234567890abcd"
+
+
+class TestCommitShaNormalization:
+    """All providers must return full-length commit SHA (not truncated)."""
+
+    def test_github_returns_full_sha(self):
+        provider = GitHub({"webhook_secret": "s"})
+        event = provider.parse_webhook_event(
+            {"X-GitHub-Event": "push"},
+            {"ref": "refs/heads/main", "head_commit": {"id": FULL_SHA}},
+        )
+        assert event.commit_sha == FULL_SHA
+
+    def test_gitlab_returns_full_sha(self):
+        provider = GitLab({"webhook_secret": "s"})
+        event = provider.parse_webhook_event(
+            {"X-Gitlab-Event": "Push Hook"},
+            {"ref": "refs/heads/main", "checkout_sha": FULL_SHA},
+        )
+        assert event.commit_sha == FULL_SHA
+
+    def test_gitea_returns_full_sha(self):
+        provider = Gitea({"webhook_secret": "s"})
+        event = provider.parse_webhook_event(
+            {"X-Gitea-Event": "push"},
+            {"ref": "refs/heads/main", "after": FULL_SHA},
+        )
+        assert event.commit_sha == FULL_SHA
+
+    def test_bitbucket_returns_full_sha(self):
+        provider = Bitbucket({"webhook_secret": "s"})
+        event = provider.parse_webhook_event(
+            {},
+            {
+                "push": {
+                    "changes": [
+                        {"new": {"name": "main", "target": {"hash": FULL_SHA}}}
+                    ]
+                },
+            },
+        )
+        assert event.commit_sha == FULL_SHA
 
 
 class TestWebhookEventParsing:

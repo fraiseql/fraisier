@@ -147,7 +147,7 @@ class BareMetalProvider(DeploymentProvider):
 
         except ImportError as e:
             raise ConnectionError(
-                "asyncssh not installed. Install with: pip install asyncssh"
+                "asyncssh not installed. Install with: uv add asyncssh"
             ) from e
         except Exception as e:
             raise ConnectionError(

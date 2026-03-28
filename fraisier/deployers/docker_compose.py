@@ -1,12 +1,17 @@
 """Docker Compose deployer — pull, up, health check."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import shlex
 import subprocess
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fraisier.runners import CommandRunner
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
 
@@ -24,7 +29,7 @@ class DockerComposeDeployer(BaseDeployer):
         image_tag: Tag to deploy (optional, uses IMAGE_TAG env var)
     """
 
-    def __init__(self, config: dict[str, Any], runner: Any = None):
+    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
         super().__init__(config, runner=runner)
         self.compose_file = config.get("compose_file", "docker-compose.yml")
         self.project_name = config.get("project_name", "fraisier")

@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 from rich.table import Table
 
-from ._helpers import console
+from ._helpers import console, require_config
 from .main import main
 
 
@@ -22,7 +22,7 @@ def status_all(
     """Check status of all fraises."""
     from fraisier.database import get_db
 
-    config = ctx.obj["config"]
+    config = require_config(ctx)
     db = get_db()
 
     # Get fraise states from database
@@ -31,14 +31,12 @@ def status_all(
     if environment:
         all_states = [s for s in all_states if s["environment_name"] == environment]
     if fraise_type:
-        first_state = all_states[0] if all_states else None
-        fraise_config = (
-            config.get_fraise(first_state["fraise_name"]) if first_state else None
-        )
-        if fraise_config:
-            all_states = [
-                s for s in all_states if fraise_config.get("type") == fraise_type
-            ]
+        all_states = [
+            s
+            for s in all_states
+            if (cfg := config.get_fraise(s["fraise_name"]))
+            and cfg.get("type") == fraise_type
+        ]
 
     if not all_states:
         console.print("[yellow]No fraises found matching filters[/yellow]")
@@ -310,7 +308,7 @@ def metrics_endpoint(port: int, address: str) -> None:
     except ImportError as e:
         console.print(
             "[red]Error:[/red] prometheus_client not installed\n"
-            "[yellow]Install with:[/yellow] pip install prometheus-client"
+            "[yellow]Install with:[/yellow] uv add prometheus-client"
         )
         raise SystemExit(1) from e
 

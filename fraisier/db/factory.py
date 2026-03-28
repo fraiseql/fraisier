@@ -129,8 +129,8 @@ async def create_adapter_from_url(
         except ImportError as e:
             raise ImportError(
                 "PostgreSQL support requires 'psycopg[binary]>=3.1.0'. "
-                "Install with: pip install 'psycopg[binary]' "
-                "or pip install fraisier[postgres]"
+                "Install with: uv add 'psycopg[binary]' "
+                "or uv add fraisier[postgres]"
             ) from e
 
         adapter = PostgresAdapter(

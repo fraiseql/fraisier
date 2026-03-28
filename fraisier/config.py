@@ -815,3 +815,13 @@ def get_config(config_path: Path | str | None = None) -> FraisierConfig:
             if _config is None or config_path:
                 _config = FraisierConfig(config_path)
     return _config
+
+
+def reset_config() -> None:
+    """Reset the global configuration singleton.
+
+    Next call to ``get_config()`` will re-read from disk.
+    """
+    global _config
+    with _config_lock:
+        _config = None

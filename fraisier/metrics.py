@@ -460,7 +460,7 @@ class MetricsRecorder:
                 "Metrics are being recorded. Export with Prometheus exporter endpoint."
                 if PROMETHEUS_AVAILABLE
                 else "Prometheus not installed. "
-                "Install with: pip install prometheus-client"
+                "Install with: uv add prometheus-client"
             ),
         }
 

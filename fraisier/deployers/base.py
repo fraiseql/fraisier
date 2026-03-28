@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from fraisier.errors import FraisierError
+    from fraisier.runners import CommandRunner
 
 
 class DeploymentStatus(Enum):
@@ -43,7 +44,11 @@ class BaseDeployer(ABC):
     that implements this interface.
     """
 
-    def __init__(self, config: dict[str, Any], runner: Any = None):
+    def __init__(
+        self,
+        config: dict[str, Any],
+        runner: CommandRunner | None = None,
+    ):
         """Initialize deployer with fraise configuration.
 
         Args:

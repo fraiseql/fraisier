@@ -94,7 +94,7 @@ class BitbucketProvider(GitProvider):
                 branch = new.get("name")
 
                 target = new.get("target", {})
-                commit_sha = target.get("hash", "")[:8]
+                commit_sha = target.get("hash") or None
 
         elif event_key.startswith("pullrequest:"):
             is_merge_request = True
@@ -104,7 +104,7 @@ class BitbucketProvider(GitProvider):
             branch = branch_data.get("name")
 
             commit = source.get("commit", {})
-            commit_sha = commit.get("hash", "")[:8]
+            commit_sha = commit.get("hash") or None
 
         return WebhookEvent(
             provider=self.name,

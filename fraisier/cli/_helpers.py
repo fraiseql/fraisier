@@ -4,12 +4,24 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import click
 from rich.console import Console
 
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
 
 console = Console()
+
+
+def require_config(ctx: click.Context) -> FraisierConfig:
+    """Get config from context, aborting with a clear error if missing."""
+    config = ctx.obj.get("config")
+    if config is None:
+        raise click.UsageError(
+            "No fraises.yaml config found. "
+            "Run 'fraisier init' to create one or use --config to specify a path."
+        )
+    return config
 
 
 def _print_dry_run(

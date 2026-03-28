@@ -95,8 +95,7 @@ class GiteaProvider(GitProvider):
                 is_tag = True
                 branch = ref.replace("refs/tags/", "")
 
-            after = payload.get("after")
-            commit_sha = after[:8] if after else None
+            commit_sha = payload.get("after")
 
         elif event_type == "create":
             ref_type = payload.get("ref_type")

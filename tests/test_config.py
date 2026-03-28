@@ -3,7 +3,7 @@
 import pytest
 import yaml
 
-from fraisier.config import FraisierConfig
+from fraisier.config import FraisierConfig, get_config, reset_config
 
 
 class TestFraisierConfig:
@@ -98,3 +98,36 @@ fraises:
         """Test that missing config file raises error."""
         with pytest.raises(FileNotFoundError):
             FraisierConfig("/nonexistent/fraises.yaml")
+
+
+class TestConfigSingleton:
+    """Tests for config singleton lifecycle."""
+
+    def test_reset_config_clears_singleton(self, tmp_path):
+        """reset_config() clears singleton so next get_config() re-reads."""
+        cfg1 = tmp_path / "a.yaml"
+        cfg1.write_text("fraises:\n  api_a:\n    type: api\n")
+        cfg2 = tmp_path / "b.yaml"
+        cfg2.write_text("fraises:\n  api_b:\n    type: api\n")
+
+        c1 = get_config(str(cfg1))
+        assert c1.get_fraise("api_a") is not None
+
+        reset_config()
+
+        c2 = get_config(str(cfg2))
+        assert c2.get_fraise("api_b") is not None
+        assert c2.get_fraise("api_a") is None
+
+    def test_get_config_with_new_path_replaces_singleton(self, tmp_path):
+        """Calling get_config(path) with a new path replaces the singleton."""
+        cfg1 = tmp_path / "a.yaml"
+        cfg1.write_text("fraises:\n  svc1:\n    type: api\n")
+        cfg2 = tmp_path / "b.yaml"
+        cfg2.write_text("fraises:\n  svc2:\n    type: api\n")
+
+        c1 = get_config(str(cfg1))
+        assert c1.get_fraise("svc1") is not None
+
+        c2 = get_config(str(cfg2))
+        assert c2.get_fraise("svc2") is not None

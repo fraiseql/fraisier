@@ -293,24 +293,17 @@ class PostgresAdapter(FraiserDatabaseAdapter):
             return PoolMetrics()
 
         try:
-            # Get pool statistics
-            num_connections = (
-                len(self._pool._holders) if hasattr(self._pool, "_holders") else 0
-            )
-            num_available = (
-                self._pool.get_size() if hasattr(self._pool, "get_size") else 0
-            )
+            stats = self._pool.get_stats()
+            pool_size = stats.get("pool_size", 0)
+            pool_available = stats.get("pool_available", 0)
 
             return PoolMetrics(
-                total_connections=num_connections,
-                active_connections=max(0, num_connections - num_available),
-                idle_connections=num_available,
-                waiting_requests=self._pool._waiting_queue.qsize()
-                if hasattr(self._pool, "_waiting_queue")
-                else 0,
+                total_connections=pool_size,
+                active_connections=max(0, pool_size - pool_available),
+                idle_connections=pool_available,
+                waiting_requests=stats.get("requests_waiting", 0),
             )
         except (psycopg.Error, AttributeError):
-            # Fallback if metrics can't be retrieved
             return PoolMetrics(
                 total_connections=self.pool_max_size,
                 active_connections=0,

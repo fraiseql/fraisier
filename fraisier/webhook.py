@@ -100,7 +100,7 @@ def _structured_error(
 def get_git_provider() -> GitProvider:
     """Get configured Git provider from environment or config."""
     config = get_config()
-    git_config = config._config.get("git", {})
+    git_config = config.get_git_provider_config()
 
     provider_name = os.getenv("FRAISIER_GIT_PROVIDER") or git_config.get(
         "provider", "github"
@@ -263,10 +263,10 @@ async def _run_deployment(
 
 def _get_lock_dir(config: Any) -> Path | None:
     """Extract lock directory from config."""
-    deployment_raw = config._config.get("deployment", {}) or {}
-    if deployment_raw.get("lock_dir"):
-        return Path(deployment_raw["lock_dir"])
-    return None
+    try:
+        return Path(config.deployment.lock_dir)
+    except (AttributeError, FileNotFoundError):
+        return None
 
 
 def _dispatch_deployment(
@@ -378,7 +378,7 @@ def _detect_git_provider(headers: dict[str, str], query_provider: str | None) ->
 
     try:
         config = get_config()
-        return config._config.get("git", {}).get("provider", "github")
+        return config.get_git_provider_config().get("provider", "github")
     except FileNotFoundError:
         return "github"
 
@@ -389,7 +389,7 @@ def _verify_signature(
     """Build provider, verify signature, return provider + headers."""
     try:
         try:
-            git_config = get_config()._config.get("git", {})
+            git_config = get_config().get_git_provider_config()
         except FileNotFoundError:
             git_config = {}
         provider_config = {
@@ -591,7 +591,7 @@ async def list_providers() -> dict[str, Any]:
     from .git import list_providers
 
     try:
-        configured = get_config()._config.get("git", {}).get("provider", "github")
+        configured = get_config().get_git_provider_config().get("provider", "github")
     except FileNotFoundError:
         configured = "github"
     return {

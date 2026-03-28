@@ -1,9 +1,14 @@
 """Scheduled fraise deployer - for cron jobs and timers."""
 
+from __future__ import annotations
+
 import logging
 import subprocess
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fraisier.runners import CommandRunner
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
 from .mixins import GitDeployMixin
@@ -17,7 +22,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
     Pulls code via bare repo pattern, then manages systemd timers.
     """
 
-    def __init__(self, config: dict[str, Any], runner: Any = None):
+    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
         super().__init__(config, runner=runner)
         self._init_git_deploy(config)
         self.systemd_service = config.get("systemd_service")

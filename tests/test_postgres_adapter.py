@@ -1,6 +1,6 @@
 """Tests for PostgresAdapter pool configuration and transaction support."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from psycopg.rows import dict_row
@@ -32,6 +32,36 @@ class TestPoolCreation:
             assert call_kwargs.kwargs.get("kwargs") == {
                 "row_factory": dict_row,
             }
+
+
+class TestPoolMetrics:
+    """Pool metrics must use public get_stats() API."""
+
+    def test_pool_metrics_uses_get_stats(self):
+        """pool_metrics() uses pool.get_stats() instead of private attributes."""
+        adapter = PostgresAdapter("postgresql://localhost/test")
+        mock_pool = MagicMock()
+        mock_pool.get_stats.return_value = {
+            "pool_size": 10,
+            "pool_available": 6,
+            "pool_min": 2,
+            "pool_max": 10,
+        }
+        adapter._pool = mock_pool
+
+        metrics = adapter.pool_metrics()
+
+        mock_pool.get_stats.assert_called_once()
+        assert metrics.total_connections == 10
+        assert metrics.idle_connections == 6
+        assert metrics.active_connections == 4
+        assert metrics.waiting_requests == 0
+
+    def test_pool_metrics_none_pool(self):
+        """pool_metrics() returns empty metrics when pool is None."""
+        adapter = PostgresAdapter("postgresql://localhost/test")
+        metrics = adapter.pool_metrics()
+        assert metrics.total_connections == 0
 
 
 class TestTransactionMethods:

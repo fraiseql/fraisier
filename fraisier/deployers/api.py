@@ -1,12 +1,17 @@
 """API fraise deployer - for web services and APIs."""
 
+from __future__ import annotations
+
 import logging
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fraisier.errors import DeploymentError, HealthCheckError
+
+if TYPE_CHECKING:
+    from fraisier.runners import CommandRunner
 from fraisier.health_check import HealthCheckManager, HTTPHealthChecker
 from fraisier.timeout import DeploymentTimeoutExpired, deployment_timeout
 
@@ -26,7 +31,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     - Health check verification
     """
 
-    def __init__(self, config: dict[str, Any], runner: Any = None):
+    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
         super().__init__(config, runner=runner)
         self._init_git_deploy(config)
         self.git_repo = config.get("git_repo")

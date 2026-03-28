@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fraisier.config import FraisierConfig
+from fraisier.config import FraisierConfig, reset_config
 from fraisier.database import FraisierDB
 from tests.fixtures.git_env import git_deploy_env as git_deploy_env  # noqa: PLC0414
 
@@ -156,6 +156,7 @@ def _reset_config_singleton():
     old = fraisier.config._config
     yield
     fraisier.config._config = old
+    reset_config()
 
 
 @pytest.fixture(autouse=True)

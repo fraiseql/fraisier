@@ -1,8 +1,13 @@
 """ETL fraise deployer - for data pipeline jobs."""
 
+from __future__ import annotations
+
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fraisier.runners import CommandRunner
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
 from .mixins import GitDeployMixin
@@ -16,7 +21,7 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
     Uses bare repo pattern for git operations, then runs configured scripts.
     """
 
-    def __init__(self, config: dict[str, Any], runner: Any = None):
+    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
         super().__init__(config, runner=runner)
         self._init_git_deploy(config)
         self.script_path = config.get("script_path")
