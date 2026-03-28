@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.5 (2026-03-28)
+
+Git deployment fix. 1409 tests, zero lint warnings.
+
+### Git Operations (#9)
+
+- **fix:** `git_repo` from fraises.yaml now used as bare repo path (was always constructing from `repos_base`)
+- **fix:** `reset --soft` uses `--git-dir`/`--work-tree` flags instead of `git -C worktree` (fixes bare repo + worktree pattern where worktree has no `.git` directory)
+- **fix:** `_git_rollback` same fix for `reset --soft`
+
 ## v0.1.4 (2026-03-28)
 
 Quality review and monorepo support (#6).
