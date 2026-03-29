@@ -7,6 +7,7 @@ generates webhook env files, installs nginx vhosts, and validates.
 from __future__ import annotations
 
 import secrets
+import socket
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,10 +41,12 @@ class ServerSetup:
         runner: CommandRunner,
         *,
         environment: str | None = None,
+        server: str | None = None,
     ) -> None:
         self.config = config
         self.runner = runner
         self.environment = environment
+        self.server = server
         self._renderer = ScaffoldRenderer(config)
 
     def plan(self) -> list[SetupAction]:
@@ -291,16 +294,41 @@ class ServerSetup:
     # Helpers
     # ------------------------------------------------------------------
 
+    def _resolve_allowed_environments(self) -> set[str] | None:
+        """Determine which environments to provision.
+
+        Resolution order:
+        1. Explicit ``--environment`` → single environment.
+        2. Explicit ``--server`` → environments whose ``server`` field matches.
+        3. Auto-detect via hostname/FQDN → environments whose ``server`` matches.
+        4. No match → ``None`` (provision everything, backwards-compatible).
+        """
+        if self.environment:
+            return {self.environment}
+
+        if self.server:
+            envs = self.config.get_environments_for_server(self.server)
+            return set(envs) if envs else None
+
+        # Auto-detect: try FQDN first, then short hostname.
+        for hostname in dict.fromkeys([socket.getfqdn(), socket.gethostname()]):
+            envs = self.config.get_environments_for_server(hostname)
+            if envs:
+                return set(envs)
+
+        return None
+
     def _iter_fraise_environments(
         self,
     ) -> Iterator[tuple[str, str, dict[str, Any]]]:
-        """Yield (fraise_name, env_name, env_config), filtered by --environment."""
+        """Yield (fraise_name, env_name, env_config), filtered by server/environment."""
+        allowed = self._resolve_allowed_environments()
         for fraise_name in self.config.list_fraises():
             fraise = self.config.get_fraise(fraise_name)
             if not fraise:
                 continue
             for env_name in fraise.get("environments", {}):
-                if self.environment and env_name != self.environment:
+                if allowed is not None and env_name not in allowed:
                     continue
                 env_config = self.config.get_fraise_environment(fraise_name, env_name)
                 if env_config:

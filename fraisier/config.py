@@ -875,6 +875,18 @@ class FraisierConfig:
             return []
         return list(fraise.get("environments", {}).keys())
 
+    def get_environments_for_server(self, server: str) -> list[str]:
+        """Return environment names whose ``server`` field matches *server*.
+
+        Compares against the global ``environments`` section of the config.
+        Returns an empty list when no environment declares that server.
+        """
+        return [
+            env_name
+            for env_name, env_config in self.environments.items()
+            if env_config.get("server") == server
+        ]
+
     def list_fraises_detailed(self) -> list[dict[str, Any]]:
         """List all fraises with detailed info (type, description, environments)."""
         result = []

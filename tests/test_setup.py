@@ -11,6 +11,43 @@ from click.testing import CliRunner
 from fraisier.config import FraisierConfig
 from fraisier.setup import ServerSetup, SetupAction
 
+SERVER_AWARE_CONFIG = """\
+fraises:
+  my_api:
+    type: api
+    description: Test API
+    environments:
+      development:
+        app_path: /var/www/my-api-dev
+        systemd_service: my-api-dev.service
+        git_repo: /var/git/my-api-dev.git
+        health_check:
+          url: http://localhost:8000/health
+          timeout: 10
+      staging:
+        app_path: /var/www/my-api-stg
+        systemd_service: my-api-stg.service
+        git_repo: /var/git/my-api-stg.git
+        health_check:
+          url: http://localhost:8001/health
+          timeout: 10
+      production:
+        app_path: /var/www/my-api
+        systemd_service: my-api.service
+        git_repo: /var/git/my-api.git
+        health_check:
+          url: http://localhost:8000/health
+          timeout: 30
+
+environments:
+  development:
+    server: dev.example.io
+  staging:
+    server: dev.example.io
+  production:
+    server: prod.example.io
+"""
+
 
 class FakeRunner:
     """Records commands without executing them."""
@@ -455,3 +492,149 @@ class TestCLI:
 
         assert result.exit_code == 0
         assert "actions would be executed" in result.output
+
+    def test_server_flag(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        runner = CliRunner()
+
+        with patch("fraisier.config.get_config", return_value=config):
+            from fraisier.cli.main import main
+
+            result = runner.invoke(
+                main, ["setup", "--dry-run", "--server", "prod.example.io"]
+            )
+
+        assert result.exit_code == 0
+        assert "actions would be executed" in result.output
+
+    def test_server_and_environment_mutually_exclusive(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        runner = CliRunner()
+
+        with patch("fraisier.config.get_config", return_value=config):
+            from fraisier.cli.main import main
+
+            result = runner.invoke(
+                main,
+                [
+                    "setup",
+                    "--dry-run",
+                    "--server",
+                    "prod.example.io",
+                    "--environment",
+                    "production",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+
+class TestServerFiltering:
+    def test_server_flag_filters_environments(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        setup = ServerSetup(config, FakeRunner(), server="prod.example.io")
+        actions = setup._plan_app_services()
+
+        assert len(actions) == 1
+        assert "production" in actions[0].description
+
+    def test_server_flag_matches_multiple_environments(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        setup = ServerSetup(config, FakeRunner(), server="dev.example.io")
+        actions = setup._plan_app_services()
+
+        descriptions = [a.description for a in actions]
+        assert len(actions) == 2
+        assert any("development" in d for d in descriptions)
+        assert any("staging" in d for d in descriptions)
+
+    def test_unknown_server_provisions_all(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        setup = ServerSetup(config, FakeRunner(), server="unknown.host")
+        actions = setup._plan_app_services()
+
+        assert len(actions) == 3
+
+    def test_auto_detect_hostname(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+
+        with (
+            patch("fraisier.setup.socket.getfqdn", return_value="prod.example.io"),
+            patch("fraisier.setup.socket.gethostname", return_value="prod"),
+        ):
+            actions = setup._plan_app_services()
+
+        assert len(actions) == 1
+        assert "production" in actions[0].description
+
+    def test_auto_detect_falls_back_to_short_hostname(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        # Use short hostname as the server value in config
+        server_config = SERVER_AWARE_CONFIG.replace(
+            "server: prod.example.io", "server: prod"
+        )
+        config = _make_config(tmp_path, server_config)
+        setup = ServerSetup(config, FakeRunner())
+
+        with (
+            patch("fraisier.setup.socket.getfqdn", return_value="prod.example.io"),
+            patch("fraisier.setup.socket.gethostname", return_value="prod"),
+        ):
+            actions = setup._plan_app_services()
+
+        assert len(actions) == 1
+        assert "production" in actions[0].description
+
+    def test_auto_detect_no_match_provisions_all(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+
+        with (
+            patch("fraisier.setup.socket.getfqdn", return_value="other.host"),
+            patch("fraisier.setup.socket.gethostname", return_value="other"),
+        ):
+            actions = setup._plan_app_services()
+
+        assert len(actions) == 3
+
+    def test_no_global_environments_provisions_all(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+
+        with (
+            patch("fraisier.setup.socket.getfqdn", return_value="any.host"),
+            patch("fraisier.setup.socket.gethostname", return_value="any"),
+        ):
+            actions = setup._plan_app_services()
+
+        assert len(actions) == 2
+
+    def test_environment_flag_takes_priority_over_auto_detect(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        setup = ServerSetup(config, FakeRunner(), environment="staging")
+
+        with (
+            patch("fraisier.setup.socket.getfqdn", return_value="prod.example.io"),
+            patch("fraisier.setup.socket.gethostname", return_value="prod"),
+        ):
+            actions = setup._plan_app_services()
+
+        assert len(actions) == 1
+        assert "staging" in actions[0].description
+
+    def test_server_filter_applies_to_full_plan(self, tmp_path):
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        all_setup = ServerSetup(config, FakeRunner(), server="dev.example.io")
+        prod_setup = ServerSetup(config, FakeRunner(), server="prod.example.io")
+
+        # Patch hostname auto-detect to not interfere
+        with (
+            patch("fraisier.setup.socket.getfqdn", return_value="localhost"),
+            patch("fraisier.setup.socket.gethostname", return_value="localhost"),
+        ):
+            dev_actions = all_setup.plan()
+            prod_actions = prod_setup.plan()
+
+        assert len(prod_actions) < len(dev_actions)

@@ -419,3 +419,55 @@ class TestConfigSingleton:
 
         c2 = get_config(str(cfg2))
         assert c2.get_fraise("svc2") is not None
+
+
+class TestGetEnvironmentsForServer:
+    """Tests for FraisierConfig.get_environments_for_server."""
+
+    def _make_config(self, tmp_path, yaml_content: str) -> FraisierConfig:
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(str(p))
+
+    CONFIG_WITH_SERVERS = """\
+fraises:
+  my_api:
+    type: api
+    description: Test
+    environments:
+      development:
+        app_path: /var/www/dev
+      production:
+        app_path: /var/www/prod
+
+environments:
+  development:
+    server: dev.example.io
+  staging:
+    server: dev.example.io
+  production:
+    server: prod.example.io
+"""
+
+    def test_returns_matching_environments(self, tmp_path):
+        config = self._make_config(tmp_path, self.CONFIG_WITH_SERVERS)
+        result = config.get_environments_for_server("dev.example.io")
+        assert sorted(result) == ["development", "staging"]
+
+    def test_returns_single_match(self, tmp_path):
+        config = self._make_config(tmp_path, self.CONFIG_WITH_SERVERS)
+        result = config.get_environments_for_server("prod.example.io")
+        assert result == ["production"]
+
+    def test_returns_empty_for_unknown_server(self, tmp_path):
+        config = self._make_config(tmp_path, self.CONFIG_WITH_SERVERS)
+        result = config.get_environments_for_server("unknown.example.io")
+        assert result == []
+
+    def test_returns_empty_when_no_global_environments(self, tmp_path):
+        config = self._make_config(
+            tmp_path,
+            "fraises:\n  svc:\n    type: api\n",
+        )
+        result = config.get_environments_for_server("any.host")
+        assert result == []
