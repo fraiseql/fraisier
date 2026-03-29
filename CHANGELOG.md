@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.2.0 (2026-03-30)
+
+Major release: restore_migrate strategy, server setup, ship pipeline,
+rebuild hardening, and real PostgreSQL integration tests.
+1521 tests, zero lint warnings.
+
+### Restore-Migrate Strategy (#17)
+
+- **feat:** `restore_migrate` strategy for staging — full backup restore lifecycle (find latest backup → validate age → pg_restore → optional ownership fix → migrate up → validate table count)
+- **feat:** instant template-based rollback (`CREATE DATABASE … TEMPLATE`) as alternative to migrate down
+- **feat:** configurable `min_tables` post-restore validation
+
+### Server Setup (#15, #16)
+
+- **feat:** `fraisier setup` command for server-side provisioning (create users, install systemd units, configure nginx, set up sudoers)
+- **feat:** multi-server deployments with per-server filtering (`--server`)
+
+### Ship Pipeline (#22, #23)
+
+- **feat:** `fraisier ship` owns the full pre-commit pipeline with phased checks (fix → validate+test)
+- **fix:** handle pre-commit hooks that modify files (re-stage after fix phase)
+
+### Rebuild Strategy (#24, #25)
+
+- **fix:** drop and recreate the entire database instead of just the schema — fixes "must be owner of schema public" errors when the app user doesn't own the public schema (#24)
+- **feat:** `required_roles` configuration — provisions missing PostgreSQL roles (`CREATE ROLE … NOLOGIN`) and grants them to the database owner before schema apply, preventing silent failures from `CREATE SCHEMA … AUTHORIZATION <role>` referencing nonexistent roles (#25)
+- **fix:** `psql -f` now uses `-v ON_ERROR_STOP=1` so schema apply aborts on the first SQL error instead of silently producing a half-built database (#25)
+- **fix:** `SchemaBuilder` resolves configs relative to the confiture config file, not the working directory
+
+### Database Operations
+
+- **feat:** all `dbops.operations` functions accept an optional `connection_url` parameter to bypass `sudo -u postgres` — enables direct connections to containerised or remote PostgreSQL instances
+- **feat:** `database_url` forwarded through the full strategy and deployer stack
+- **feat:** confiture view_helpers option forwarded during migrate up (#20)
+- **fix:** `terminate_backends` and `check_db_exists` no longer use psql variable binding (`:'var'`) which broke in psql 18
+
+### Scaffold & Config (#14, #18)
+
+- **feat:** per-environment webhook secrets (#14)
+- **feat:** systemd and nginx names prefixed with project name (#18)
+
+### Testing Infrastructure
+
+- **feat:** integration tests using `testcontainers[postgres]` — 17 tests run against a real PostgreSQL 16 container
+- **refactor:** removed 22 mock-heavy tests (525 lines) replaced by higher-confidence integration tests
+
+### Dependencies
+
+- **deps:** bump confiture to >=0.8.14
+- **deps:** add `testcontainers[postgres]>=4.0.0` to dev dependencies
+
 ## v0.1.8 (2026-03-29)
 
 Rebuild strategy performance. 1413 tests, zero lint warnings.
