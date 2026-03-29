@@ -391,9 +391,7 @@ class TestViewHelpersForwarding:
         mock_vm = MagicMock()
         mock_vm.helpers_installed.return_value = True
 
-        with patch(
-            "confiture.core.view_manager.ViewManager", return_value=mock_vm
-        ):
+        with patch("confiture.core.view_manager.ViewManager", return_value=mock_vm):
             migrate_up("confiture.yaml")
 
         mock_vm.install_helpers.assert_not_called()
@@ -416,9 +414,7 @@ class TestViewHelpersForwarding:
         )
         mock_migrator.from_config.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch(
-            "confiture.core.view_manager.ViewManager"
-        ) as mock_vm_cls:
+        with patch("confiture.core.view_manager.ViewManager") as mock_vm_cls:
             migrate_up("confiture.yaml")
 
         mock_vm_cls.assert_not_called()

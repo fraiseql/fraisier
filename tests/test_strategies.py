@@ -556,9 +556,7 @@ class TestRestoreMigrateStrategy:
         result = strategy.execute(CONFIG, migrations_dir=MDIR, database_url=url)
 
         assert result.success
-        mock_up.assert_called_once_with(
-            CONFIG, migrations_dir=MDIR, database_url=url
-        )
+        mock_up.assert_called_once_with(CONFIG, migrations_dir=MDIR, database_url=url)
 
     @patch("fraisier.strategies.migrate_down")
     def test_rollback_passes_database_url_to_migrate_down(self, mock_down):
