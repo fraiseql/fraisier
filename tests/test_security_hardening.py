@@ -7,12 +7,15 @@ Cycle 4: Expand log redaction
 Cycle 5: Tighten path validation
 """
 
+import json
 import os
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 from fraisier.dbops._validation import validate_file_path
+from fraisier.status import DeploymentStatusFile
 
 # ---------------------------------------------------------------------------
 # Cycle 1: Webhook secret required on startup
@@ -50,6 +53,201 @@ class TestWebhookSecretRequired:
         secret = "a" * 32
         with patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": secret}):
             assert _get_webhook_secret() == secret
+
+
+class TestCollectWebhookSecrets:
+    """_collect_webhook_secrets gathers secrets from multiple sources."""
+
+    def test_single_secret_from_env(self):
+        from fraisier.webhook import _collect_webhook_secrets
+
+        secret = "s" * 32
+        with patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": secret}, clear=True):
+            secrets = _collect_webhook_secrets()
+        assert secrets == [secret]
+
+    def test_per_env_secrets_collected(self):
+        from fraisier.webhook import _collect_webhook_secrets
+
+        env = {
+            "FRAISIER_WEBHOOK_SECRET_DEVELOPMENT": "d" * 32,
+            "FRAISIER_WEBHOOK_SECRET_STAGING": "s" * 32,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            secrets = _collect_webhook_secrets()
+        expected = {
+            env["FRAISIER_WEBHOOK_SECRET_DEVELOPMENT"],
+            env["FRAISIER_WEBHOOK_SECRET_STAGING"],
+        }
+        assert set(secrets) == expected
+
+    def test_combines_base_and_per_env(self):
+        from fraisier.webhook import _collect_webhook_secrets
+
+        env = {
+            "FRAISIER_WEBHOOK_SECRET": "b" * 32,
+            "FRAISIER_WEBHOOK_SECRET_STAGING": "s" * 32,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            secrets = _collect_webhook_secrets()
+        assert "b" * 32 in secrets
+        assert "s" * 32 in secrets
+        assert len(secrets) == 2
+
+    def test_skips_short_secrets_with_warning(self, caplog):
+        from fraisier.webhook import _collect_webhook_secrets
+
+        env = {
+            "FRAISIER_WEBHOOK_SECRET": "short",
+            "FRAISIER_WEBHOOK_SECRET_STAGING": "s" * 32,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            secrets = _collect_webhook_secrets()
+        assert secrets == ["s" * 32]
+        log = caplog.text.lower()
+        assert "too short" in log or "32 characters" in log
+
+    def test_empty_when_no_secrets(self):
+        from fraisier.webhook import _collect_webhook_secrets
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            mock_config.return_value.get_git_provider_config.return_value = {}
+            secrets = _collect_webhook_secrets()
+        assert secrets == []
+
+    def test_deduplicates_identical_secrets(self):
+        from fraisier.webhook import _collect_webhook_secrets
+
+        secret = "x" * 32
+        env = {
+            "FRAISIER_WEBHOOK_SECRET": secret,
+            "FRAISIER_WEBHOOK_SECRET_DEV": secret,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            secrets = _collect_webhook_secrets()
+        assert secrets == [secret]
+
+    def test_fallback_to_config_file(self):
+        from fraisier.webhook import _collect_webhook_secrets
+
+        secret = "c" * 32
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            mock_config.return_value.get_git_provider_config.return_value = {
+                "github": {"webhook_secret": secret}
+            }
+            secrets = _collect_webhook_secrets()
+        assert secrets == [secret]
+
+
+class TestMultiSecretSignatureVerification:
+    """Webhook signature verification tries all configured secrets."""
+
+    def test_accepts_webhook_signed_with_per_env_secret(self):
+        """A webhook signed with a per-env secret should pass verification."""
+        import hashlib
+        import hmac as hmac_mod
+
+        from fraisier.webhook import _verify_signature
+
+        dev_secret = "d" * 32
+        payload = json.dumps(
+            {
+                "ref": "refs/heads/main",
+                "repository": {"full_name": "o/r"},
+                "sender": {"login": "u"},
+            }
+        ).encode()
+        sig = (
+            "sha256="
+            + hmac_mod.new(dev_secret.encode(), payload, hashlib.sha256).hexdigest()
+        )
+
+        env = {"FRAISIER_WEBHOOK_SECRET_DEVELOPMENT": dev_secret}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            mock_config.return_value.get_git_provider_config.return_value = {}
+
+            provider, _ = _verify_signature(
+                "github",
+                payload,
+                {
+                    "x-hub-signature-256": sig,
+                    "x-github-event": "push",
+                },
+            )
+            assert provider is not None
+
+    def test_rejects_webhook_with_unknown_secret(self):
+        """A webhook signed with an unknown secret should be rejected."""
+        import hashlib
+        import hmac as hmac_mod
+
+        from fraisier.webhook import _verify_signature
+
+        unknown_secret = "u" * 32
+        known_secret = "k" * 32
+        payload = json.dumps({"ref": "refs/heads/main"}).encode()
+        sig = (
+            "sha256="
+            + hmac_mod.new(unknown_secret.encode(), payload, hashlib.sha256).hexdigest()
+        )
+
+        env = {"FRAISIER_WEBHOOK_SECRET": known_secret}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            mock_config.return_value.get_git_provider_config.return_value = {}
+            with pytest.raises(HTTPException) as exc_info:
+                _verify_signature(
+                    "github",
+                    payload,
+                    {
+                        "x-hub-signature-256": sig,
+                        "x-github-event": "push",
+                    },
+                )
+            assert exc_info.value.status_code == 401
+
+
+class TestMultiSecretTokenAuth:
+    """Details endpoint accepts any configured secret as token."""
+
+    def test_details_accepts_per_env_secret_as_token(self):
+        from fastapi.testclient import TestClient
+
+        from fraisier.webhook import app
+
+        client = TestClient(app)
+        staging_secret = "s" * 32
+        status = DeploymentStatusFile(
+            fraise_name="my_api",
+            environment="staging",
+            state="failed",
+            error_message="something broke",
+        )
+
+        env = {"FRAISIER_WEBHOOK_SECRET_STAGING": staging_secret}
+        with (
+            patch("fraisier.webhook.read_status", return_value=status),
+            patch.dict(os.environ, env, clear=True),
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            mock_config.return_value.get_git_provider_config.return_value = {}
+            response = client.get(
+                "/api/status/my_api/details",
+                headers={"X-Deployment-Token": staging_secret},
+            )
+
+        assert response.status_code == 200
 
 
 # ---------------------------------------------------------------------------

@@ -83,6 +83,31 @@ fraises:
         health_check:
           url: https://api.myapp.io/health
           timeout: 30
+        service:
+          type: exec               # systemd Type= (default: notify)
+          user: myapp
+          group: www-data
+          port: 8000
+          workers: 4
+          memory_max: "8G"
+          memory_high: "6G"
+          cpu_quota: "200%"
+          runtime_directory: myapp           # creates /run/myapp/
+          runtime_directory_mode: "0755"
+          logs_directory: myapp              # creates /var/log/myapp/
+          logs_directory_mode: "0755"
+          exec_start_pre:                    # pre-start hooks
+            - "/bin/sh -c 'printf \"PGPASSWORD=%s\" \"$(cat ${CREDENTIALS_DIRECTORY}/pg_password)\" > /run/myapp/pg.env'"
+          environment_file: /etc/myapp/prod.env
+          credentials:
+            pg_password: /etc/creds/pg
+          environment:
+            DB_NAME: myapp_production
+        nginx:
+          server_name: api.myapp.io
+          cors_origins:
+            - '^https://app\\.myapp\\.io$'
+            - '^https?://localhost(:[0-9]+)?$'
 
   # ============================================================
   # SELF-HOSTED GITLAB EXAMPLE
@@ -211,6 +236,7 @@ environments:
 # BRANCH MAPPING
 # Maps git branches to fraise deployments (for webhook routing)
 # ============================================================
+# Single-fraise syntax (one branch → one fraise):
 branch_mapping:
   dev:
     fraise: my_api
@@ -221,3 +247,12 @@ branch_mapping:
   main:
     fraise: my_api
     environment: production
+
+  # Multi-fraise syntax (one branch → multiple fraises, for monorepos):
+  # main:
+  #   - fraise: management_api
+  #     environment: production
+  #   - fraise: backend_api
+  #     environment: production
+  #   - fraise: worker
+  #     environment: production

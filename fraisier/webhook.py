@@ -405,32 +405,99 @@ def _detect_git_provider(headers: dict[str, str], query_provider: str | None) ->
         return "github"
 
 
+def _collect_webhook_secrets() -> list[str]:
+    """Collect all configured webhook secrets from environment and config.
+
+    Sources (in order):
+    1. FRAISIER_WEBHOOK_SECRET (base env var, backwards compatible)
+    2. FRAISIER_WEBHOOK_SECRET_* (per-environment env vars)
+    3. Webhook secrets from fraises.yaml git provider config (fallback)
+
+    Secrets shorter than 32 characters are skipped with a warning.
+    Duplicates are removed.
+    """
+    _MIN_LEN = 32
+    seen: set[str] = set()
+    secrets: list[str] = []
+
+    def _add(secret: str, source: str) -> None:
+        if len(secret) < _MIN_LEN:
+            logger.warning(
+                "%s is too short (%d chars, minimum %d) — skipping",
+                source,
+                len(secret),
+                _MIN_LEN,
+            )
+            return
+        if secret not in seen:
+            seen.add(secret)
+            secrets.append(secret)
+
+    # 1. Base env var
+    base = os.getenv("FRAISIER_WEBHOOK_SECRET")
+    if base:
+        _add(base, "FRAISIER_WEBHOOK_SECRET")
+
+    # 2. Per-environment env vars (FRAISIER_WEBHOOK_SECRET_*)
+    prefix = "FRAISIER_WEBHOOK_SECRET_"
+    for key, value in sorted(os.environ.items()):
+        if key.startswith(prefix) and value:
+            _add(value, key)
+
+    # 3. Fallback to config file
+    if not secrets:
+        try:
+            config = get_config()
+            git_config = config.get_git_provider_config()
+            for provider_conf in git_config.values():
+                is_dict = isinstance(provider_conf, dict)
+                if is_dict and "webhook_secret" in provider_conf:
+                    _add(provider_conf["webhook_secret"], "fraises.yaml")
+        except FileNotFoundError:
+            pass
+
+    return secrets
+
+
 def _verify_signature(
     provider_name: str, body: bytes, headers: dict[str, str]
 ) -> tuple[GitProvider, dict[str, str]]:
-    """Build provider, verify signature, return provider + headers."""
+    """Build provider, verify signature, return provider + headers.
+
+    Tries each configured webhook secret until one validates the signature.
+    """
     try:
-        try:
-            git_config = get_config().get_git_provider_config()
-        except FileNotFoundError:
-            git_config = {}
-        provider_config = {
-            "webhook_secret": os.getenv("FRAISIER_WEBHOOK_SECRET"),
-            **git_config.get(provider_name, {}),
-        }
-        provider = get_provider(provider_name, provider_config)
-    except ValueError as e:
-        raise _structured_error(400, "validation_error", str(e)) from e
+        git_config = get_config().get_git_provider_config()
+    except FileNotFoundError:
+        git_config = {}
 
     normalized_headers = {k.lower(): v for k, v in headers.items()}
+    secrets = _collect_webhook_secrets()
 
-    if not provider.verify_webhook_signature(body, normalized_headers):
-        logger.warning(f"Invalid webhook signature from {provider_name}")
-        raise _structured_error(
-            401, "authentication_error", "Invalid webhook signature"
-        )
+    # When no explicit secrets are configured, still attempt with None so that
+    # the provider's verify_webhook_signature (which returns False for missing
+    # secret) produces a proper 401 rather than silently skipping verification.
+    candidates = secrets or [None]
 
-    return provider, normalized_headers
+    for secret in candidates:
+        try:
+            provider_config = {
+                "webhook_secret": secret,
+                **git_config.get(provider_name, {}),
+            }
+            provider = get_provider(provider_name, provider_config)
+        except ValueError as e:
+            raise _structured_error(400, "validation_error", str(e)) from e
+
+        if provider.verify_webhook_signature(body, normalized_headers):
+            return provider, normalized_headers
+
+    logger.warning(
+        "Invalid webhook signature from %s (tried %d secret(s))",
+        provider_name,
+        len(secrets),
+    )
+    raise _structured_error(401, "authentication_error", "Invalid webhook signature")
 
 
 async def _normalize_event(
@@ -485,38 +552,28 @@ async def generic_webhook(
 
 
 def _get_webhook_secret() -> str:
-    """Get webhook secret from config for token authentication.
+    """Get the first webhook secret for backwards-compatible single-secret callers.
 
     Raises RuntimeError if no secret is configured or if the secret
     is shorter than 32 characters.
     """
-    secret = os.getenv("FRAISIER_WEBHOOK_SECRET")
-    if not secret:
-        # Walk provider configs to find a webhook_secret
-        try:
-            config = get_config()
-            git_config = config.get_git_provider_config()
-            for provider_conf in git_config.values():
-                is_dict = isinstance(provider_conf, dict)
-                if is_dict and "webhook_secret" in provider_conf:
-                    secret = provider_conf["webhook_secret"]
-                    break
-        except FileNotFoundError:
-            pass
-    if not secret:
+    secrets = _collect_webhook_secrets()
+    if not secrets:
+        # Check if there's a raw env var that was too short
+        raw = os.getenv("FRAISIER_WEBHOOK_SECRET")
+        if raw and len(raw) < 32:
+            msg = (
+                "FRAISIER_WEBHOOK_SECRET must be at least 32 characters. "
+                f"Current length: {len(raw)}"
+            )
+            raise RuntimeError(msg)
         msg = (
             "FRAISIER_WEBHOOK_SECRET must be set. "
             "Generate one with: python -c "
             '"import secrets; print(secrets.token_urlsafe(48))"'
         )
         raise RuntimeError(msg)
-    if len(secret) < 32:
-        msg = (
-            "FRAISIER_WEBHOOK_SECRET must be at least 32 characters. "
-            f"Current length: {len(secret)}"
-        )
-        raise RuntimeError(msg)
-    return secret
+    return secrets[0]
 
 
 @app.get("/api/status/{fraise_name}")
@@ -549,8 +606,8 @@ async def get_deploy_details(fraise_name: str, request: Request) -> dict[str, An
             400, "validation_error", f"Invalid fraise name: {fraise_name!r}"
         )
     token = request.headers.get("X-Deployment-Token")
-    expected = _get_webhook_secret()
-    if not token or not hmac.compare_digest(token, expected):
+    secrets = _collect_webhook_secrets()
+    if not token or not any(hmac.compare_digest(token, s) for s in secrets):
         raise _structured_error(403, "authentication_error", "Invalid or missing token")
 
     status = read_status(fraise_name)
