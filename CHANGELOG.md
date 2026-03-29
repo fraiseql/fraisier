@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.8 (2026-03-29)
+
+Rebuild strategy performance. 1413 tests, zero lint warnings.
+
+### Database Strategies (#13)
+
+- **feat:** `RebuildStrategy` now uses `confiture build` (SchemaBuilder) + `psql -f` for bulk SQL apply — ~30s vs 10+ minutes for large schemas (~1284 SQL files)
+- **feat:** rebuild now includes seed data (`schema_only=False`) making development databases immediately usable
+- **fix:** drop and recreate `public` schema before applying to ensure clean state
+
 ## v0.1.7 (2026-03-29)
 
 Deployment fix. 1413 tests, zero lint warnings.

@@ -126,40 +126,112 @@ class TestMigrateStrategy:
 # ---------------------------------------------------------------------------
 
 
-class TestRebuildStrategy:
-    """Development strategy: rebuild from scratch."""
+def _mock_rebuild_deps(mock_env_validate, mock_migrator_cls):
+    """Set up common mocks for RebuildStrategy tests."""
+    mock_env = MagicMock()
+    mock_env.name = "dev"
+    mock_env.database_url = "postgresql:///mydb"
+    mock_env_validate.return_value = mock_env
 
+    mock_session = MagicMock()
+    mock_migrator_cls.from_config.return_value.__enter__ = MagicMock(
+        return_value=mock_session
+    )
+    mock_migrator_cls.from_config.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_env, mock_session
+
+
+class TestRebuildStrategy:
+    """Development strategy: build SQL + psql apply + reinit."""
+
+    @patch("fraisier.strategies.subprocess.run")
     @patch("confiture.core.migrator.Migrator")
-    def test_execute_calls_rebuild(self, mock_migrator_cls):
-        mock_session = MagicMock()
-        mock_migrator_cls.from_config.return_value.__enter__ = MagicMock(
-            return_value=mock_session
-        )
-        mock_migrator_cls.from_config.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_builds_and_applies_via_psql(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+    ):
+        _, mock_session = _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder = MagicMock()
+        mock_builder_cls.return_value = mock_builder
 
         strategy = RebuildStrategy()
         result = strategy.execute(CONFIG, migrations_dir=MDIR)
 
         assert result.success
-        mock_session.rebuild.assert_called_once_with(drop_schemas=True)
+        mock_builder_cls.assert_called_once_with(env="dev")
+        mock_builder.build.assert_called_once()
 
+        # Two psql calls: drop schemas + apply file.
+        assert mock_subprocess_run.call_count == 2
+        drop_call, apply_call = mock_subprocess_run.call_args_list
+        assert "-c" in drop_call[0][0]
+        assert "DROP SCHEMA" in drop_call[0][0][-1]
+        assert "-f" in apply_call[0][0]
+
+        mock_session.reinit.assert_called_once()
+
+    @patch("fraisier.strategies.subprocess.run")
     @patch("confiture.core.migrator.Migrator")
-    def test_rollback_calls_rebuild(self, mock_migrator_cls):
-        mock_session = MagicMock()
-        mock_migrator_cls.from_config.return_value.__enter__ = MagicMock(
-            return_value=mock_session
-        )
-        mock_migrator_cls.from_config.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_cleans_up_temp_file_on_psql_failure(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+    ):
+        import subprocess as sp
+
+        _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder_cls.return_value = MagicMock()
+
+        # First psql call (drop) succeeds, second (apply) fails.
+        mock_subprocess_run.side_effect = [
+            MagicMock(returncode=0),
+            sp.CalledProcessError(1, "psql"),
+        ]
+
+        strategy = RebuildStrategy()
+        with pytest.raises(sp.CalledProcessError):
+            strategy.execute(CONFIG, migrations_dir=MDIR)
+
+    @patch("fraisier.strategies.subprocess.run")
+    @patch("confiture.core.migrator.Migrator")
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_rollback_calls_execute(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+    ):
+        _, mock_session = _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder_cls.return_value = MagicMock()
 
         strategy = RebuildStrategy()
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=5)
 
         assert result.success
-        mock_session.rebuild.assert_called_once()
+        mock_session.reinit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
