@@ -26,6 +26,7 @@ from confiture.core.migrator import Migrator
 
 if TYPE_CHECKING:
     from confiture import MigrateDownResult, MigrateUpResult
+    from confiture.config.environment import Environment
 
 log = logging.getLogger(__name__)
 
@@ -68,11 +69,37 @@ class RollbackError(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _load_env(
+    config_path: Path | str,
+    *,
+    database_url: str | None = None,
+) -> Environment:
+    """Load a confiture Environment, optionally overriding database_url."""
+    import yaml
+    from confiture.config.environment import Environment
+
+    raw: dict = yaml.safe_load(Path(config_path).read_text())  # type: ignore[assignment]
+    if database_url:
+        raw["database_url"] = database_url
+    return Environment.model_validate(raw)
+
+
+def _resolve_config(
+    config_path: Path | str,
+    database_url: str | None,
+) -> Path | str | Environment:
+    """Return an Environment when database_url is set, else the raw path."""
+    if database_url:
+        return _load_env(config_path, database_url=database_url)
+    return config_path
+
+
 def preflight(
     config_path: Path | str,
     *,
     migrations_dir: Path | str = "db/migrations",
     allow_irreversible: bool = False,
+    database_url: str | None = None,
 ) -> None:
     """Run pre-deploy checks.  Raises on policy violations.
 
@@ -81,8 +108,9 @@ def preflight(
     - All pending migrations have down files (unless *allow_irreversible*)
     """
     mdir = Path(migrations_dir)
+    config = _resolve_config(config_path, database_url)
 
-    with Migrator.from_config(config_path, migrations_dir=mdir) as m:
+    with Migrator.from_config(config, migrations_dir=mdir) as m:
         status = m.status()
 
     if not status.has_pending:
@@ -106,6 +134,7 @@ def dry_run_execute(
     config_path: Path | str,
     *,
     migrations_dir: Path | str = "db/migrations",
+    database_url: str | None = None,
 ) -> MigrationResult:
     """Run migrations inside a SAVEPOINT, then rollback.
 
@@ -116,7 +145,16 @@ def dry_run_execute(
 
     try:
         mdir = Path(migrations_dir)
-        with Migrator.from_config(config_path, migrations_dir=mdir) as m:
+        env = _load_env(config_path, database_url=database_url)
+        with Migrator.from_config(env, migrations_dir=mdir) as m:
+            if env.migration.view_helpers == "auto":
+                from confiture.core.view_manager import ViewManager
+
+                vm = ViewManager(m._conn)
+                if not vm.helpers_installed():
+                    vm.install_helpers()
+                    log.info("Auto-installed confiture view helper functions")
+
             result = m.up(dry_run_execute=True)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -152,6 +190,7 @@ def migrate_up(
     lock_timeout: int = 30_000,
     pre_migrate_verify: bool = False,
     require_reversible: bool = False,
+    database_url: str | None = None,
 ) -> MigrationResult:
     """Apply pending migrations with lock retry.
 
@@ -165,7 +204,9 @@ def migrate_up(
             lacks a .down.sql file (confiture v0.8.11+).
     """
     if pre_migrate_verify:
-        verify_result = dry_run_execute(config_path, migrations_dir=migrations_dir)
+        verify_result = dry_run_execute(
+            config_path, migrations_dir=migrations_dir, database_url=database_url
+        )
         if not verify_result.success:
             raise MigrationError(
                 "Pre-migration verification failed: " + "; ".join(verify_result.errors)
@@ -173,8 +214,18 @@ def migrate_up(
         log.info("Pre-migration verification passed")
 
     start = time.monotonic()
+    env = _load_env(config_path, database_url=database_url)
 
-    with Migrator.from_config(config_path, migrations_dir=Path(migrations_dir)) as m:
+    with Migrator.from_config(env, migrations_dir=Path(migrations_dir)) as m:
+        # Auto-install view helpers if configured (mirrors confiture CLI behavior).
+        if env.migration.view_helpers == "auto":
+            from confiture.core.view_manager import ViewManager
+
+            vm = ViewManager(m._conn)
+            if not vm.helpers_installed():
+                vm.install_helpers()
+                log.info("Auto-installed confiture view helper functions")
+
         for attempt in range(MAX_LOCK_RETRIES):
             try:
                 result: MigrateUpResult = m.up(
@@ -212,11 +263,13 @@ def migrate_down(
     *,
     migrations_dir: Path | str = "db/migrations",
     steps: int,
+    database_url: str | None = None,
 ) -> MigrationResult:
     """Reverse exactly *steps* migrations.  Best-effort — logs errors."""
     start = time.monotonic()
+    config = _resolve_config(config_path, database_url)
 
-    with Migrator.from_config(config_path, migrations_dir=Path(migrations_dir)) as m:
+    with Migrator.from_config(config, migrations_dir=Path(migrations_dir)) as m:
         result: MigrateDownResult = m.down(steps=steps)
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -242,9 +295,11 @@ def has_pending(
     config_path: Path | str,
     *,
     migrations_dir: Path | str = "db/migrations",
+    database_url: str | None = None,
 ) -> bool:
     """Check if there are pending migrations."""
-    with Migrator.from_config(config_path, migrations_dir=Path(migrations_dir)) as m:
+    config = _resolve_config(config_path, database_url)
+    with Migrator.from_config(config, migrations_dir=Path(migrations_dir)) as m:
         return m.status().has_pending
 
 
