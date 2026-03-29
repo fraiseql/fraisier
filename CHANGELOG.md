@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.7 (2026-03-29)
+
+Deployment fix. 1413 tests, zero lint warnings.
+
+### Deployment (#12)
+
+- **fix:** stop service before `rebuild` strategy to release DB connections — prevents PostgreSQL "cache lookup failed for function" errors from stale OIDs
+- **feat:** add `SystemdServiceManager.stop()` method
+
 ## v0.1.6 (2026-03-28)
 
 Deployment fix. 1411 tests, zero lint warnings.
