@@ -6,6 +6,7 @@ threshold.
 """
 
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,9 +97,23 @@ def validate_table_count(
     return count >= min_threshold, count
 
 
-def find_latest_backup(backup_dir: Path) -> Path | None:
-    """Find the most recent ``.dump`` file in *backup_dir*."""
-    dumps = list(backup_dir.glob("*.dump"))
+def find_latest_backup(
+    backup_dir: Path,
+    *,
+    pattern: str = "*.dump",
+) -> Path | None:
+    """Find the most recent backup file matching *pattern* in *backup_dir*."""
+    dumps = list(backup_dir.glob(pattern))
     if not dumps:
         return None
     return max(dumps, key=lambda p: p.stat().st_mtime)
+
+
+def validate_backup_age(
+    backup_path: Path,
+    *,
+    max_age_hours: float,
+) -> bool:
+    """Return True if *backup_path* is newer than *max_age_hours*."""
+    age_seconds = time.time() - backup_path.stat().st_mtime
+    return age_seconds < max_age_hours * 3600

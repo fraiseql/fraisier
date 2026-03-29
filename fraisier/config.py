@@ -485,11 +485,29 @@ class FraisierConfig:
                 errors.append(
                     f"{fraise_name}: unknown strategy '{strategy}'. Valid: {valid}"
                 )
+            if strategy == "restore_migrate":
+                errors.extend(self._validate_restore_migrate(fraise_name, db))
 
         if errors:
             raise ValidationError(
                 f"Invalid fraise config: {'; '.join(errors)}",
             )
+
+    @staticmethod
+    def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
+        """Return validation errors for a restore_migrate database config."""
+        errors: list[str] = []
+        restore = db.get("restore", {})
+        if not isinstance(restore, dict) or not restore.get("backup_dir"):
+            errors.append(
+                f"{fraise_name}: strategy 'restore_migrate' requires "
+                "database.restore.backup_dir"
+            )
+        if not db.get("name"):
+            errors.append(
+                f"{fraise_name}: strategy 'restore_migrate' requires database.name"
+            )
+        return errors
 
     _VALID_NOTIFIER_TYPES = frozenset(
         {

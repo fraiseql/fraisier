@@ -4,7 +4,7 @@ import pytest
 import yaml
 
 from fraisier.config import FraisierConfig, get_config, reset_config
-from fraisier.errors import ConfigurationError
+from fraisier.errors import ConfigurationError, ValidationError
 
 
 class TestFraisierConfig:
@@ -471,3 +471,75 @@ environments:
         )
         result = config.get_environments_for_server("any.host")
         assert result == []
+
+
+class TestRestoreMigrateValidation:
+    """Validation for restore_migrate strategy config."""
+
+    def _make_config(self, tmp_path, yaml_content: str) -> FraisierConfig:
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(str(p))
+
+    def test_restore_migrate_requires_backup_dir(self, tmp_path):
+        with pytest.raises(ValidationError, match="backup_dir"):
+            self._make_config(
+                tmp_path,
+                """\
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: staging_db
+          strategy: restore_migrate
+""",
+            )
+
+    def test_restore_migrate_requires_db_name(self, tmp_path):
+        with pytest.raises(ValidationError, match=r"database\.name"):
+            self._make_config(
+                tmp_path,
+                """\
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          strategy: restore_migrate
+          restore:
+            backup_dir: /backup/production
+""",
+            )
+
+    def test_restore_migrate_valid_config_passes(self, tmp_path):
+        config = self._make_config(
+            tmp_path,
+            """\
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: staging_db
+          strategy: restore_migrate
+          restore:
+            backup_dir: /backup/production
+            backup_pattern: "*.dump"
+            max_age_hours: 48
+            target_owner: app_user
+            create_template: true
+            template_name: staging_template
+            min_tables: 300
+""",
+        )
+        env = config.get_fraise_environment("my_api", "staging")
+        assert env is not None
+        assert env["database"]["strategy"] == "restore_migrate"
+        assert env["database"]["restore"]["backup_dir"] == "/backup/production"

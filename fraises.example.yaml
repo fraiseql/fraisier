@@ -65,7 +65,16 @@ fraises:
         systemd_service: api.myapp.staging.service
         database:
           name: myapp_staging
-          strategy: rebuild
+          strategy: restore_migrate
+          confiture_config: db/environments/staging.yaml
+          restore:
+            backup_dir: /backup/production
+            backup_pattern: "*.dump"          # glob for finding backups
+            max_age_hours: 48                 # reject backups older than this
+            target_owner: myapp_user          # fix ownership after restore
+            create_template: true             # create rollback template before migrating
+            template_name: myapp_staging_template
+            min_tables: 300                   # post-restore validation
         health_check:
           url: https://api.myapp.staging/health
           timeout: 30

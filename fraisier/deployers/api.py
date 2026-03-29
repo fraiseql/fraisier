@@ -204,10 +204,20 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         from fraisier.strategies import get_strategy
 
         strategy_name = self.database_config.get("strategy", "apply")
-        strategy_map = {"apply": "migrate", "rebuild": "rebuild", "migrate": "migrate"}
+        strategy_map = {
+            "apply": "migrate",
+            "rebuild": "rebuild",
+            "migrate": "migrate",
+            "restore_migrate": "restore_migrate",
+        }
         resolved = strategy_map.get(strategy_name, strategy_name)
 
-        strategy = get_strategy(resolved)
+        kwargs: dict[str, Any] = {}
+        if resolved == "restore_migrate":
+            kwargs["restore_config"] = self.database_config.get("restore", {})
+            kwargs["db_name"] = self.database_config.get("name", "")
+
+        strategy = get_strategy(resolved, **kwargs)
         confiture_config = Path(
             self.database_config.get("confiture_config", "confiture.yaml")
         )
