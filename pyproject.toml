@@ -16,7 +16,7 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 dependencies = [
-  "fraiseql-confiture>=0.8.14,<1.0",
+  "fraiseql-confiture>=0.8.16,<1.0",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
@@ -31,7 +31,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.1.9"
+version = "0.1.10"
 
 [project.optional-dependencies]
 all-databases = [
@@ -64,9 +64,6 @@ Homepage = "https://github.com/fraiseql/fraisier"
 Issues = "https://github.com/fraiseql/fraisier/issues"
 Repository = "https://github.com/fraiseql/fraisier"
 
-
-[tool.uv.sources]
-fraiseql-confiture = { path = "../confiture", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["fraisier"]
