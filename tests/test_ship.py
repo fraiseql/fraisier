@@ -1,6 +1,7 @@
 """Tests for fraisier ship command."""
 
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import yaml
@@ -101,10 +102,10 @@ class TestShipCommand:
             ],
         )
 
-        # Should have called git add and git commit
+        # Should have called git add --update and git commit
         calls = mock_run.call_args_list
         commands = [c[0][0] for c in calls]
-        assert any("git" in str(cmd) and "add" in str(cmd) for cmd in commands)
+        assert any(cmd == ["git", "add", "--update"] for cmd in commands)
         assert any("git" in str(cmd) and "commit" in str(cmd) for cmd in commands)
 
     @patch("subprocess.run")
@@ -131,6 +132,115 @@ class TestShipCommand:
         calls = mock_run.call_args_list
         commands = [c[0][0] for c in calls]
         assert any("git" in str(cmd) and "push" in str(cmd) for cmd in commands)
+
+
+    @patch("subprocess.run")
+    def test_ship_retries_commit_on_precommit_failure(self, mock_run, tmp_path):
+        """Test ship retries commit when pre-commit hooks modify files."""
+        cfg = _setup_project(tmp_path)
+
+        # First commit fails (pre-commit modified files), retry succeeds
+        def side_effect(cmd, **kwargs):
+            if cmd[:2] == ["git", "commit"] and not hasattr(side_effect, "retried"):
+                side_effect.retried = True
+                raise subprocess.CalledProcessError(1, cmd)
+            # git diff --quiet returns 1 = dirty (files were modified by hook)
+            if cmd == ["git", "diff", "--quiet"]:
+                return MagicMock(returncode=1)
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Pre-commit hooks modified files" in result.output
+
+        # Should have called git add --update twice (initial + retry)
+        add_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c[0][0] == ["git", "add", "--update"]
+        ]
+        assert len(add_calls) == 2
+
+    @patch("subprocess.run")
+    def test_ship_raises_if_commit_fails_without_dirty_files(self, mock_run, tmp_path):
+        """Test ship raises if commit fails and no files were modified by hooks."""
+        cfg = _setup_project(tmp_path)
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:2] == ["git", "commit"]:
+                raise subprocess.CalledProcessError(1, cmd)
+            # git diff --quiet returns 0 = clean (no hook modifications)
+            if cmd == ["git", "diff", "--quiet"]:
+                return MagicMock(returncode=0)
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Pre-commit hooks modified files" not in result.output
+
+    @patch("subprocess.run")
+    def test_ship_raises_if_retry_also_fails(self, mock_run, tmp_path):
+        """Test ship raises if commit fails even after retry."""
+        cfg = _setup_project(tmp_path)
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:2] == ["git", "commit"]:
+                raise subprocess.CalledProcessError(1, cmd)
+            # git diff --quiet returns 1 = dirty (hooks did modify files)
+            if cmd == ["git", "diff", "--quiet"]:
+                return MagicMock(returncode=1)
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code != 0
 
 
 class TestShipDryRun:

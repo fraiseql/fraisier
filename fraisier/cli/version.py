@@ -188,15 +188,29 @@ def ship(
     console.print(f"[green]Version bumped:[/green] {current.version} -> {info.version}")
 
     # Git add, commit, push
-    files_to_add = [str(version_path)]
-    if pp:
-        files_to_add.append(str(pp))
-
-    subprocess.run(["git", "add", *files_to_add], check=True)
-    subprocess.run(
-        ["git", "commit", "-m", f"release: v{info.version}"],
-        check=True,
-    )
+    # Stage all tracked dirty files — ship is an explicit release action
+    subprocess.run(["git", "add", "--update"], check=True)
+    try:
+        subprocess.run(
+            ["git", "commit", "-m", f"release: v{info.version}"],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        # Pre-commit hooks may have auto-fixed files (ruff, detect-secrets…)
+        # Only retry if the working tree is dirty — otherwise it's a real failure
+        diff = subprocess.run(
+            ["git", "diff", "--quiet"], capture_output=True, check=False
+        )
+        if diff.returncode == 0:
+            raise
+        console.print(
+            "[yellow]Pre-commit hooks modified files, staging and retrying...[/yellow]"
+        )
+        subprocess.run(["git", "add", "--update"], check=True)
+        subprocess.run(
+            ["git", "commit", "-m", f"release: v{info.version}"],
+            check=True,
+        )
     subprocess.run(["git", "push"], check=True)
     console.print(f"[green]Shipped v{info.version}[/green]")
 
