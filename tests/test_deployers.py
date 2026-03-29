@@ -618,6 +618,64 @@ class TestScheduledDeployer:
         assert any("restart" in c for c in calls)
 
 
+class TestAPIDeployerRebuildStopsService:
+    """Rebuild strategy stops service before DB operations (#12)."""
+
+    def test_rebuild_stops_service_before_strategy(self, mock_subprocess):
+        """Service is stopped before rebuild strategy runs."""
+        config = {
+            "app_path": "/var/www/api",
+            "systemd_service": "my-api.service",
+            "database": {"strategy": "rebuild"},
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        call_order = []
+
+        with (
+            patch.object(
+                deployer,
+                "_stop_service",
+                side_effect=lambda: call_order.append("stop"),
+            ),
+            patch.object(
+                deployer,
+                "_run_strategy",
+                side_effect=lambda: call_order.append("strategy"),
+            ),
+            patch.object(
+                deployer,
+                "_restart_service",
+                side_effect=lambda: call_order.append("restart"),
+            ),
+        ):
+            deployer.execute()
+
+        assert "stop" in call_order
+        assert "strategy" in call_order
+        assert call_order.index("stop") < call_order.index("strategy")
+
+    def test_migrate_does_not_stop_service(self, mock_subprocess):
+        """Migrate strategy does NOT stop service before running."""
+        config = {
+            "app_path": "/var/www/api",
+            "systemd_service": "my-api.service",
+            "database": {"strategy": "apply"},
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        with (
+            patch.object(deployer, "_stop_service") as mock_stop,
+            patch.object(deployer, "_run_strategy"),
+            patch.object(deployer, "_restart_service"),
+        ):
+            deployer.execute()
+
+        mock_stop.assert_not_called()
+
+
 class TestAPIDeployerChdirForStrategy:
     """Deployer must chdir to app_path before running confiture."""
 

@@ -64,6 +64,15 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
                 # Step 2: Run database migrations via strategy if configured
                 if self.database_config:
+                    # Rebuild drops schemas — stop service first to release
+                    # DB connections and avoid stale OID errors (#12)
+                    if self._is_rebuild_strategy() and self.systemd_service:
+                        logger.info(
+                            "Stopping service for rebuild: %s",
+                            self.systemd_service,
+                        )
+                        self._stop_service()
+
                     logger.info("Running database migrations")
                     self._run_strategy()
 
@@ -240,6 +249,18 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     "fraise": self.fraise_name,
                 },
             )
+
+    def _is_rebuild_strategy(self) -> bool:
+        """Check if the configured strategy is rebuild."""
+        return self.database_config.get("strategy") == "rebuild"
+
+    def _stop_service(self) -> None:
+        """Stop systemd service."""
+        if not self.systemd_service:
+            return
+        from fraisier.systemd import SystemdServiceManager
+
+        SystemdServiceManager(self.runner).stop(self.systemd_service)
 
     def _restart_service(self) -> None:
         """Restart systemd service."""

@@ -19,6 +19,20 @@ class SystemdServiceManager:
     def __init__(self, runner: CommandRunner) -> None:
         self.runner = runner
 
+    def stop(self, service_name: str, timeout: int = 60) -> None:
+        """Stop a systemd service.
+
+        Raises:
+            ValueError: If service_name contains invalid characters.
+            subprocess.CalledProcessError: If systemctl fails.
+        """
+        validate_service_name(service_name)
+        self.runner.run(
+            ["sudo", "systemctl", "stop", service_name],
+            timeout=timeout,
+            check=True,
+        )
+
     def restart(self, service_name: str, timeout: int = 60) -> None:
         """Restart a systemd service.
 
