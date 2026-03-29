@@ -12,6 +12,7 @@ from fraisier.config import FraisierConfig
 from fraisier.setup import ServerSetup, SetupAction
 
 SERVER_AWARE_CONFIG = """\
+name: tp
 fraises:
   my_api:
     type: api
@@ -80,6 +81,7 @@ def _make_config(tmp_path, yaml_content: str) -> FraisierConfig:
 
 
 MINIMAL_CONFIG = """\
+name: tp
 fraises:
   my_api:
     type: api
@@ -102,6 +104,7 @@ fraises:
 """
 
 MULTI_FRAISE_CONFIG = """\
+name: tp
 fraises:
   api:
     type: api
@@ -121,6 +124,7 @@ fraises:
 """
 
 NGINX_CONFIG = """\
+name: tp
 fraises:
   my_api:
     type: api
@@ -199,7 +203,7 @@ class TestPlanSymlinks:
         assert len(actions) == 2
         assert all(a.category == "symlink" for a in actions)
         assert "/var/git/my-api-dev.git" in " ".join(actions[0].command)
-        assert "/var/lib/fraisier/repos/my_api_development.git" in " ".join(
+        assert "/var/lib/fraisier/repos/tp_my_api_development.git" in " ".join(
             actions[0].command
         )
 
@@ -207,6 +211,7 @@ class TestPlanSymlinks:
         config = _make_config(
             tmp_path,
             """\
+name: tp
 fraises:
   my_api:
     type: api
@@ -227,7 +232,7 @@ fraises:
         actions = setup._plan_symlinks()
 
         assert len(actions) == 1
-        assert "my_api_production" in " ".join(actions[0].command)
+        assert "tp_my_api_production" in " ".join(actions[0].command)
 
 
 class TestPlanAppServices:
@@ -238,8 +243,8 @@ class TestPlanAppServices:
 
         assert len(actions) == 2
         assert all(a.category == "systemd" for a in actions)
-        assert "my_api_development.service" in actions[0].description
-        assert "my_api_production.service" in actions[1].description
+        assert "tp_my_api_development.service" in actions[0].description
+        assert "tp_my_api_production.service" in actions[1].description
 
     def test_environment_filter(self, tmp_path):
         config = _make_config(tmp_path, MINIMAL_CONFIG)
@@ -295,7 +300,7 @@ class TestPlanNginx:
         setup = ServerSetup(config, FakeRunner())
         actions = setup._plan_nginx()
 
-        env_actions = [a for a in actions if "my_api_production" in a.description]
+        env_actions = [a for a in actions if "tp_my_api_production" in a.description]
         assert len(env_actions) == 2
 
     def test_no_per_env_nginx_when_unconfigured(self, tmp_path):
@@ -365,15 +370,15 @@ class TestFullPlan:
         filtered_actions = filtered_setup.plan()
         assert len(filtered_actions) < len(all_actions)
 
+    def test_project_name_from_config(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        assert setup._infer_project_name() == "tp"
+
     def test_multi_fraise_project_name(self, tmp_path):
         config = _make_config(tmp_path, MULTI_FRAISE_CONFIG)
         setup = ServerSetup(config, FakeRunner())
-        assert setup._infer_project_name() == "fraisier_project"
-
-    def test_single_fraise_project_name(self, tmp_path):
-        config = _make_config(tmp_path, MINIMAL_CONFIG)
-        setup = ServerSetup(config, FakeRunner())
-        assert setup._infer_project_name() == "my_api"
+        assert setup._infer_project_name() == "tp"
 
 
 class TestExecute:

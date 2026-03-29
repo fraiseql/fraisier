@@ -105,12 +105,8 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
 
 
 def _infer_project_name(config: FraisierConfig) -> str:
-    """Infer project name from config or fraise names."""
-    names = config.list_fraises()
-    if len(names) == 1:
-        return names[0]
-    # Use common prefix or fallback
-    return "fraisier_project"
+    """Return the project name from config (used for naming prefixes)."""
+    return config.project_name
 
 
 class ScaffoldRenderer:
@@ -188,10 +184,11 @@ class ScaffoldRenderer:
                 self._render_template(template_path, out_name)
 
         # Per-fraise systemd service templates
+        project = self.context["project_name"]
         for fraise in self.context["fraises"]:
             name = fraise["name"]
             for env_name in fraise.get("environments", {}):
-                svc_name = f"systemd/{name}_{env_name}.service"
+                svc_name = f"systemd/{project}_{name}_{env_name}.service"
                 rendered_files.append(svc_name)
                 if not dry_run:
                     self._render_systemd_service(fraise, env_name, svc_name)
@@ -292,6 +289,7 @@ class ScaffoldRenderer:
         Returns list of rendered file paths.
         """
         files: list[str] = []
+        project = self.context["project_name"]
         for fraise in self.context["fraises"]:
             name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
@@ -300,7 +298,7 @@ class ScaffoldRenderer:
                 nginx_config = NginxEnvConfig.from_env_dict(env_config)
                 if nginx_config is None:
                     continue
-                out_name = f"nginx/{name}_{env_name}.conf"
+                out_name = f"nginx/{project}_{name}_{env_name}.conf"
                 files.append(out_name)
                 if not dry_run:
                     self._render_nginx_env(

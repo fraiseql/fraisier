@@ -16,6 +16,7 @@ class TestScaffoldConfigParsing:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises: {}
 scaffold:
   output_dir: scripts/generated
@@ -50,7 +51,7 @@ scaffold:
 
     def test_scaffold_section_defaults(self, tmp_path):
         """Missing scaffold section uses sensible defaults."""
-        config = self._make_config(tmp_path, "fraises: {}\n")
+        config = self._make_config(tmp_path, "name: tp\nfraises: {}\n")
         sc = config.scaffold
         assert sc.output_dir == "scripts/generated"
         assert sc.deploy_user == "fraisier"
@@ -64,6 +65,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   management:
     type: api
@@ -99,6 +101,7 @@ fraises:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises: {}
 deployment:
   deploy_user: deploy_bot
@@ -123,6 +126,7 @@ class TestScaffoldRenderer:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -148,6 +152,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -171,6 +176,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -215,6 +221,7 @@ class TestSystemdServiceTemplates:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -232,7 +239,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc_path = tmp_path / "output" / "systemd" / "my_api_production.service"
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
         assert svc_path.exists(), f"Expected {svc_path} to exist"
         content = svc_path.read_text()
 
@@ -244,6 +251,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -261,7 +269,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc_path = tmp_path / "output" / "systemd" / "my_api_production.service"
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
         content = svc_path.read_text()
 
         assert "ExecStart=" in content
@@ -273,6 +281,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -290,7 +299,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc_path = tmp_path / "output" / "systemd" / "my_api_development.service"
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_development.service"
         content = svc_path.read_text()
         assert "MemoryMax=2G" in content
 
@@ -308,6 +317,7 @@ class TestSystemdTimerTemplates:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -336,6 +346,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -385,6 +396,7 @@ class TestSystemdServiceHardening:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -413,6 +425,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -448,6 +461,7 @@ class TestNginxTemplate:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -475,6 +489,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -509,6 +524,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -535,6 +551,7 @@ scaffold:
 
 
 _SCAFFOLD_YAML = """
+name: tp
 fraises:
   my_api:
     type: api
@@ -582,6 +599,7 @@ class TestSystemdServiceUsesConfig:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   management_api:
     type: api
@@ -598,7 +616,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc = tmp_path / "output" / "systemd" / "management_api_production.service"
+        svc = tmp_path / "output" / "systemd" / "tp_management_api_production.service"
         content = svc.read_text()
         assert "WorkingDirectory=/var/www/management.printoptim.com" in content
         assert "/opt/management_api" not in content
@@ -608,6 +626,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   management_api:
     type: api
@@ -626,7 +645,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc = tmp_path / "output" / "systemd" / "management_api_production.service"
+        svc = tmp_path / "output" / "systemd" / "tp_management_api_production.service"
         content = svc.read_text()
         assert "--port 8042" in content
         assert "--port 8000" not in content
@@ -636,6 +655,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   graphql_gateway:
     type: api
@@ -653,7 +673,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc = tmp_path / "output" / "systemd" / "graphql_gateway_production.service"
+        svc = tmp_path / "output" / "systemd" / "tp_graphql_gateway_production.service"
         content = svc.read_text()
         assert "ExecStart=/usr/local/bin/fraiseql-cli serve --port 4000" in content
         assert "uvicorn" not in content
@@ -663,6 +683,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -678,7 +699,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc = tmp_path / "output" / "systemd" / "my_api_production.service"
+        svc = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
         content = svc.read_text()
         assert "WorkingDirectory=/opt/my_api" in content
         assert "--port 8000" in content
@@ -697,6 +718,7 @@ class TestNginxPerFraiseRouting:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api_a:
     type: api
@@ -729,6 +751,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api_a:
     type: api
@@ -764,6 +787,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   management_api:
     type: api
@@ -794,14 +818,15 @@ scaffold:
         content = nginx.read_text()
         assert "server_name management.example.com" in content
         assert "server_name backend.example.com" in content
-        assert "management_api_backend" in content
-        assert "backend_api_backend" in content
+        assert "tp_management_api_backend" in content
+        assert "tp_backend_api_backend" in content
 
     def test_single_fraise_uses_location_root(self, tmp_path):
         """Single API fraise still gets location / (no prefix needed)."""
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -820,13 +845,14 @@ scaffold:
         nginx = tmp_path / "output" / "nginx" / "gateway.conf"
         content = nginx.read_text()
         assert "location / {" in content
-        assert "proxy_pass http://my_api_backend" in content
+        assert "proxy_pass http://tp_my_api_backend" in content
 
     def test_custom_location_prefix(self, tmp_path):
         """Fraises with explicit location field use that path."""
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   management_api:
     type: api
@@ -871,7 +897,7 @@ class TestSystemdServiceEnvConfig:
 
         renderer = ScaffoldRenderer(config)
         renderer.render()
-        svc = tmp_path / "output" / "systemd" / f"{fraise}_{env}.service"
+        svc = tmp_path / "output" / "systemd" / f"tp_{fraise}_{env}.service"
         return svc.read_text()
 
     def test_user_group_override(self, tmp_path):
@@ -879,6 +905,7 @@ class TestSystemdServiceEnvConfig:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -903,6 +930,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -922,6 +950,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -941,6 +970,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -958,6 +988,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -977,6 +1008,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -994,6 +1026,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1013,6 +1046,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1035,6 +1069,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1059,6 +1094,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1083,6 +1119,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1105,6 +1142,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1124,6 +1162,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1141,6 +1180,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1161,6 +1201,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1187,6 +1228,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1209,6 +1251,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1226,6 +1269,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1247,6 +1291,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1268,6 +1313,7 @@ scaffold:
         content = self._render_service(
             tmp_path,
             """
+name: tp
 fraises:
   my_api:
     type: api
@@ -1295,6 +1341,7 @@ class TestNginxPerEnvConfig:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1312,7 +1359,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert "listen 80;" in content
         assert "server_name api.myapp.io" in content
         assert "/.well-known/acme-challenge/" in content
@@ -1323,6 +1370,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1344,13 +1392,17 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         files = renderer.render()
 
-        assert "nginx/api_development.conf" in files
-        assert "nginx/api_production.conf" in files
+        assert "nginx/tp_api_development.conf" in files
+        assert "nginx/tp_api_production.conf" in files
 
-        dev_conf = (tmp_path / "output" / "nginx" / "api_development.conf").read_text()
+        dev_conf = (
+            tmp_path / "output" / "nginx" / "tp_api_development.conf"
+        ).read_text()
         assert "server_name api.myapp.dev" in dev_conf
 
-        prod_conf = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        prod_conf = (
+            tmp_path / "output" / "nginx" / "tp_api_production.conf"
+        ).read_text()
         assert "server_name api.myapp.io" in prod_conf
 
     def test_per_env_custom_ssl_paths(self, tmp_path):
@@ -1358,6 +1410,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1377,7 +1430,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert "ssl_certificate /etc/ssl/custom/cert.pem" in content
         assert "ssl_certificate_key /etc/ssl/custom/key.pem" in content
         assert "letsencrypt" not in content
@@ -1387,6 +1440,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1404,7 +1458,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert "/etc/letsencrypt/live/api.myapp.io/fullchain.pem" in content
         assert "/etc/letsencrypt/live/api.myapp.io/privkey.pem" in content
 
@@ -1413,6 +1467,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1432,7 +1487,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert "map $http_origin $cors_origin" in content
         assert "if ($http_origin" not in content
         assert "Access-Control-Allow-Origin $cors_origin" in content
@@ -1442,6 +1497,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1463,7 +1519,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert r"https://app\.myapp\.io" in content
         assert "global" not in content
 
@@ -1472,6 +1528,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1491,7 +1548,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert r"https://global\.example\.com" in content
 
     def test_per_env_structured_restricted_paths(self, tmp_path):
@@ -1499,6 +1556,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1520,7 +1578,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert "location /admin/" in content
         assert "allow 10.0.0.0/8;" in content
         assert "allow 127.0.0.1;" in content
@@ -1531,6 +1589,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1559,6 +1618,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1578,7 +1638,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
         assert "127.0.0.1:9000" in content
 
     def test_dry_run_includes_per_env_nginx(self, tmp_path):
@@ -1586,6 +1646,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1603,7 +1664,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         files = renderer.render(dry_run=True)
 
-        assert "nginx/api_production.conf" in files
+        assert "nginx/tp_api_production.conf" in files
         assert not (tmp_path / "output").exists()
 
 
@@ -1732,6 +1793,7 @@ class TestPerEnvIntegration:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   api:
     type: api
@@ -1801,21 +1863,21 @@ scaffold:
         files = renderer.render()
 
         # Systemd files for all fraise+env combos
-        assert "systemd/api_development.service" in files
-        assert "systemd/api_production.service" in files
-        assert "systemd/worker_production.service" in files
+        assert "systemd/tp_api_development.service" in files
+        assert "systemd/tp_api_production.service" in files
+        assert "systemd/tp_worker_production.service" in files
 
         # Per-env nginx for api (has nginx: blocks)
-        assert "nginx/api_development.conf" in files
-        assert "nginx/api_production.conf" in files
+        assert "nginx/tp_api_development.conf" in files
+        assert "nginx/tp_api_production.conf" in files
 
         # No per-env nginx for worker (no nginx: block)
-        worker_nginx = [f for f in files if f.startswith("nginx/worker_")]
+        worker_nginx = [f for f in files if f.startswith("nginx/tp_worker_")]
         assert worker_nginx == []
 
         # Verify dev systemd content
         dev_svc = (
-            tmp_path / "output" / "systemd" / "api_development.service"
+            tmp_path / "output" / "systemd" / "tp_api_development.service"
         ).read_text()
         assert "User=myapp_dev" in dev_svc
         assert "Group=www-data" in dev_svc
@@ -1828,7 +1890,7 @@ scaffold:
 
         # Verify prod systemd content
         prod_svc = (
-            tmp_path / "output" / "systemd" / "api_production.service"
+            tmp_path / "output" / "systemd" / "tp_api_production.service"
         ).read_text()
         assert "User=myapp_prod" in prod_svc
         assert "CPUQuota=200%" in prod_svc
@@ -1837,12 +1899,14 @@ scaffold:
 
         # Verify worker uses fallback deploy_user
         worker_svc = (
-            tmp_path / "output" / "systemd" / "worker_production.service"
+            tmp_path / "output" / "systemd" / "tp_worker_production.service"
         ).read_text()
         assert "User=worker_user" in worker_svc
 
         # Verify prod nginx content
-        prod_nginx = (tmp_path / "output" / "nginx" / "api_production.conf").read_text()
+        prod_nginx = (
+            tmp_path / "output" / "nginx" / "tp_api_production.conf"
+        ).read_text()
         assert "server_name api.example.com" in prod_nginx
         assert "ssl_certificate /etc/ssl/api/cert.pem" in prod_nginx
         assert r"https://app\.example\.com" in prod_nginx
@@ -1854,6 +1918,7 @@ scaffold:
         config = self._make_config(
             tmp_path,
             """
+name: tp
 fraises:
   new_style:
     type: api
@@ -1883,14 +1948,14 @@ scaffold:
         renderer.render()
 
         new_svc = (
-            tmp_path / "output" / "systemd" / "new_style_production.service"
+            tmp_path / "output" / "systemd" / "tp_new_style_production.service"
         ).read_text()
         assert "User=new_user" in new_svc
         assert "--workers 4" in new_svc
         assert "MemoryMax=8G" in new_svc
 
         legacy_svc = (
-            tmp_path / "output" / "systemd" / "legacy_style_production.service"
+            tmp_path / "output" / "systemd" / "tp_legacy_style_production.service"
         ).read_text()
         assert "User=default_user" in legacy_svc
         assert "MemoryMax=4G" in legacy_svc
@@ -1934,6 +1999,7 @@ class TestScaffoldCLI:
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text(
             """
+name: tp
 fraises:
   api_a:
     type: api

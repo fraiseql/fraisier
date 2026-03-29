@@ -128,11 +128,13 @@ class ServerSetup:
     def _plan_symlinks(self) -> list[SetupAction]:
         actions: list[SetupAction] = []
         seen: set[str] = set()
+        project = self.config.project_name
         for fraise_name, env_name, env_config in self._iter_fraise_environments():
             git_repo = env_config.get("git_repo")
             if not git_repo:
                 continue
-            link_name = f"/var/lib/fraisier/repos/{fraise_name}_{env_name}.git"
+            repo_name = f"{project}_{fraise_name}_{env_name}"
+            link_name = f"/var/lib/fraisier/repos/{repo_name}.git"
             if link_name in seen:
                 continue
             seen.add(link_name)
@@ -147,9 +149,10 @@ class ServerSetup:
 
     def _plan_app_services(self) -> list[SetupAction]:
         output_dir = self.config.scaffold.output_dir
+        project = self.config.project_name
         actions: list[SetupAction] = []
         for fraise_name, env_name, _ in self._iter_fraise_environments():
-            svc = f"{fraise_name}_{env_name}.service"
+            svc = f"{project}_{fraise_name}_{env_name}.service"
             src = f"{output_dir}/systemd/{svc}"
             dst = f"/etc/systemd/system/{svc}"
             actions.append(
@@ -216,11 +219,12 @@ class ServerSetup:
         )
 
         # Per-environment configs
+        project = self.config.project_name
         for fraise_name, env_name, env_config in self._iter_fraise_environments():
             nginx_config = NginxEnvConfig.from_env_dict(env_config)
             if nginx_config is None:
                 continue
-            conf_name = f"{fraise_name}_{env_name}"
+            conf_name = f"{project}_{fraise_name}_{env_name}"
             src = f"{output_dir}/nginx/{conf_name}.conf"
             dst = f"/etc/nginx/sites-available/{conf_name}"
             actions.append(
@@ -259,8 +263,9 @@ class ServerSetup:
                 category="systemd",
             ),
         ]
+        project = self.config.project_name
         for fraise_name, env_name, _ in self._iter_fraise_environments():
-            svc = f"{fraise_name}_{env_name}.service"
+            svc = f"{project}_{fraise_name}_{env_name}.service"
             actions.append(
                 SetupAction(
                     description=f"Enable {svc}",
@@ -335,10 +340,7 @@ class ServerSetup:
                     yield fraise_name, env_name, env_config
 
     def _infer_project_name(self) -> str:
-        names = self.config.list_fraises()
-        if len(names) == 1:
-            return names[0]
-        return "fraisier_project"
+        return self.config.project_name
 
     def _write_env_file(self) -> None:
         """Write webhook env file to scaffold output dir."""

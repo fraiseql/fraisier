@@ -4,8 +4,10 @@ Loads fraise definitions from fraises.yaml.
 Supports hierarchical fraise -> environment structure.
 """
 
+import logging
 import os
 import re
+import subprocess
 import threading
 import warnings
 from dataclasses import dataclass, field
@@ -717,6 +719,34 @@ class FraisierConfig:
                 include_commit=raw_response.get("include_commit", False),
             ),
         )
+
+    @property
+    def project_name(self) -> str:
+        """Project name used to prefix generated service names.
+
+        Resolution order:
+        1. Explicit ``name`` field in fraises.yaml
+        2. Git repository basename
+        3. Current working directory basename
+        """
+        name = self._config.get("name")
+        if name:
+            return str(name)
+
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return Path(result.stdout.strip()).name
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            logging.getLogger(__name__).debug(
+                "Could not determine git repo name, using cwd"
+            )
+
+        return Path.cwd().name
 
     @property
     def fraises(self) -> dict[str, dict[str, Any]]:

@@ -4,6 +4,13 @@
 # Fraisier (the strawberry plant) orchestrates deployment of fraises
 
 # ============================================================
+# PROJECT NAME
+# Prefixes generated systemd service and nginx config names.
+# Falls back to git repo name or current directory name.
+# ============================================================
+name: myapp
+
+# ============================================================
 # GIT PROVIDER CONFIGURATION
 # Supports: github, gitlab, gitea, bitbucket (or custom)
 # ============================================================

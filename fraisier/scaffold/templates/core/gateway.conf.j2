@@ -3,7 +3,7 @@
 
 {% for fraise in fraises %}
 {% if fraise.type == 'api' %}
-upstream {{ fraise.name }}_backend {
+upstream {{ project_name }}_{{ fraise.name }}_backend {
     server 127.0.0.1:{{ fraise.port }};
 }
 {% endif %}
@@ -78,7 +78,7 @@ server {
 
     location / {
         limit_req zone=api_limit burst=20 nodelay;
-        proxy_pass http://{{ fraise.name }}_backend;
+        proxy_pass http://{{ project_name }}_{{ fraise.name }}_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -124,7 +124,7 @@ server {
     location {{ path }} {
         allow 127.0.0.1;
         deny all;
-        proxy_pass http://{{ fraises[0].name }}_backend;
+        proxy_pass http://{{ project_name }}_{{ fraises[0].name }}_backend;
     }
 {% endfor %}
 
@@ -132,7 +132,7 @@ server {
 {% if fraise.location %}
     location {{ fraise.location }} {
         limit_req zone=api_limit burst=20 nodelay;
-        proxy_pass http://{{ fraise.name }}_backend;
+        proxy_pass http://{{ project_name }}_{{ fraise.name }}_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -141,7 +141,7 @@ server {
 {% elif api_fraises | length == 1 %}
     location / {
         limit_req zone=api_limit burst=20 nodelay;
-        proxy_pass http://{{ fraise.name }}_backend;
+        proxy_pass http://{{ project_name }}_{{ fraise.name }}_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -150,7 +150,7 @@ server {
 {% else %}
     location /{{ fraise.name }}/ {
         limit_req zone=api_limit burst=20 nodelay;
-        proxy_pass http://{{ fraise.name }}_backend;
+        proxy_pass http://{{ project_name }}_{{ fraise.name }}_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
