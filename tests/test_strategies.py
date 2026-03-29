@@ -194,15 +194,18 @@ def _mock_rebuild_deps(mock_env_validate, mock_migrator_cls):
 
 
 class TestRebuildStrategy:
-    """Development strategy: build SQL + psql apply + reinit."""
+    """Development strategy: drop/create DB + build SQL + psql apply + reinit."""
 
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
     @patch("fraisier.strategies.subprocess.run")
     @patch("confiture.core.migrator.Migrator")
     @patch("confiture.core.builder.SchemaBuilder")
     @patch("confiture.config.environment.Environment.model_validate")
     @patch("yaml.safe_load", return_value={})
     @patch("pathlib.Path.read_text", return_value="")
-    def test_execute_builds_and_applies_via_psql(
+    def test_execute_drops_and_recreates_db(
         self,
         mock_read_text,
         mock_yaml_load,
@@ -210,10 +213,14 @@ class TestRebuildStrategy:
         mock_builder_cls,
         mock_migrator_cls,
         mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
     ):
         _, mock_session = _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
         mock_builder = MagicMock()
         mock_builder_cls.return_value = mock_builder
+        mock_subprocess_run.return_value = MagicMock(returncode=0, stderr="")
 
         strategy = RebuildStrategy()
         result = strategy.execute(CONFIG, migrations_dir=MDIR)
@@ -222,15 +229,21 @@ class TestRebuildStrategy:
         mock_builder_cls.assert_called_once_with(env="dev")
         mock_builder.build.assert_called_once()
 
-        # Two psql calls: drop schemas + apply file.
-        assert mock_subprocess_run.call_count == 2
-        drop_call, apply_call = mock_subprocess_run.call_args_list
-        assert "-c" in drop_call[0][0]
-        assert "DROP SCHEMA" in drop_call[0][0][-1]
+        # DB is dropped and recreated via operations module
+        mock_terminate.assert_called_once_with("mydb")
+        mock_drop.assert_called_once_with("mydb")
+        mock_create.assert_called_once_with("mydb", owner=None)
+
+        # psql -f applies the generated schema
+        assert mock_subprocess_run.call_count == 1
+        apply_call = mock_subprocess_run.call_args_list[0]
         assert "-f" in apply_call[0][0]
 
         mock_session.reinit.assert_called_once()
 
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
     @patch("fraisier.strategies.subprocess.run")
     @patch("confiture.core.migrator.Migrator")
     @patch("confiture.core.builder.SchemaBuilder")
@@ -245,22 +258,27 @@ class TestRebuildStrategy:
         mock_builder_cls,
         mock_migrator_cls,
         mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
     ):
         import subprocess as sp
 
         _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
         mock_builder_cls.return_value = MagicMock()
 
-        # First psql call (drop) succeeds, second (apply) fails.
-        mock_subprocess_run.side_effect = [
-            MagicMock(returncode=0),
-            sp.CalledProcessError(1, "psql"),
-        ]
+        # psql apply fails with stderr
+        mock_subprocess_run.return_value = MagicMock(
+            returncode=1, stderr="ERROR: syntax error"
+        )
 
         strategy = RebuildStrategy()
         with pytest.raises(sp.CalledProcessError):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
     @patch("fraisier.strategies.subprocess.run")
     @patch("confiture.core.migrator.Migrator")
     @patch("confiture.core.builder.SchemaBuilder")
@@ -275,9 +293,13 @@ class TestRebuildStrategy:
         mock_builder_cls,
         mock_migrator_cls,
         mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
     ):
         _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
         mock_builder_cls.return_value = MagicMock()
+        mock_subprocess_run.return_value = MagicMock(returncode=0, stderr="")
         url = "postgresql:///override?host=/var/run/postgresql"
 
         strategy = RebuildStrategy()
@@ -288,6 +310,9 @@ class TestRebuildStrategy:
         call_args = mock_env_validate.call_args[0][0]
         assert call_args["database_url"] == url
 
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
     @patch("fraisier.strategies.subprocess.run")
     @patch("confiture.core.migrator.Migrator")
     @patch("confiture.core.builder.SchemaBuilder")
@@ -302,15 +327,93 @@ class TestRebuildStrategy:
         mock_builder_cls,
         mock_migrator_cls,
         mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
     ):
         _, mock_session = _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
         mock_builder_cls.return_value = MagicMock()
+        mock_subprocess_run.return_value = MagicMock(returncode=0, stderr="")
 
         strategy = RebuildStrategy()
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=5)
 
         assert result.success
         mock_session.reinit.assert_called_once()
+
+    @patch(
+        "fraisier.strategies.create_db",
+        return_value=(1, "", "ERROR: permission denied"),
+    )
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
+    @patch("fraisier.strategies.subprocess.run")
+    @patch("confiture.core.migrator.Migrator")
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_raises_on_createdb_failure(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
+    ):
+        import subprocess as sp
+
+        _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder_cls.return_value = MagicMock()
+
+        strategy = RebuildStrategy()
+        with pytest.raises(sp.CalledProcessError):
+            strategy.execute(CONFIG, migrations_dir=MDIR)
+
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
+    @patch("fraisier.strategies.subprocess.run")
+    @patch("confiture.core.migrator.Migrator")
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_parses_owner_from_url(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
+    ):
+        mock_env = MagicMock()
+        mock_env.name = "dev"
+        mock_env.database_url = "postgresql://appuser:pass@localhost/mydb"
+        mock_env_validate.return_value = mock_env
+        mock_session = MagicMock()
+        mock_migrator_cls.from_config.return_value.__enter__ = MagicMock(
+            return_value=mock_session
+        )
+        mock_migrator_cls.from_config.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+        mock_builder_cls.return_value = MagicMock()
+        mock_subprocess_run.return_value = MagicMock(returncode=0, stderr="")
+
+        strategy = RebuildStrategy()
+        result = strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        mock_create.assert_called_once_with("mydb", owner="appuser")
 
 
 # ---------------------------------------------------------------------------

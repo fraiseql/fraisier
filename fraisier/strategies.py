@@ -20,6 +20,7 @@ from fraisier.dbops.confiture import (
     migrate_up,
     preflight,
 )
+from fraisier.dbops.operations import create_db, drop_db, terminate_backends
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +128,7 @@ class RebuildStrategy(Strategy):
         database_url: str | None = None,
     ) -> StrategyResult:
         import tempfile
+        from urllib.parse import urlparse
 
         import yaml
         from confiture.config.environment import Environment
@@ -141,6 +143,11 @@ class RebuildStrategy(Strategy):
             raw["database_url"] = database_url
         env = Environment.model_validate(raw)
 
+        # Parse database name and owner from the connection URL.
+        parsed = urlparse(env.database_url)
+        db_name = parsed.path.lstrip("/")
+        db_owner = parsed.username
+
         # Build full SQL (DDL + seeds).
         builder = SchemaBuilder(env=env.name)
         with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
@@ -149,20 +156,26 @@ class RebuildStrategy(Strategy):
         try:
             builder.build(output_path=output_path)
 
-            # Drop all user schemas so the new DDL starts clean.
-            drop_sql = "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
-            subprocess.run(
-                ["psql", env.database_url, "-c", drop_sql],
-                check=True,
-                capture_output=True,
-            )
+            # Drop and recreate the database as postgres superuser.
+            # This avoids "must be owner of schema public" errors when
+            # the app user doesn't own the public schema.
+            terminate_backends(db_name)
+            drop_db(db_name)
+            code, _, stderr = create_db(db_name, owner=db_owner)
+            if code != 0:
+                raise subprocess.CalledProcessError(code, "createdb", stderr=stderr)
 
             # Apply the generated schema in one shot (fast).
-            subprocess.run(
+            result = subprocess.run(
                 ["psql", env.database_url, "-f", str(output_path)],
-                check=True,
                 capture_output=True,
+                text=True,
+                check=False,
             )
+            if result.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    result.returncode, "psql", stderr=result.stderr
+                )
         finally:
             output_path.unlink(missing_ok=True)
 
