@@ -1,8 +1,10 @@
 """Shared test fixtures and configuration."""
 
 import asyncio
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse, urlunparse
 
 import pytest
 
@@ -176,3 +178,115 @@ def _isolated_db(tmp_path, monkeypatch):
     fraisier.database._db = None
     yield
     fraisier.database._db = old_db
+
+
+# ---------------------------------------------------------------------------
+# Integration test fixtures (testcontainers + PostgreSQL)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def pg_container():
+    """Start a PostgreSQL 16 container for the test session.
+
+    Skips gracefully when testcontainers or Docker is unavailable.
+    """
+    try:
+        from testcontainers.postgres import PostgresContainer
+    except ImportError:
+        pytest.skip("testcontainers not installed")
+
+    with PostgresContainer("postgres:16", driver=None) as pg:
+        yield pg
+
+
+@pytest.fixture(scope="session")
+def pg_superuser_url(pg_container):
+    """Superuser connection URL for the session container."""
+    return pg_container.get_connection_url()
+
+
+@pytest.fixture
+def pg_test_db(pg_superuser_url):
+    """Create a fresh database per test, drop on teardown."""
+    import psycopg
+
+    db_name = f"test_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
+        conn.execute(f"CREATE DATABASE {db_name}")
+
+    parsed = urlparse(pg_superuser_url)
+    test_url = urlunparse(parsed._replace(path=f"/{db_name}"))
+    yield test_url, db_name
+
+    with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
+        # Terminate any lingering connections before dropping
+        conn.execute(
+            "SELECT pg_terminate_backend(pid) "
+            "FROM pg_stat_activity "
+            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
+        )
+        conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
+
+
+@pytest.fixture
+def confiture_project(pg_test_db, tmp_path):
+    """Set up a confiture project directory with config pointing at the test DB.
+
+    Creates the full directory layout that both confiture's Migrator (reads
+    confiture.yaml) and SchemaBuilder (reads db/environments/<name>.yaml)
+    expect.
+    """
+    import textwrap
+
+    test_url, db_name = pg_test_db
+
+    # Write confiture.yaml (used by Migrator / strategy execute)
+    config_path = tmp_path / "confiture.yaml"
+    config_path.write_text(
+        textwrap.dedent(f"""\
+        name: test
+        database_url: "{test_url}"
+        include_dirs:
+          - "{tmp_path / "db" / "0_schema"}"
+        """)
+    )
+
+    # Write db/environments/test.yaml (used by SchemaBuilder.load)
+    env_dir = tmp_path / "db" / "environments"
+    env_dir.mkdir(parents=True)
+    (env_dir / "test.yaml").write_text(
+        textwrap.dedent(f"""\
+        name: test
+        database_url: "{test_url}"
+        include_dirs:
+          - "{tmp_path / "db" / "0_schema"}"
+        """)
+    )
+
+    # Create migration directory structure
+    migrations_dir = tmp_path / "db" / "migrations"
+    migrations_dir.mkdir(parents=True)
+
+    # Create a simple schema directory
+    schema_dir = tmp_path / "db" / "0_schema" / "01_public"
+    schema_dir.mkdir(parents=True)
+    (schema_dir / "011_tb_example.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS public.tb_example (\n"
+        "    id serial PRIMARY KEY,\n"
+        "    name text NOT NULL\n"
+        ");\n"
+    )
+
+    # Write a migration pair
+    (migrations_dir / "001_initial.up.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS public.tb_example (\n"
+        "    id serial PRIMARY KEY,\n"
+        "    name text NOT NULL\n"
+        ");\n"
+    )
+    (migrations_dir / "001_initial.down.sql").write_text(
+        "DROP TABLE IF EXISTS public.tb_example;\n"
+    )
+
+    return config_path, migrations_dir, test_url, db_name

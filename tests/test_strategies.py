@@ -226,13 +226,15 @@ class TestRebuildStrategy:
         result = strategy.execute(CONFIG, migrations_dir=MDIR)
 
         assert result.success
-        mock_builder_cls.assert_called_once_with(env="dev")
+        mock_builder_cls.assert_called_once_with(
+            env="dev", project_dir=CONFIG.resolve().parent
+        )
         mock_builder.build.assert_called_once()
 
         # DB is dropped and recreated via operations module
-        mock_terminate.assert_called_once_with("mydb")
-        mock_drop.assert_called_once_with("mydb")
-        mock_create.assert_called_once_with("mydb", owner=None)
+        mock_terminate.assert_called_once_with("mydb", connection_url=None)
+        mock_drop.assert_called_once_with("mydb", connection_url=None)
+        mock_create.assert_called_once_with("mydb", owner=None, connection_url=None)
 
         # psql -f applies the generated schema
         assert mock_subprocess_run.call_count == 1
@@ -413,7 +415,9 @@ class TestRebuildStrategy:
         result = strategy.execute(CONFIG, migrations_dir=MDIR)
 
         assert result.success
-        mock_create.assert_called_once_with("mydb", owner="appuser")
+        mock_create.assert_called_once_with(
+            "mydb", owner="appuser", connection_url=None
+        )
 
 
 # ---------------------------------------------------------------------------

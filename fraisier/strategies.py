@@ -128,7 +128,7 @@ class RebuildStrategy(Strategy):
         database_url: str | None = None,
     ) -> StrategyResult:
         import tempfile
-        from urllib.parse import urlparse
+        from urllib.parse import urlparse, urlunparse
 
         import yaml
         from confiture.config.environment import Environment
@@ -148,8 +148,16 @@ class RebuildStrategy(Strategy):
         db_name = parsed.path.lstrip("/")
         db_owner = parsed.username
 
+        # Derive a superuser admin URL (pointing at the "postgres"
+        # database) when a connection_url was provided.  This lets
+        # terminate_backends / drop_db / create_db connect without sudo.
+        admin_url: str | None = None
+        if database_url:
+            admin_url = urlunparse(parsed._replace(path="/postgres"))
+
         # Build full SQL (DDL + seeds).
-        builder = SchemaBuilder(env=env.name)
+        project_dir = Path(confiture_config).resolve().parent
+        builder = SchemaBuilder(env=env.name, project_dir=project_dir)
         with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
             output_path = Path(tmp.name)
 
@@ -159,9 +167,11 @@ class RebuildStrategy(Strategy):
             # Drop and recreate the database as postgres superuser.
             # This avoids "must be owner of schema public" errors when
             # the app user doesn't own the public schema.
-            terminate_backends(db_name)
-            drop_db(db_name)
-            code, _, stderr = create_db(db_name, owner=db_owner)
+            terminate_backends(db_name, connection_url=admin_url)
+            drop_db(db_name, connection_url=admin_url)
+            code, _, stderr = create_db(
+                db_name, owner=db_owner, connection_url=admin_url
+            )
             if code != 0:
                 raise subprocess.CalledProcessError(code, "createdb", stderr=stderr)
 
