@@ -414,4 +414,5 @@ from . import health as _health_mod  # noqa: E402, F401
 from . import ops as _ops_mod  # noqa: E402, F401
 from . import providers as _providers_mod  # noqa: E402, F401
 from . import scaffold as _scaffold_mod  # noqa: E402, F401
+from . import setup as _setup_mod  # noqa: E402, F401
 from . import version as _version_mod  # noqa: E402, F401

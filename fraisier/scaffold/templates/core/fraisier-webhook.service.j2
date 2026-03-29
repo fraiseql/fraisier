@@ -1,0 +1,45 @@
+[Unit]
+Description=Fraisier webhook server for {{ project_name }}
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User={{ scaffold.deploy_user }}
+Group={{ scaffold.deploy_user }}
+ExecStart=/usr/local/bin/fraisier-webhook
+Restart=on-failure
+RestartSec=5
+WatchdogSec=120
+
+# Environment
+EnvironmentFile=/etc/fraisier/webhook.env
+
+# Resource limits
+MemoryMax=512M
+CPUAccounting=true
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Writable paths
+ReadWritePaths=/var/lib/fraisier
+ReadWritePaths=/run/fraisier
+{% for fraise in fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% if env_config.get('app_path') %}
+ReadWritePaths={{ env_config['app_path'] }}
+{% endif %}
+{% endfor %}
+{% endfor %}
+
+[Install]
+WantedBy=multi-user.target

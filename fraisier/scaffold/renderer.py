@@ -34,6 +34,7 @@ _CORE_TEMPLATES = [
     "core/db_reset.sh.j2",
     "core/db_deploy.sh.j2",
     "core/poll-deploy.service.j2",
+    "core/fraisier-webhook.service.j2",
 ]
 
 # Provider-specific templates
