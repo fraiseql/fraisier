@@ -373,6 +373,26 @@ class HealthConfig:
     response: HealthResponseConfig = field(default_factory=HealthResponseConfig)
 
 
+@dataclass
+class ShipCheckConfig:
+    """A single check in the ship pipeline."""
+
+    name: str
+    command: list[str]
+    phase: str  # "fix", "validate", "test"
+    triggers: list[str] | None = None
+    timeout: int = 60
+
+
+@dataclass
+class ShipConfig:
+    """Parsed ship: section from fraises.yaml."""
+
+    checks: list[ShipCheckConfig] = field(default_factory=list)
+    pr_base: str | None = None
+    parallel: bool = True
+
+
 class FraisierConfig:
     """Load and manage deployment configuration from fraises.yaml.
 
@@ -737,6 +757,36 @@ class FraisierConfig:
                 include_environment=raw_response.get("include_environment", False),
                 include_commit=raw_response.get("include_commit", False),
             ),
+        )
+
+    @property
+    def ship(self) -> ShipConfig:
+        """Get parsed ship pipeline configuration."""
+        raw = self._config.get("ship", {}) or {}
+        raw_checks = raw.get("checks", []) or []
+        valid_phases = {"fix", "validate", "test"}
+        checks = []
+        for c in raw_checks:
+            phase = c.get("phase", "validate")
+            if phase not in valid_phases:
+                raise ValidationError(
+                    f"Invalid ship check phase '{phase}' for "
+                    f"'{c.get('name', '?')}'. "
+                    f"Valid: {', '.join(sorted(valid_phases))}",
+                )
+            checks.append(
+                ShipCheckConfig(
+                    name=c["name"],
+                    command=c.get("command", []),
+                    phase=phase,
+                    triggers=c.get("triggers"),
+                    timeout=c.get("timeout", 60),
+                )
+            )
+        return ShipConfig(
+            checks=checks,
+            pr_base=raw.get("pr_base"),
+            parallel=raw.get("parallel", True),
         )
 
     @property

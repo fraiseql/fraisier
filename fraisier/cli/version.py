@@ -121,6 +121,11 @@ def version_bump(
 @click.argument("bump_type", type=click.Choice(["patch", "minor", "major"]))
 @click.option("--dry-run", is_flag=True, help="Show what would happen")
 @click.option("--no-deploy", is_flag=True, help="Skip deploy after push")
+@click.option("--pr", "create_pr", is_flag=True, help="Create a PR after push")
+@click.option("--pr-base", default=None, help="Base branch for the PR")
+@click.option(
+    "--skip-checks", is_flag=True, help="Skip pipeline checks, just bump+commit+push"
+)
 @click.option(
     "--version-file",
     type=click.Path(),
@@ -133,10 +138,15 @@ def version_bump(
     default="pyproject.toml",
     help="Path to pyproject.toml",
 )
+@click.pass_context
 def ship(
+    ctx: click.Context,
     bump_type: str,
     dry_run: bool,
     no_deploy: bool,
+    create_pr: bool,
+    pr_base: str | None,
+    skip_checks: bool,
     version_file: str,
     pyproject: str,
 ) -> None:
@@ -147,48 +157,168 @@ def ship(
         fraisier ship patch
         fraisier ship minor --dry-run
         fraisier ship patch --no-deploy
-        fraisier ship major --pyproject path/to/pyproject.toml
+        fraisier ship patch --pr --pr-base dev
+        fraisier ship major --skip-checks
     """
-    import subprocess
-
-    from fraisier.versioning import bump_version, parse_semver, read_version
+    from fraisier.versioning import bump_version, parse_semver
 
     version_path = Path(version_file)
     pyproject_path = Path(pyproject)
+    current = _read_current_version(version_path)
+    new = _calc_new_version(current.version, bump_type, parse_semver)
 
-    if not version_path.exists():
-        console.print(f"[red]Error:[/red] {version_path} not found")
-        raise SystemExit(1)
-
-    current = read_version(version_path)
-    if current is None:
-        console.print(f"[red]Error:[/red] Cannot read {version_path}")
-        raise SystemExit(1)
-
-    major, minor, patch_v = parse_semver(current.version)
-    if bump_type == "major":
-        new = f"{major + 1}.0.0"
-    elif bump_type == "minor":
-        new = f"{major}.{minor + 1}.0"
-    else:
-        new = f"{major}.{minor}.{patch_v + 1}"
+    # Resolve ship config (may be None if no fraises.yaml)
+    config = ctx.obj.get("config") if ctx.obj else None
+    ship_config = config.ship if config else None
+    has_pipeline = bool(ship_config and ship_config.checks and not skip_checks)
 
     if dry_run:
-        console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{new}")
-        console.print(f"  Bump: {current.version} -> {new} ({bump_type})")
-        console.print(f"  Files: {version_path}, {pyproject_path}")
-        console.print("  Git: add, commit, push")
-        if not no_deploy:
-            console.print("  Deploy: trigger for branch-mapped fraises")
+        _ship_dry_run(
+            current.version,
+            new,
+            bump_type,
+            version_path,
+            pyproject_path,
+            ship_config,
+            has_pipeline,
+            create_pr,
+            pr_base,
+            no_deploy,
+        )
         return
 
-    # Bump version atomically
     pp = pyproject_path if pyproject_path.exists() else None
     info = bump_version(version_path, bump_type, pyproject_path=pp)
     console.print(f"[green]Version bumped:[/green] {current.version} -> {info.version}")
 
-    # Git add, commit, push
-    # Stage all tracked dirty files — ship is an explicit release action
+    if has_pipeline:
+        _ship_with_pipeline(info, ship_config)
+    else:
+        _ship_legacy(info)
+
+    if create_pr:
+        _ship_create_pr(info.version, pr_base, ship_config)
+
+    console.print(f"[green]Shipped v{info.version}[/green]")
+
+    if not no_deploy:
+        _trigger_deploy_for_current_branch()
+
+
+def _read_current_version(version_path: Path) -> object:
+    """Read and validate the current version file."""
+    from fraisier.versioning import read_version
+
+    if not version_path.exists():
+        console.print(f"[red]Error:[/red] {version_path} not found")
+        raise SystemExit(1)
+    current = read_version(version_path)
+    if current is None:
+        console.print(f"[red]Error:[/red] Cannot read {version_path}")
+        raise SystemExit(1)
+    return current
+
+
+def _calc_new_version(
+    current_version: str,
+    bump_type: str,
+    parse_semver: object,
+) -> str:
+    """Calculate the new version string."""
+    major, minor, patch_v = parse_semver(current_version)
+    if bump_type == "major":
+        return f"{major + 1}.0.0"
+    if bump_type == "minor":
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch_v + 1}"
+
+
+def _ship_dry_run(
+    current_version: str,
+    new: str,
+    bump_type: str,
+    version_path: Path,
+    pyproject_path: Path,
+    ship_config: object,
+    has_pipeline: bool,
+    create_pr: bool,
+    pr_base: str | None,
+    no_deploy: bool,
+) -> None:
+    """Print dry-run plan for ship."""
+    console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{new}")
+    console.print(f"  Bump: {current_version} -> {new} ({bump_type})")
+    console.print(f"  Files: {version_path}, {pyproject_path}")
+    if has_pipeline:
+        console.print("  Pipeline checks:")
+        for c in ship_config.checks:
+            console.print(f"    [{c.phase}] {c.name}")
+    console.print("  Git: add, commit, push")
+    if create_pr:
+        base = pr_base or (ship_config.pr_base if ship_config else None)
+        console.print(f"  PR: create against {base or '<default branch>'}")
+    if not no_deploy:
+        console.print("  Deploy: trigger for branch-mapped fraises")
+
+
+def _ship_create_pr(
+    version: str,
+    pr_base: str | None,
+    ship_config: object,
+) -> None:
+    """Create a PR after push."""
+    base = pr_base or (ship_config.pr_base if ship_config else None)
+    if not base:
+        console.print(
+            "[red]Error:[/red] --pr-base required (or set ship.pr_base in fraises.yaml)"
+        )
+        raise SystemExit(1)
+    from fraisier.ship.pr import create_pr as do_create_pr
+
+    do_create_pr(version, base, console)
+
+
+def _ship_with_pipeline(
+    info: object,
+    ship_config: object,
+) -> None:
+    """Ship using the check pipeline (--no-verify commit)."""
+    import subprocess
+
+    from fraisier.ship.pipeline import ShipPipeline
+
+    cwd = Path.cwd()
+    pipeline = ShipPipeline(ship_config, cwd, console)
+
+    # Phase 1: auto-fixers (before staging)
+    console.print("[bold]Running fix checks...[/bold]")
+    fix_result = pipeline.run_fix_phase()
+    if not fix_result.success:
+        console.print("[red]Fix checks failed, aborting ship.[/red]")
+        raise SystemExit(1)
+
+    # Stage all tracked dirty files (bump + fixer output)
+    subprocess.run(["git", "add", "--update"], check=True)
+
+    # Phase 2: validators + tests (after staging)
+    console.print("[bold]Running validation and tests...[/bold]")
+    verify_result = pipeline.run_verify_phase()
+    if not verify_result.success:
+        console.print("[red]Validation/test checks failed, aborting ship.[/red]")
+        raise SystemExit(1)
+
+    # Commit with --no-verify (we already ran all checks)
+    subprocess.run(
+        ["git", "commit", "--no-verify", "-m", f"release: v{info.version}"],
+        check=True,
+    )
+    subprocess.run(["git", "push"], check=True)
+
+
+def _ship_legacy(info: object) -> None:
+    """Ship without pipeline (backward compat, uses pre-commit hooks)."""
+    import subprocess
+
     subprocess.run(["git", "add", "--update"], check=True)
     try:
         subprocess.run(
@@ -212,11 +342,6 @@ def ship(
             check=True,
         )
     subprocess.run(["git", "push"], check=True)
-    console.print(f"[green]Shipped v{info.version}[/green]")
-
-    # Deploy for branch-mapped fraises
-    if not no_deploy:
-        _trigger_deploy_for_current_branch()
 
 
 def _trigger_deploy_for_current_branch() -> None:

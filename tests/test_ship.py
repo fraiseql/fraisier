@@ -133,7 +133,6 @@ class TestShipCommand:
         commands = [c[0][0] for c in calls]
         assert any("git" in str(cmd) and "push" in str(cmd) for cmd in commands)
 
-
     @patch("subprocess.run")
     def test_ship_retries_commit_on_precommit_failure(self, mock_run, tmp_path):
         """Test ship retries commit when pre-commit hooks modify files."""
@@ -171,9 +170,7 @@ class TestShipCommand:
 
         # Should have called git add --update twice (initial + retry)
         add_calls = [
-            c
-            for c in mock_run.call_args_list
-            if c[0][0] == ["git", "add", "--update"]
+            c for c in mock_run.call_args_list if c[0][0] == ["git", "add", "--update"]
         ]
         assert len(add_calls) == 2
 
@@ -241,6 +238,242 @@ class TestShipCommand:
             ],
         )
         assert result.exit_code != 0
+
+
+def _setup_project_with_pipeline(tmp_path, version="1.0.0"):
+    """Create project with ship pipeline config."""
+    vj = tmp_path / "version.json"
+    vj.write_text(
+        json.dumps(
+            {
+                "version": version,
+                "commit": "abc123",
+                "branch": "main",
+                "timestamp": "2026-03-23T12:00:00Z",
+                "schema_hash": "",
+                "environment": "",
+                "database_version": "",
+            },
+            indent=2,
+        )
+    )
+
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(f'[project]\nname = "myapp"\nversion = "{version}"\n')
+
+    config = {
+        "fraises": {
+            "my_api": {
+                "type": "api",
+                "environments": {
+                    "production": {
+                        "name": "my-api",
+                        "app_path": "/var/www/my-api",
+                    },
+                },
+            },
+        },
+        "ship": {
+            "pr_base": "dev",
+            "checks": [
+                {
+                    "name": "ruff-fix",
+                    "command": ["echo", "ruff"],
+                    "phase": "fix",
+                },
+                {
+                    "name": "pytest",
+                    "command": ["echo", "tests"],
+                    "phase": "test",
+                    "timeout": 120,
+                },
+            ],
+        },
+    }
+
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text(yaml.dump(config))
+    return str(cfg)
+
+
+class TestShipPipelineIntegration:
+    """Test ship with pipeline config."""
+
+    @patch("subprocess.run")
+    @patch("fraisier.ship.pipeline.run_check")
+    def test_ship_uses_no_verify_with_pipeline(self, mock_check, mock_run, tmp_path):
+        """Pipeline path uses --no-verify on commit."""
+        mock_run.return_value = MagicMock(returncode=0)
+        from fraisier.ship.checks import CheckResult
+
+        mock_check.return_value = CheckResult(
+            name="test", success=True, output="", duration_seconds=0.1
+        )
+        cfg = _setup_project_with_pipeline(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        calls = mock_run.call_args_list
+        commit_calls = [c[0][0] for c in calls if "commit" in str(c[0][0])]
+        assert any("--no-verify" in cmd for cmd in commit_calls)
+
+    @patch("subprocess.run")
+    def test_ship_backward_compat_no_pipeline(self, mock_run, tmp_path):
+        """Without ship config, uses legacy path (no --no-verify)."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        calls = mock_run.call_args_list
+        commit_calls = [c[0][0] for c in calls if "commit" in str(c[0][0])]
+        assert not any("--no-verify" in cmd for cmd in commit_calls)
+
+    @patch("subprocess.run")
+    @patch("fraisier.ship.pipeline.run_check")
+    def test_ship_skip_checks_bypasses_pipeline(self, mock_check, mock_run, tmp_path):
+        """--skip-checks skips pipeline even when configured."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project_with_pipeline(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--skip-checks",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        mock_check.assert_not_called()
+
+    @patch("subprocess.run")
+    @patch("fraisier.ship.pipeline.run_check")
+    def test_ship_fix_failure_aborts(self, mock_check, mock_run, tmp_path):
+        """Fix phase failure aborts ship."""
+        mock_run.return_value = MagicMock(returncode=0)
+        from fraisier.ship.checks import CheckResult
+
+        mock_check.return_value = CheckResult(
+            name="ruff-fix",
+            success=False,
+            output="lint error",
+            duration_seconds=0.1,
+        )
+        cfg = _setup_project_with_pipeline(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Fix checks failed" in result.output
+
+    @patch("subprocess.run")
+    @patch("fraisier.ship.pr.create_pr")
+    @patch("fraisier.ship.pipeline.run_check")
+    def test_ship_pr_flag_creates_pr(
+        self, mock_check, mock_create_pr, mock_run, tmp_path
+    ):
+        """--pr creates a PR after push."""
+        mock_run.return_value = MagicMock(returncode=0)
+        from fraisier.ship.checks import CheckResult
+
+        mock_check.return_value = CheckResult(
+            name="test", success=True, output="", duration_seconds=0.1
+        )
+        mock_create_pr.return_value = "https://github.com/test/pr/1"
+        cfg = _setup_project_with_pipeline(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pr",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        mock_create_pr.assert_called_once()
+
+    def test_dry_run_shows_pipeline_checks(self, tmp_path):
+        """--dry-run lists pipeline checks."""
+        cfg = _setup_project_with_pipeline(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--dry-run",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Pipeline checks" in result.output
+        assert "ruff-fix" in result.output
+        assert "pytest" in result.output
 
 
 class TestShipDryRun:
