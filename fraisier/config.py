@@ -489,11 +489,30 @@ class FraisierConfig:
                 )
             if strategy == "restore_migrate":
                 errors.extend(self._validate_restore_migrate(fraise_name, db))
+            errors.extend(self._validate_database_url(fraise_name, db))
 
         if errors:
             raise ValidationError(
                 f"Invalid fraise config: {'; '.join(errors)}",
             )
+
+    @staticmethod
+    def _validate_database_url(fraise_name: str, db: dict) -> list[str]:
+        """Return validation errors for a database_url override."""
+        db_url = db.get("database_url")
+        if db_url is None:
+            return []
+        if not isinstance(db_url, str):
+            return [
+                f"{fraise_name}: database.database_url must be a string, "
+                f"got {type(db_url).__name__}"
+            ]
+        if not db_url.startswith(("postgresql://", "postgres://")):
+            return [
+                f"{fraise_name}: database.database_url must start with "
+                f"'postgresql://' or 'postgres://'"
+            ]
+        return []
 
     @staticmethod
     def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:

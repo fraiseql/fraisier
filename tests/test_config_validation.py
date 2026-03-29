@@ -147,6 +147,78 @@ fraises:
         config = FraisierConfig(config_file)
         assert config.get_fraise("my_api") is not None
 
+    def test_rejects_non_string_database_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          strategy: migrate
+          database_url: 12345
+""",
+        )
+        with pytest.raises(ValidationError, match=r"database_url.*must be a string"):
+            FraisierConfig(config_file)
+
+    def test_rejects_invalid_database_url_scheme(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          strategy: migrate
+          database_url: "mysql://localhost/mydb"
+""",
+        )
+        with pytest.raises(ValidationError, match=r"database_url.*must start with"):
+            FraisierConfig(config_file)
+
+    def test_accepts_valid_database_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          strategy: migrate
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
+    def test_accepts_postgres_scheme_database_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          strategy: migrate
+          database_url: "postgres://localhost/mydb"
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
     def test_rejects_unknown_strategy(self, tmp_path):
         config_file = _write_config(
             tmp_path,

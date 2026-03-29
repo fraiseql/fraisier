@@ -44,6 +44,7 @@ class Strategy(ABC):
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
+        database_url: str | None = None,
     ) -> StrategyResult: ...
 
     @abstractmethod
@@ -53,6 +54,7 @@ class Strategy(ABC):
         *,
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
+        database_url: str | None = None,
     ) -> StrategyResult: ...
 
 
@@ -66,11 +68,13 @@ class MigrateStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
+        database_url: str | None = None,
     ) -> StrategyResult:
         preflight(
             confiture_config,
             migrations_dir=migrations_dir,
             allow_irreversible=allow_irreversible,
+            database_url=database_url,
         )
 
         result = migrate_up(
@@ -78,6 +82,7 @@ class MigrateStrategy(Strategy):
             migrations_dir=migrations_dir,
             pre_migrate_verify=pre_migrate_verify,
             require_reversible=not allow_irreversible,
+            database_url=database_url,
         )
         return StrategyResult(success=True, migrations_applied=result.steps_applied)
 
@@ -87,9 +92,13 @@ class MigrateStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
+        database_url: str | None = None,
     ) -> StrategyResult:
         result = migrate_down(
-            confiture_config, migrations_dir=migrations_dir, steps=steps
+            confiture_config,
+            migrations_dir=migrations_dir,
+            steps=steps,
+            database_url=database_url,
         )
         return StrategyResult(
             success=result.success,
@@ -115,6 +124,7 @@ class RebuildStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
+        database_url: str | None = None,
     ) -> StrategyResult:
         import tempfile
 
@@ -127,6 +137,8 @@ class RebuildStrategy(Strategy):
         raw: dict = yaml.safe_load(  # type: ignore[assignment]
             Path(confiture_config).read_text()
         )
+        if database_url:
+            raw["database_url"] = database_url
         env = Environment.model_validate(raw)
 
         # Build full SQL (DDL + seeds).
@@ -155,7 +167,7 @@ class RebuildStrategy(Strategy):
             output_path.unlink(missing_ok=True)
 
         # Re-baseline migration tracking table.
-        with Migrator.from_config(confiture_config, migrations_dir=migrations_dir) as m:
+        with Migrator.from_config(env, migrations_dir=migrations_dir) as m:
             m.reinit()
 
         return StrategyResult(success=True)
@@ -166,8 +178,11 @@ class RebuildStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
+        database_url: str | None = None,
     ) -> StrategyResult:
-        return self.execute(confiture_config, migrations_dir=migrations_dir)
+        return self.execute(
+            confiture_config, migrations_dir=migrations_dir, database_url=database_url
+        )
 
 
 @dataclass
@@ -222,6 +237,7 @@ class RestoreMigrateStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
+        database_url: str | None = None,
     ) -> StrategyResult:
         from fraisier.dbops.operations import create_db, drop_db, terminate_backends
         from fraisier.dbops.restore import (
@@ -288,7 +304,9 @@ class RestoreMigrateStrategy(Strategy):
             log.info("Created rollback template %s", template_name)
 
         # Step 8: Migrate up
-        result = migrate_up(confiture_config, migrations_dir=migrations_dir)
+        result = migrate_up(
+            confiture_config, migrations_dir=migrations_dir, database_url=database_url
+        )
         log.info("Applied %d migrations", result.steps_applied)
 
         # Step 9: Validate table count
@@ -308,6 +326,7 @@ class RestoreMigrateStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
+        database_url: str | None = None,
     ) -> StrategyResult:
         if self._config.create_template:
             from fraisier.dbops.templates import reset_from_template
@@ -346,7 +365,10 @@ class RestoreMigrateStrategy(Strategy):
             return StrategyResult(success=True)
 
         result = migrate_down(
-            confiture_config, migrations_dir=migrations_dir, steps=steps
+            confiture_config,
+            migrations_dir=migrations_dir,
+            steps=steps,
+            database_url=database_url,
         )
         return StrategyResult(
             success=result.success,

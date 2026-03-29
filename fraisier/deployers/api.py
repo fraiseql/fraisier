@@ -199,8 +199,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         except Exception as rollback_exc:
             logger.critical("Rollback after failure also failed: %s", rollback_exc)
 
-    def _resolve_strategy(self) -> tuple[Any, Path, Path]:
-        """Resolve database strategy, config path, and migrations dir from config."""
+    def _resolve_strategy(self) -> tuple[Any, Path, Path, str | None]:
+        """Resolve database strategy, config path, migrations dir, and database_url."""
         from fraisier.strategies import get_strategy
 
         strategy_name = self.database_config.get("strategy", "apply")
@@ -224,7 +224,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         migrations_dir = Path(
             self.database_config.get("migrations_dir", "db/migrations")
         )
-        return strategy, confiture_config, migrations_dir
+        database_url = self.database_config.get("database_url")
+        return strategy, confiture_config, migrations_dir, database_url
 
     def _run_strategy(self) -> None:
         """Run database migrations via deployment strategy.
@@ -232,7 +233,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         Changes cwd to app_path so confiture resolves relative paths
         (db/migrations/, db/environments/) correctly.
         """
-        strategy, confiture_config, migrations_dir = self._resolve_strategy()
+        strategy, confiture_config, migrations_dir, database_url = (
+            self._resolve_strategy()
+        )
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
         old_cwd = Path.cwd()
@@ -245,6 +248,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 migrations_dir=migrations_dir,
                 allow_irreversible=self.allow_irreversible,
                 pre_migrate_verify=pre_verify,
+                database_url=database_url,
             )
         finally:
             os.chdir(old_cwd)
@@ -416,11 +420,14 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self, current_version: str | None, target: str
     ) -> DeploymentResult | None:
         """Roll back database migrations. Returns failure result or None."""
-        strategy, confiture_config, migrations_dir = self._resolve_strategy()
+        strategy, confiture_config, migrations_dir, database_url = (
+            self._resolve_strategy()
+        )
         db_result = strategy.rollback(
             confiture_config,
             migrations_dir=migrations_dir,
             steps=self._migrations_applied,
+            database_url=database_url,
         )
         if db_result.success:
             return DeploymentResult(

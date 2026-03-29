@@ -45,13 +45,17 @@ class TestMigrateStrategy:
         assert result.success
         assert result.migrations_applied == 3
         mock_preflight.assert_called_once_with(
-            CONFIG, migrations_dir=MDIR, allow_irreversible=False
+            CONFIG,
+            migrations_dir=MDIR,
+            allow_irreversible=False,
+            database_url=None,
         )
         mock_up.assert_called_once_with(
             CONFIG,
             migrations_dir=MDIR,
             pre_migrate_verify=False,
             require_reversible=True,
+            database_url=None,
         )
 
     @patch("fraisier.strategies.preflight")
@@ -72,7 +76,10 @@ class TestMigrateStrategy:
 
         assert result.success
         mock_preflight.assert_called_once_with(
-            CONFIG, migrations_dir=MDIR, allow_irreversible=True
+            CONFIG,
+            migrations_dir=MDIR,
+            allow_irreversible=True,
+            database_url=None,
         )
 
     @patch("fraisier.strategies.migrate_up")
@@ -93,7 +100,9 @@ class TestMigrateStrategy:
 
         assert result.success
         assert result.migrations_applied == 2
-        mock_down.assert_called_once_with(CONFIG, migrations_dir=MDIR, steps=2)
+        mock_down.assert_called_once_with(
+            CONFIG, migrations_dir=MDIR, steps=2, database_url=None
+        )
 
     @patch("fraisier.strategies.migrate_down")
     def test_rollback_failure(self, mock_down):
@@ -109,6 +118,45 @@ class TestMigrateStrategy:
 
     @patch("fraisier.strategies.migrate_up")
     @patch("fraisier.strategies.preflight")
+    def test_execute_passes_database_url_override(self, mock_preflight, mock_up):
+        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+        url = "postgresql:///mydb?host=/var/run/postgresql"
+
+        strategy = MigrateStrategy()
+        result = strategy.execute(CONFIG, migrations_dir=MDIR, database_url=url)
+
+        assert result.success
+        mock_preflight.assert_called_once_with(
+            CONFIG,
+            migrations_dir=MDIR,
+            allow_irreversible=False,
+            database_url=url,
+        )
+        mock_up.assert_called_once_with(
+            CONFIG,
+            migrations_dir=MDIR,
+            pre_migrate_verify=False,
+            require_reversible=True,
+            database_url=url,
+        )
+
+    @patch("fraisier.strategies.migrate_down")
+    def test_rollback_passes_database_url_override(self, mock_down):
+        mock_down.return_value = MigrationResult(success=True, steps_applied=1)
+        url = "postgresql:///mydb?host=/var/run/postgresql"
+
+        strategy = MigrateStrategy()
+        result = strategy.rollback(
+            CONFIG, migrations_dir=MDIR, steps=1, database_url=url
+        )
+
+        assert result.success
+        mock_down.assert_called_once_with(
+            CONFIG, migrations_dir=MDIR, steps=1, database_url=url
+        )
+
+    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies.preflight")
     def test_execute_with_pre_migrate_verify(self, mock_preflight, mock_up):
         mock_up.return_value = MigrationResult(success=True, steps_applied=1)
 
@@ -121,6 +169,7 @@ class TestMigrateStrategy:
             migrations_dir=MDIR,
             pre_migrate_verify=True,
             require_reversible=True,
+            database_url=None,
         )
 
 
@@ -211,6 +260,33 @@ class TestRebuildStrategy:
         strategy = RebuildStrategy()
         with pytest.raises(sp.CalledProcessError):
             strategy.execute(CONFIG, migrations_dir=MDIR)
+
+    @patch("fraisier.strategies.subprocess.run")
+    @patch("confiture.core.migrator.Migrator")
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={"database_url": "postgresql:///original"})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_with_database_url_override(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+    ):
+        _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder_cls.return_value = MagicMock()
+        url = "postgresql:///override?host=/var/run/postgresql"
+
+        strategy = RebuildStrategy()
+        result = strategy.execute(CONFIG, migrations_dir=MDIR, database_url=url)
+
+        assert result.success
+        # Verify the raw dict was patched before model_validate
+        call_args = mock_env_validate.call_args[0][0]
+        assert call_args["database_url"] == url
 
     @patch("fraisier.strategies.subprocess.run")
     @patch("confiture.core.migrator.Migrator")
@@ -453,6 +529,51 @@ class TestRestoreMigrateStrategy:
         assert template_call[1] == {"template": "staging_db"}
 
     # -- Rollback --
+
+    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.dbops.restore.restore_backup")
+    @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_execute_passes_database_url_to_migrate_up(
+        self,
+        mock_find,
+        mock_age,
+        mock_term,
+        mock_drop,
+        mock_create,
+        mock_restore,
+        mock_up,
+    ):
+        mock_find.return_value = Path("/backup/db.dump")
+        mock_restore.return_value = RestoreResult(success=True)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+        url = "postgresql:///staging?host=/var/run/postgresql"
+
+        strategy = RestoreMigrateStrategy(_make_config())
+        result = strategy.execute(CONFIG, migrations_dir=MDIR, database_url=url)
+
+        assert result.success
+        mock_up.assert_called_once_with(
+            CONFIG, migrations_dir=MDIR, database_url=url
+        )
+
+    @patch("fraisier.strategies.migrate_down")
+    def test_rollback_passes_database_url_to_migrate_down(self, mock_down):
+        mock_down.return_value = MigrationResult(success=True, steps_applied=1)
+        url = "postgresql:///staging?host=/var/run/postgresql"
+
+        strategy = RestoreMigrateStrategy(_make_config())
+        result = strategy.rollback(
+            CONFIG, migrations_dir=MDIR, steps=1, database_url=url
+        )
+
+        assert result.success
+        mock_down.assert_called_once_with(
+            CONFIG, migrations_dir=MDIR, steps=1, database_url=url
+        )
 
     @patch("fraisier.strategies.migrate_down")
     def test_rollback_without_template_calls_migrate_down(self, mock_down):

@@ -138,7 +138,7 @@ class TestDeployRollbackIntegration:
             patch.object(
                 deployer,
                 "_resolve_strategy",
-                return_value=(mock_strategy, "confiture.yaml", "db/migrations"),
+                return_value=(mock_strategy, "confiture.yaml", "db/migrations", None),
             ),
         ):
             result = deployer.execute()
@@ -177,7 +177,7 @@ class TestDeployRollbackIntegration:
             patch.object(
                 deployer,
                 "_resolve_strategy",
-                return_value=(mock_strategy, "confiture.yaml", "db/migrations"),
+                return_value=(mock_strategy, "confiture.yaml", "db/migrations", None),
             ),
             patch.object(
                 deployer,
