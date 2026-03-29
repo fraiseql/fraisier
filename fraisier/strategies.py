@@ -15,12 +15,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from fraisier.dbops._validation import validate_pg_identifier
 from fraisier.dbops.confiture import (
     migrate_down,
     migrate_up,
     preflight,
 )
-from fraisier.dbops.operations import create_db, drop_db, terminate_backends
+from fraisier.dbops.operations import (
+    create_db,
+    drop_db,
+    run_psql,
+    terminate_backends,
+)
 
 log = logging.getLogger(__name__)
 
@@ -116,7 +122,51 @@ class RebuildStrategy(Strategy):
     generated file in bulk (single protocol message — 10-50x faster than
     per-statement execution), then re-baselines the migration tracking
     table.
+
+    When *required_roles* is configured, those roles are provisioned
+    (``CREATE ROLE … NOLOGIN``) and granted to the database owner
+    **before** the schema is applied.  This prevents silent failures
+    when the schema contains ``CREATE SCHEMA … AUTHORIZATION <role>``
+    for roles that don't yet exist on the cluster.
     """
+
+    def __init__(self, *, required_roles: list[str] | None = None) -> None:
+        self._required_roles: list[str] = []
+        for role in required_roles or []:
+            validate_pg_identifier(role, "required role")
+            self._required_roles.append(role)
+
+    def _provision_roles(
+        self,
+        db_name: str,
+        db_owner: str | None,
+        *,
+        connection_url: str | None = None,
+    ) -> None:
+        """Ensure required roles exist and are granted to the db owner."""
+        for role in self._required_roles:
+            sql = (
+                "DO $$ BEGIN "
+                f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{role}') "
+                f"THEN CREATE ROLE {role} NOLOGIN; END IF; END $$;"
+            )
+            code, _, stderr = run_psql(
+                sql, db_name=db_name, connection_url=connection_url
+            )
+            if code != 0:
+                raise subprocess.CalledProcessError(code, "psql", stderr=stderr)
+            log.info("Ensured role %s exists", role)
+
+            if db_owner:
+                grant_sql = f"GRANT {role} TO {db_owner}"
+                code, _, stderr = run_psql(
+                    grant_sql,
+                    db_name=db_name,
+                    connection_url=connection_url,
+                )
+                if code != 0:
+                    raise subprocess.CalledProcessError(code, "psql", stderr=stderr)
+                log.info("Granted %s to %s", role, db_owner)
 
     def execute(
         self,
@@ -175,9 +225,23 @@ class RebuildStrategy(Strategy):
             if code != 0:
                 raise subprocess.CalledProcessError(code, "createdb", stderr=stderr)
 
+            # Provision required roles before schema apply so that
+            # CREATE SCHEMA … AUTHORIZATION <role> doesn't fail.
+            if self._required_roles:
+                self._provision_roles(db_name, db_owner, connection_url=admin_url)
+
             # Apply the generated schema in one shot (fast).
+            # ON_ERROR_STOP makes psql abort on the first error instead
+            # of silently producing a half-built database.
             result = subprocess.run(
-                ["psql", env.database_url, "-f", str(output_path)],
+                [
+                    "psql",
+                    "-v",
+                    "ON_ERROR_STOP=1",
+                    env.database_url,
+                    "-f",
+                    str(output_path),
+                ],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -411,7 +475,8 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
     if name == "migrate":
         return MigrateStrategy()
     if name == "rebuild":
-        return RebuildStrategy()
+        roles = kwargs.get("required_roles") or []
+        return RebuildStrategy(required_roles=roles)
     if name == "restore_migrate":
         restore_cfg = kwargs.get("restore_config")
         if not restore_cfg or not isinstance(restore_cfg, dict):

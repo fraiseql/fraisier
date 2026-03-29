@@ -236,10 +236,12 @@ class TestRebuildStrategy:
         mock_drop.assert_called_once_with("mydb", connection_url=None)
         mock_create.assert_called_once_with("mydb", owner=None, connection_url=None)
 
-        # psql -f applies the generated schema
+        # psql -f applies the generated schema with ON_ERROR_STOP
         assert mock_subprocess_run.call_count == 1
         apply_call = mock_subprocess_run.call_args_list[0]
-        assert "-f" in apply_call[0][0]
+        psql_cmd = apply_call[0][0]
+        assert "-f" in psql_cmd
+        assert "ON_ERROR_STOP=1" in psql_cmd
 
         mock_session.reinit.assert_called_once()
 
@@ -418,6 +420,118 @@ class TestRebuildStrategy:
         mock_create.assert_called_once_with(
             "mydb", owner="appuser", connection_url=None
         )
+
+    def test_init_validates_required_roles(self):
+        with pytest.raises(ValueError, match="required role"):
+            RebuildStrategy(required_roles=["bad;role"])
+
+    def test_init_accepts_valid_roles(self):
+        strategy = RebuildStrategy(required_roles=["app_core", "app_admin"])
+        assert strategy._required_roles == ["app_core", "app_admin"]
+
+    @patch("fraisier.strategies.run_psql", return_value=(0, "", ""))
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
+    @patch("fraisier.strategies.subprocess.run")
+    @patch("confiture.core.migrator.Migrator")
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_provisions_roles_before_schema_apply(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
+        mock_run_psql,
+    ):
+        _, mock_session = _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder_cls.return_value = MagicMock()
+        mock_subprocess_run.return_value = MagicMock(returncode=0, stderr="")
+
+        strategy = RebuildStrategy(required_roles=["app_core", "app_admin"])
+        result = strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        # 2 run_psql calls: CREATE ROLE for each of 2 roles
+        # (no GRANT because mock env URL has no username → db_owner=None)
+        assert mock_run_psql.call_count == 2
+        mock_session.reinit.assert_called_once()
+
+    @patch("fraisier.strategies.run_psql", return_value=(0, "", ""))
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
+    @patch("fraisier.strategies.subprocess.run")
+    @patch("confiture.core.migrator.Migrator")
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_no_roles_skips_provisioning(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
+        mock_run_psql,
+    ):
+        _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder_cls.return_value = MagicMock()
+        mock_subprocess_run.return_value = MagicMock(returncode=0, stderr="")
+
+        strategy = RebuildStrategy()
+        result = strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        mock_run_psql.assert_not_called()
+
+    @patch(
+        "fraisier.strategies.run_psql",
+        return_value=(1, "", "ERROR: permission denied"),
+    )
+    @patch("fraisier.strategies.create_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.strategies.terminate_backends", return_value=(0, "", ""))
+    @patch("fraisier.strategies.subprocess.run")
+    @patch("confiture.core.migrator.Migrator")
+    @patch("confiture.core.builder.SchemaBuilder")
+    @patch("confiture.config.environment.Environment.model_validate")
+    @patch("yaml.safe_load", return_value={})
+    @patch("pathlib.Path.read_text", return_value="")
+    def test_execute_raises_on_role_provisioning_failure(
+        self,
+        mock_read_text,
+        mock_yaml_load,
+        mock_env_validate,
+        mock_builder_cls,
+        mock_migrator_cls,
+        mock_subprocess_run,
+        mock_terminate,
+        mock_drop,
+        mock_create,
+        mock_run_psql,
+    ):
+        import subprocess as sp
+
+        _mock_rebuild_deps(mock_env_validate, mock_migrator_cls)
+        mock_builder_cls.return_value = MagicMock()
+
+        strategy = RebuildStrategy(required_roles=["bad_role"])
+        with pytest.raises(sp.CalledProcessError):
+            strategy.execute(CONFIG, migrations_dir=MDIR)
 
 
 # ---------------------------------------------------------------------------
@@ -738,6 +852,11 @@ class TestGetStrategy:
 
     def test_rebuild(self):
         assert isinstance(get_strategy("rebuild"), RebuildStrategy)
+
+    def test_rebuild_with_required_roles(self):
+        s = get_strategy("rebuild", required_roles=["app_core", "app_admin"])
+        assert isinstance(s, RebuildStrategy)
+        assert s._required_roles == ["app_core", "app_admin"]
 
     def test_restore_migrate(self):
         s = get_strategy(
