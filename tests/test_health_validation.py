@@ -588,7 +588,10 @@ deployment:
         cfg = FraisierConfig(str(config_file))
         runner = ValidationRunner(cfg)
         results = runner.run_all()
-        user_check = next((r for r in results if r.name == "deploy_user"), None)
+        user_check = next(
+            (r for r in results if r.name == "user_nonexistent_user_xyz_12345"),
+            None,
+        )
         assert user_check is not None
         assert user_check.passed is False
 

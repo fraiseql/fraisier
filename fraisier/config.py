@@ -993,6 +993,16 @@ class FraisierConfig:
         """Get environment config for a fraise. Alias for get_fraise_environment."""
         return self.get_fraise_environment(fraise_name, environment)
 
+    def get_deploy_user(self, fraise_name: str, environment: str) -> str:
+        """Resolve effective deploy_user for a fraise/environment pair.
+
+        Priority: environment-level deploy_user > scaffold.deploy_user.
+        """
+        env = self.get_fraise_environment(fraise_name, environment)
+        if env and env.get("deploy_user"):
+            return env["deploy_user"]
+        return self.scaffold.deploy_user
+
     def get_git_provider_config(self) -> dict[str, Any]:
         """Get git provider configuration."""
         return self._config.get("git", {})

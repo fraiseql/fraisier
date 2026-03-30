@@ -558,3 +558,48 @@ class TestConfigDefaultLocations:
 
         config = FraisierConfig()
         assert config.config_path == cwd_config
+
+
+class TestGetDeployUser:
+    """get_deploy_user() resolves per-env override vs scaffold default (#28)."""
+
+    def test_returns_scaffold_default_when_no_override(self, tmp_path):
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "scaffold:\n  deploy_user: fraisier\n"
+            "fraises:\n  my_api:\n    type: api\n"
+            "    environments:\n      production:\n"
+            "        app_path: /var/www/api\n"
+        )
+        config = FraisierConfig(str(config_file))
+        assert config.get_deploy_user("my_api", "production") == "fraisier"
+
+    def test_returns_env_override_when_set(self, tmp_path):
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "scaffold:\n  deploy_user: fraisier\n"
+            "fraises:\n  my_api:\n    type: api\n"
+            "    environments:\n      production:\n"
+            "        app_path: /var/www/api\n"
+            "        deploy_user: prod-deployer\n"
+        )
+        config = FraisierConfig(str(config_file))
+        assert config.get_deploy_user("my_api", "production") == "prod-deployer"
+
+    def test_different_envs_can_have_different_deploy_users(self, tmp_path):
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "scaffold:\n  deploy_user: fraisier\n"
+            "fraises:\n  my_api:\n    type: api\n"
+            "    environments:\n      development:\n"
+            "        app_path: /var/www/dev\n"
+            "      production:\n"
+            "        app_path: /var/www/prod\n"
+            "        deploy_user: prod-deployer\n"
+        )
+        config = FraisierConfig(str(config_file))
+        assert config.get_deploy_user("my_api", "development") == "fraisier"
+        assert config.get_deploy_user("my_api", "production") == "prod-deployer"

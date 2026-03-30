@@ -87,24 +87,55 @@ class ValidationRunner:
                 message=str(e),
             )
 
-    def _check_deploy_user(self) -> ValidationCheckResult:
-        """Check that the configured deploy user exists on the system."""
-        deploy_user = self.config.deployment.deploy_user
-        try:
-            pwd.getpwnam(deploy_user)
-            return ValidationCheckResult(
-                name="deploy_user", passed=True, severity="error"
-            )
-        except KeyError:
-            return ValidationCheckResult(
-                name="deploy_user",
-                passed=False,
-                message=(
-                    f"User '{deploy_user}' does not exist. "
-                    f"Fix: sudo useradd -r -s /bin/bash {deploy_user}"
-                ),
-                severity="error",
-            )
+    def _check_deploy_user(self) -> list[ValidationCheckResult]:
+        """Check that deploy users and app users exist on the system."""
+        results: list[ValidationCheckResult] = []
+        checked: set[str] = set()
+
+        def _check_user(user: str, label: str) -> None:
+            if user in checked:
+                return
+            checked.add(user)
+            try:
+                pwd.getpwnam(user)
+                results.append(
+                    ValidationCheckResult(
+                        name=f"user_{user}",
+                        passed=True,
+                        severity="error",
+                    )
+                )
+            except KeyError:
+                results.append(
+                    ValidationCheckResult(
+                        name=f"user_{user}",
+                        passed=False,
+                        message=(
+                            f"{label} '{user}' does not exist. "
+                            f"Fix: sudo useradd -r -s /bin/bash {user}"
+                        ),
+                        severity="error",
+                    )
+                )
+
+        # Global deploy user
+        _check_user(self.config.scaffold.deploy_user, "Deploy user")
+
+        # Per-environment users
+        for fraise_name in self.config.list_fraises():
+            for env_name in self.config.list_environments(fraise_name):
+                env = self.config.get_fraise_environment(fraise_name, env_name)
+                if not env:
+                    continue
+                env_deploy = env.get("deploy_user")
+                if env_deploy:
+                    _check_user(env_deploy, f"Deploy user ({env_name})")
+                svc = env.get("service", {})
+                app_user = svc.get("user") if isinstance(svc, dict) else None
+                if app_user:
+                    _check_user(app_user, f"App user ({fraise_name}/{env_name})")
+
+        return results
 
     def _check_fraises_have_environments(self) -> ValidationCheckResult:
         """Check that every fraise has at least one environment."""

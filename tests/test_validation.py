@@ -40,6 +40,7 @@ class TestValidationRunner:
         config = MagicMock()
         config.list_fraises.return_value = fraises or []
         config.deployment.deploy_user = deploy_user
+        config.scaffold.deploy_user = deploy_user
         if envs is not None:
             config.list_environments.side_effect = lambda name: envs.get(name, [])
         else:
@@ -53,6 +54,10 @@ class TestValidationRunner:
             },
         }
         config.get_environment.side_effect = lambda name, _env: {
+            "name": name,
+            "app_path": f"/var/www/{name}",
+        }
+        config.get_fraise_environment.side_effect = lambda name, _env: {
             "name": name,
             "app_path": f"/var/www/{name}",
         }
@@ -80,8 +85,8 @@ class TestValidationRunner:
         mock_pwd.getpwnam.return_value = MagicMock()
         config = self._make_config(deploy_user="deploy")
         runner = ValidationRunner(config)
-        result = runner._check_deploy_user()
-        assert result.passed is True
+        results = runner._check_deploy_user()
+        assert all(r.passed for r in results)
         mock_pwd.getpwnam.assert_called_once_with("deploy")
 
     @patch("fraisier.validation.pwd")
@@ -90,9 +95,10 @@ class TestValidationRunner:
         mock_pwd.getpwnam.side_effect = KeyError("no such user")
         config = self._make_config(deploy_user="ghost")
         runner = ValidationRunner(config)
-        result = runner._check_deploy_user()
-        assert result.passed is False
-        assert "ghost" in result.message
+        results = runner._check_deploy_user()
+        failed = [r for r in results if not r.passed]
+        assert len(failed) >= 1
+        assert "ghost" in failed[0].message
 
     def test_fraises_have_environments_pass(self):
         """Check passes when all fraises have at least one environment."""
@@ -124,7 +130,7 @@ class TestValidationRunner:
         results = runner.run_all()
         names = {r.name for r in results}
         # Must include at least the original 3 plus the new checks
-        assert {"config_valid", "deploy_user", "fraises_have_environments"} <= names
+        assert {"config_valid", "user_fraisier", "fraises_have_environments"} <= names
         assert len(results) >= 3
 
 

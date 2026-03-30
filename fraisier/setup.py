@@ -52,7 +52,9 @@ class ServerSetup:
     def plan(self) -> list[SetupAction]:
         """Build the full ordered list of actions without side effects."""
         actions: list[SetupAction] = []
+        actions.extend(self._plan_users())
         actions.extend(self._plan_directories())
+        actions.extend(self._plan_app_permissions())
         actions.extend(self._plan_symlinks())
         actions.extend(self._plan_sudoers())
         actions.extend(self._plan_app_services())
@@ -95,11 +97,51 @@ class ServerSetup:
     # Planning methods
     # ------------------------------------------------------------------
 
+    def _plan_users(self) -> list[SetupAction]:
+        """Create system accounts for deploy and app users."""
+        users: dict[str, str] = {}
+
+        # Global deploy user
+        deploy_user = self.config.scaffold.deploy_user
+        users[deploy_user] = "deploy user"
+
+        # Per-environment users
+        for fraise_name, env_name, env_config in self._iter_fraise_environments():
+            env_deploy = env_config.get("deploy_user")
+            if env_deploy and env_deploy not in users:
+                users[env_deploy] = f"deploy user ({env_name})"
+
+            svc = env_config.get("service", {})
+            app_user = svc.get("user") if isinstance(svc, dict) else None
+            if app_user and app_user not in users:
+                users[app_user] = f"app user ({fraise_name}/{env_name})"
+
+        actions: list[SetupAction] = []
+        for user, desc in users.items():
+            actions.append(
+                SetupAction(
+                    description=f"Create {desc}: {user}",
+                    command=[
+                        "sudo",
+                        "useradd",
+                        "--system",
+                        "--create-home",
+                        "--shell",
+                        "/usr/sbin/nologin",
+                        user,
+                    ],
+                    check=["id", "-u", user],
+                    category="user",
+                )
+            )
+        return actions
+
     def _plan_directories(self) -> list[SetupAction]:
         deploy_user = self.config.scaffold.deploy_user
         managed_dirs = [
             ("/var/lib/fraisier", deploy_user),
             ("/var/lib/fraisier/repos", deploy_user),
+            ("/var/lib/fraisier/status", deploy_user),
             ("/run/fraisier", deploy_user),
         ]
         root_dirs = [
@@ -122,6 +164,70 @@ class ServerSetup:
                         description=f"Set ownership of {path} to {owner}",
                         command=["sudo", "chown", f"{owner}:{owner}", path],
                         category="directory",
+                    )
+                )
+        return actions
+
+    def _plan_app_permissions(self) -> list[SetupAction]:
+        """Configure ownership when app_user differs from deploy_user."""
+        actions: list[SetupAction] = []
+        for _, _, env_config in self._iter_fraise_environments():
+            app_path = env_config.get("app_path")
+            if not app_path:
+                continue
+
+            svc = env_config.get("service", {})
+            app_user = svc.get("user") if isinstance(svc, dict) else None
+            deploy_user = env_config.get(
+                "deploy_user", self.config.scaffold.deploy_user
+            )
+
+            if app_user and app_user != deploy_user:
+                actions.append(
+                    SetupAction(
+                        description=f"Set {app_path} ownership to {app_user}",
+                        command=[
+                            "sudo",
+                            "chown",
+                            "-R",
+                            f"{app_user}:{app_user}",
+                            app_path,
+                        ],
+                        category="permissions",
+                    )
+                )
+                actions.append(
+                    SetupAction(
+                        description=(f"Add {deploy_user} to {app_user} group"),
+                        command=[
+                            "sudo",
+                            "usermod",
+                            "-aG",
+                            app_user,
+                            deploy_user,
+                        ],
+                        category="permissions",
+                    )
+                )
+                actions.append(
+                    SetupAction(
+                        description=f"Set group write on {app_path}",
+                        command=["sudo", "chmod", "g+rwx", app_path],
+                        category="permissions",
+                    )
+                )
+            else:
+                actions.append(
+                    SetupAction(
+                        description=(f"Set {app_path} ownership to {deploy_user}"),
+                        command=[
+                            "sudo",
+                            "chown",
+                            "-R",
+                            f"{deploy_user}:{deploy_user}",
+                            app_path,
+                        ],
+                        category="permissions",
                     )
                 )
         return actions

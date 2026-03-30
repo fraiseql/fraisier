@@ -176,6 +176,8 @@ class GitDeployMixin:
     ) -> int | None:
         """Record deployment start in database. Returns deployment pk."""
         try:
+            import getpass
+
             from fraisier.database import get_db
 
             db = get_db()
@@ -183,6 +185,7 @@ class GitDeployMixin:
                 fraise=self.fraise_name,
                 environment=self.environment,
                 triggered_by="deploy",
+                triggered_by_user=getpass.getuser(),
                 git_branch=getattr(self, "branch", None),
                 git_commit=git_commit,
                 old_version=old_version,

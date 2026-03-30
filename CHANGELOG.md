@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.0 (2026-03-30)
+
+Feature release: deploy user / app user separation. 1521 tests, zero lint warnings.
+
+### User Separation (#28)
+
+- **feat:** per-environment `deploy_user` override in `fraises.yaml` — different environments can use different deploy users
+- **feat:** `FraisierConfig.get_deploy_user(fraise, env)` resolves effective deploy user (env-level > scaffold.deploy_user)
+- **feat:** `fraisier setup` creates both deploy and app system accounts with idempotency checks
+- **feat:** `fraisier setup` configures file permissions when `service.user` differs from `deploy_user` — sets app_path ownership to app user, adds deploy user to app group for write access
+- **feat:** sudoers template resolves per-environment deploy_user for systemctl permissions
+- **feat:** install.sh template creates app users when `service.user` is configured
+- **feat:** validation checks existence of all deploy users and app users (per-env and global)
+- **feat:** `triggered_by_user` field now populated with OS username in deployment records
+- **feat:** `/var/lib/fraisier/status/` added to managed directories in setup
+- **docs:** "User Separation" section added to `docs/security.md`
+
 ## v0.2.4 (2026-03-30)
 
 Bug-fix release: setup installs sudoers. 1507 tests, zero lint warnings.

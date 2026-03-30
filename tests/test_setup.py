@@ -189,7 +189,7 @@ class TestPlanDirectories:
         setup = ServerSetup(config, FakeRunner())
         actions = setup._plan_directories()
         chown_actions = [a for a in actions if "ownership" in a.description]
-        assert len(chown_actions) == 3
+        assert len(chown_actions) == 4
         for a in chown_actions:
             assert "fraisier:fraisier" in " ".join(a.command)
 
@@ -354,6 +354,7 @@ class TestFullPlan:
         actions = setup.plan()
 
         categories = {a.category for a in actions}
+        assert "user" in categories
         assert "directory" in categories
         assert "sudoers" in categories
         assert "symlink" in categories
@@ -644,3 +645,163 @@ class TestServerFiltering:
             prod_actions = prod_setup.plan()
 
         assert len(prod_actions) < len(dev_actions)
+
+
+class TestPlanUsers:
+    """Setup creates system accounts for deploy and app users (#28)."""
+
+    def test_creates_deploy_user(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_users()
+
+        assert len(actions) >= 1
+        assert all(a.category == "user" for a in actions)
+        cmds = [a.command for a in actions]
+        assert any("fraisier" in cmd for cmd in cmds)
+
+    def test_creates_per_env_deploy_user(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+scaffold:
+  deploy_user: fraisier
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        deploy_user: prod-deployer
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_users()
+
+        user_names = [a.command[-1] for a in actions]
+        assert "fraisier" in user_names
+        assert "prod-deployer" in user_names
+
+    def test_creates_app_user_from_service_config(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_users()
+
+        user_names = [a.command[-1] for a in actions]
+        assert "fraisier" in user_names
+        assert "myapp" in user_names
+
+    def test_deduplicates_users(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      dev:
+        app_path: /var/www/dev
+        service:
+          user: myapp
+      staging:
+        app_path: /var/www/staging
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_users()
+
+        user_names = [a.command[-1] for a in actions]
+        assert user_names.count("myapp") == 1
+
+    def test_users_before_directories_in_plan(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup.plan()
+
+        categories = [a.category for a in actions]
+        first_user = categories.index("user")
+        first_dir = categories.index("directory")
+        assert first_user < first_dir
+
+    def test_idempotent_check(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_users()
+
+        for action in actions:
+            assert action.check is not None
+            assert action.check[0] == "id"
+
+
+class TestPlanAppPermissions:
+    """Setup configures ownership when app_user != deploy_user (#28)."""
+
+    def test_split_user_creates_chown_and_group(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_app_permissions()
+
+        categories = [a.category for a in actions]
+        assert all(c == "permissions" for c in categories)
+        cmds = [" ".join(a.command) for a in actions]
+        assert any("chown" in c and "myapp" in c for c in cmds)
+        assert any("usermod" in c and "myapp" in c for c in cmds)
+        assert any("chmod" in c and "g+rwx" in c for c in cmds)
+
+    def test_single_user_creates_simple_chown(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_app_permissions()
+
+        assert len(actions) == 1
+        assert "chown" in " ".join(actions[0].command)
+        assert "fraisier" in " ".join(actions[0].command)
+
+    def test_permissions_category_in_plan(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup.plan()
+
+        categories = {a.category for a in actions}
+        assert "permissions" in categories

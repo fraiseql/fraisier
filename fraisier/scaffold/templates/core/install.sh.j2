@@ -17,6 +17,21 @@ else
     echo "  User ${DEPLOY_USER} already exists"
 fi
 
+# Create app users (separate from deploy user for least privilege)
+{% for fraise in fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% set app_user = env_config.get('service', {}).get('user') %}
+{% if app_user and app_user != scaffold.deploy_user %}
+if ! id -u "{{ app_user }}" &>/dev/null; then
+    echo "  Creating app user {{ app_user }}"
+    useradd --system --create-home --shell /usr/sbin/nologin "{{ app_user }}"
+else
+    echo "  App user {{ app_user }} already exists"
+fi
+{% endif %}
+{% endfor %}
+{% endfor %}
+
 # Create project directory
 if [ ! -d "${PROJECT_DIR}" ]; then
     echo "  Creating ${PROJECT_DIR}"

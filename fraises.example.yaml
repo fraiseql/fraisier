@@ -93,6 +93,7 @@ fraises:
         git_repo: /var/git/api.myapp.io.git
         app_path: /var/www/api.myapp.io
         systemd_service: api.myapp.io.service
+        # deploy_user: prod-deployer  # override scaffold.deploy_user for this env
         database:
           name: myapp_production
           strategy: apply  # safe migrations only, never drop
@@ -102,7 +103,7 @@ fraises:
           timeout: 30
         service:
           type: exec               # systemd Type= (default: notify)
-          user: myapp
+          user: myapp              # app runs as myapp (least privilege)
           group: www-data
           port: 8000
           workers: 4

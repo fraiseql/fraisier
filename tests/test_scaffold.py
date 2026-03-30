@@ -1703,6 +1703,44 @@ class TestSudoersAndInstall:
         assert "my_app" in content
         assert "systemctl" in content
 
+    def test_sudoers_uses_per_env_deploy_user(self, tmp_path):
+        """Per-env deploy_user overrides scaffold.deploy_user in sudoers (#28)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: tp
+scaffold:
+  deploy_user: default-deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+      production:
+        app_path: /var/www/prod
+        deploy_user: prod-deployer
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # Development uses default deploy_user
+        assert "default-deployer" in content
+        assert "my_api_development" in content
+        # Production uses per-env deploy_user
+        assert "prod-deployer" in content
+        assert "my_api_production" in content
+        # Per-env lines use prod-deployer, not default-deployer
+        for line in content.splitlines():
+            if "my_api_production" in line:
+                assert "prod-deployer" in line
+
     def test_install_sh_rendered(self, tmp_path):
         """install.sh is generated and idempotent-friendly."""
         config = _make_full_config(tmp_path)
@@ -1716,6 +1754,35 @@ class TestSudoersAndInstall:
         content = install_path.read_text()
         assert "#!/" in content
         assert "my_app" in content
+
+    def test_install_sh_creates_app_users(self, tmp_path):
+        """install.sh creates app users when service.user is set (#28)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: tp
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        service:
+          user: myapp
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        assert "myapp" in content
+        assert "Creating app user myapp" in content
 
 
 class TestConfitureTemplates:

@@ -73,6 +73,55 @@ The webhook endpoint enforces rate limiting:
 - 10 requests per minute per IP (configurable via `FRAISIER_WEBHOOK_RATE_LIMIT`)
 - Maximum 256 tracked IPs (LRU eviction)
 
+## User Separation
+
+Fraisier supports separating the **deploy user** (runs deployments) from the **app user** (runs the application process). This follows the principle of least privilege: if the application is compromised, the attacker cannot drop databases, restart services, or modify deployed code.
+
+### Two-user model
+
+| User | Role | Privileges |
+|------|------|-----------|
+| `deploy_user` | Runs `fraisier deploy`, webhook, backups | CREATEDB (for rebuild strategy), sudoers for systemctl, git worktree write |
+| `service.user` | Runs the application process | Connect to own DB, read app files |
+
+### Configuration
+
+```yaml
+scaffold:
+  deploy_user: myapp_deploy   # global deploy user
+
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        deploy_user: prod-deployer  # per-env override (optional)
+        service:
+          user: myapp               # app runs as myapp
+```
+
+When `service.user` differs from `deploy_user`, `fraisier setup` will:
+1. Create both system accounts
+2. Set `app_path` ownership to the app user
+3. Add the deploy user to the app user's group for write access during deployment
+4. Install sudoers for the deploy user's systemctl access
+
+### When single-user is acceptable
+
+On **development servers**, running both roles as the same user is acceptable (data is disposable, no external exposure). On **production**, use separate users. Production typically uses the `migrate` strategy which doesn't need CREATEDB.
+
+### Database access
+
+For strategies that need privileged database operations (rebuild, restore_migrate), configure `admin_url` to connect as a PostgreSQL superuser:
+
+```yaml
+database:
+  strategy: rebuild
+  admin_url: postgresql://postgres@/postgres?host=/var/run/postgresql
+```
+
+This avoids granting the deploy user OS-level sudo access to the postgres account.
+
 ## What Fraisier Does NOT Protect Against
 
 - **Host compromise**: If an attacker has shell access to the deployment server, fraisier cannot protect against them.
