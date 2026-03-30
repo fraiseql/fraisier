@@ -8,6 +8,7 @@
 {{ scaffold.deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl stop {{ fraise.name }}_{{ env_name }}.service
 {{ scaffold.deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl start {{ fraise.name }}_{{ env_name }}.service
 {{ scaffold.deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl status {{ fraise.name }}_{{ env_name }}.service
+{{ scaffold.deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active {{ fraise.name }}_{{ env_name }}.service
 {% endfor %}
 {% endfor %}
 {{ scaffold.deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload

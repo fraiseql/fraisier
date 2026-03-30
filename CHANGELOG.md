@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.4 (2026-03-30)
+
+Bug-fix release: setup installs sudoers. 1507 tests, zero lint warnings.
+
+### Server Setup (#27)
+
+- **feat:** `fraisier setup` now installs the sudoers fragment to `/etc/sudoers.d/` — deploy users get passwordless `systemctl stop/start/restart/status/is-active/daemon-reload` without manual configuration
+- **fix:** sudoers template now includes `is-active` permission (used by health checks)
+
 ## v0.2.3 (2026-03-30)
 
 Feature release: admin_url for privileged DB operations. 1507 tests, zero lint warnings.

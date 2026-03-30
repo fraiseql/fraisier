@@ -54,6 +54,7 @@ class ServerSetup:
         actions: list[SetupAction] = []
         actions.extend(self._plan_directories())
         actions.extend(self._plan_symlinks())
+        actions.extend(self._plan_sudoers())
         actions.extend(self._plan_app_services())
         actions.extend(self._plan_webhook_service())
         actions.extend(self._plan_env_files())
@@ -146,6 +147,19 @@ class ServerSetup:
                 )
             )
         return actions
+
+    def _plan_sudoers(self) -> list[SetupAction]:
+        output_dir = self.config.scaffold.output_dir
+        project = self.config.project_name
+        src = f"{output_dir}/sudoers"
+        dst = f"/etc/sudoers.d/{project}"
+        return [
+            SetupAction(
+                description="Install sudoers fragment for deploy user",
+                command=["sudo", "install", "-m", "0440", src, dst],
+                category="sudoers",
+            ),
+        ]
 
     def _plan_app_services(self) -> list[SetupAction]:
         output_dir = self.config.scaffold.output_dir

@@ -355,6 +355,7 @@ class TestFullPlan:
 
         categories = {a.category for a in actions}
         assert "directory" in categories
+        assert "sudoers" in categories
         assert "symlink" in categories
         assert "systemd" in categories
         assert "env" in categories
