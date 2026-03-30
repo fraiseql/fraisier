@@ -44,9 +44,7 @@ class TestEnsureTemplate:
 
     @patch("fraisier.testing._manager.check_db_exists")
     @patch("fraisier.testing._manager.read_meta")
-    def test_hash_mismatch_triggers_rebuild(
-        self, mock_read_meta, mock_db_exists
-    ):
+    def test_hash_mismatch_triggers_rebuild(self, mock_read_meta, mock_db_exists):
         mock_db_exists.return_value = True
         mock_read_meta.return_value = TemplateMeta(
             schema_hash="old_hash",

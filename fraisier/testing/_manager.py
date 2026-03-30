@@ -88,9 +88,7 @@ class TemplateManager:
         """Compute schema hash via confiture's SchemaBuilder."""
         from confiture.core.builder import SchemaBuilder
 
-        builder = SchemaBuilder(
-            env=self._env, project_dir=self._project_dir
-        )
+        builder = SchemaBuilder(env=self._env, project_dir=self._project_dir)
         return builder.compute_hash()
 
     def _db_name_from_url(self) -> str:
@@ -113,9 +111,7 @@ class TemplateManager:
         if not self._connection_url:
             return None
         parsed = urlparse(self._connection_url)
-        return urlunparse(
-            parsed._replace(path=f"/{self.template_name}")
-        )
+        return urlunparse(parsed._replace(path=f"/{self.template_name}"))
 
     def ensure_template(self) -> TemplateInfo:
         """Ensure a valid template database exists.
@@ -164,9 +160,7 @@ class TemplateManager:
 
         return self.build_template(_report=report)
 
-    def build_template(
-        self, *, _report: TimingReport | None = None
-    ) -> TemplateInfo:
+    def build_template(self, *, _report: TimingReport | None = None) -> TemplateInfo:
         """Force rebuild the template database.
 
         Builds schema via RebuildStrategy, snapshots as template,
@@ -262,9 +256,7 @@ class TemplateManager:
 
         if self._connection_url:
             parsed = urlparse(self._connection_url)
-            return urlunparse(
-                parsed._replace(path=f"/{test_db_name}")
-            )
+            return urlunparse(parsed._replace(path=f"/{test_db_name}"))
         return test_db_name
 
     def cleanup(self) -> int:
