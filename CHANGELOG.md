@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.2 (2026-03-30)
+
+Feature release: two-phase rebuild strategy. 1538 tests, zero lint warnings.
+
+### Split Schema Apply (#32)
+
+- **feat:** `RebuildStrategy` now applies schema in two phases — superuser SQL (roles, extensions) via `admin_url`, then app SQL (schemas, tables, views, data) via `database_url` — using confiture's new `build_split()` API
+- **feat:** superuser phase is skipped automatically when no `superuser_dirs` are configured in the confiture environment
+- **feat:** `admin_url` is rewritten to target the app database (not `postgres`) so that `CREATE EXTENSION` and `GRANT` statements land in the right place
+- **deps:** requires `fraiseql-confiture>=0.8.17` for `build_split()` support
+
 ## v0.3.0 (2026-03-30)
 
 Feature release: deploy user / app user separation. 1521 tests, zero lint warnings.

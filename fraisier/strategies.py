@@ -144,6 +144,28 @@ class RebuildStrategy(Strategy):
         self._project_dir = project_dir
         self._admin_url = admin_url
 
+    @staticmethod
+    def _apply_sql(connection_url: str, sql_path: Path) -> None:
+        """Apply a SQL file via psql with ON_ERROR_STOP."""
+        psql_cmd = [
+            "psql",
+            "-v",
+            "ON_ERROR_STOP=1",
+            connection_url,
+            "-f",
+            str(sql_path),
+        ]
+        result = subprocess.run(
+            psql_cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode, "psql", stderr=result.stderr
+            )
+
     def _provision_roles(
         self,
         db_name: str,
@@ -212,7 +234,7 @@ class RebuildStrategy(Strategy):
         if not admin_url and database_url:
             admin_url = urlunparse(parsed._replace(path="/postgres"))
 
-        # Build full SQL (DDL + seeds).
+        # Build SQL split into superuser and app phases.
         # project_dir must be the app root so SchemaBuilder can find
         # db/environments/<name>.yaml relative to it.  When called via
         # the deployer, app_path is passed explicitly; when called
@@ -220,15 +242,14 @@ class RebuildStrategy(Strategy):
         # file's parent (works when config sits at the project root).
         project_dir = self._project_dir or Path(confiture_config).resolve().parent
         builder = SchemaBuilder(env=env.name, project_dir=project_dir)
-        with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
-            output_path = Path(tmp.name)
+        output_dir = Path(tempfile.mkdtemp(prefix="fraisier_rebuild_"))
 
         try:
-            builder.build(output_path=output_path)
+            split = builder.build_split(output_dir=output_dir)
+            superuser_path = Path(split.superuser_path)
+            app_path = Path(split.app_path)
 
             # Drop and recreate the database as postgres superuser.
-            # This avoids "must be owner of schema public" errors when
-            # the app user doesn't own the public schema.
             terminate_backends(db_name, connection_url=admin_url)
             drop_db(db_name, connection_url=admin_url)
             code, _, stderr = create_db(
@@ -242,28 +263,28 @@ class RebuildStrategy(Strategy):
             if self._required_roles:
                 self._provision_roles(db_name, db_owner, connection_url=admin_url)
 
-            # Apply the generated schema in one shot (fast).
-            # ON_ERROR_STOP makes psql abort on the first error instead
-            # of silently producing a half-built database.
-            result = subprocess.run(
-                [
-                    "psql",
-                    "-v",
-                    "ON_ERROR_STOP=1",
-                    env.database_url,
-                    "-f",
-                    str(output_path),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    result.returncode, "psql", stderr=result.stderr
-                )
+            # Phase 1: Apply superuser SQL (roles, extensions) via admin_url.
+            if split.superuser_files > 0:
+                su_conn = admin_url or env.database_url
+                # Superuser SQL targets the app database, not postgres.
+                # If admin_url points to the postgres database, rewrite
+                # its path to the app database so that CREATE EXTENSION
+                # and GRANT statements land in the right place.
+                if admin_url:
+                    from urllib.parse import urlparse as _urlparse
+                    from urllib.parse import urlunparse as _urlunparse
+
+                    admin_parsed = _urlparse(admin_url)
+                    su_conn = _urlunparse(admin_parsed._replace(path=f"/{db_name}"))
+
+                self._apply_sql(su_conn, superuser_path)
+
+            # Phase 2: Apply app SQL (schemas, tables, views, data).
+            self._apply_sql(env.database_url, app_path)
         finally:
-            output_path.unlink(missing_ok=True)
+            import shutil
+
+            shutil.rmtree(output_dir, ignore_errors=True)
 
         # Re-baseline migration tracking table.
         with Migrator.from_config(env, migrations_dir=migrations_dir) as m:

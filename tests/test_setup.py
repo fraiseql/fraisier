@@ -835,9 +835,7 @@ fraises:
         assert any("/var/git/api.git" in c for c in cmds)
         assert any("/var/www/api" in c for c in cmds)
         for cmd in cmds:
-            assert "sudo -u fraisier" in cmd or (
-                "sudo" in cmd and "fraisier" in cmd
-            )
+            assert "sudo -u fraisier" in cmd or ("sudo" in cmd and "fraisier" in cmd)
 
     def test_no_actions_when_users_match(self, tmp_path):
         config = _make_config(
