@@ -55,6 +55,7 @@ class ServerSetup:
         actions.extend(self._plan_users())
         actions.extend(self._plan_directories())
         actions.extend(self._plan_app_permissions())
+        actions.extend(self._plan_git_safe_directory())
         actions.extend(self._plan_symlinks())
         actions.extend(self._plan_sudoers())
         actions.extend(self._plan_app_services())
@@ -228,6 +229,55 @@ class ServerSetup:
                             app_path,
                         ],
                         category="permissions",
+                    )
+                )
+        return actions
+
+    def _plan_git_safe_directory(self) -> list[SetupAction]:
+        """Add git safe.directory entries for deploy user when users differ."""
+        actions: list[SetupAction] = []
+        seen: set[tuple[str, str]] = set()
+        for _, _, env_config in self._iter_fraise_environments():
+            svc = env_config.get("service", {})
+            app_user = svc.get("user") if isinstance(svc, dict) else None
+            deploy_user = env_config.get(
+                "deploy_user", self.config.scaffold.deploy_user
+            )
+
+            if not app_user or app_user == deploy_user:
+                continue
+
+            git_repo = env_config.get("git_repo")
+            if not git_repo:
+                continue
+
+            paths = [git_repo]
+            app_path = env_config.get("app_path")
+            if app_path:
+                paths.append(app_path)
+
+            for path in paths:
+                key = (deploy_user, path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                actions.append(
+                    SetupAction(
+                        description=(
+                            f"Add {path} to git safe.directory for {deploy_user}"
+                        ),
+                        command=[
+                            "sudo",
+                            "-u",
+                            deploy_user,
+                            "git",
+                            "config",
+                            "--global",
+                            "--add",
+                            "safe.directory",
+                            path,
+                        ],
+                        category="git",
                     )
                 )
         return actions

@@ -805,3 +805,171 @@ fraises:
 
         categories = {a.category for a in actions}
         assert "permissions" in categories
+
+
+class TestPlanGitSafeDirectory:
+    """Setup configures git safe.directory for deploy user (#31)."""
+
+    def test_adds_safe_directory_when_users_differ(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        git_repo: /var/git/api.git
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_git_safe_directory()
+
+        assert len(actions) == 2
+        assert all(a.category == "git" for a in actions)
+        cmds = [" ".join(a.command) for a in actions]
+        assert any("/var/git/api.git" in c for c in cmds)
+        assert any("/var/www/api" in c for c in cmds)
+        for cmd in cmds:
+            assert "sudo -u fraisier" in cmd or (
+                "sudo" in cmd and "fraisier" in cmd
+            )
+
+    def test_no_actions_when_users_match(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        git_repo: /var/git/api.git
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_git_safe_directory()
+
+        assert actions == []
+
+    def test_no_actions_when_no_git_repo(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_git_safe_directory()
+
+        assert actions == []
+
+    def test_only_adds_git_repo_when_no_app_path(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        git_repo: /var/git/api.git
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_git_safe_directory()
+
+        assert len(actions) == 1
+        assert "/var/git/api.git" in " ".join(actions[0].command)
+
+    def test_deduplicates_paths(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  api:
+    type: api
+    environments:
+      dev:
+        app_path: /var/www/api
+        git_repo: /var/git/api.git
+        service:
+          user: myapp
+      staging:
+        app_path: /var/www/api
+        git_repo: /var/git/api.git
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_git_safe_directory()
+
+        assert len(actions) == 2
+
+    def test_uses_per_env_deploy_user(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        git_repo: /var/git/api.git
+        deploy_user: prod-deployer
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_git_safe_directory()
+
+        cmds = [" ".join(a.command) for a in actions]
+        assert all("prod-deployer" in c for c in cmds)
+
+    def test_git_category_in_plan(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        git_repo: /var/git/api.git
+        service:
+          user: myapp
+""",
+        )
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup.plan()
+
+        categories = [a.category for a in actions]
+        assert "git" in categories
+        # git safe.directory should come after users but before symlinks
+        first_git = categories.index("git")
+        first_symlink = categories.index("symlink")
+        assert first_git < first_symlink
