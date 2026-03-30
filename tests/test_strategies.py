@@ -269,9 +269,9 @@ class TestRestoreMigrateStrategy:
 
         mock_find.assert_called_once_with(cfg.backup_dir, pattern=cfg.backup_pattern)
         mock_age.assert_called_once_with(backup, max_age_hours=48.0)
-        mock_term.assert_called_once_with("staging_db")
-        mock_drop.assert_called_once_with("staging_db")
-        mock_create.assert_called_once_with("staging_db")
+        mock_term.assert_called_once_with("staging_db", connection_url=None)
+        mock_drop.assert_called_once_with("staging_db", connection_url=None)
+        mock_create.assert_called_once_with("staging_db", connection_url=None)
         mock_restore.assert_called_once_with(
             backup_path=str(backup),
             db_name="staging_db",
@@ -406,7 +406,10 @@ class TestRestoreMigrateStrategy:
         assert mock_create.call_count == 2
         template_call = mock_create.call_args_list[1]
         assert template_call[0] == ("staging_tmpl",)
-        assert template_call[1] == {"template": "staging_db"}
+        assert template_call[1] == {
+            "template": "staging_db",
+            "connection_url": None,
+        }
 
     # -- Rollback --
 
@@ -476,7 +479,9 @@ class TestRestoreMigrateStrategy:
 
         assert result.success
         # Should drop staging_db then create from template
-        mock_create.assert_called_once_with("staging_db", template="staging_tmpl")
+        mock_create.assert_called_once_with(
+            "staging_db", template="staging_tmpl", connection_url=None
+        )
 
     @patch("fraisier.dbops.templates.reset_from_template")
     def test_rollback_with_default_template_name(self, mock_reset):

@@ -135,12 +135,14 @@ class RebuildStrategy(Strategy):
         *,
         required_roles: list[str] | None = None,
         project_dir: Path | None = None,
+        admin_url: str | None = None,
     ) -> None:
         self._required_roles: list[str] = []
         for role in required_roles or []:
             validate_pg_identifier(role, "required role")
             self._required_roles.append(role)
         self._project_dir = project_dir
+        self._admin_url = admin_url
 
     def _provision_roles(
         self,
@@ -204,11 +206,10 @@ class RebuildStrategy(Strategy):
         db_name = parsed.path.lstrip("/")
         db_owner = parsed.username
 
-        # Derive a superuser admin URL (pointing at the "postgres"
-        # database) when a connection_url was provided.  This lets
-        # terminate_backends / drop_db / create_db connect without sudo.
-        admin_url: str | None = None
-        if database_url:
+        # Admin URL for privileged operations (DROP/CREATE DATABASE).
+        # Priority: explicit admin_url > derived from database_url > sudo.
+        admin_url: str | None = self._admin_url
+        if not admin_url and database_url:
             admin_url = urlunparse(parsed._replace(path="/postgres"))
 
         # Build full SQL (DDL + seeds).
@@ -314,7 +315,7 @@ class RestoreMigrateStrategy(Strategy):
     Rollback: template-based (instant) or migrate_down.
     """
 
-    def __init__(self, config: RestoreConfig) -> None:
+    def __init__(self, config: RestoreConfig, *, admin_url: str | None = None) -> None:
         from fraisier.dbops._validation import validate_pg_identifier
 
         validate_pg_identifier(config.db_name, "database name")
@@ -323,6 +324,7 @@ class RestoreMigrateStrategy(Strategy):
         if config.template_name:
             validate_pg_identifier(config.template_name, "template name")
         self._config = config
+        self._admin_url = admin_url
 
     @property
     def _resolved_template_name(self) -> str:
@@ -363,12 +365,12 @@ class RestoreMigrateStrategy(Strategy):
             )
 
         # Step 3: Terminate connections
-        terminate_backends(cfg.db_name)
+        terminate_backends(cfg.db_name, connection_url=self._admin_url)
         log.info("Terminated connections to %s", cfg.db_name)
 
         # Step 4: Drop and recreate database
-        drop_db(cfg.db_name)
-        code, _, stderr = create_db(cfg.db_name)
+        drop_db(cfg.db_name, connection_url=self._admin_url)
+        code, _, stderr = create_db(cfg.db_name, connection_url=self._admin_url)
         if code != 0:
             raise DatabaseError(
                 f"Failed to create database {cfg.db_name}: {stderr.strip()}",
@@ -391,10 +393,12 @@ class RestoreMigrateStrategy(Strategy):
         if cfg.create_template:
             template_name = self._resolved_template_name
             # Drop existing template if any, disconnect from source, create
-            terminate_backends(template_name)
-            drop_db(template_name)
-            terminate_backends(cfg.db_name)
-            code, _, stderr = create_db(template_name, template=cfg.db_name)
+            terminate_backends(template_name, connection_url=self._admin_url)
+            drop_db(template_name, connection_url=self._admin_url)
+            terminate_backends(cfg.db_name, connection_url=self._admin_url)
+            code, _, stderr = create_db(
+                template_name, template=cfg.db_name, connection_url=self._admin_url
+            )
             if code != 0:
                 raise DatabaseError(
                     f"Failed to create template {template_name}: {stderr.strip()}",
@@ -441,11 +445,13 @@ class RestoreMigrateStrategy(Strategy):
                     terminate_backends,
                 )
 
-                terminate_backends(self._config.db_name)
-                drop_db(self._config.db_name)
-                terminate_backends(template_name)
+                terminate_backends(self._config.db_name, connection_url=self._admin_url)
+                drop_db(self._config.db_name, connection_url=self._admin_url)
+                terminate_backends(template_name, connection_url=self._admin_url)
                 code, _, stderr = create_db(
-                    self._config.db_name, template=template_name
+                    self._config.db_name,
+                    template=template_name,
+                    connection_url=self._admin_url,
                 )
                 if code != 0:
                     return StrategyResult(
@@ -488,7 +494,10 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
     if name == "rebuild":
         roles = kwargs.get("required_roles") or []
         project_dir = kwargs.get("project_dir")
-        return RebuildStrategy(required_roles=roles, project_dir=project_dir)
+        admin_url = kwargs.get("admin_url")
+        return RebuildStrategy(
+            required_roles=roles, project_dir=project_dir, admin_url=admin_url
+        )
     if name == "restore_migrate":
         restore_cfg = kwargs.get("restore_config")
         if not restore_cfg or not isinstance(restore_cfg, dict):
@@ -506,6 +515,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             template_name=restore_cfg.get("template_name"),
             min_tables=int(restore_cfg.get("min_tables", 0)),
         )
-        return RestoreMigrateStrategy(config)
+        admin_url = kwargs.get("admin_url")
+        return RestoreMigrateStrategy(config, admin_url=admin_url)
     valid = "migrate, rebuild, restore_migrate"
     raise ValueError(f"Unknown strategy '{name}'. Valid: {valid}")

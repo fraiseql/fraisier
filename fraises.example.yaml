@@ -60,6 +60,7 @@ fraises:
         database:
           name: myapp_development
           strategy: rebuild  # drop and recreate (dev only!)
+          # admin_url: postgresql://postgres@/postgres?host=/var/run/postgresql  # for DROP/CREATE DB
         health_check:
           url: https://api.myapp.dev/health
           timeout: 30

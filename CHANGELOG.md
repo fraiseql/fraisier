@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.3 (2026-03-30)
+
+Feature release: admin_url for privileged DB operations. 1507 tests, zero lint warnings.
+
+### Admin URL (#27)
+
+- **feat:** `admin_url` config field for `rebuild` and `restore_migrate` strategies — uses a PostgreSQL superuser connection for DROP/CREATE DATABASE instead of `sudo -u postgres`, fixing deployments where the service user has no sudo access
+- **feat:** `RestoreMigrateStrategy` now passes `connection_url` to all dbops calls (terminate_backends, drop_db, create_db) — previously always fell back to sudo
+- **feat:** config validation for `admin_url` (same rules as `database_url`)
+
 ## v0.2.2 (2026-03-30)
 
 Bug-fix release: rebuild strategy path doubling. 1507 tests, zero lint warnings.

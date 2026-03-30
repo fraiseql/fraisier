@@ -517,22 +517,34 @@ class FraisierConfig:
             )
 
     @staticmethod
-    def _validate_database_url(fraise_name: str, db: dict) -> list[str]:
-        """Return validation errors for a database_url override."""
-        db_url = db.get("database_url")
-        if db_url is None:
+    def _validate_pg_url(fraise_name: str, field: str, value: Any) -> list[str]:
+        """Return validation errors for a PostgreSQL URL field."""
+        if value is None:
             return []
-        if not isinstance(db_url, str):
+        if not isinstance(value, str):
             return [
-                f"{fraise_name}: database.database_url must be a string, "
-                f"got {type(db_url).__name__}"
+                f"{fraise_name}: database.{field} must be a string, "
+                f"got {type(value).__name__}"
             ]
-        if not db_url.startswith(("postgresql://", "postgres://")):
+        if not value.startswith(("postgresql://", "postgres://")):
             return [
-                f"{fraise_name}: database.database_url must start with "
+                f"{fraise_name}: database.{field} must start with "
                 f"'postgresql://' or 'postgres://'"
             ]
         return []
+
+    @staticmethod
+    def _validate_database_url(fraise_name: str, db: dict) -> list[str]:
+        """Return validation errors for database_url and admin_url."""
+        errors = FraisierConfig._validate_pg_url(
+            fraise_name, "database_url", db.get("database_url")
+        )
+        errors.extend(
+            FraisierConfig._validate_pg_url(
+                fraise_name, "admin_url", db.get("admin_url")
+            )
+        )
+        return errors
 
     @staticmethod
     def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:

@@ -213,6 +213,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         resolved = strategy_map.get(strategy_name, strategy_name)
 
         kwargs: dict[str, Any] = {}
+        admin_url = self.database_config.get("admin_url")
+        if admin_url:
+            kwargs["admin_url"] = admin_url
         if resolved == "rebuild":
             kwargs["required_roles"] = self.database_config.get("required_roles", [])
             if self.app_path:
