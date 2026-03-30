@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.2 (2026-03-30)
+
+Bug-fix release: rebuild strategy path doubling. 1507 tests, zero lint warnings.
+
+### Path Resolution (#26)
+
+- **fix:** `RebuildStrategy` used config file's parent as `project_dir`, causing `SchemaBuilder` to produce doubled paths like `app/db/environments/db/environments/dev.yaml` — deployer now passes `app_path` as explicit `project_dir`; standalone callers fall back to config file's parent (original behavior)
+
 ## v0.2.1 (2026-03-30)
 
 Bug-fix release: deploy CLI path resolution. 1507 tests, zero lint warnings.

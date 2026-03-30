@@ -215,6 +215,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         kwargs: dict[str, Any] = {}
         if resolved == "rebuild":
             kwargs["required_roles"] = self.database_config.get("required_roles", [])
+            if self.app_path:
+                kwargs["project_dir"] = Path(self.app_path)
         if resolved == "restore_migrate":
             kwargs["restore_config"] = self.database_config.get("restore", {})
             kwargs["db_name"] = self.database_config.get("name", "")

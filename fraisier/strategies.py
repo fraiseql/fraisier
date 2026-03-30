@@ -130,11 +130,17 @@ class RebuildStrategy(Strategy):
     for roles that don't yet exist on the cluster.
     """
 
-    def __init__(self, *, required_roles: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        required_roles: list[str] | None = None,
+        project_dir: Path | None = None,
+    ) -> None:
         self._required_roles: list[str] = []
         for role in required_roles or []:
             validate_pg_identifier(role, "required role")
             self._required_roles.append(role)
+        self._project_dir = project_dir
 
     def _provision_roles(
         self,
@@ -206,7 +212,12 @@ class RebuildStrategy(Strategy):
             admin_url = urlunparse(parsed._replace(path="/postgres"))
 
         # Build full SQL (DDL + seeds).
-        project_dir = Path(confiture_config).resolve().parent
+        # project_dir must be the app root so SchemaBuilder can find
+        # db/environments/<name>.yaml relative to it.  When called via
+        # the deployer, app_path is passed explicitly; when called
+        # directly (e.g. integration tests), fall back to the config
+        # file's parent (works when config sits at the project root).
+        project_dir = self._project_dir or Path(confiture_config).resolve().parent
         builder = SchemaBuilder(env=env.name, project_dir=project_dir)
         with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
             output_path = Path(tmp.name)
@@ -476,7 +487,8 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         return MigrateStrategy()
     if name == "rebuild":
         roles = kwargs.get("required_roles") or []
-        return RebuildStrategy(required_roles=roles)
+        project_dir = kwargs.get("project_dir")
+        return RebuildStrategy(required_roles=roles, project_dir=project_dir)
     if name == "restore_migrate":
         restore_cfg = kwargs.get("restore_config")
         if not restore_cfg or not isinstance(restore_cfg, dict):
