@@ -588,6 +588,32 @@ class TestGetDeployUser:
         config = FraisierConfig(str(config_file))
         assert config.get_deploy_user("my_api", "production") == "prod-deployer"
 
+    def test_top_level_deploy_user_used_when_no_scaffold(self, tmp_path):
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "deploy_user: top-level-deployer\n"
+            "fraises:\n  my_api:\n    type: api\n"
+            "    environments:\n      production:\n"
+            "        app_path: /var/www/api\n"
+        )
+        config = FraisierConfig(str(config_file))
+        assert config.scaffold.deploy_user == "top-level-deployer"
+        assert config.get_deploy_user("my_api", "production") == "top-level-deployer"
+
+    def test_scaffold_deploy_user_takes_priority_over_top_level(self, tmp_path):
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "deploy_user: top-level-deployer\n"
+            "scaffold:\n  deploy_user: scaffold-deployer\n"
+            "fraises:\n  my_api:\n    type: api\n"
+            "    environments:\n      production:\n"
+            "        app_path: /var/www/api\n"
+        )
+        config = FraisierConfig(str(config_file))
+        assert config.scaffold.deploy_user == "scaffold-deployer"
+
     def test_different_envs_can_have_different_deploy_users(self, tmp_path):
         config_file = tmp_path / "fraises.yaml"
         config_file.write_text(

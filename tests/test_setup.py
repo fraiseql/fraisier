@@ -226,6 +226,16 @@ fraises:
         actions = setup._plan_symlinks()
         assert actions == []
 
+    def test_has_idempotency_check(self, tmp_path):
+        """Symlink actions have a check to avoid overwriting existing targets (#35)."""
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_symlinks()
+
+        for action in actions:
+            assert action.check is not None
+            assert "readlink" in " ".join(action.check)
+
     def test_environment_filter(self, tmp_path):
         config = _make_config(tmp_path, MINIMAL_CONFIG)
         setup = ServerSetup(config, FakeRunner(), environment="production")
@@ -243,8 +253,45 @@ class TestPlanAppServices:
 
         assert len(actions) == 2
         assert all(a.category == "systemd" for a in actions)
-        assert "tp_my_api_development.service" in actions[0].description
-        assert "tp_my_api_production.service" in actions[1].description
+        assert "my-api-dev.service" in actions[0].description
+        assert "my-api.service" in actions[1].description
+
+    def test_uses_systemd_service_from_config(self, tmp_path):
+        """systemd_service from env config is used as the installed filename (#35)."""
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_app_services()
+
+        # The destination should use systemd_service from config
+        dev_dst = actions[0].command[-1]
+        assert dev_dst == "/etc/systemd/system/my-api-dev.service"
+        prod_dst = actions[1].command[-1]
+        assert prod_dst == "/etc/systemd/system/my-api.service"
+
+        # The source should still use the generated name
+        dev_src = actions[0].command[-2]
+        assert "tp_my_api_development.service" in dev_src
+
+    def test_falls_back_to_generated_name(self, tmp_path):
+        """Without systemd_service, the generated name is used."""
+        no_svc_config = """\
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/my-api
+        git_repo: /var/git/my-api.git
+"""
+        config = _make_config(tmp_path, no_svc_config)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_app_services()
+
+        assert len(actions) == 1
+        assert "tp_my_api_production.service" in actions[0].description
+        dst = "/etc/systemd/system/tp_my_api_production.service"
+        assert actions[0].command[-1] == dst
 
     def test_environment_filter(self, tmp_path):
         config = _make_config(tmp_path, MINIMAL_CONFIG)
@@ -252,7 +299,7 @@ class TestPlanAppServices:
         actions = setup._plan_app_services()
 
         assert len(actions) == 1
-        assert "development" in actions[0].description
+        assert "my-api-dev.service" in actions[0].description
 
 
 class TestPlanWebhookService:
@@ -327,6 +374,21 @@ class TestPlanSystemdReload:
 
         enable_actions = [a for a in actions if "Enable" in a.description]
         assert len(enable_actions) == 3
+
+    def test_enable_uses_systemd_service_from_config(self, tmp_path):
+        """Enable commands use systemd_service from env config (#35)."""
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_systemd_reload()
+
+        app_enables = [
+            a
+            for a in actions
+            if "Enable" in a.description and "webhook" not in a.description
+        ]
+        assert len(app_enables) == 2
+        assert "my-api-dev.service" in app_enables[0].description
+        assert "my-api.service" in app_enables[1].description
 
 
 class TestPlanValidation:
@@ -544,7 +606,7 @@ class TestServerFiltering:
         actions = setup._plan_app_services()
 
         assert len(actions) == 1
-        assert "production" in actions[0].description
+        assert "my-api.service" in actions[0].description
 
     def test_server_flag_matches_multiple_environments(self, tmp_path):
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
@@ -553,8 +615,8 @@ class TestServerFiltering:
 
         descriptions = [a.description for a in actions]
         assert len(actions) == 2
-        assert any("development" in d for d in descriptions)
-        assert any("staging" in d for d in descriptions)
+        assert any("my-api-dev" in d for d in descriptions)
+        assert any("my-api-stg" in d for d in descriptions)
 
     def test_unknown_server_provisions_all(self, tmp_path):
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
@@ -574,7 +636,7 @@ class TestServerFiltering:
             actions = setup._plan_app_services()
 
         assert len(actions) == 1
-        assert "production" in actions[0].description
+        assert "my-api.service" in actions[0].description
 
     def test_auto_detect_falls_back_to_short_hostname(self, tmp_path):
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
@@ -592,7 +654,7 @@ class TestServerFiltering:
             actions = setup._plan_app_services()
 
         assert len(actions) == 1
-        assert "production" in actions[0].description
+        assert "my-api.service" in actions[0].description
 
     def test_auto_detect_no_match_provisions_all(self, tmp_path):
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
@@ -629,7 +691,7 @@ class TestServerFiltering:
             actions = setup._plan_app_services()
 
         assert len(actions) == 1
-        assert "staging" in actions[0].description
+        assert "my-api-stg.service" in actions[0].description
 
     def test_server_filter_applies_to_full_plan(self, tmp_path):
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
@@ -645,6 +707,45 @@ class TestServerFiltering:
             prod_actions = prod_setup.plan()
 
         assert len(prod_actions) < len(dev_actions)
+
+    def test_per_fraise_server_field_used_for_filtering(self, tmp_path):
+        """Server field in per-fraise environments is used for filtering (#35)."""
+        per_fraise_server_config = """\
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/my-api-dev
+        server: dev.example.io
+        git_repo: /var/git/my-api-dev.git
+      production:
+        app_path: /var/www/my-api
+        server: prod.example.io
+        git_repo: /var/git/my-api.git
+"""
+        config = _make_config(tmp_path, per_fraise_server_config)
+        setup = ServerSetup(config, FakeRunner(), server="dev.example.io")
+        actions = setup._plan_app_services()
+
+        assert len(actions) == 1
+        assert "development" in actions[0].description
+
+    def test_auto_detect_no_match_logs_warning(self, tmp_path, caplog):
+        """Warning is logged when hostname auto-detect finds no match (#35)."""
+        config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+
+        with (
+            patch("fraisier.setup.socket.getfqdn", return_value="other.host"),
+            patch("fraisier.setup.socket.gethostname", return_value="other"),
+            caplog.at_level("WARNING", logger="fraisier.setup"),
+        ):
+            actions = setup._plan_app_services()
+
+        assert len(actions) == 3  # All provisioned
+        assert "No server match" in caplog.text
 
 
 class TestPlanUsers:

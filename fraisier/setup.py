@@ -6,6 +6,7 @@ generates webhook env files, installs nginx vhosts, and validates.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import socket
 import subprocess
@@ -15,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 from fraisier.config import FraisierConfig, NginxEnvConfig
 from fraisier.scaffold.renderer import ScaffoldRenderer
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -295,10 +298,19 @@ class ServerSetup:
             if link_name in seen:
                 continue
             seen.add(link_name)
+            # Check if symlink already points to the correct target.
+            # Prevents overwriting existing non-symlink directories
+            # (e.g., bare repos) which would break existing deployments.
             actions.append(
                 SetupAction(
                     description=f"Symlink {git_repo} -> {link_name}",
                     command=["sudo", "ln", "-sfn", git_repo, link_name],
+                    check=[
+                        "bash",
+                        "-c",
+                        f'[ -L "{link_name}" ] && '
+                        f'[ "$(readlink "{link_name}")" = "{git_repo}" ]',
+                    ],
                     category="symlink",
                 )
             )
@@ -321,9 +333,10 @@ class ServerSetup:
         output_dir = self.config.scaffold.output_dir
         project = self.config.project_name
         actions: list[SetupAction] = []
-        for fraise_name, env_name, _ in self._iter_fraise_environments():
-            svc = f"{project}_{fraise_name}_{env_name}.service"
-            src = f"{output_dir}/systemd/{svc}"
+        for fraise_name, env_name, env_config in self._iter_fraise_environments():
+            generated = f"{project}_{fraise_name}_{env_name}.service"
+            svc = env_config.get("systemd_service", generated)
+            src = f"{output_dir}/systemd/{generated}"
             dst = f"/etc/systemd/system/{svc}"
             actions.append(
                 SetupAction(
@@ -434,8 +447,9 @@ class ServerSetup:
             ),
         ]
         project = self.config.project_name
-        for fraise_name, env_name, _ in self._iter_fraise_environments():
-            svc = f"{project}_{fraise_name}_{env_name}.service"
+        for fraise_name, env_name, env_config in self._iter_fraise_environments():
+            generated = f"{project}_{fraise_name}_{env_name}.service"
+            svc = env_config.get("systemd_service", generated)
             actions.append(
                 SetupAction(
                     description=f"Enable {svc}",
@@ -486,11 +500,18 @@ class ServerSetup:
             return set(envs) if envs else None
 
         # Auto-detect: try FQDN first, then short hostname.
-        for hostname in dict.fromkeys([socket.getfqdn(), socket.gethostname()]):
+        hostnames = list(dict.fromkeys([socket.getfqdn(), socket.gethostname()]))
+        for hostname in hostnames:
             envs = self.config.get_environments_for_server(hostname)
             if envs:
                 return set(envs)
 
+        logger.warning(
+            "No server match for hostname(s) %s — provisioning all environments. "
+            "Use --server or --environment to filter, or set 'server' in your "
+            "environments config.",
+            hostnames,
+        )
         return None
 
     def _iter_fraise_environments(

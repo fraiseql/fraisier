@@ -723,8 +723,10 @@ class FraisierConfig:
         raw_nginx = raw.get("nginx", {}) or {}
         raw_gh = raw.get("github_actions", {}) or {}
 
-        # Fallback deploy_user: scaffold -> deployment -> "fraisier"
+        # Fallback deploy_user: scaffold -> top-level -> deployment -> "fraisier"
         deploy_user = raw.get("deploy_user")
+        if not deploy_user:
+            deploy_user = self._config.get("deploy_user")
         if not deploy_user:
             dep_raw = self._config.get("deployment", {}) or {}
             deploy_user = dep_raw.get("deploy_user", "fraisier")
@@ -1017,14 +1019,24 @@ class FraisierConfig:
     def get_environments_for_server(self, server: str) -> list[str]:
         """Return environment names whose ``server`` field matches *server*.
 
-        Compares against the global ``environments`` section of the config.
+        Checks both the global ``environments`` section and per-fraise
+        environment configs, deduplicating the result.
         Returns an empty list when no environment declares that server.
         """
-        return [
-            env_name
-            for env_name, env_config in self.environments.items()
-            if env_config.get("server") == server
-        ]
+        matched: dict[str, None] = {}
+
+        # Check global environments section
+        for env_name, env_config in self.environments.items():
+            if env_config.get("server") == server:
+                matched[env_name] = None
+
+        # Check per-fraise environment configs
+        for fraise in self.fraises.values():
+            for env_name, env_config in fraise.get("environments", {}).items():
+                if env_config.get("server") == server:
+                    matched[env_name] = None
+
+        return list(matched)
 
     def list_fraises_detailed(self) -> list[dict[str, Any]]:
         """List all fraises with detailed info (type, description, environments)."""
