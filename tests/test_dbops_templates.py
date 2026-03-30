@@ -2,7 +2,110 @@
 
 import pytest
 
-from fraisier.dbops.templates import cleanup_templates
+from fraisier.dbops.templates import (
+    cleanup_templates,
+    create_template,
+    reset_from_template,
+)
+
+
+class TestConnectionUrlPassthrough:
+    """Verify connection_url is threaded to all underlying operations."""
+
+    def test_create_template_passes_connection_url(self, monkeypatch):
+        captured_urls: list[str | None] = []
+
+        def fake_terminate(db_name, *, sudo_user="postgres", connection_url=None):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        def fake_drop(db_name, *, sudo_user="postgres", connection_url=None):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        def fake_create(
+            db_name,
+            *,
+            template=None,
+            owner=None,
+            sudo_user="postgres",
+            connection_url=None,
+        ):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        monkeypatch.setattr(
+            "fraisier.dbops.templates.terminate_backends", fake_terminate
+        )
+        monkeypatch.setattr("fraisier.dbops.templates.drop_db", fake_drop)
+        monkeypatch.setattr("fraisier.dbops.templates.create_db", fake_create)
+
+        url = "postgresql://user:pass@localhost:5432/testdb"
+        create_template("mydb", connection_url=url)
+        assert all(u == url for u in captured_urls)
+
+    def test_reset_from_template_passes_connection_url(self, monkeypatch):
+        captured_urls: list[str | None] = []
+
+        def fake_terminate(db_name, *, sudo_user="postgres", connection_url=None):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        def fake_drop(
+            db_name,
+            *,
+            force_disconnect=False,
+            sudo_user="postgres",
+            connection_url=None,
+        ):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        def fake_create(
+            db_name,
+            *,
+            template=None,
+            owner=None,
+            sudo_user="postgres",
+            connection_url=None,
+        ):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        monkeypatch.setattr(
+            "fraisier.dbops.templates.terminate_backends", fake_terminate
+        )
+        monkeypatch.setattr("fraisier.dbops.templates.drop_db", fake_drop)
+        monkeypatch.setattr("fraisier.dbops.templates.create_db", fake_create)
+
+        url = "postgresql://user:pass@localhost:5432/testdb"
+        reset_from_template("mydb", connection_url=url)
+        assert all(u == url for u in captured_urls)
+
+    def test_cleanup_templates_passes_connection_url(self, monkeypatch):
+        captured_urls: list[str | None] = []
+
+        def fake_pg_cmd(cmd, *, sudo_user="postgres", connection_url=None):
+            captured_urls.append(connection_url)
+            return (0, "template_mydb\n", "")
+
+        def fake_terminate(db_name, *, sudo_user="postgres", connection_url=None):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        def fake_drop(db_name, *, sudo_user="postgres", connection_url=None):
+            captured_urls.append(connection_url)
+            return (0, "", "")
+
+        monkeypatch.setattr("fraisier.dbops.templates._pg_cmd", fake_pg_cmd)
+        monkeypatch.setattr(
+            "fraisier.dbops.templates.terminate_backends", fake_terminate
+        )
+        monkeypatch.setattr("fraisier.dbops.templates.drop_db", fake_drop)
+
+        url = "postgresql://user:pass@localhost:5432/testdb"
+        cleanup_templates("mydb", max_templates=0, connection_url=url)
+        assert all(u == url for u in captured_urls)
 
 
 class TestCleanupTemplatesSQL:
@@ -18,7 +121,10 @@ class TestCleanupTemplatesSQL:
         captured_cmds: list[list[str]] = []
 
         def fake_pg_cmd(
-            cmd: list[str], *, sudo_user: str = "postgres"
+            cmd: list[str],
+            *,
+            sudo_user: str = "postgres",
+            connection_url: str | None = None,
         ) -> tuple[int, str, str]:
             captured_cmds.append(cmd)
             return (0, "", "")
@@ -39,7 +145,10 @@ class TestCleanupTemplatesSQL:
         captured_cmds: list[list[str]] = []
 
         def fake_pg_cmd(
-            cmd: list[str], *, sudo_user: str = "postgres"
+            cmd: list[str],
+            *,
+            sudo_user: str = "postgres",
+            connection_url: str | None = None,
         ) -> tuple[int, str, str]:
             captured_cmds.append(cmd)
             return (0, "", "")
