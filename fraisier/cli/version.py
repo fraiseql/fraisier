@@ -118,7 +118,13 @@ def version_bump(
 
 
 @main.command(name="ship")
-@click.argument("bump_type", type=click.Choice(["patch", "minor", "major"]))
+@click.argument(
+    "bump_type",
+    type=click.Choice(["patch", "minor", "major"]),
+    required=False,
+    default=None,
+)
+@click.option("--no-bump", is_flag=True, help="Skip version bump")
 @click.option("--dry-run", is_flag=True, help="Show what would happen")
 @click.option("--no-deploy", is_flag=True, help="Skip deploy after push")
 @click.option("--pr", "create_pr", is_flag=True, help="Create a PR after push")
@@ -141,7 +147,8 @@ def version_bump(
 @click.pass_context
 def ship(
     ctx: click.Context,
-    bump_type: str,
+    bump_type: str | None,
+    no_bump: bool,
     dry_run: bool,
     no_deploy: bool,
     create_pr: bool,
@@ -159,18 +166,56 @@ def ship(
         fraisier ship patch --no-deploy
         fraisier ship patch --pr --pr-base dev
         fraisier ship major --skip-checks
+        fraisier ship --no-bump
     """
+    if no_bump and bump_type is not None:
+        console.print(
+            "[red]Error:[/red] Cannot use --no-bump with a bump type argument"
+        )
+        raise SystemExit(1)
+    if not no_bump and bump_type is None:
+        console.print(
+            "[red]Error:[/red] Bump type (patch, minor, major) is required "
+            "unless --no-bump is set"
+        )
+        raise SystemExit(1)
+
     from fraisier.versioning import bump_version, parse_semver
 
     version_path = Path(version_file)
     pyproject_path = Path(pyproject)
     current = _read_current_version(version_path)
-    new = _calc_new_version(current.version, bump_type, parse_semver)
 
     # Resolve ship config (may be None if no fraises.yaml)
     config = ctx.obj.get("config") if ctx.obj else None
     ship_config = config.ship if config else None
     has_pipeline = bool(ship_config and ship_config.checks and not skip_checks)
+
+    if no_bump:
+        if dry_run:
+            _ship_dry_run_no_bump(
+                current.version,
+                version_path,
+                ship_config,
+                has_pipeline,
+                create_pr,
+                pr_base,
+                no_deploy,
+            )
+            return
+
+        _ship_commit_push_deploy(
+            current,
+            ship_config,
+            has_pipeline,
+            create_pr,
+            pr_base,
+            no_deploy,
+            label=f"v{current.version} (no bump)",
+        )
+        return
+
+    new = _calc_new_version(current.version, bump_type, parse_semver)
 
     if dry_run:
         _ship_dry_run(
@@ -191,6 +236,28 @@ def ship(
     info = bump_version(version_path, bump_type, pyproject_path=pp)
     console.print(f"[green]Version bumped:[/green] {current.version} -> {info.version}")
 
+    _ship_commit_push_deploy(
+        info,
+        ship_config,
+        has_pipeline,
+        create_pr,
+        pr_base,
+        no_deploy,
+        label=f"v{info.version}",
+    )
+
+
+def _ship_commit_push_deploy(
+    info: object,
+    ship_config: object,
+    has_pipeline: bool,
+    create_pr: bool,
+    pr_base: str | None,
+    no_deploy: bool,
+    *,
+    label: str,
+) -> None:
+    """Run the commit-push-PR-deploy sequence."""
     if has_pipeline:
         _ship_with_pipeline(info, ship_config)
     else:
@@ -199,7 +266,7 @@ def ship(
     if create_pr:
         _ship_create_pr(info.version, pr_base, ship_config)
 
-    console.print(f"[green]Shipped v{info.version}[/green]")
+    console.print(f"[green]Shipped {label}[/green]")
 
     if not no_deploy:
         _trigger_deploy_for_current_branch()
@@ -249,6 +316,31 @@ def _ship_dry_run(
     console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{new}")
     console.print(f"  Bump: {current_version} -> {new} ({bump_type})")
     console.print(f"  Files: {version_path}, {pyproject_path}")
+    if has_pipeline:
+        console.print("  Pipeline checks:")
+        for c in ship_config.checks:
+            console.print(f"    [{c.phase}] {c.name}")
+    console.print("  Git: add, commit, push")
+    if create_pr:
+        base = pr_base or (ship_config.pr_base if ship_config else None)
+        console.print(f"  PR: create against {base or '<default branch>'}")
+    if not no_deploy:
+        console.print("  Deploy: trigger for branch-mapped fraises")
+
+
+def _ship_dry_run_no_bump(
+    current_version: str,
+    version_path: Path,
+    ship_config: object,
+    has_pipeline: bool,
+    create_pr: bool,
+    pr_base: str | None,
+    no_deploy: bool,
+) -> None:
+    """Print dry-run plan for ship --no-bump."""
+    console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{current_version} (no bump)")
+    console.print(f"  Version: {current_version} (unchanged)")
+    console.print(f"  Files: {version_path}")
     if has_pipeline:
         console.print("  Pipeline checks:")
         for c in ship_config.checks:

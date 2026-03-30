@@ -597,6 +597,153 @@ class TestShipBumpTypes:
         assert "2.0.0" in result.output
 
 
+class TestShipNoBump:
+    """Test fraisier ship --no-bump."""
+
+    @patch("subprocess.run")
+    def test_ship_no_bump_skips_version_change(self, mock_run, tmp_path):
+        """--no-bump leaves version.json unchanged."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path, version="1.2.3")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "--no-bump",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+
+        # version.json should still be 1.2.3
+        data = json.loads((tmp_path / "version.json").read_text())
+        assert data["version"] == "1.2.3"
+
+    @patch("subprocess.run")
+    def test_ship_no_bump_commits_with_current_version(self, mock_run, tmp_path):
+        """--no-bump commits with the current version in the message."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path, version="2.0.0")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "--no-bump",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+
+        calls = mock_run.call_args_list
+        commit_calls = [c for c in calls if "commit" in str(c[0][0])]
+        assert len(commit_calls) >= 1
+        commit_msg = str(commit_calls[0])
+        assert "v2.0.0" in commit_msg
+
+    @patch("subprocess.run")
+    def test_ship_no_bump_still_pushes(self, mock_run, tmp_path):
+        """--no-bump still stages, commits, and pushes."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "--no-bump",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        calls = mock_run.call_args_list
+        commands = [c[0][0] for c in calls]
+        assert any(cmd == ["git", "add", "--update"] for cmd in commands)
+        assert any("push" in str(cmd) for cmd in commands)
+
+    def test_ship_no_bump_dry_run(self, tmp_path):
+        """--no-bump --dry-run shows plan without version bump."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "--no-bump",
+                "--dry-run",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "no bump" in result.output.lower() or "1.0.0" in result.output
+
+    def test_ship_bump_type_required_without_no_bump(self, tmp_path):
+        """bump_type is required when --no-bump is not set."""
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_ship_no_bump_with_bump_type_is_error(self, tmp_path):
+        """Passing both --no-bump and a bump type is an error."""
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-bump",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+            ],
+        )
+        assert result.exit_code != 0
+
+
 class TestShipDeploy:
     """Test ship triggers deploy after push."""
 
