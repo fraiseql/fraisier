@@ -543,3 +543,18 @@ fraises:
         assert env is not None
         assert env["database"]["strategy"] == "restore_migrate"
         assert env["database"]["restore"]["backup_dir"] == "/backup/production"
+
+
+class TestConfigDefaultLocations:
+    """Config resolution should prefer CWD over /opt/fraisier/ (#26)."""
+
+    def test_cwd_takes_priority_over_opt(self, tmp_path, monkeypatch):
+        """fraises.yaml in CWD is found before /opt/fraisier/fraises.yaml."""
+        cwd_config = tmp_path / "fraises.yaml"
+        cwd_config.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\nfraises: {}\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        config = FraisierConfig()
+        assert config.config_path == cwd_config

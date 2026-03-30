@@ -71,10 +71,12 @@ class TestAPIDeployer:
         assert version == "fedcba98"
         mock_subprocess.assert_called_once()
 
-    def test_execute_success(self, mock_subprocess, mock_requests):
+    def test_execute_success(self, mock_subprocess, mock_requests, tmp_path):
         """Test successful API deployment."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
         config = {
-            "app_path": "/var/www/api",
+            "app_path": str(app_dir),
             "systemd_service": "api.service",
             "health_check": {"url": "http://localhost:8000/health"},
             "database": {"strategy": "apply"},
@@ -195,11 +197,13 @@ class TestAPIDeployer:
         assert result is False
 
     def test_execute_delegates_to_migrate_strategy(
-        self, mock_subprocess, mock_requests
+        self, mock_subprocess, mock_requests, tmp_path
     ):
         """Config strategy 'apply' maps to MigrateStrategy."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
         config = {
-            "app_path": "/var/www/api",
+            "app_path": str(app_dir),
             "database": {"strategy": "apply"},
         }
         deployer = APIDeployer(config)
@@ -218,11 +222,13 @@ class TestAPIDeployer:
         mock_strategy.execute.assert_called_once()
 
     def test_execute_delegates_to_rebuild_strategy(
-        self, mock_subprocess, mock_requests
+        self, mock_subprocess, mock_requests, tmp_path
     ):
         """Config strategy 'rebuild' maps to RebuildStrategy."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
         config = {
-            "app_path": "/var/www/api",
+            "app_path": str(app_dir),
             "database": {"strategy": "rebuild"},
         }
         deployer = APIDeployer(config)
@@ -238,10 +244,14 @@ class TestAPIDeployer:
         strategy_name = mock_factory.call_args[0][0]
         assert strategy_name == "rebuild"
 
-    def test_execute_propagates_strategy_failure(self, mock_subprocess, mock_requests):
+    def test_execute_propagates_strategy_failure(
+        self, mock_subprocess, mock_requests, tmp_path
+    ):
         """Strategy failure propagates as deployer failure."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
         config = {
-            "app_path": "/var/www/api",
+            "app_path": str(app_dir),
             "database": {"strategy": "apply"},
         }
         deployer = APIDeployer(config)
@@ -277,11 +287,13 @@ class TestAPIDeployer:
         mock_factory.assert_not_called()
 
     def test_execute_passes_confiture_config_to_strategy(
-        self, mock_subprocess, mock_requests
+        self, mock_subprocess, mock_requests, tmp_path
     ):
-        """Strategy receives confiture_config from deployer database config."""
+        """Strategy receives confiture_config resolved against app_path."""
+        app_dir = tmp_path / "my_api"
+        app_dir.mkdir()
         config = {
-            "app_path": "/var/www/my_api",
+            "app_path": str(app_dir),
             "database": {
                 "strategy": "apply",
                 "confiture_config": "custom.yaml",
@@ -298,7 +310,7 @@ class TestAPIDeployer:
             deployer.execute()
 
         call_args = mock_strategy.execute.call_args
-        assert call_args[0][0] == Path("custom.yaml")
+        assert call_args[0][0] == app_dir / "custom.yaml"
 
     def test_rollback_to_specific_version(self, mock_subprocess, mock_requests):
         """Test rollback to specific commit."""
@@ -733,6 +745,78 @@ class TestAPIDeployerChdirForStrategy:
             deployer.execute()
 
         assert str(Path.cwd()) == original_cwd
+
+    def test_relative_paths_resolved_against_app_path(
+        self, mock_subprocess, mock_requests, tmp_path
+    ):
+        """Relative confiture_config and migrations_dir resolve against app_path."""
+        app_dir = tmp_path / "my-app"
+        app_dir.mkdir()
+        config = {
+            "app_path": str(app_dir),
+            "database": {
+                "strategy": "apply",
+                "confiture_config": "db/environments/dev.yaml",
+                "migrations_dir": "db/migrations",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        with patch("fraisier.strategies.get_strategy") as mock_factory:
+            mock_strategy = MagicMock()
+            mock_strategy.execute.return_value = StrategyResult(success=True)
+            mock_factory.return_value = mock_strategy
+
+            deployer.execute()
+
+        call_args = mock_strategy.execute.call_args
+        actual_config = call_args[0][0]
+        actual_migrations = call_args[1]["migrations_dir"]
+        assert actual_config == app_dir / "db" / "environments" / "dev.yaml"
+        assert actual_migrations == app_dir / "db" / "migrations"
+
+    def test_absolute_paths_not_changed(self, mock_subprocess, mock_requests, tmp_path):
+        """Absolute confiture_config and migrations_dir are left unchanged."""
+        app_dir = tmp_path / "my-app"
+        app_dir.mkdir()
+        config = {
+            "app_path": str(app_dir),
+            "database": {
+                "strategy": "apply",
+                "confiture_config": "/etc/confiture/prod.yaml",
+                "migrations_dir": "/opt/migrations",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        with patch("fraisier.strategies.get_strategy") as mock_factory:
+            mock_strategy = MagicMock()
+            mock_strategy.execute.return_value = StrategyResult(success=True)
+            mock_factory.return_value = mock_strategy
+
+            deployer.execute()
+
+        call_args = mock_strategy.execute.call_args
+        actual_config = call_args[0][0]
+        actual_migrations = call_args[1]["migrations_dir"]
+        assert actual_config == Path("/etc/confiture/prod.yaml")
+        assert actual_migrations == Path("/opt/migrations")
+
+    def test_missing_app_path_fails_loudly(self, mock_subprocess, mock_requests):
+        """Deployment fails with clear error when app_path directory is missing."""
+        config = {
+            "app_path": "/nonexistent/path/to/app",
+            "database": {"strategy": "apply"},
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        result = deployer.execute()
+
+        assert result.success is False
+        assert "app_path does not exist" in result.error_message
 
 
 class TestAPIDeployerNotifications:

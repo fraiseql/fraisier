@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.1 (2026-03-30)
+
+Bug-fix release: deploy CLI path resolution. 1507 tests, zero lint warnings.
+
+### Path Resolution (#26)
+
+- **fix:** resolve relative `confiture_config` and `migrations_dir` against `app_path` explicitly instead of relying solely on `os.chdir()` — prevents silent misresolution when `app_path` is missing or the chdir is skipped
+- **fix:** deployment now fails loudly with a clear `DeploymentError` when `app_path` is configured but the directory does not exist (was silently using wrong CWD)
+- **fix:** database rollback also resolves paths against `app_path` (same fix as forward migrations)
+- **fix:** config default locations reordered — CWD is now checked before `/opt/fraisier/` so local configs take precedence over system-wide installs
+
 ## v0.2.0 (2026-03-30)
 
 Major release: restore_migrate strategy, server setup, ship pipeline,

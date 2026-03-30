@@ -229,14 +229,48 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         database_url = self.database_config.get("database_url")
         return strategy, confiture_config, migrations_dir, database_url
 
+    def _resolve_paths_against_app(
+        self, confiture_config: Path, migrations_dir: Path
+    ) -> tuple[Path, Path]:
+        """Resolve relative paths against app_path.
+
+        Raises DeploymentError if app_path is configured but does not exist.
+        """
+        confiture_config = Path(confiture_config)
+        migrations_dir = Path(migrations_dir)
+
+        if not self.app_path:
+            return confiture_config, migrations_dir
+
+        app_dir = Path(self.app_path)
+        if not app_dir.is_dir():
+            raise DeploymentError(
+                f"app_path does not exist: {self.app_path}",
+                context={
+                    "fraise": self.fraise_name,
+                    "environment": self.environment,
+                },
+            )
+
+        if not confiture_config.is_absolute():
+            confiture_config = app_dir / confiture_config
+        if not migrations_dir.is_absolute():
+            migrations_dir = app_dir / migrations_dir
+
+        return confiture_config, migrations_dir
+
     def _run_strategy(self) -> None:
         """Run database migrations via deployment strategy.
 
-        Changes cwd to app_path so confiture resolves relative paths
-        (db/migrations/, db/environments/) correctly.
+        Resolves relative paths (confiture_config, migrations_dir) against
+        app_path explicitly, and also changes cwd so that any internal
+        relative path resolution inside confiture works correctly.
         """
         strategy, confiture_config, migrations_dir, database_url = (
             self._resolve_strategy()
+        )
+        confiture_config, migrations_dir = self._resolve_paths_against_app(
+            confiture_config, migrations_dir
         )
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
@@ -424,6 +458,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         """Roll back database migrations. Returns failure result or None."""
         strategy, confiture_config, migrations_dir, database_url = (
             self._resolve_strategy()
+        )
+        confiture_config, migrations_dir = self._resolve_paths_against_app(
+            confiture_config, migrations_dir
         )
         db_result = strategy.rollback(
             confiture_config,

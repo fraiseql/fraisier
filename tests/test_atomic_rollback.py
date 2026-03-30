@@ -7,10 +7,12 @@ from fraisier.strategies import StrategyResult
 
 
 def _make_deployer(tmp_path, **overrides):
+    app_dir = tmp_path / "myapi"
+    app_dir.mkdir(exist_ok=True)
     config = {
         "fraise_name": "myapi",
         "environment": "production",
-        "app_path": "/srv/myapi",
+        "app_path": str(app_dir),
         "clone_url": "git@github.com:org/myapi.git",
         "branch": "main",
         "systemd_service": "myapi.service",

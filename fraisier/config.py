@@ -425,11 +425,11 @@ class FraisierConfig:
         if env_path:
             return Path(env_path)
 
-        # Check standard locations
+        # Check standard locations (CWD first, then system-wide)
         locations = [
-            Path("/opt/fraisier/fraises.yaml"),
             Path.cwd() / "fraises.yaml",
             Path.cwd() / "config" / "fraises.yaml",
+            Path("/opt/fraisier/fraises.yaml"),
             Path(__file__).parent.parent / "fraises.yaml",
         ]
 
