@@ -4,12 +4,12 @@ import asyncio
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from urllib.parse import urlparse, urlunparse
 
 import pytest
 
 from fraisier.config import FraisierConfig, reset_config
 from fraisier.database import FraisierDB
+from fraisier.dbops._url import replace_db_name
 from tests.fixtures.git_env import git_deploy_env as git_deploy_env  # noqa: PLC0414
 
 
@@ -215,8 +215,7 @@ def pg_test_db(pg_superuser_url):
     with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
         conn.execute(f"CREATE DATABASE {db_name}")
 
-    parsed = urlparse(pg_superuser_url)
-    test_url = urlunparse(parsed._replace(path=f"/{db_name}"))
+    test_url = replace_db_name(pg_superuser_url, db_name)
     yield test_url, db_name
 
     with psycopg.connect(pg_superuser_url, autocommit=True) as conn:

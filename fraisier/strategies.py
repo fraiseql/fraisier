@@ -212,7 +212,7 @@ class RebuildStrategy(Strategy):
         database_url: str | None = None,
     ) -> StrategyResult:
         import tempfile
-        from urllib.parse import urlparse, urlunparse
+        from urllib.parse import urlparse
 
         import yaml
         from confiture.config.environment import Environment
@@ -234,9 +234,11 @@ class RebuildStrategy(Strategy):
 
         # Admin URL for privileged operations (DROP/CREATE DATABASE).
         # Priority: explicit admin_url > derived from database_url > sudo.
+        from fraisier.dbops._url import replace_db_name
+
         admin_url: str | None = self._admin_url
         if not admin_url and database_url:
-            admin_url = urlunparse(parsed._replace(path="/postgres"))
+            admin_url = replace_db_name(env.database_url, "postgres")
 
         # Build SQL split into superuser and app phases.
         # project_dir must be the app root so SchemaBuilder can find
@@ -270,12 +272,7 @@ class RebuildStrategy(Strategy):
             # Phase 1: Apply superuser SQL (roles, extensions) via admin_url.
             # Compute the admin connection URL targeting the app database.
             # Superuser SQL must land in the app db, not postgres.
-            if admin_url:
-                admin_app_conn = urlunparse(
-                    urlparse(admin_url)._replace(path=f"/{db_name}")
-                )
-            else:
-                admin_app_conn = None
+            admin_app_conn = replace_db_name(admin_url, db_name) if admin_url else None
 
             # Phase 1: Apply superuser pre-schema SQL (roles, extensions).
             if split.superuser_pre_files > 0:

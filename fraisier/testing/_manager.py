@@ -10,8 +10,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
+from fraisier.dbops._url import replace_db_name
 from fraisier.dbops.operations import (
     check_db_exists,
     create_db,
@@ -103,15 +104,13 @@ class TemplateManager:
         """Derive admin URL (pointing to 'postgres' db) from connection URL."""
         if not self._connection_url:
             return None
-        parsed = urlparse(self._connection_url)
-        return urlunparse(parsed._replace(path="/postgres"))
+        return replace_db_name(self._connection_url, "postgres")
 
     def _template_url(self) -> str | None:
         """Connection URL pointing to the template database."""
         if not self._connection_url:
             return None
-        parsed = urlparse(self._connection_url)
-        return urlunparse(parsed._replace(path=f"/{self.template_name}"))
+        return replace_db_name(self._connection_url, self.template_name)
 
     def ensure_template(self) -> TemplateInfo:
         """Ensure a valid template database exists.
@@ -255,8 +254,7 @@ class TemplateManager:
             raise RuntimeError(msg)
 
         if self._connection_url:
-            parsed = urlparse(self._connection_url)
-            return urlunparse(parsed._replace(path=f"/{test_db_name}"))
+            return replace_db_name(self._connection_url, test_db_name)
         return test_db_name
 
     def cleanup(self) -> int:
