@@ -2202,6 +2202,65 @@ fraises:
         assert "NOPASSWD: /usr/bin/createdb" not in content
         assert "NOPASSWD: /usr/bin/dropdb" not in content
 
+    def test_sudoers_includes_install_command_for_app_user(self, tmp_path):
+        """Sudoers allows deploy_user to run install as app user (#44)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: fraisier
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        install:
+          command: [/home/myapp/.local/bin/uv, sync, --frozen]
+          user: myapp
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        assert "ALL=(myapp)" in content
+        assert "/home/myapp/.local/bin/uv sync --frozen" in content
+
+    def test_sudoers_omits_install_when_no_user(self, tmp_path):
+        """Sudoers omits install rule when install.user is not set (#44)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: fraisier
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        install:
+          command: [uv, sync, --frozen]
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # No install rule since no user is specified
+        assert "Dependency install" not in content
+
     def test_install_sh_rendered(self, tmp_path):
         """install.sh is generated and idempotent-friendly."""
         config = _make_full_config(tmp_path)

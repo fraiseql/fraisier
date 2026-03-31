@@ -27,6 +27,13 @@
 # Database admin via wrapper ({{ strategy }} strategy)
 {{ deploy_user }} ALL=(postgres) NOPASSWD: {{ _wrapper_path }} *
 {% endif %}
+{% set install = env_config.get('install', {}) or {} %}
+{% set install_user = install.get('user') %}
+{% set install_cmd = install.get('command', []) %}
+{% if install_user and install_cmd %}
+# Dependency install as app user
+{{ deploy_user }} ALL=({{ install_user }}) NOPASSWD: {{ install_cmd | join(' ') }}
+{% endif %}
 {% endfor %}
 {% endfor %}
 # Global

@@ -62,7 +62,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 old_sha, new_sha = self._git_pull()
                 old_version = old_sha[:8] if old_sha else None
 
-                # Step 2: Run database migrations via strategy if configured
+                # Step 2: Install dependencies
+                self._install_dependencies()
+
+                # Step 3: Run database migrations via strategy if configured
                 if self.database_config:
                     # Rebuild drops schemas — stop service first to release
                     # DB connections and avoid stale OID errors (#12)
@@ -76,12 +79,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     logger.info("Running database migrations")
                     self._run_strategy()
 
-                # Step 3: Restart service
+                # Step 4: Restart service
                 if self.systemd_service:
                     logger.info(f"Restarting service: {self.systemd_service}")
                     self._restart_service()
 
-                # Step 4: Health check
+                # Step 5: Health check
                 if self.health_check_url:
                     logger.info(f"Running health check: {self.health_check_url}")
                     if not self._wait_for_health():

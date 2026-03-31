@@ -43,6 +43,8 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
                 old_sha, new_sha = self._git_pull()
                 old_version = old_sha[:8] if old_sha else None
 
+                self._install_dependencies()
+
             if self.script_path and self.app_path:
                 logger.info(f"Running ETL script: {self.script_path}")
                 self.runner.run(

@@ -67,6 +67,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
                 old_sha, new_sha = self._git_pull()
                 old_version = old_sha[:8] if old_sha else None
 
+                self._install_dependencies()
+
             if self.systemd_timer:
                 logger.info(f"Enabling timer: {self.systemd_timer}")
                 self.runner.run(

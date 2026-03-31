@@ -57,6 +57,9 @@ fraises:
         git_repo: /var/git/api.myapp.dev.git
         app_path: /var/www/api.myapp.dev
         systemd_service: api.myapp.dev.service
+        install:
+          command: [uv, sync, --frozen]   # run after git checkout, before DB migrations
+          user: myapp                      # optional: run as this user (sudo -u)
         database:
           name: myapp_development
           strategy: rebuild  # drop and recreate (dev only!)

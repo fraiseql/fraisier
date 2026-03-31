@@ -47,6 +47,9 @@ class GitDeployMixin:
         self.status_dir = Path(config.get("status_dir", str(DEFAULT_STATUS_DIR)))
         self.lock_timeout = config.get("lock_timeout", 300)
         self._previous_sha: str | None = None
+        install_config = config.get("install", {})
+        self.install_command: list[str] | None = install_config.get("command")
+        self.install_user: str | None = install_config.get("user")
         self._init_notifications(config)
 
     def get_current_version(self) -> str | None:
@@ -91,6 +94,20 @@ class GitDeployMixin:
         )
         self._previous_sha = old_sha
         return old_sha, new_sha
+
+    def _install_dependencies(self) -> None:
+        """Run dependency install command if configured.
+
+        Runs the configured install command in the app_path directory.
+        When install.user is set, the command is prefixed with sudo -u.
+        """
+        if not self.install_command or not self.app_path:
+            return
+        cmd = list(self.install_command)
+        if self.install_user:
+            cmd = ["sudo", "-u", self.install_user, *cmd]
+        logger.info("Installing dependencies: %s", cmd)
+        self.runner.run(cmd, cwd=self.app_path)
 
     def _git_rollback(
         self,
