@@ -370,6 +370,24 @@ def _ship_create_pr(
     do_create_pr(version, base, console)
 
 
+def _git_push() -> None:
+    """Push to remote, setting upstream if needed (#45)."""
+    import subprocess
+
+    # Check if current branch has a remote tracking branch
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # No upstream configured — push with --set-upstream
+        subprocess.run(["git", "push", "-u", "origin", "HEAD"], check=True)
+    else:
+        subprocess.run(["git", "push"], check=True)
+
+
 def _ship_with_pipeline(
     info: object,
     ship_config: object,
@@ -404,7 +422,7 @@ def _ship_with_pipeline(
         ["git", "commit", "--no-verify", "-m", f"release: v{info.version}"],
         check=True,
     )
-    subprocess.run(["git", "push"], check=True)
+    _git_push()
 
 
 def _ship_legacy(info: object) -> None:
@@ -433,7 +451,7 @@ def _ship_legacy(info: object) -> None:
             ["git", "commit", "-m", f"release: v{info.version}"],
             check=True,
         )
-    subprocess.run(["git", "push"], check=True)
+    _git_push()
 
 
 def _trigger_deploy_for_current_branch() -> None:

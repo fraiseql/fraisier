@@ -744,6 +744,79 @@ class TestShipNoBump:
         assert result.exit_code != 0
 
 
+class TestShipGitPush:
+    """Test git push with upstream detection (#45)."""
+
+    @patch("subprocess.run")
+    def test_push_uses_set_upstream_when_no_tracking(self, mock_run, tmp_path):
+        """Push uses -u origin HEAD when branch has no upstream."""
+        cfg = _setup_project(tmp_path)
+
+        def side_effect(cmd, **kwargs):
+            # Simulate no upstream: rev-parse @{u} fails
+            if "@{u}" in str(cmd):
+                return MagicMock(returncode=128, stdout="", stderr="no upstream")
+            return MagicMock(returncode=0, stdout="main\n", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+
+        calls = mock_run.call_args_list
+        push_calls = [c[0][0] for c in calls if "push" in str(c[0][0])]
+        assert any(cmd == ["git", "push", "-u", "origin", "HEAD"] for cmd in push_calls)
+
+    @patch("subprocess.run")
+    def test_push_uses_plain_push_when_upstream_exists(self, mock_run, tmp_path):
+        """Push uses plain git push when upstream is already set."""
+        cfg = _setup_project(tmp_path)
+
+        def side_effect(cmd, **kwargs):
+            # Simulate upstream exists: rev-parse @{u} succeeds
+            if "@{u}" in str(cmd):
+                return MagicMock(returncode=0, stdout="origin/main\n", stderr="")
+            return MagicMock(returncode=0, stdout="main\n", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+
+        calls = mock_run.call_args_list
+        push_calls = [c[0][0] for c in calls if "push" in str(c[0][0])]
+        assert any(cmd == ["git", "push"] for cmd in push_calls)
+        assert not any("-u" in str(cmd) for cmd in push_calls)
+
+
 class TestShipDeploy:
     """Test ship triggers deploy after push."""
 
