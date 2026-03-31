@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.9 (2026-03-31)
+
+Bug-fix release: ship command push fix. 1663 tests, zero lint warnings.
+
+### Ship: Fix push on new branches (#45)
+
+- **fix:** `fraisier ship` now uses `git push -u origin HEAD` when the current branch has no upstream, instead of failing with "no upstream branch"
+- **refactor:** extracted `_git_push()` helper shared by both pipeline and legacy ship paths
+
 ## v0.3.8 (2026-03-31)
 
 Feature release: dependency install step in deploy pipeline. 1661 tests, zero lint warnings.
