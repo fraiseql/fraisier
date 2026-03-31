@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.8 (2026-03-31)
+
+Feature release: dependency install step in deploy pipeline. 1661 tests, zero lint warnings.
+
+### Deploy: Dependency Install Step (#44)
+
+- **feat:** deploy pipeline now supports an `install` step between git checkout and database migrations — ensures the venv is in sync with `uv.lock` before the service restarts
+- **feat:** `install.command` config (list of strings) runs the install command in `app_path` after git checkout
+- **feat:** `install.user` config runs the command as the app user via `sudo -u`, keeping venv ownership correct
+- **feat:** install step wired into all git-based deployers (API, ETL, Scheduled)
+- **feat:** sudoers scaffold generates a NOPASSWD rule for the install command when `install.user` is configured
+- **fix:** deployments that change dependencies in `uv.lock` no longer fail at health check
+
 ## v0.3.5 (2026-03-31)
 
 Feature release: three-phase rebuild, CLI improvements, better error reporting. 1593 tests, zero lint warnings.
