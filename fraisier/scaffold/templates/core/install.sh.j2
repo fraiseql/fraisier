@@ -59,6 +59,15 @@ apt-get install -y -qq --no-install-recommends \
     certbot \
     python3-certbot-nginx
 
+# Install PostgreSQL admin wrapper (if generated)
+PG_WRAPPER_SRC="${PROJECT_DIR}/scripts/generated/pg-wrapper.sh"
+PG_WRAPPER_DST="/usr/local/libexec/fraisier/pgadmin-{{ project_name }}"
+if [ -f "${PG_WRAPPER_SRC}" ]; then
+    echo "  Installing PostgreSQL admin wrapper"
+    mkdir -p /usr/local/libexec/fraisier
+    install -m 0755 "${PG_WRAPPER_SRC}" "${PG_WRAPPER_DST}"
+fi
+
 # Install sudoers fragment
 SUDOERS_SRC="${PROJECT_DIR}/scripts/generated/sudoers"
 SUDOERS_DST="/etc/sudoers.d/{{ project_name }}"
@@ -72,9 +81,10 @@ fi
 echo "  Installing systemd units"
 {% for fraise in fraises %}
 {% for env_name in fraise.get('environments', {}) %}
-if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ fraise.name }}_{{ env_name }}.service" ]; then
-    cp "${PROJECT_DIR}/scripts/generated/systemd/{{ fraise.name }}_{{ env_name }}.service" \
-       /etc/systemd/system/{{ fraise.name }}_{{ env_name }}.service
+{% set svc = project_name ~ '_' ~ fraise.name ~ '_' ~ env_name %}
+if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ svc }}.service" ]; then
+    cp "${PROJECT_DIR}/scripts/generated/systemd/{{ svc }}.service" \
+       /etc/systemd/system/{{ svc }}.service
 fi
 {% endfor %}
 {% endfor %}

@@ -2,14 +2,32 @@
 # Sudoers fragment for deployment users
 # Install to /etc/sudoers.d/{{ project_name }}
 
+{% set _admin_strategies = ['rebuild', 'restore_migrate'] %}
+{% set _wrapper_path = '/usr/local/libexec/fraisier/pgadmin-' ~ project_name %}
+
 {% for fraise in fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set deploy_user = env_config.get('deploy_user', scaffold.deploy_user) %}
-{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart {{ fraise.name }}_{{ env_name }}.service
-{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl stop {{ fraise.name }}_{{ env_name }}.service
-{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl start {{ fraise.name }}_{{ env_name }}.service
-{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl status {{ fraise.name }}_{{ env_name }}.service
-{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active {{ fraise.name }}_{{ env_name }}.service
+{% set svc = project_name ~ '_' ~ fraise.name ~ '_' ~ env_name %}
+{% set db = env_config.get('database', {}) or {} %}
+{% set strategy = db.get('strategy', '') %}
+# --- {{ svc }} ---
+
+# Service management
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl stop {{ svc }}.service
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl start {{ svc }}.service
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart {{ svc }}.service
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl status {{ svc }}.service
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active {{ svc }}.service
+
+# Log access
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/journalctl -u {{ svc }}.service *
+
+{% if strategy in _admin_strategies %}
+# Database admin via wrapper ({{ strategy }} strategy)
+{{ deploy_user }} ALL=(postgres) NOPASSWD: {{ _wrapper_path }} *
+{% endif %}
 {% endfor %}
 {% endfor %}
+# Global
 {{ scaffold.deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload

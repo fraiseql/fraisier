@@ -5,7 +5,6 @@ and validates the restore by checking the table count against a minimum
 threshold.
 """
 
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,17 +79,15 @@ def validate_table_count(
     Returns (ok, count).
     """
     sql = "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
-    result = subprocess.run(
-        ["sudo", "-u", sudo_user, "psql", "-d", db_name, "-t", "-A", "-c", sql],
-        capture_output=True,
-        text=True,
-        check=False,
+    code, stdout, _ = _pg_cmd(
+        ["psql", "-d", db_name, "-t", "-A", "-c", sql],
+        sudo_user=sudo_user,
     )
-    if result.returncode != 0:
+    if code != 0:
         return False, 0
 
     try:
-        count = int(result.stdout.strip())
+        count = int(stdout.strip())
     except ValueError:
         return False, 0
 

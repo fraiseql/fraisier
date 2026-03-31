@@ -81,6 +81,36 @@ def _resolve_fraise_port(fraise: dict[str, Any]) -> int:
     return 8000
 
 
+_ADMIN_STRATEGIES = {"rebuild", "restore_migrate"}
+
+
+def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[str]:
+    """Collect database names that need admin access (rebuild/restore_migrate).
+
+    Returns the allowlist including template-prefixed variants.
+    """
+    allowed: dict[str, None] = {}
+    for fraise in fraises_list:
+        for env_config in fraise.get("environments", {}).values():
+            db = env_config.get("database") or {}
+            if not isinstance(db, dict):
+                continue
+            strategy = db.get("strategy", "")
+            if strategy not in _ADMIN_STRATEGIES:
+                continue
+            db_name = db.get("name", "")
+            if not db_name:
+                continue
+            allowed[db_name] = None
+            # Default template name
+            allowed[f"template_{db_name}"] = None
+            # Custom template name from restore config
+            restore = db.get("restore") or {}
+            if isinstance(restore, dict) and restore.get("template_name"):
+                allowed[restore["template_name"]] = None
+    return list(allowed)
+
+
 def _build_context(config: FraisierConfig) -> dict[str, Any]:
     """Build the Jinja2 template context from config."""
     fraises_list = []
@@ -101,6 +131,7 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
         "fraise_names": config.list_fraises(),
         "project_name": _infer_project_name(config),
         "multi_fraise": len(config.list_fraises()) > 1,
+        "pg_allowed_databases": _collect_pg_allowed_databases(fraises_list),
     }
 
 
@@ -182,6 +213,13 @@ class ScaffoldRenderer:
             rendered_files.append(out_name)
             if not dry_run:
                 self._render_template(template_path, out_name)
+
+        # PostgreSQL admin wrapper (only when admin strategies are configured)
+        if self.context["pg_allowed_databases"]:
+            pg_out = "pg-wrapper.sh"
+            rendered_files.append(pg_out)
+            if not dry_run:
+                self._render_template("core/pg-wrapper.sh.j2", pg_out)
 
         # Per-fraise systemd service templates
         project = self.context["project_name"]

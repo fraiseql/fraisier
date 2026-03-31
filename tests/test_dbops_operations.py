@@ -39,6 +39,51 @@ class TestPgCmd:
         assert code == 2
         assert stderr == "fatal error"
 
+    def test_pg_cmd_uses_wrapper_from_env(self):
+        """_pg_cmd routes through FRAISIER_PG_WRAPPER when set (#41)."""
+        with (
+            patch("subprocess.run") as mock_run,
+            patch.dict(
+                "os.environ",
+                {"FRAISIER_PG_WRAPPER": "/usr/local/libexec/fraisier/pgadmin-myproj"},
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(["psql", "-d", "mydb", "-c", "SELECT 1"])
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd == [
+            "sudo",
+            "-u",
+            "postgres",
+            "/usr/local/libexec/fraisier/pgadmin-myproj",
+            "psql",
+            "-d",
+            "mydb",
+            "-c",
+            "SELECT 1",
+        ]
+
+    def test_pg_cmd_no_wrapper_with_connection_url(self):
+        """_pg_cmd ignores wrapper when connection_url is set (test mode)."""
+        with (
+            patch("subprocess.run") as mock_run,
+            patch.dict(
+                "os.environ",
+                {"FRAISIER_PG_WRAPPER": "/usr/local/libexec/fraisier/pgadmin-myproj"},
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["psql", "-d", "mydb", "-c", "SELECT 1"],
+                connection_url="postgresql://user:pass@localhost:5432/mydb",
+            )
+
+        cmd = mock_run.call_args[0][0]
+        # connection_url path bypasses sudo entirely — no wrapper
+        assert "pgadmin" not in str(cmd)
+        assert "sudo" not in cmd
+
 
 class TestRunPsql:
     """Test run_psql wrapper."""

@@ -59,7 +59,11 @@ def _pg_cmd(
         if extra_env:
             run_env = {**os.environ, **extra_env}
     else:
-        full_cmd = ["sudo", "-u", sudo_user, *cmd]
+        wrapper = os.environ.get("FRAISIER_PG_WRAPPER")
+        if wrapper:
+            full_cmd = ["sudo", "-u", sudo_user, wrapper, *cmd]
+        else:
+            full_cmd = ["sudo", "-u", sudo_user, *cmd]
 
     result = subprocess.run(
         full_cmd,

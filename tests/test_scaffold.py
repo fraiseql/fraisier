@@ -1736,10 +1736,358 @@ fraises:
         # Production uses per-env deploy_user
         assert "prod-deployer" in content
         assert "my_api_production" in content
-        # Per-env lines use prod-deployer, not default-deployer
+        # Per-env command lines use prod-deployer, not default-deployer
         for line in content.splitlines():
-            if "my_api_production" in line:
+            if "my_api_production" in line and not line.startswith("#"):
                 assert "prod-deployer" in line
+
+    def test_sudoers_service_names_include_project_prefix(self, tmp_path):
+        """Service names in sudoers must match renderer: {project}_{fraise}_{env}."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # Must use project-prefixed service name
+        assert "myproj_my_api_production.service" in content
+        # Must NOT use unprefixed service name
+        for line in content.splitlines():
+            if "systemctl" in line and "daemon-reload" not in line:
+                assert "myproj_my_api_production" in line
+
+    def test_sudoers_includes_journalctl(self, tmp_path):
+        """Sudoers grants journalctl access for each service (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+      development:
+        app_path: /var/www/dev
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        assert "journalctl" in content
+        assert "myproj_my_api_production.service" in content
+        assert "myproj_my_api_development.service" in content
+        # Each env gets its own journalctl rule
+        journal_lines = [line for line in content.splitlines() if "journalctl" in line]
+        assert len(journal_lines) >= 2
+
+    def test_sudoers_includes_wrapper_for_rebuild_strategy(self, tmp_path):
+        """Sudoers grants wrapper access for rebuild database strategy (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        database:
+          name: myapp_dev
+          strategy: rebuild
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        assert "ALL=(postgres)" in content
+        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
+
+    def test_sudoers_includes_wrapper_for_restore_migrate(self, tmp_path):
+        """Sudoers grants wrapper access for restore_migrate strategy (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: myapp_staging
+          strategy: restore_migrate
+          restore:
+            backup_dir: /backup/prod
+            backup_pattern: "*.dump"
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        assert "ALL=(postgres)" in content
+        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
+
+    def test_sudoers_no_db_admin_for_migrate_strategy(self, tmp_path):
+        """Sudoers omits DB admin commands for migrate/apply strategies (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+        database:
+          name: myapp_prod
+          strategy: migrate
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        assert "createdb" not in content
+        assert "dropdb" not in content
+        assert "pg_restore" not in content
+        assert "pgadmin" not in content
+
+    def test_sudoers_wrapper_scoped_to_deploy_user(self, tmp_path):
+        """Wrapper rules use the correct deploy_user per environment (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: default-deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        deploy_user: dev-deployer
+        database:
+          name: myapp_dev
+          strategy: rebuild
+      production:
+        app_path: /var/www/prod
+        database:
+          name: myapp_prod
+          strategy: migrate
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # dev-deployer gets wrapper access (rebuild strategy)
+        wrapper_lines = [line for line in content.splitlines() if "pgadmin" in line]
+        assert any("dev-deployer" in line for line in wrapper_lines)
+        # default-deployer (production) does NOT get wrapper (migrate strategy)
+        assert not any(
+            "default-deployer" in line and "pgadmin" in line
+            for line in content.splitlines()
+        )
+
+    def test_pg_wrapper_generated_with_allowlist(self, tmp_path):
+        """pg-wrapper.sh embeds allowed database names from config (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        database:
+          name: myapp_dev
+          strategy: rebuild
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: myapp_staging
+          strategy: restore_migrate
+          restore:
+            backup_dir: /backup/prod
+            backup_pattern: "*.dump"
+      production:
+        app_path: /var/www/prod
+        database:
+          name: myapp_prod
+          strategy: migrate
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        wrapper_path = tmp_path / "output" / "pg-wrapper.sh"
+        assert wrapper_path.exists()
+        content = wrapper_path.read_text()
+        # Allowlist includes only databases with admin strategies
+        assert "myapp_dev" in content
+        assert "myapp_staging" in content
+        # Production (migrate) must NOT be in the allowlist
+        assert "myapp_prod" not in content
+        # Template databases are also allowed
+        assert "template_myapp_dev" in content
+        assert "template_myapp_staging" in content
+        # Script is executable-ready
+        assert content.startswith("#!/")
+
+    def test_pg_wrapper_includes_custom_template_names(self, tmp_path):
+        """pg-wrapper.sh includes custom template_name from config (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: myapp_staging
+          strategy: restore_migrate
+          restore:
+            backup_dir: /backup/prod
+            backup_pattern: "*.dump"
+            template_name: myapp_staging_tpl
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "pg-wrapper.sh").read_text()
+        assert "myapp_staging_tpl" in content
+
+    def test_pg_wrapper_not_generated_without_admin_strategies(self, tmp_path):
+        """pg-wrapper.sh is not generated when no env needs DB admin (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+        database:
+          name: myapp_prod
+          strategy: migrate
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render()
+        assert "pg-wrapper.sh" not in files
+
+    def test_sudoers_references_wrapper_for_db_admin(self, tmp_path):
+        """Sudoers uses wrapper path instead of raw pg commands (#41)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        database:
+          name: myapp_dev
+          strategy: rebuild
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # Should reference the wrapper, not raw psql/createdb/dropdb
+        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
+        # Raw commands should NOT appear in sudoers
+        assert "NOPASSWD: /usr/bin/psql" not in content
+        assert "NOPASSWD: /usr/bin/createdb" not in content
+        assert "NOPASSWD: /usr/bin/dropdb" not in content
 
     def test_install_sh_rendered(self, tmp_path):
         """install.sh is generated and idempotent-friendly."""
@@ -1783,6 +2131,96 @@ fraises:
         content = (tmp_path / "output" / "install.sh").read_text()
         assert "myapp" in content
         assert "Creating app user myapp" in content
+
+    def test_install_sh_service_names_include_project_prefix(self, tmp_path):
+        """install.sh copies service files with project-prefixed names."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        # Must use project-prefixed service name
+        assert "myproj_my_api_production.service" in content
+        # Must NOT use unprefixed service name in cp commands
+        for line in content.splitlines():
+            if "cp " in line and ".service" in line:
+                assert "myproj_" in line
+
+    def test_webhook_service_sets_pg_wrapper_env(self, tmp_path):
+        """Webhook service sets FRAISIER_PG_WRAPPER when wrapper exists."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        database:
+          name: myapp_dev
+          strategy: rebuild
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        assert "FRAISIER_PG_WRAPPER=" in content
+        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
+
+    def test_webhook_service_no_pg_wrapper_without_admin_strategies(self, tmp_path):
+        """Webhook service omits FRAISIER_PG_WRAPPER when no admin strategies."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+        database:
+          name: myapp_prod
+          strategy: migrate
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        assert "FRAISIER_PG_WRAPPER" not in content
 
 
 class TestConfitureTemplates:

@@ -6,13 +6,13 @@ cleanup, and per-destination schedule matching.
 
 import re
 import shutil
-import subprocess
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
+from fraisier.dbops.operations import _pg_cmd
 
 _COMPRESSION_RE = re.compile(r"^(zstd|lz4|gzip|none)(:\d+)?$")
 
@@ -63,10 +63,7 @@ def run_backup(
     filename = f"{db_name}_{mode}_{timestamp}.dump"
     backup_path = f"{output_dir}/{filename}"
 
-    cmd = [
-        "sudo",
-        "-u",
-        sudo_user,
+    cmd: list[str] = [
         "pg_dump",
         "-Fc",
         f"--compress={compression}",
@@ -81,18 +78,13 @@ def run_backup(
 
     cmd.append(db_name)
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    code, _, stderr = _pg_cmd(cmd, sudo_user=sudo_user)
 
-    if result.returncode != 0:
+    if code != 0:
         return BackupResult(
             success=False,
             backup_path=backup_path,
-            error=result.stderr.strip(),
+            error=stderr.strip(),
         )
 
     return BackupResult(success=True, backup_path=backup_path)
