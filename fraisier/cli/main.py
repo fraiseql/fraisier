@@ -14,14 +14,16 @@ from ._helpers import _get_deployer, _print_dry_run, console
 
 
 @click.group()
+@click.version_option(package_name="fraisier", prog_name="fraisier")
 @click.option(
     "--config",
     "-c",
     type=click.Path(exists=True),
     help="Path to fraises.yaml configuration file",
 )
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose/debug output")
 @click.pass_context
-def main(ctx: click.Context, config: str | None) -> None:
+def main(ctx: click.Context, config: str | None, verbose: bool) -> None:
     """Fraisier - Deployment orchestrator for the FraiseQL ecosystem.
 
     Manage deployments for all your fraises (services) across multiple providers
@@ -35,6 +37,12 @@ def main(ctx: click.Context, config: str | None) -> None:
         fraisier provider-info bare_metal
         fraisier provider-test docker_compose -f config.yaml
     """
+    if verbose:
+        import logging
+
+        logging.basicConfig(format="%(name)s %(levelname)s %(message)s")
+        logging.getLogger().setLevel(logging.DEBUG)
+
     ctx.ensure_object(dict)
     try:
         ctx.obj["config"] = get_config(config)

@@ -535,6 +535,23 @@ class TestVersionGating:
         assert has_version_changed(None, "1.0.0") is True
 
 
+class TestCliVersionFlag:
+    """Test fraisier --version flag."""
+
+    def test_version_flag_outputs_version(self):
+        from fraisier.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["--version"])
+
+        assert result.exit_code == 0
+        assert "fraisier" in result.output
+        # Should contain a version-like string (e.g. "0.3.4")
+        import re
+
+        assert re.search(r"\d+\.\d+\.\d+", result.output)
+
+
 class TestDeployTemplateVersionGating:
     """Test that deploy.yml template includes version gating."""
 

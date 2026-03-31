@@ -162,8 +162,12 @@ class RebuildStrategy(Strategy):
             check=False,
         )
         if result.returncode != 0:
+            log.error("psql failed on %s:\n%s", sql_path, result.stderr)
             raise subprocess.CalledProcessError(
-                result.returncode, "psql", stderr=result.stderr
+                result.returncode,
+                "psql",
+                output=result.stdout,
+                stderr=result.stderr,
             )
 
     def _provision_roles(
@@ -246,7 +250,7 @@ class RebuildStrategy(Strategy):
 
         try:
             split = builder.build_split(output_dir=output_dir)
-            superuser_path = Path(split.superuser_path)
+            superuser_pre_path = Path(split.superuser_pre_path)
             app_path = Path(split.app_path)
 
             # Drop and recreate the database as postgres superuser.
@@ -264,23 +268,28 @@ class RebuildStrategy(Strategy):
                 self._provision_roles(db_name, db_owner, connection_url=admin_url)
 
             # Phase 1: Apply superuser SQL (roles, extensions) via admin_url.
-            if split.superuser_files > 0:
-                su_conn = admin_url or env.database_url
-                # Superuser SQL targets the app database, not postgres.
-                # If admin_url points to the postgres database, rewrite
-                # its path to the app database so that CREATE EXTENSION
-                # and GRANT statements land in the right place.
-                if admin_url:
-                    from urllib.parse import urlparse as _urlparse
-                    from urllib.parse import urlunparse as _urlunparse
+            # Compute the admin connection URL targeting the app database.
+            # Superuser SQL must land in the app db, not postgres.
+            if admin_url:
+                admin_app_conn = urlunparse(
+                    urlparse(admin_url)._replace(path=f"/{db_name}")
+                )
+            else:
+                admin_app_conn = None
 
-                    admin_parsed = _urlparse(admin_url)
-                    su_conn = _urlunparse(admin_parsed._replace(path=f"/{db_name}"))
-
-                self._apply_sql(su_conn, superuser_path)
+            # Phase 1: Apply superuser pre-schema SQL (roles, extensions).
+            if split.superuser_pre_files > 0:
+                su_conn = admin_app_conn or env.database_url
+                self._apply_sql(su_conn, superuser_pre_path)
 
             # Phase 2: Apply app SQL (schemas, tables, views, data).
             self._apply_sql(env.database_url, app_path)
+
+            # Phase 3: Apply superuser post-schema SQL (grants on tables,
+            # role settings) — requires tables to exist, hence after app.
+            if split.superuser_post_files > 0:
+                su_post_conn = admin_app_conn or env.database_url
+                self._apply_sql(su_post_conn, Path(split.superuser_post_path))
         finally:
             import shutil
 

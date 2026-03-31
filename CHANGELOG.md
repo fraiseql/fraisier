@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.3.5 (2026-03-31)
+
+Feature release: three-phase rebuild, CLI improvements, better error reporting. 1593 tests, zero lint warnings.
+
+### Three-Phase Schema Apply (#39)
+
+- **feat:** `RebuildStrategy` now supports confiture's three-phase `build_split()` — superuser pre-schema (roles, extensions), app schema (tables, views, data), and superuser post-schema (grants on tables, role settings)
+- **feat:** post-schema phase is skipped automatically when `superuser_post_files == 0`
+- **refactor:** extracted shared `admin_app_conn` computation for reuse across pre and post phases
+- **deps:** requires `fraiseql-confiture>=0.8.20` for three-phase `build_split()` support
+
+### CLI: --version flag (#36)
+
+- **feat:** `fraisier --version` now prints the installed version (e.g. `fraisier, version 0.3.5`)
+
+### CLI: --verbose flag (#37)
+
+- **feat:** `fraisier --verbose` / `fraisier -v` sets root logger to DEBUG for detailed diagnostic output from all subcommands
+
+### Better psql error reporting (#38)
+
+- **fix:** `_apply_sql` now logs stderr at ERROR level before raising, so psql failures show the actual database error instead of a generic exit code message
+- **fix:** `CalledProcessError` now includes both stdout and stderr from failed psql commands
+
 ## v0.3.2 (2026-03-30)
 
 Feature release: two-phase rebuild strategy. 1538 tests, zero lint warnings.
