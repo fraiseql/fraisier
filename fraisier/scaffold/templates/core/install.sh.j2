@@ -109,4 +109,13 @@ if [ -f "${PROJECT_DIR}/scripts/generated/nginx/gateway.conf" ]; then
     nginx -t && systemctl reload nginx
 fi
 
+{% if has_database %}
+# PostgreSQL logging configuration
+echo "  PostgreSQL logging configs generated in postgresql/"
+echo "  Review and install the one matching this server's environment:"
+echo "    cp ${PROJECT_DIR}/scripts/generated/postgresql/fraisier_<env>.conf \\"
+echo "       /etc/postgresql/*/conf.d/fraisier.conf"
+echo "    systemctl reload postgresql"
+{% endif %}
+
 echo "==> Setup complete for {{ project_name }}"

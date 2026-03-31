@@ -42,9 +42,7 @@ RuntimeDirectoryMode={{ service.runtime_directory_mode }}
 {% if service.logs_directory %}
 # Logs directory
 LogsDirectory={{ service.logs_directory }}
-{% if service.logs_directory_mode %}
-LogsDirectoryMode={{ service.logs_directory_mode }}
-{% endif %}
+LogsDirectoryMode={{ service.logs_directory_mode or '0750' }}
 {% endif %}
 
 {% if service.environment_file %}

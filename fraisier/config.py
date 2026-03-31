@@ -313,6 +313,41 @@ class GithubActionsScaffoldConfig:
 
 
 @dataclass
+class PostgresLoggingConfig:
+    """PostgreSQL logging configuration for conf.d snippet."""
+
+    log_min_duration_statement: str | None = None
+    log_statement: str | None = None
+    log_connections: bool | None = None
+    log_line_prefix: str = "'%m [%p] %q%u@%d '"
+    log_min_error_statement: str = "error"
+    log_error_verbosity: str = "default"
+    deadlock_timeout: str = "1s"
+    log_lock_waits: bool = True
+    log_rotation_age: str = "1d"
+    log_rotation_size: str = "100MB"
+
+
+PG_LOG_ENV_DEFAULTS: dict[str, dict[str, str | bool]] = {
+    "development": {
+        "log_min_duration_statement": "100",
+        "log_statement": "all",
+        "log_connections": True,
+    },
+    "staging": {
+        "log_min_duration_statement": "250",
+        "log_statement": "ddl",
+        "log_connections": False,
+    },
+    "production": {
+        "log_min_duration_statement": "500",
+        "log_statement": "ddl",
+        "log_connections": False,
+    },
+}
+
+
+@dataclass
 class ScaffoldConfig:
     """Parsed scaffold: section from fraises.yaml."""
 
@@ -323,6 +358,7 @@ class ScaffoldConfig:
     github_actions: GithubActionsScaffoldConfig = field(
         default_factory=GithubActionsScaffoldConfig
     )
+    postgresql: PostgresLoggingConfig = field(default_factory=PostgresLoggingConfig)
 
 
 _VALID_LOCK_BACKENDS = {"file", "database"}
@@ -722,6 +758,7 @@ class FraisierConfig:
         raw_systemd = raw.get("systemd", {}) or {}
         raw_nginx = raw.get("nginx", {}) or {}
         raw_gh = raw.get("github_actions", {}) or {}
+        raw_pg = raw.get("postgresql", {}) or {}
 
         # Fallback deploy_user: scaffold -> top-level -> deployment -> "fraisier"
         deploy_user = raw.get("deploy_user")
@@ -751,6 +788,18 @@ class FraisierConfig:
                 format_command=raw_gh.get(
                     "format_command", "uv run ruff format --check"
                 ),
+            ),
+            postgresql=PostgresLoggingConfig(
+                log_min_duration_statement=raw_pg.get("log_min_duration_statement"),
+                log_statement=raw_pg.get("log_statement"),
+                log_connections=raw_pg.get("log_connections"),
+                log_line_prefix=raw_pg.get("log_line_prefix", "'%m [%p] %q%u@%d '"),
+                log_min_error_statement=raw_pg.get("log_min_error_statement", "error"),
+                log_error_verbosity=raw_pg.get("log_error_verbosity", "default"),
+                deadlock_timeout=raw_pg.get("deadlock_timeout", "1s"),
+                log_lock_waits=raw_pg.get("log_lock_waits", True),
+                log_rotation_age=raw_pg.get("log_rotation_age", "1d"),
+                log_rotation_size=raw_pg.get("log_rotation_size", "100MB"),
             ),
         )
 

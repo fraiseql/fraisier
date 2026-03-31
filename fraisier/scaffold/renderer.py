@@ -111,6 +111,15 @@ def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[st
     return list(allowed)
 
 
+def _any_fraise_has_database(fraises_list: list[dict[str, Any]]) -> bool:
+    """Return True if any fraise environment has a database section."""
+    for fraise in fraises_list:
+        for env_config in fraise.get("environments", {}).values():
+            if isinstance(env_config, dict) and env_config.get("database"):
+                return True
+    return False
+
+
 def _build_context(config: FraisierConfig) -> dict[str, Any]:
     """Build the Jinja2 template context from config."""
     fraises_list = []
@@ -132,6 +141,7 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
         "project_name": _infer_project_name(config),
         "multi_fraise": len(config.list_fraises()) > 1,
         "pg_allowed_databases": _collect_pg_allowed_databases(fraises_list),
+        "has_database": _any_fraise_has_database(fraises_list),
     }
 
 
@@ -220,6 +230,9 @@ class ScaffoldRenderer:
             rendered_files.append(pg_out)
             if not dry_run:
                 self._render_template("core/pg-wrapper.sh.j2", pg_out)
+
+        # PostgreSQL logging config (one per unique environment with a database)
+        rendered_files.extend(self._collect_pg_logging(dry_run))
 
         # Per-fraise systemd service templates
         project = self.context["project_name"]
@@ -318,6 +331,46 @@ class ScaffoldRenderer:
             content = template.render(**ctx)
         except jinja2.TemplateNotFound:
             content = f"# Placeholder: core/service.j2 for {fraise['name']}\n"
+
+        self._write_output(out_name, content)
+
+    def _collect_pg_logging(self, dry_run: bool) -> list[str]:
+        """Discover and render per-environment PostgreSQL logging configs.
+
+        Returns list of rendered file paths.
+        """
+        if not self.context["has_database"]:
+            return []
+
+        env_names: set[str] = set()
+        for fraise in self.context["fraises"]:
+            for env_name, env_config in fraise.get("environments", {}).items():
+                if isinstance(env_config, dict) and env_config.get("database"):
+                    env_names.add(env_name)
+
+        files: list[str] = []
+        for env_name in sorted(env_names):
+            pg_conf_out = f"postgresql/fraisier_{env_name}.conf"
+            files.append(pg_conf_out)
+            if not dry_run:
+                self._render_pg_logging(env_name, pg_conf_out)
+        return files
+
+    def _render_pg_logging(self, env_name: str, out_name: str) -> None:
+        """Render a per-environment PostgreSQL logging config."""
+        from fraisier.config import PG_LOG_ENV_DEFAULTS
+
+        defaults = PG_LOG_ENV_DEFAULTS.get(env_name, PG_LOG_ENV_DEFAULTS["production"])
+        ctx = {
+            **self.context,
+            "env_name": env_name,
+            "pg_defaults": defaults,
+        }
+        try:
+            template = self.env.get_template("core/postgresql-logging.conf.j2")
+            content = template.render(**ctx)
+        except jinja2.TemplateNotFound:
+            content = f"# Placeholder: postgresql logging for {env_name}\n"
 
         self._write_output(out_name, content)
 

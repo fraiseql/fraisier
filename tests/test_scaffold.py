@@ -110,6 +110,39 @@ deployment:
         sc = config.scaffold
         assert sc.deploy_user == "deploy_bot"
 
+    def test_postgres_logging_config_defaults(self, tmp_path):
+        """PostgresLoggingConfig uses sensible defaults (#42)."""
+        config = self._make_config(tmp_path, "name: tp\nfraises: {}\n")
+        pg = config.scaffold.postgresql
+        assert pg.log_min_duration_statement is None
+        assert pg.log_statement is None
+        assert pg.log_connections is None
+        assert pg.deadlock_timeout == "1s"
+        assert pg.log_lock_waits is True
+        assert pg.log_rotation_age == "1d"
+        assert pg.log_rotation_size == "100MB"
+
+    def test_postgres_logging_config_from_yaml(self, tmp_path):
+        """scaffold.postgresql parses overrides from YAML (#42)."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises: {}
+scaffold:
+  postgresql:
+    log_min_duration_statement: "200"
+    log_statement: mod
+    deadlock_timeout: 2s
+    log_lock_waits: false
+""",
+        )
+        pg = config.scaffold.postgresql
+        assert pg.log_min_duration_statement == "200"
+        assert pg.log_statement == "mod"
+        assert pg.deadlock_timeout == "2s"
+        assert pg.log_lock_waits is False
+
 
 class TestScaffoldRenderer:
     """Renderer runs core templates, then provider templates."""
@@ -302,6 +335,86 @@ scaffold:
         svc_path = tmp_path / "output" / "systemd" / "tp_my_api_development.service"
         content = svc_path.read_text()
         assert "MemoryMax=2G" in content
+
+    def test_logs_directory_mode_defaults_to_0750(self, tmp_path):
+        """LogsDirectoryMode defaults to 0750 when LogsDirectory is set (#42)."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        service:
+          logs_directory: myapp
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
+        content = svc_path.read_text()
+        assert "LogsDirectory=myapp" in content
+        assert "LogsDirectoryMode=0750" in content
+
+    def test_logs_directory_mode_explicit_override(self, tmp_path):
+        """Explicit LogsDirectoryMode overrides the 0750 default (#42)."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        service:
+          logs_directory: myapp
+          logs_directory_mode: "0700"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
+        content = svc_path.read_text()
+        assert "LogsDirectoryMode=0700" in content
+        assert "LogsDirectoryMode=0750" not in content
+
+    def test_no_logs_directory_omits_mode(self, tmp_path):
+        """No LogsDirectory means no LogsDirectoryMode directive (#42)."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
+        content = svc_path.read_text()
+        assert "LogsDirectoryMode" not in content
 
 
 class TestSystemdTimerTemplates:
@@ -2221,6 +2334,261 @@ fraises:
 
         content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
         assert "FRAISIER_PG_WRAPPER" not in content
+
+
+class TestPostgresLogging:
+    """PostgreSQL logging config generation (#42)."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_pg_logging_generated_when_database_present(self, tmp_path):
+        """postgresql/ configs generated when any fraise has a database."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        database:
+          name: myapp_prod
+          strategy: migrate
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render()
+        assert "postgresql/fraisier_production.conf" in files
+        pg_conf = tmp_path / "output" / "postgresql" / "fraisier_production.conf"
+        assert pg_conf.exists()
+
+    def test_pg_logging_not_generated_without_database(self, tmp_path):
+        """No postgresql/ configs when no fraise has a database section."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render()
+        assert not any(f.startswith("postgresql/") for f in files)
+
+    def test_pg_logging_dev_defaults(self, tmp_path):
+        """Development env uses log_statement=all, 100ms threshold, connections on."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        database:
+          name: myapp_dev
+          strategy: rebuild
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (
+            tmp_path / "output" / "postgresql" / "fraisier_development.conf"
+        ).read_text()
+        assert "log_min_duration_statement = 100" in content
+        assert "log_statement = 'all'" in content
+        assert "log_connections = on" in content
+
+    def test_pg_logging_production_defaults(self, tmp_path):
+        """Production env uses log_statement=ddl, 500ms threshold, connections off."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        database:
+          name: myapp_prod
+          strategy: migrate
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (
+            tmp_path / "output" / "postgresql" / "fraisier_production.conf"
+        ).read_text()
+        assert "log_min_duration_statement = 500" in content
+        assert "log_statement = 'ddl'" in content
+        assert "log_connections = off" in content
+
+    def test_pg_logging_override_wins(self, tmp_path):
+        """scaffold.postgresql overrides win over env defaults."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+  postgresql:
+    log_min_duration_statement: "200"
+    log_statement: mod
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        database:
+          name: myapp_prod
+          strategy: migrate
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (
+            tmp_path / "output" / "postgresql" / "fraisier_production.conf"
+        ).read_text()
+        assert "log_min_duration_statement = 200" in content
+        assert "log_statement = 'mod'" in content
+
+    def test_pg_logging_unknown_env_uses_production(self, tmp_path):
+        """Unknown environment names fall back to production defaults."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      qa:
+        database:
+          name: myapp_qa
+          strategy: migrate
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "postgresql" / "fraisier_qa.conf").read_text()
+        assert "log_min_duration_statement = 500" in content
+        assert "log_statement = 'ddl'" in content
+
+    def test_pg_logging_per_env_files(self, tmp_path):
+        """One config file generated per unique environment name."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        database:
+          name: myapp_dev
+          strategy: rebuild
+      production:
+        database:
+          name: myapp_prod
+          strategy: migrate
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render()
+        assert "postgresql/fraisier_development.conf" in files
+        assert "postgresql/fraisier_production.conf" in files
+
+    def test_install_sh_mentions_pg_config_when_database(self, tmp_path):
+        """install.sh mentions PostgreSQL logging when databases exist."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        database:
+          name: myapp_prod
+          strategy: migrate
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        assert "postgresql" in content.lower()
+
+    def test_install_sh_no_pg_mention_without_database(self, tmp_path):
+        """install.sh omits PostgreSQL logging instructions without databases."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        assert "conf.d" not in content
 
 
 class TestConfitureTemplates:
