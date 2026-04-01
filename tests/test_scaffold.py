@@ -2263,6 +2263,123 @@ fraises:
         # No install rule since no user is specified
         assert "Dependency install" not in content
 
+    def test_sudoers_uses_absolute_paths(self, tmp_path):
+        """Sudoers entries use absolute paths for commands (#49)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: fraisier
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # Should use absolute path for uv
+        assert "/usr/local/bin/uv sync --frozen" in content
+        # Should not have relative path
+        assert "NOPASSWD: uv" not in content
+
+    def test_sudoers_deduplicates_identical_rules(self, tmp_path):
+        """Identical sudoers rules are deduplicated across environments (#49)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: fraisier
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+      staging:
+        app_path: /var/www/staging
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+      production:
+        app_path: /var/www/prod
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # The identical rule should appear only once
+        count = content.count("uv sync --frozen")
+        # Should appear once, not 3 times (one per environment)
+        assert count == 1
+
+    def test_sudoers_lists_affected_environments(self, tmp_path):
+        """Sudoers rules include comments listing affected environments (#49)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: fraisier
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+      staging:
+        app_path: /var/www/staging
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+      production:
+        app_path: /var/www/prod
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sudoers").read_text()
+        # Should have comment listing all environments
+        assert "Environments:" in content
+        assert "development" in content
+        assert "staging" in content
+        assert "production" in content
+
     def test_install_sh_rendered(self, tmp_path):
         """install.sh is generated and idempotent-friendly."""
         config = _make_full_config(tmp_path)
@@ -2960,3 +3077,81 @@ scaffold:
         # Nginx gateway should be generated for multi-fraise
         gateway = tmp_path / "output" / "nginx" / "gateway.conf"
         assert gateway.exists()
+
+    def test_scaffold_install_command_missing_install_script(self, tmp_path):
+        """scaffold-install fails if install.sh doesn't exist."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises: {{}}
+"""
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install"])
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+
+    def test_scaffold_then_install_workflow(self, tmp_path):
+        """Complete workflow: scaffold generates files, then scaffold-install processes them."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_SCAFFOLD_YAML.format(output=str(tmp_path / "output")))
+
+        runner = CliRunner()
+
+        # Step 1: Generate scaffold files
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold"])
+        assert result.exit_code == 0
+        install_script = tmp_path / "output" / "install.sh"
+        assert install_script.exists()
+
+        # Step 2: Check that install.sh mentions next steps
+        assert "scaffold-install" in result.output.lower()
+
+        # Step 3: Verify install.sh has dry-run support
+        assert install_script.exists()
+        content = install_script.read_text()
+        assert "--dry-run" in content
+        assert "--validate-only" in content
+
+    def test_scaffold_install_help(self, tmp_path):
+        """scaffold-install --help shows usage information."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["scaffold-install", "--help"])
+        assert result.exit_code == 0
+        assert "preview" in result.output.lower()
+        assert "validate" in result.output.lower()
+        assert "--dry-run" in result.output
+        assert "--validate-only" in result.output
+
+    def test_scaffold_generates_install_suggestion(self, tmp_path):
+        """After scaffold, output suggests running scaffold-install."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_SCAFFOLD_YAML.format(output=str(tmp_path / "output")))
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold"])
+        assert result.exit_code == 0
+        # Should mention the next command
+        assert "scaffold-install" in result.output
+        assert "--dry-run" in result.output
+        assert "--yes" in result.output

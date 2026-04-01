@@ -11,6 +11,16 @@
 {{ user }} ALL=(root) NOPASSWD: {{ _systemctl_wrapper_path }} *
 {% endfor %}
 
+{% if sudoers_rules %}
+# Dependency install rules (deduplicated)
+{% for rule in sudoers_rules %}
+# {{ rule.description }}
+# Environments: {{ rule.environments | join(', ') }}
+{{ rule.from_user }} ALL=({{ rule.as_user }}) NOPASSWD: {{ rule.cmd }}
+
+{% endfor %}
+{% endif %}
+
 {% for fraise in fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set deploy_user = env_config.get('deploy_user', scaffold.deploy_user) %}
@@ -19,13 +29,6 @@
 {% if strategy in _admin_strategies %}
 # Database admin via wrapper ({{ strategy }} strategy)
 {{ deploy_user }} ALL=(postgres) NOPASSWD: {{ _pg_wrapper_path }} *
-{% endif %}
-{% set install = env_config.get('install', {}) or {} %}
-{% set install_user = install.get('user') %}
-{% set install_cmd = install.get('command', []) %}
-{% if install_user and install_cmd %}
-# Dependency install as app user
-{{ deploy_user }} ALL=({{ install_user }}) NOPASSWD: {{ install_cmd | join(' ') }}
 {% endif %}
 {% endfor %}
 {% endfor %}

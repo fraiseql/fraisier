@@ -83,6 +83,37 @@ def _resolve_fraise_port(fraise: dict[str, Any]) -> int:
 
 _ADMIN_STRATEGIES = {"rebuild", "restore_migrate"}
 
+# Mapping of command names to their absolute paths
+_COMMAND_PATH_MAP = {
+    "uv": "/usr/local/bin/uv",
+    "systemctl": "/usr/bin/systemctl",
+    "curl": "/usr/bin/curl",
+    "tar": "/usr/bin/tar",
+    "gunzip": "/usr/bin/gunzip",
+    "psql": "/usr/bin/psql",
+}
+
+
+def _resolve_command_path(cmd: str) -> str:
+    """Resolve a command to its absolute path.
+
+    Args:
+        cmd: Command name or partial command (e.g., 'uv', 'uv sync --frozen')
+
+    Returns:
+        Command with absolute path for the first word, or original if not found.
+    """
+    parts = cmd.split(None, 1)
+    if not parts:
+        return cmd
+
+    first_word = parts[0]
+    absolute = _COMMAND_PATH_MAP.get(first_word, first_word)
+
+    if len(parts) == 1:
+        return absolute
+    return f"{absolute} {parts[1]}"
+
 
 def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[str]:
     """Collect database names that need admin access (rebuild/restore_migrate).
@@ -153,6 +184,51 @@ def _any_fraise_has_database(fraises_list: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _collect_deduplicated_sudoers_rules(
+    config: FraisierConfig, fraises_list: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Collect and deduplicate sudoers rules across all environments.
+
+    Returns list of unique rules, each with:
+    - from_user: user who runs the command
+    - as_user: user the command runs as
+    - cmd: absolute path command
+    - environments: list of environments using this rule
+    - description: human-readable description
+    """
+    rules_dict: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    for fraise in fraises_list:
+        for env_name, env_config in fraise.get("environments", {}).items():
+            if not isinstance(env_config, dict):
+                continue
+
+            deploy_user = env_config.get("deploy_user", config.scaffold.deploy_user)
+            install = env_config.get("install") or {}
+
+            if isinstance(install, dict):
+                install_user = install.get("user")
+                install_cmd = install.get("command", [])
+
+                if install_user and install_cmd:
+                    # Resolve command to absolute path
+                    cmd_str = " ".join(install_cmd)
+                    abs_cmd = _resolve_command_path(cmd_str)
+
+                    rule_key = (deploy_user, install_user, abs_cmd)
+                    if rule_key not in rules_dict:
+                        rules_dict[rule_key] = {
+                            "from_user": deploy_user,
+                            "as_user": install_user,
+                            "cmd": abs_cmd,
+                            "environments": [],
+                            "description": "Dependency install",
+                        }
+                    rules_dict[rule_key]["environments"].append(env_name)
+
+    return list(rules_dict.values())
+
+
 def _build_context(config: FraisierConfig) -> dict[str, Any]:
     """Build the Jinja2 template context from config."""
     fraises_list = []
@@ -179,6 +255,7 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
         "has_database": _any_fraise_has_database(fraises_list),
         "allowed_services": _collect_allowed_services(project_name, fraises_list),
         "deploy_users": _collect_deploy_users(config, fraises_list),
+        "sudoers_rules": _collect_deduplicated_sudoers_rules(config, fraises_list),
     }
 
 
