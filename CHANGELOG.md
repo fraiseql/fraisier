@@ -2,7 +2,14 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command, component test commands. Fixes #52, #53, #54, #55, #56, #57, #58, #60. 1801+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command, component test commands, multi-server scaffold filtering. Fixes #52, #53, #54, #55, #56, #57, #58, #60, #62. 1811+ tests, zero lint warnings.
+
+### Scaffold: Multi-Server Webhook Path Filtering (#62)
+
+- **fix:** webhook service now filters `ReadWritePaths` to only environments running on the current server, preventing startup failures when paths from other servers don't exist locally
+- **feat:** new `fraisier scaffold --server <hostname>` option filters generated configurations to a specific server (matches `fraisier setup --server`)
+- **feat:** preserves backward compatibility — running `scaffold` without `--server` generates all paths (existing behavior)
+- **test:** 3 new tests covering server-filtered paths, unfiltered fallback, and non-existent server cases
 
 ### Component Test Commands (#60)
 

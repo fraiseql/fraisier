@@ -229,7 +229,7 @@ def _collect_deduplicated_sudoers_rules(
     return list(rules_dict.values())
 
 
-def _build_context(config: FraisierConfig) -> dict[str, Any]:
+def _build_context(config: FraisierConfig, server: str | None = None) -> dict[str, Any]:
     """Build the Jinja2 template context from config."""
     fraises_list = []
     for name in config.list_fraises():
@@ -242,12 +242,30 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
             entry.setdefault("location", None)
             fraises_list.append(entry)
 
+    # Build local_fraises: filtered to only environments on the given server
+    if server is not None:
+        allowed_envs = set(config.get_environments_for_server(server))
+        local_fraises = [
+            {
+                **f,
+                "environments": {
+                    k: v
+                    for k, v in f.get("environments", {}).items()
+                    if k in allowed_envs
+                },
+            }
+            for f in fraises_list
+        ]
+    else:
+        local_fraises = fraises_list
+
     project_name = _infer_project_name(config)
     return {
         "scaffold": config.scaffold,
         "deployment": config.deployment,
         "health": config.health,
         "fraises": fraises_list,
+        "local_fraises": local_fraises,
         "fraise_names": config.list_fraises(),
         "project_name": project_name,
         "multi_fraise": len(config.list_fraises()) > 1,
@@ -267,8 +285,9 @@ def _infer_project_name(config: FraisierConfig) -> str:
 class ScaffoldRenderer:
     """Renders Jinja2 templates using fraises.yaml context."""
 
-    def __init__(self, config: FraisierConfig):
+    def __init__(self, config: FraisierConfig, server: str | None = None):
         self.config = config
+        self.server = server
         self.output_dir = Path(config.scaffold.output_dir)
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(_TEMPLATES_DIR)),
@@ -277,7 +296,7 @@ class ScaffoldRenderer:
             trim_blocks=True,
             lstrip_blocks=True,
         )
-        self.context = _build_context(config)
+        self.context = _build_context(config, server)
 
     def get_core_template_paths(self) -> list[str]:
         """Return output file paths for core templates."""

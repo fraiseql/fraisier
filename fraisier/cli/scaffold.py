@@ -13,8 +13,14 @@ from .main import main
 
 @main.command(name="scaffold")
 @click.option("--dry-run", is_flag=True, help="Show what would be generated")
+@click.option(
+    "--server",
+    "-s",
+    default=None,
+    help="Only include paths for this server",
+)
 @click.pass_context
-def scaffold(ctx: click.Context, dry_run: bool) -> None:
+def scaffold(ctx: click.Context, dry_run: bool, server: str | None) -> None:
     """Generate infrastructure files from fraises.yaml.
 
     Renders systemd units, nginx configs, GitHub Actions workflows,
@@ -24,11 +30,12 @@ def scaffold(ctx: click.Context, dry_run: bool) -> None:
     Examples:
         fraisier scaffold
         fraisier scaffold --dry-run
+        fraisier scaffold --server server-1
     """
     from fraisier.scaffold.renderer import ScaffoldRenderer
 
     config = ctx.obj["config"]
-    renderer = ScaffoldRenderer(config)
+    renderer = ScaffoldRenderer(config, server=server)
     files = renderer.render(dry_run=dry_run)
 
     if dry_run:
@@ -59,8 +66,7 @@ def _run_script(cmd: list[str]) -> int:
         return result.returncode
     except FileNotFoundError as e:
         console.print(
-            "[red]Error:[/red] Could not run script. "
-            "Please ensure sudo is available.",
+            "[red]Error:[/red] Could not run script. Please ensure sudo is available.",
             style="bold",
         )
         raise SystemExit(1) from e

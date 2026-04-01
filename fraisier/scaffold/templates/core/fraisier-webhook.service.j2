@@ -39,7 +39,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # Writable paths
 ReadWritePaths=/var/lib/fraisier
 ReadWritePaths=/run/fraisier
-{% for fraise in fraises %}
+{% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% if env_config.get('app_path') %}
 ReadWritePaths={{ env_config['app_path'] }}

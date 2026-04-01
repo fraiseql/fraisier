@@ -2514,6 +2514,116 @@ fraises:
         assert "FRAISIER_PG_WRAPPER" not in content
 
 
+class TestWebhookServerFiltering:
+    """Webhook service filters ReadWritePaths by server (#62)."""
+
+    def test_webhook_includes_only_local_server_paths(self, tmp_path):
+        """Webhook service only includes ReadWritePaths for environments on the specified server."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+environments:
+  development:
+    server: server-1
+  production:
+    server: server-2
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config, server="server-1")
+        renderer.render()
+
+        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        assert "ReadWritePaths=/var/www/dev" in content
+        assert "ReadWritePaths=/var/www/prod" not in content
+
+    def test_webhook_without_server_includes_all_paths(self, tmp_path):
+        """Without --server, webhook includes paths for all environments (backward compatible)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+environments:
+  development:
+    server: server-1
+  production:
+    server: server-2
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)  # No server specified
+        renderer.render()
+
+        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        assert "ReadWritePaths=/var/www/dev" in content
+        assert "ReadWritePaths=/var/www/prod" in content
+
+    def test_webhook_server_with_no_matching_environments(self, tmp_path):
+        """Webhook for a server with no environments only has default paths."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+environments:
+  development:
+    server: server-1
+  production:
+    server: server-2
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config, server="server-3")  # Non-existent server
+        renderer.render()
+
+        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        # Should have the default paths but no app paths
+        assert "ReadWritePaths=/var/lib/fraisier" in content
+        assert "ReadWritePaths=/run/fraisier" in content
+        # No app paths for any environment
+        assert "ReadWritePaths=/var/www/dev" not in content
+        assert "ReadWritePaths=/var/www/prod" not in content
+
+
 class TestPostgresLogging:
     """PostgreSQL logging config generation (#42)."""
 
