@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from fraisier.errors import FraisierError
     from fraisier.runners import CommandRunner
+
+logger = logging.getLogger("fraisier")
 
 
 class DeploymentStatus(Enum):
@@ -128,3 +132,139 @@ class BaseDeployer(ABC):
         """
         # Default implementation - subclasses can override
         return True
+
+    # Phase 2: Config sync methods
+    def _sync_fraises_yaml(
+        self, source_path: Path | None = None, dest_path: Path | None = None
+    ) -> None:
+        """Pull fraises.yaml from git repository to server.
+
+        Updates config file from source (app_path) to destination.
+
+        Args:
+            source_path: Source file path (usually from app checkout)
+            dest_path: Destination file path (usually /opt/project/fraises.yaml)
+
+        Raises:
+            FileNotFoundError: If source file doesn't exist
+        """
+
+        if not source_path or not dest_path:
+            logger.warning(
+                "No source/dest paths configured, skipping fraises.yaml sync"
+            )
+            return
+
+        source_path = Path(source_path)
+        dest_path = Path(dest_path)
+
+        logger.info(f"Syncing fraises.yaml from {source_path}")
+
+        # Verify source exists
+        if not source_path.exists():
+            raise FileNotFoundError(
+                f"fraises.yaml not found at {source_path}. "
+                "Ensure it's committed to git and checked out."
+            )
+
+        # Copy file
+        self.runner.run(
+            f"cp {source_path} {dest_path}",
+            description=f"Sync fraises.yaml from {source_path}",
+        )
+
+        logger.info(f"✓ Synced fraises.yaml to {dest_path}")
+
+    def _detect_config_changes(self, config_path: Path | None = None) -> bool:
+        """Detect if fraises.yaml has changed.
+
+        Compares hash of old config vs. newly synced config.
+
+        Args:
+            config_path: Path to fraises.yaml to check
+
+        Returns:
+            True if config changed, False if identical
+        """
+        from fraisier.config_watcher import ConfigWatcher
+
+        if not config_path:
+            logger.warning("No config path provided, assuming no change")
+            return False
+
+        config_path = Path(config_path)
+        project_dir = config_path.parent
+
+        try:
+            watcher = ConfigWatcher(project_dir)
+            changed = watcher.has_changed()
+
+            if changed:
+                logger.info("Config changed, will regenerate scaffold")
+            else:
+                logger.info("Config unchanged")
+
+            return changed
+        except Exception as e:
+            logger.warning(f"Could not detect config changes: {e}")
+            return True  # Assume changed if we can't detect
+
+    def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
+        """Regenerate scaffold files based on current fraises.yaml.
+
+        Runs 'fraisier scaffold' on the server to generate updated
+        systemd units, nginx configs, sudoers rules, etc.
+
+        Args:
+            config_path: Path to fraises.yaml to use for generation
+
+        Raises:
+            DeploymentError: If scaffold regeneration fails
+        """
+        from fraisier.errors import DeploymentError
+
+        if not config_path:
+            logger.warning("No config path provided, skipping scaffold regeneration")
+            return
+
+        logger.info("Regenerating scaffold files")
+
+        config_path = Path(config_path)
+        project_dir = config_path.parent
+
+        # Run scaffold regeneration
+        result = self.runner.run(
+            f"cd {project_dir} && fraisier -c {config_path} scaffold",
+            description="Regenerate scaffold files from fraises.yaml",
+        )
+
+        if not result.ok:
+            raise DeploymentError(
+                f"Failed to regenerate scaffold files: {result.output}"
+            )
+
+        logger.info("✓ Scaffold files regenerated")
+
+    def _install_scaffold(self) -> None:
+        """Install updated scaffold files to system locations.
+
+        Runs 'fraisier scaffold-install' on the server to install
+        sudoers, systemd units, nginx configs, wrappers, etc.
+
+        Raises:
+            DeploymentError: If scaffold installation fails
+        """
+        from fraisier.errors import DeploymentError
+
+        logger.info("Installing updated scaffold files")
+
+        # Run scaffold install
+        result = self.runner.run(
+            "fraisier scaffold-install --yes",
+            description="Install updated scaffold files",
+        )
+
+        if not result.ok:
+            raise DeploymentError(f"Failed to install scaffold files: {result.output}")
+
+        logger.info("✓ Scaffold files installed")

@@ -208,3 +208,68 @@ class TestConfigWatcherSaveHash:
         watcher.save_hash()
 
         assert hash_file.exists()
+
+
+# Phase 2: Deployer Base Class Methods tests (RED phase)
+class TestDeployerSyncFraisesYaml:
+    """Tests for BaseDeployer._sync_fraises_yaml()."""
+
+    def test_sync_fraises_yaml_method_exists(self, tmp_path):
+        """_sync_fraises_yaml() method exists on deployer."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert hasattr(BaseDeployer, "_sync_fraises_yaml")
+
+    def test_sync_fraises_yaml_is_callable(self, tmp_path):
+        """_sync_fraises_yaml() is callable."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert callable(getattr(BaseDeployer, "_sync_fraises_yaml", None))
+
+
+class TestDeployerDetectConfigChanges:
+    """Tests for BaseDeployer._detect_config_changes()."""
+
+    def test_detect_config_changes_method_exists(self, tmp_path):
+        """_detect_config_changes() method exists on deployer."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert hasattr(BaseDeployer, "_detect_config_changes")
+
+    def test_detect_config_changes_is_callable(self, tmp_path):
+        """_detect_config_changes() is callable."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert callable(getattr(BaseDeployer, "_detect_config_changes", None))
+
+
+class TestDeployerRegenerateScaffold:
+    """Tests for BaseDeployer._regenerate_scaffold()."""
+
+    def test_regenerate_scaffold_method_exists(self, tmp_path):
+        """_regenerate_scaffold() method exists on deployer."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert hasattr(BaseDeployer, "_regenerate_scaffold")
+
+    def test_regenerate_scaffold_is_callable(self, tmp_path):
+        """_regenerate_scaffold() is callable."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert callable(getattr(BaseDeployer, "_regenerate_scaffold", None))
+
+
+class TestDeployerInstallScaffold:
+    """Tests for BaseDeployer._install_scaffold()."""
+
+    def test_install_scaffold_method_exists(self, tmp_path):
+        """_install_scaffold() method exists on deployer."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert hasattr(BaseDeployer, "_install_scaffold")
+
+    def test_install_scaffold_is_callable(self, tmp_path):
+        """_install_scaffold() is callable."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert callable(getattr(BaseDeployer, "_install_scaffold", None))
