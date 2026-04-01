@@ -134,10 +134,7 @@ class HTTPHealthChecker(HealthChecker):
             if is_transient:
                 msg = f"HTTP {e.code}: {e.reason} (server error — may recover on retry)"
             else:
-                msg = (
-                    f"HTTP {e.code}: {e.reason} "
-                    "(check health endpoint configuration)"
-                )
+                msg = f"HTTP {e.code}: {e.reason} (check health endpoint configuration)"
             return HealthCheckResult(
                 success=False,
                 check_type=self.check_type,

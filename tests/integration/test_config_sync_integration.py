@@ -1,7 +1,5 @@
 """Integration tests for config synchronization during deployment."""
 
-
-
 from fraisier.config_watcher import ConfigWatcher
 from fraisier.deployers.api import APIDeployer
 

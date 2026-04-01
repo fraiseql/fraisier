@@ -238,8 +238,7 @@ class GitDeployMixin:
         except (sqlite3.Error, OSError) as exc:
             db_path = get_db_path()
             logger.warning(
-                "Failed to record deployment start in DB for %s/%s "
-                "(db=%s): %s",
+                "Failed to record deployment start in DB for %s/%s (db=%s): %s",
                 self.fraise_name,
                 self.environment,
                 db_path,

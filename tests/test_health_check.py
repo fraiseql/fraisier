@@ -399,9 +399,7 @@ class TestHealthCheckManager:
         with patch("time.sleep"):
             manager = HealthCheckManager(provider="test")
             with patch.object(manager.logger, "info") as mock_info:
-                manager.check_with_retries(
-                    checker, max_retries=3, initial_delay=0.01
-                )
+                manager.check_with_retries(checker, max_retries=3, initial_delay=0.01)
 
             # Verify that info logs contain "X/Y" format
             info_calls = [call[0][0] for call in mock_info.call_args_list]

@@ -222,9 +222,7 @@ class BaseDeployer(ABC):
             }
 
             if changed:
-                logger.info(
-                    "Config changed, will regenerate scaffold", extra=log_data
-                )
+                logger.info("Config changed, will regenerate scaffold", extra=log_data)
             else:
                 logger.info("Config unchanged", extra=log_data)
 
