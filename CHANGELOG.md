@@ -2,7 +2,7 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements. Fixes #52. 1700+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements. Fixes #52, #53. 1715+ tests, zero lint warnings.
 
 ### Deploy: Automatic Config Synchronization
 
@@ -18,6 +18,12 @@ Feature release: config synchronization, automatic scaffold regeneration, instal
 - **fix:** `_install_dependencies()` now skips `sudo -u` prefix when `install.user` equals `deploy_user` — avoids errors when already running as the correct user
 - **fix:** `webhook._run_deployment()` injects `deploy_user` into deploy_config so deployers can compare against `install.user`
 - **feat:** install command runs directly when users match, uses `sudo -u` only when they differ
+
+### Install Step: Fraise-Level Inheritance (#53)
+
+- **feat:** `install` configuration can now be defined at the fraise level and inherited by all environments — reduces boilerplate for multi-environment deployments where install steps are identical
+- **feat:** environment-level `install` takes full precedence, allowing per-env overrides when needed (e.g., different flags for production)
+- **refactor:** `get_fraise_environment()` now merges fraise-level `install` with environment config
 
 ### Scaffold: Install Step Sudoers Entry with Wildcard
 
