@@ -2,7 +2,13 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements. Fixes #52, #53. 1715+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, deployment validation. Fixes #52, #53, #54. 1715+ tests, zero lint warnings.
+
+### Deploy: Wrapper Script Validation (#54)
+
+- **feat:** `APIDeployer._validate_wrapper_scripts()` pre-flight check validates that `FRAISIER_SYSTEMCTL_WRAPPER` and `FRAISIER_PG_WRAPPER` scripts exist and are executable before deployment
+- **feat:** clear error messages with remediation hints when wrappers are missing or not executable
+- **feat:** validation runs at start of `execute()` before any deployment work (git pull, migrations, restart) — fails fast with actionable guidance
 
 ### Deploy: Automatic Config Synchronization
 
