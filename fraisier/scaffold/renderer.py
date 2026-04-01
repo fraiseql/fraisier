@@ -111,6 +111,24 @@ def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[st
     return list(allowed)
 
 
+def _collect_allowed_services(
+    project_name: str, fraises_list: list[dict[str, Any]]
+) -> list[str]:
+    """Collect all systemd service names from fraises and environments.
+
+    Returns fully-qualified service names (e.g., 'project_fraise_env.service').
+    """
+    services = []
+    for fraise in fraises_list:
+        fraise_name = fraise.get("name", "")
+        if not fraise_name:
+            continue
+        for env_name in fraise.get("environments", {}):
+            svc = f"{project_name}_{fraise_name}_{env_name}.service"
+            services.append(svc)
+    return services
+
+
 def _any_fraise_has_database(fraises_list: list[dict[str, Any]]) -> bool:
     """Return True if any fraise environment has a database section."""
     for fraise in fraises_list:
@@ -133,15 +151,17 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
             entry.setdefault("location", None)
             fraises_list.append(entry)
 
+    project_name = _infer_project_name(config)
     return {
         "scaffold": config.scaffold,
         "deployment": config.deployment,
         "fraises": fraises_list,
         "fraise_names": config.list_fraises(),
-        "project_name": _infer_project_name(config),
+        "project_name": project_name,
         "multi_fraise": len(config.list_fraises()) > 1,
         "pg_allowed_databases": _collect_pg_allowed_databases(fraises_list),
         "has_database": _any_fraise_has_database(fraises_list),
+        "allowed_services": _collect_allowed_services(project_name, fraises_list),
     }
 
 
@@ -194,7 +214,7 @@ class ScaffoldRenderer:
                     )
                     raise ValueError(msg)
 
-    def render(self, dry_run: bool = False) -> list[str]:
+    def render(self, dry_run: bool = False) -> list[str]:  # noqa: PLR0912
         """Render all templates.
 
         Args:
@@ -230,6 +250,13 @@ class ScaffoldRenderer:
             rendered_files.append(pg_out)
             if not dry_run:
                 self._render_template("core/pg-wrapper.sh.j2", pg_out)
+
+        # systemd service wrapper (always when there are services)
+        if self.context["allowed_services"]:
+            systemctl_out = "systemctl-wrapper.sh"
+            rendered_files.append(systemctl_out)
+            if not dry_run:
+                self._render_template("core/systemctl-wrapper.sh.j2", systemctl_out)
 
         # PostgreSQL logging config (one per unique environment with a database)
         rendered_files.extend(self._collect_pg_logging(dry_run))

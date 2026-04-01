@@ -68,6 +68,15 @@ if [ -f "${PG_WRAPPER_SRC}" ]; then
     install -m 0755 "${PG_WRAPPER_SRC}" "${PG_WRAPPER_DST}"
 fi
 
+# Install systemctl wrapper (if generated)
+SYSTEMCTL_WRAPPER_SRC="${PROJECT_DIR}/scripts/generated/systemctl-wrapper.sh"
+SYSTEMCTL_WRAPPER_DST="/usr/local/libexec/fraisier/systemctl-{{ project_name }}"
+if [ -f "${SYSTEMCTL_WRAPPER_SRC}" ]; then
+    echo "  Installing systemctl wrapper"
+    mkdir -p /usr/local/libexec/fraisier
+    install -m 0755 "${SYSTEMCTL_WRAPPER_SRC}" "${SYSTEMCTL_WRAPPER_DST}"
+fi
+
 # Install sudoers fragment
 SUDOERS_SRC="${PROJECT_DIR}/scripts/generated/sudoers"
 SUDOERS_DST="/etc/sudoers.d/{{ project_name }}"

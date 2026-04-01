@@ -8,6 +8,9 @@ User={{ scaffold.deploy_user }}
 {% if pg_allowed_databases %}
 Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_name }}
 {% endif %}
+{% if allowed_services %}
+Environment=FRAISIER_SYSTEMCTL_WRAPPER=/usr/local/libexec/fraisier/systemctl-{{ project_name }}
+{% endif %}
 ExecStart=/usr/local/bin/fraisier deploy {{ fraise_names | first }} production --if-changed
 
 # Security hardening
