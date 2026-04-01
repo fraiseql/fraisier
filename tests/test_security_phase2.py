@@ -254,19 +254,19 @@ class TestCorsOriginValidation:
     """CORS origins must have dots properly escaped for nginx regex matching."""
 
     def test_literal_domain_dots_escaped(self):
-        """'example.com' must be auto-escaped to 'example\\.com' via property."""
+        """'example.com' is auto-escaped to 'example\\.com'."""
         nc = NginxEnvConfig(cors_origins=["https://example.com"])
-        escaped = nc.cors_origins_escaped
-        assert escaped == [r"https://example\.com"]
+        # CORS origins are auto-escaped in __post_init__
+        assert nc.cors_origins == [r"https://example\.com"]
 
     def test_already_escaped_dots_not_double_escaped(self):
         """Already-escaped 'example\\.com' must not become 'example\\\\.com'."""
         nc = NginxEnvConfig(cors_origins=[r"https://example\.com"])
-        escaped = nc.cors_origins_escaped
-        assert r"\\." not in escaped[0]
+        # No double-escaping
+        assert r"\\." not in nc.cors_origins[0]
 
     def test_regex_pattern_preserved(self):
-        """Explicit regex patterns like '.*\\.example\\.com' must be preserved."""
+        """Explicit regex patterns like '.*\\.example\\.com' are preserved."""
         nc = NginxEnvConfig(cors_origins=[r"https://.*\.example\.com"])
-        escaped = nc.cors_origins_escaped
-        assert escaped[0] == r"https://.*\.example\.com"
+        # Regex quantifiers are preserved, not escaped
+        assert nc.cors_origins[0] == r"https://.*\.example\.com"

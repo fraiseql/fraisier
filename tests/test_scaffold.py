@@ -42,7 +42,9 @@ scaffold:
         assert sc.systemd.security_hardening is True
         assert sc.systemd.memory_max_default == "4G"
         assert sc.nginx.ssl_provider == "letsencrypt"
-        assert "*.example.io" in sc.nginx.cors_origins
+        # CORS origins are auto-escaped for nginx regex
+        assert "*\\.example\\.io" in sc.nginx.cors_origins
+        assert "localhost:*" in sc.nginx.cors_origins
         assert sc.nginx.rate_limit == "10r/s"
         assert "/admin/" in sc.nginx.restricted_paths
         assert "3.12" in sc.github_actions.python_versions

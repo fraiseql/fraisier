@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import threading
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -233,6 +232,8 @@ class NginxEnvConfig:
             raise ValidationError(
                 "nginx.ssl_key requires nginx.ssl_cert to also be set",
             )
+        # Auto-escape CORS origins for nginx regex
+        self.cors_origins = [_escape_cors_dots(o) for o in self.cors_origins]
 
     @property
     def cors_origins_escaped(self) -> list[str]:
@@ -288,10 +289,14 @@ class NginxScaffoldConfig:
     rate_limit: str = "10r/s"
     restricted_paths: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        # Auto-escape CORS origins for nginx regex
+        self.cors_origins = [_escape_cors_dots(o) for o in self.cors_origins]
+
     @property
     def cors_origins_escaped(self) -> list[str]:
-        """Return CORS origins with literal dots escaped for nginx regex."""
-        return [_escape_cors_dots(o) for o in self.cors_origins]
+        """Return CORS origins (already escaped)."""
+        return self.cors_origins
 
 
 @dataclass
@@ -364,7 +369,6 @@ class DeploymentConfig:
     lock_backend: str = "file"
     lock_db_path: str = "/var/lib/fraisier/locks.db"
     status_file: str = "deployment_status.json"
-    webhook_secret_env: str = "DEPLOYMENT_TOKEN"
     deploy_user: str = "fraisier"
     strategies: dict[str, str] = field(default_factory=dict)
     timeouts: dict[str, int] = field(default_factory=dict)
@@ -713,24 +717,11 @@ class FraisierConfig:
                 f"Invalid lock_backend '{lock_backend}'. Valid: {valid}",
             )
 
-        _DEPRECATED_DEPLOYMENT_KEYS = {
-            "webhook_secret_env": (
-                "deployment.webhook_secret_env is deprecated "
-                "and ignored. The webhook reads "
-                "FRAISIER_WEBHOOK_SECRET from the environment "
-                "directly."
-            ),
-        }
-        for key, message in _DEPRECATED_DEPLOYMENT_KEYS.items():
-            if key in raw:
-                warnings.warn(message, DeprecationWarning, stacklevel=2)
-
         return DeploymentConfig(
             lock_dir=raw.get("lock_dir", "/run/fraisier"),
             lock_backend=lock_backend,
             lock_db_path=raw.get("lock_db_path", "/var/lib/fraisier/locks.db"),
             status_file=raw.get("status_file", "deployment_status.json"),
-            webhook_secret_env=raw.get("webhook_secret_env", "DEPLOYMENT_TOKEN"),
             deploy_user=raw.get("deploy_user", "fraisier"),
             strategies=strategies,
             timeouts=raw.get("timeouts", {}) or {},

@@ -156,7 +156,7 @@ class TestServiceManagement:
         return BareMetalProvider(config)
 
     def test_start_service_calls_systemctl_start(self):
-        """start_service() runs 'sudo systemctl start <name>.service' via run_command()."""
+        """start_service() calls sudo systemctl start via run_command()."""
         provider = self._make_provider()
 
         with patch.object(provider, "run_command", return_value=(0, "", "")) as mock:
@@ -177,7 +177,7 @@ class TestServiceManagement:
         assert result is False
 
     def test_stop_service_calls_systemctl_stop(self):
-        """stop_service() runs 'sudo systemctl stop <name>.service' via run_command()."""
+        """stop_service() calls sudo systemctl stop via run_command()."""
         provider = self._make_provider()
 
         with patch.object(provider, "run_command", return_value=(0, "", "")) as mock:

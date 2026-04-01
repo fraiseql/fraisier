@@ -300,7 +300,6 @@ fraises: {}
 deployment:
   lock_dir: /run/my-project
   status_file: deployment_status.json
-  webhook_secret_env: DEPLOYMENT_TOKEN
   deploy_user: my_project_app
   strategies:
     development: rebuild
@@ -315,7 +314,6 @@ deployment:
         dep = config.deployment
         assert dep.lock_dir == "/run/my-project"
         assert dep.status_file == "deployment_status.json"
-        assert dep.webhook_secret_env == "DEPLOYMENT_TOKEN"
         assert dep.deploy_user == "my_project_app"
         assert dep.strategies["development"] == "rebuild"
         assert dep.strategies["production"] == "migrate"

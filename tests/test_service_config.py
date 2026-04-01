@@ -221,7 +221,8 @@ class TestNginxEnvConfigFromEnvDict:
         assert nc.server_name == "api.dev"
         assert nc.ssl_cert == "/etc/ssl/cert.pem"
         assert nc.ssl_key == "/etc/ssl/key.pem"
-        assert nc.cors_origins == ["https://app.dev"]
+        # CORS origins are auto-escaped for nginx regex
+        assert nc.cors_origins == [r"https://app\.dev"]
         assert len(nc.restricted_paths) == 1
         assert nc.restricted_paths[0].path == "/admin/"
         assert nc.restricted_paths[0].allow == ["10.0.0.0/8"]

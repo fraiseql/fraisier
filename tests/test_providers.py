@@ -199,7 +199,9 @@ class TestBareMetalProvider:
         ) as mock_run:
             result = provider.stop_service("api")
             assert result is True
-            mock_run.assert_called_once_with("sudo systemctl stop api.service", timeout=60)
+            mock_run.assert_called_once_with(
+                "sudo systemctl stop api.service", timeout=60
+            )
 
     def test_stop_service_failure(self):
         """Test stop_service returns False on failure."""

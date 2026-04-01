@@ -1,6 +1,5 @@
 """Tests for config values being properly wired to runtime behaviour."""
 
-import warnings
 from unittest.mock import MagicMock, patch
 
 from fraisier.deployers.api import APIDeployer
@@ -76,24 +75,3 @@ class TestHealthCheckTimeoutWired:
 class TestDeprecationWarnings:
     """Dead config keys emit deprecation warnings during validation."""
 
-    def test_webhook_secret_env_emits_warning(self, tmp_path):
-        """Config with deployment.webhook_secret_env emits warning."""
-        from fraisier.config import FraisierConfig
-
-        config_file = tmp_path / "fraises.yaml"
-        config_file.write_text(
-            """\
-deployment:
-  webhook_secret_env: MY_SECRET
-fraises: {}
-"""
-        )
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            cfg = FraisierConfig(str(config_file))
-            _ = cfg.deployment  # triggers property access
-
-        deprecation_msgs = [
-            str(x.message) for x in w if issubclass(x.category, DeprecationWarning)
-        ]
-        assert any("webhook_secret_env" in m for m in deprecation_msgs)
