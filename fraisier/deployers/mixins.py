@@ -182,11 +182,12 @@ class GitDeployMixin:
         )
         try:
             write_status(status, status_dir=self.status_dir)
-        except OSError:
+        except OSError as exc:
             logger.warning(
-                "Failed to write status file for %s (dir=%s)",
+                "Failed to write status file for %s (dir=%s): %s",
                 self.fraise_name,
                 self.status_dir,
+                exc,
             )
 
     def _start_db_record(
@@ -198,7 +199,7 @@ class GitDeployMixin:
         try:
             import getpass
 
-            from fraisier.database import get_db
+            from fraisier.database import get_db, get_db_path
 
             db = get_db()
             return db.start_deployment(
@@ -210,11 +211,15 @@ class GitDeployMixin:
                 git_commit=git_commit,
                 old_version=old_version,
             )
-        except (sqlite3.Error, OSError):
+        except (sqlite3.Error, OSError) as exc:
+            db_path = get_db_path()
             logger.warning(
-                "Failed to record deployment start in DB for %s/%s",
+                "Failed to record deployment start in DB for %s/%s "
+                "(db=%s): %s",
                 self.fraise_name,
                 self.environment,
+                db_path,
+                exc,
             )
             return None
 
@@ -238,10 +243,15 @@ class GitDeployMixin:
             )
             if result.status.value == "rolled_back":
                 db.mark_deployment_rolled_back(deployment_pk)
-        except (sqlite3.Error, OSError):
+        except (sqlite3.Error, OSError) as exc:
+            from fraisier.database import get_db_path
+
+            db_path = get_db_path()
             logger.warning(
-                "Failed to record deployment completion in DB (pk=%s)",
+                "Failed to record deployment completion in DB (pk=%s, db=%s): %s",
                 deployment_pk,
+                db_path,
+                exc,
             )
 
     def _write_incident(
