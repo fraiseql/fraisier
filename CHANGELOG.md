@@ -2,7 +2,7 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements, deployment validation. Fixes #52, #53, #54. 1715+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, deployment validation. Fixes #52, #53, #54, #55. 1721+ tests, zero lint warnings.
 
 ### Deploy: Wrapper Script Validation (#54)
 
@@ -30,6 +30,13 @@ Feature release: config synchronization, automatic scaffold regeneration, instal
 - **feat:** `install` configuration can now be defined at the fraise level and inherited by all environments — reduces boilerplate for multi-environment deployments where install steps are identical
 - **feat:** environment-level `install` takes full precedence, allowing per-env overrides when needed (e.g., different flags for production)
 - **refactor:** `get_fraise_environment()` now merges fraise-level `install` with environment config
+
+### Install Step: Enhanced Error Messages (#55)
+
+- **feat:** `_install_dependencies()` now captures and reports comprehensive error context when install commands fail — shows exact command, exit code, stdout, stderr, and working directory
+- **feat:** structured `DeploymentError` context includes `suggested_command` (e.g., `cd /var/www/api && uv sync --frozen`) for operators to reproduce failures manually
+- **feat:** error messages are human-readable and actionable: operators can quickly diagnose why install failed without accessing logs
+- **test:** 6 new tests covering failure scenarios, context capture, and edge cases (no-op when unconfigured, sudo prefix handling)
 
 ### Scaffold: Install Step Sudoers Entry with Wildcard
 
