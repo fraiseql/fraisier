@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
 
+from fraisier.errors import MigrationError as FraisierMigrationError
+
 if TYPE_CHECKING:
     from confiture import MigrateDownResult, MigrateUpResult
     from confiture.config.environment import Environment
@@ -44,7 +46,7 @@ class MigrationResult:
 
     success: bool
     steps_applied: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list = field(default_factory=list)  # List of str | FraisierMigrationError
     execution_time_ms: int = 0
 
 
@@ -208,8 +210,12 @@ def migrate_up(
             config_path, migrations_dir=migrations_dir, database_url=database_url
         )
         if not verify_result.success:
-            raise MigrationError(
-                "Pre-migration verification failed: " + "; ".join(verify_result.errors)
+            error_msg = "; ".join(verify_result.errors)
+            raise FraisierMigrationError(
+                message=f"Pre-migration verification failed: {error_msg}",
+                direction="up",
+                db_error=error_msg,
+                rollback_attempted=False,
             )
         log.info("Pre-migration verification passed")
 
@@ -248,7 +254,13 @@ def migrate_up(
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
     if result.has_errors:
-        raise MigrationError(f"Migration failed: {result.error_summary}")
+        # Raise FraisierMigrationError with detailed context
+        raise FraisierMigrationError(
+            message=f"Migration failed: {result.error_summary}",
+            direction="up",
+            db_error=result.error_summary or "Unknown migration error",
+            rollback_attempted=False,
+        )
 
     return MigrationResult(
         success=True,
