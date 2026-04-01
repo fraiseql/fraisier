@@ -57,6 +57,28 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
         try:
             with deployment_timeout(timeout):
+                # Phase 0: Config sync and scaffold regeneration
+                try:
+                    # Determine config file locations
+                    project_name = self.config.get("project_name", self.fraise_name)
+                    opt_dir = Path("/opt") / project_name
+                    opt_config = opt_dir / "fraises.yaml"
+                    app_config = Path(self.app_path) / "fraises.yaml"
+
+                    # Sync config from git checkout
+                    if app_config.exists():
+                        self._sync_fraises_yaml(
+                            source_path=app_config, dest_path=opt_config
+                        )
+
+                        # Check if config changed and regenerate scaffold if needed
+                        if self._detect_config_changes(config_path=opt_config):
+                            self._regenerate_scaffold(config_path=opt_config)
+                            self._install_scaffold()
+                except Exception as e:
+                    logger.warning(f"Config sync failed: {e}")
+                    # Continue with deployment - config mismatch is not fatal
+
                 # Step 1: Git pull via bare repo
                 logger.info(f"Deploying via bare repo to {self.app_path}")
                 old_sha, new_sha = self._git_pull()
