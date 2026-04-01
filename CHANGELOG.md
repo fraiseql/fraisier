@@ -2,7 +2,22 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command, component test commands, multi-server scaffold filtering. Fixes #52, #53, #54, #55, #56, #57, #58, #60, #62. 1811+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command, component test commands, multi-server scaffold filtering, migration error recovery guidance. Fixes #52, #53, #54, #55, #56, #57, #58, #60, #61, #62. 1811+ tests, zero lint warnings.
+
+### Database Migration Error Reporting (#61)
+
+- **feat:** migration errors now include detailed context: migration filename, direction (up/down), database error message, and rollback status
+- **feat:** automatic error classification categorizes failures as constraint, syntax, transient, permission, or unknown — determines recovery strategy
+- **feat:** actionable recovery suggestions per error type:
+  - **constraint errors:** database inspection hints, idempotency checks, manual recovery steps
+  - **transient errors:** retry guidance with connectivity investigation tips
+  - **syntax errors:** specific migration file reference with fix instructions
+  - **permission errors:** privilege escalation suggestions with admin contact guidance
+  - **unknown errors:** log review and support contact recommendations
+- **feat:** `format_for_operator()` method on MigrationError generates human-readable multi-line error messages with rollback status, error details, and recovery steps
+- **feat:** migration errors preserve full context through error chain — classification and recovery suggestions available in API responses and CLI output
+- **refactor:** `confiture.migrate_up()` and `migrate_down()` now raise `FraisierMigrationError` with structured context instead of generic exceptions
+- **test:** 72 new tests covering error classification, recovery suggestion generation, error formatting, and end-to-end integration
 
 ### Scaffold: Multi-Server Webhook Path Filtering (#62)
 
