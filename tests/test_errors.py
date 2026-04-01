@@ -13,6 +13,7 @@ from fraisier.errors import (
     FraisierError,
     GitProviderError,
     HealthCheckError,
+    MigrationError,
     NotFoundError,
     ProviderConnectionError,
     ProviderError,
@@ -151,6 +152,95 @@ class TestDatabaseErrors:
         error = DatabaseTransactionError("Transaction failed")
         assert isinstance(error, DatabaseError)
         assert error.code == "DATABASE_TRANSACTION_ERROR"
+
+
+class TestMigrationErrors:
+    """Test migration-related errors."""
+
+    def test_migration_error_includes_context(self):
+        """Test MigrationError with migration context fields."""
+        error = MigrationError(
+            message="Migration failed",
+            migration_file="20260401_add_column.py",
+            direction="up",
+            step=1,
+            db_error="column 'new_column' already exists",
+            rollback_attempted=True,
+            rollback_succeeded=False,
+        )
+        assert error.migration_file == "20260401_add_column.py"
+        assert error.direction == "up"
+        assert error.step == 1
+        assert error.db_error == "column 'new_column' already exists"
+        assert error.rollback_attempted is True
+        assert error.rollback_succeeded is False
+
+    def test_migration_error_is_database_error(self):
+        """Test MigrationError inherits from DatabaseError."""
+        error = MigrationError("Migration failed")
+        assert isinstance(error, DatabaseError)
+
+    def test_migration_error_has_migration_code(self):
+        """Test MigrationError has MIGRATION_FAILED code."""
+        error = MigrationError("Migration failed")
+        assert error.code == "MIGRATION_FAILED"
+
+    def test_migration_error_context_fields_optional(self):
+        """Test that migration context fields are optional."""
+        error = MigrationError("Migration failed")
+        assert error.migration_file is None
+        assert error.direction is None
+        assert error.step is None
+        assert error.db_error is None
+        assert error.rollback_attempted is None
+        assert error.rollback_succeeded is None
+
+    def test_migration_error_to_dict_includes_context(self):
+        """Test serialization includes migration context."""
+        error = MigrationError(
+            "Migration failed",
+            migration_file="20260401_add_column.py",
+            direction="up",
+            db_error="column already exists",
+        )
+        result = error.to_dict()
+        assert result["error_type"] == "MigrationError"
+        assert result["code"] == "MIGRATION_FAILED"
+        assert result["context"]["migration_file"] == "20260401_add_column.py"
+        assert result["context"]["direction"] == "up"
+        assert result["context"]["db_error"] == "column already exists"
+
+    def test_migration_context_str_full(self):
+        """Test migration_context_str property with all fields."""
+        error = MigrationError(
+            "Migration failed",
+            migration_file="20260401_add_column.py",
+            direction="up",
+            step=1,
+        )
+        assert error.migration_context_str == "20260401_add_column.py (up, step 1)"
+
+    def test_migration_context_str_minimal(self):
+        """Test migration_context_str property with minimal fields."""
+        error = MigrationError(
+            "Migration failed",
+            migration_file="20260401_add_column.py",
+        )
+        assert error.migration_context_str == "20260401_add_column.py"
+
+    def test_migration_context_str_with_direction(self):
+        """Test migration_context_str property with direction."""
+        error = MigrationError(
+            "Migration failed",
+            migration_file="20260401_add_column.py",
+            direction="down",
+        )
+        assert error.migration_context_str == "20260401_add_column.py (down)"
+
+    def test_migration_context_str_no_context(self):
+        """Test migration_context_str property without migration context."""
+        error = MigrationError("Migration failed")
+        assert error.migration_context_str == "(no migration context)"
 
 
 class TestOtherErrors:

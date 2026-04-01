@@ -184,6 +184,102 @@ class DatabaseTransactionError(DatabaseError):
     )
 
 
+class MigrationError(DatabaseError):
+    """Database migration operation failed.
+
+    Includes detailed context about which migration failed, the database error,
+    and rollback status to help operators debug and recover.
+    """
+
+    code = "MIGRATION_FAILED"
+    recovery_hint = (
+        "A database migration failed. Check the migration file and database "
+        "state. See error details for recovery suggestions."
+    )
+
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        context: dict[str, Any] | None = None,
+        recoverable: bool | None = None,
+        cause: Exception | None = None,
+        migration_file: str | None = None,
+        direction: str | None = None,
+        step: int | None = None,
+        db_error: str | None = None,
+        rollback_attempted: bool | None = None,
+        rollback_succeeded: bool | None = None,
+    ):
+        """Initialize MigrationError with migration context.
+
+        Args:
+            message: Human-readable error message
+            code: Machine-readable error code
+            context: Additional context dict for debugging
+            recoverable: Whether error can be automatically recovered from
+            cause: Original exception that caused this error
+            migration_file: Name of migration file that failed
+                (e.g., "20260401_add_column.py")
+            direction: Direction of migration ("up" or "down")
+            step: Step number in migration sequence (1-indexed)
+            db_error: Raw database error message from database engine
+            rollback_attempted: Whether automatic rollback was attempted
+            rollback_succeeded: Whether rollback succeeded (None if not attempted)
+        """
+        self.migration_file = migration_file
+        self.direction = direction
+        self.step = step
+        self.db_error = db_error
+        self.rollback_attempted = rollback_attempted
+        self.rollback_succeeded = rollback_succeeded
+
+        # Build context dict with migration-specific fields
+        migration_context = {
+            "migration_file": migration_file,
+            "direction": direction,
+            "step": step,
+            "db_error": db_error,
+            "rollback_attempted": rollback_attempted,
+            "rollback_succeeded": rollback_succeeded,
+        }
+        # Remove None values from context
+        migration_context = {
+            k: v for k, v in migration_context.items() if v is not None
+        }
+
+        # Merge with provided context
+        merged_context = {**(context or {}), **migration_context}
+
+        super().__init__(
+            message=message,
+            code=code,
+            context=merged_context,
+            recoverable=recoverable,
+            cause=cause,
+        )
+
+    @property
+    def migration_context_str(self) -> str:
+        """Return formatted migration context for logging.
+
+        Examples:
+            "20260401_add_column.py (up, step 1)"
+            "20260401_drop_column.py (down)"
+            "(no migration context)"
+        """
+        if not self.migration_file:
+            return "(no migration context)"
+
+        parts = [self.migration_file]
+        if self.direction:
+            parts.append(self.direction)
+        if self.step is not None:
+            parts.append(f"step {self.step}")
+
+        return f"{parts[0]} ({', '.join(parts[1:])})" if len(parts) > 1 else parts[0]
+
+
 class DeploymentLockError(DeploymentError):
     """Deployment lock acquisition failed."""
 
