@@ -267,14 +267,16 @@ class BareMetalProvider(DeploymentProvider):
         validate_service_name(service_name)
         try:
             exit_code, stdout, stderr = await self.execute_command(
-                f"systemctl is-active {service_name}.service"
+                f"sudo systemctl is-active {service_name}.service"
             )
 
             if exit_code == 0:
                 # Also get details
-                _, details, _ = await self.execute_command(
-                    f"systemctl show {service_name}.service -p ActiveState,SubState"
+                show_cmd = (
+                    f"sudo systemctl show {service_name}.service "
+                    "-p ActiveState,SubState"
                 )
+                _, details, _ = await self.execute_command(show_cmd)
 
                 return {
                     "service": service_name,
@@ -311,7 +313,7 @@ class BareMetalProvider(DeploymentProvider):
         validate_service_name(health_check.service)
         try:
             exit_code, _, _ = await self.execute_command(
-                f"systemctl is-active {health_check.service}.service"
+                f"sudo systemctl is-active {health_check.service}.service"
             )
             return exit_code == 0
 
@@ -337,7 +339,7 @@ class BareMetalProvider(DeploymentProvider):
         """
         validate_service_name(service_name)
         return self.run_command(
-            f"systemctl {action} {service_name}.service", timeout=timeout
+            f"sudo systemctl {action} {service_name}.service", timeout=timeout
         )
 
     def start_service(self, service_name: str, timeout: int = 60) -> bool:
@@ -433,7 +435,7 @@ class BareMetalProvider(DeploymentProvider):
         """
         validate_service_name(service_name)
         exit_code, stdout, _ = self.run_command(
-            f"systemctl is-active {service_name}.service"
+            f"sudo systemctl is-active {service_name}.service"
         )
         state = stdout.strip()
         return {
