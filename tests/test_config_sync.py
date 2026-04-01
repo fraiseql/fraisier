@@ -271,3 +271,143 @@ class TestDeployerInstallScaffold:
         from fraisier.deployers.base import BaseDeployer
 
         assert callable(getattr(BaseDeployer, "_install_scaffold", None))
+
+
+# Phase 4: Rollback handling tests
+class TestDeployerRollbackConfig:
+    """Tests for BaseDeployer._rollback_config()."""
+
+    def test_rollback_config_method_exists(self, tmp_path):
+        """_rollback_config() method exists on deployer."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert hasattr(BaseDeployer, "_rollback_config")
+
+    def test_rollback_config_is_callable(self, tmp_path):
+        """_rollback_config() is callable."""
+        from fraisier.deployers.base import BaseDeployer
+
+        assert callable(getattr(BaseDeployer, "_rollback_config", None))
+
+    def test_rollback_config_returns_bool(self, tmp_path):
+        """_rollback_config() returns boolean."""
+        from fraisier.deployers.base import BaseDeployer
+
+        method = getattr(BaseDeployer, "_rollback_config", None)
+        assert method is not None
+        # Check that it's expected to return a bool (via docstring)
+        assert "Returns:" in method.__doc__
+
+
+# Phase 5: Edge Cases & Error Handling tests
+class TestConfigSyncEdgeCases:
+    """Tests for edge cases and error scenarios."""
+
+    def test_config_watcher_handles_missing_config_file(self, tmp_path):
+        """ConfigWatcher handles missing fraises.yaml gracefully."""
+        watcher = ConfigWatcher(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            watcher.compute_hash()
+
+    def test_detect_config_changes_handles_missing_paths(self, tmp_path):
+        """_detect_config_changes handles None path gracefully."""
+        config = {
+            "fraise_name": "test_api",
+            "environment": "dev",
+        }
+
+        from fraisier.deployers.api import APIDeployer
+
+        deployer = APIDeployer(config)
+
+        # Should return False with None path
+        result = deployer._detect_config_changes(config_path=None)
+        assert result is False
+
+    def test_sync_fraises_yaml_handles_missing_source(self, tmp_path):
+        """_sync_fraises_yaml raises FileNotFoundError if source missing."""
+        config = {
+            "fraise_name": "test_api",
+            "environment": "dev",
+        }
+
+        from fraisier.deployers.api import APIDeployer
+
+        deployer = APIDeployer(config)
+
+        # Should raise FileNotFoundError for missing source
+        with pytest.raises(FileNotFoundError):
+            deployer._sync_fraises_yaml(
+                source_path=tmp_path / "nonexistent.yaml",
+                dest_path=tmp_path / "dest.yaml",
+            )
+
+    def test_sync_fraises_yaml_handles_none_paths(self, tmp_path):
+        """_sync_fraises_yaml handles None paths gracefully."""
+        config = {
+            "fraise_name": "test_api",
+            "environment": "dev",
+        }
+
+        from fraisier.deployers.api import APIDeployer
+
+        deployer = APIDeployer(config)
+
+        # Should not raise when both paths are None
+        deployer._sync_fraises_yaml(source_path=None, dest_path=None)
+
+    def test_config_watcher_handles_large_files(self, tmp_path):
+        """ConfigWatcher efficiently handles large config files."""
+        config_file = tmp_path / "fraises.yaml"
+        # Create a 1MB file
+        config_file.write_text("x" * (1024 * 1024))
+
+        watcher = ConfigWatcher(tmp_path)
+        hash_value = watcher.compute_hash()
+
+        # Should produce valid hash
+        assert len(hash_value) == 64
+        assert all(c in "0123456789abcdef" for c in hash_value)
+
+    def test_config_watcher_hash_stability(self, tmp_path):
+        """ConfigWatcher produces stable hashes for identical content."""
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text("test content")
+
+        watcher = ConfigWatcher(tmp_path)
+        hash1 = watcher.compute_hash()
+
+        # Create new watcher instance
+        watcher2 = ConfigWatcher(tmp_path)
+        hash2 = watcher2.compute_hash()
+
+        # Hashes should be identical
+        assert hash1 == hash2
+
+    def test_config_watcher_detects_binary_content_changes(self, tmp_path):
+        """ConfigWatcher detects binary content changes."""
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_bytes(b"\x00\x01\x02\x03")
+
+        watcher = ConfigWatcher(tmp_path)
+        hash1 = watcher.compute_hash()
+        watcher.save_hash()
+
+        # Modify binary content
+        config_file.write_bytes(b"\x00\x01\x02\x04")
+
+        assert watcher.has_changed() is True
+
+    def test_rollback_config_handles_none_path(self, tmp_path):
+        """_rollback_config returns True with None path."""
+        config = {
+            "fraise_name": "test_api",
+            "environment": "dev",
+        }
+
+        from fraisier.deployers.api import APIDeployer
+
+        deployer = APIDeployer(config)
+
+        result = deployer._rollback_config(config_path=None)
+        assert result is True

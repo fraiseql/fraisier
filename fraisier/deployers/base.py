@@ -157,7 +157,16 @@ class BaseDeployer(ABC):
         source_path = Path(source_path)
         dest_path = Path(dest_path)
 
-        logger.info(f"Syncing fraises.yaml from {source_path}")
+        logger.info(
+            "Syncing fraises.yaml",
+            extra={
+                "event": "config_sync_started",
+                "source": str(source_path),
+                "destination": str(dest_path),
+                "fraise": self.fraise_name,
+                "environment": self.environment,
+            },
+        )
 
         # Verify source exists
         if not source_path.exists():
@@ -167,12 +176,18 @@ class BaseDeployer(ABC):
             )
 
         # Copy file
-        self.runner.run(
-            f"cp {source_path} {dest_path}",
-            description=f"Sync fraises.yaml from {source_path}",
-        )
+        self.runner.run(["cp", str(source_path), str(dest_path)])
 
-        logger.info(f"✓ Synced fraises.yaml to {dest_path}")
+        logger.info(
+            "Config synced successfully",
+            extra={
+                "event": "config_sync_completed",
+                "source": str(source_path),
+                "destination": str(dest_path),
+                "fraise": self.fraise_name,
+                "environment": self.environment,
+            },
+        )
 
     def _detect_config_changes(self, config_path: Path | None = None) -> bool:
         """Detect if fraises.yaml has changed.
@@ -198,14 +213,32 @@ class BaseDeployer(ABC):
             watcher = ConfigWatcher(project_dir)
             changed = watcher.has_changed()
 
+            log_data = {
+                "event": "config_change_detection_completed",
+                "config_changed": changed,
+                "config_path": str(config_path),
+                "fraise": self.fraise_name,
+                "environment": self.environment,
+            }
+
             if changed:
-                logger.info("Config changed, will regenerate scaffold")
+                logger.info(
+                    "Config changed, will regenerate scaffold", extra=log_data
+                )
             else:
-                logger.info("Config unchanged")
+                logger.info("Config unchanged", extra=log_data)
 
             return changed
         except Exception as e:
-            logger.warning(f"Could not detect config changes: {e}")
+            logger.warning(
+                f"Could not detect config changes: {e}",
+                extra={
+                    "event": "config_change_detection_failed",
+                    "error": str(e),
+                    "fraise": self.fraise_name,
+                    "environment": self.environment,
+                },
+            )
             return True  # Assume changed if we can't detect
 
     def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
@@ -233,8 +266,7 @@ class BaseDeployer(ABC):
 
         # Run scaffold regeneration
         result = self.runner.run(
-            f"cd {project_dir} && fraisier -c {config_path} scaffold",
-            description="Regenerate scaffold files from fraises.yaml",
+            ["sh", "-c", f"cd {project_dir} && fraisier -c {config_path} scaffold"]
         )
 
         if not result.ok:
@@ -258,12 +290,55 @@ class BaseDeployer(ABC):
         logger.info("Installing updated scaffold files")
 
         # Run scaffold install
-        result = self.runner.run(
-            "fraisier scaffold-install --yes",
-            description="Install updated scaffold files",
-        )
+        result = self.runner.run(["fraisier", "scaffold-install", "--yes"])
 
         if not result.ok:
             raise DeploymentError(f"Failed to install scaffold files: {result.output}")
 
         logger.info("✓ Scaffold files installed")
+
+    def _rollback_config(self, config_path: Path | None = None) -> bool:
+        """Rollback to previous fraises.yaml and regenerate scaffold.
+
+        Restores previous commit version of fraises.yaml from git and
+        regenerates scaffold files from the restored config.
+
+        Args:
+            config_path: Path to fraises.yaml to restore
+
+        Returns:
+            True if rollback successful, False otherwise
+        """
+        if not config_path:
+            logger.warning("No config path provided, skipping config rollback")
+            return True
+
+        try:
+            logger.info("Rolling back to previous configuration")
+
+            # Restore previous commit of fraises.yaml from git
+            config_path = Path(config_path)
+            app_path = config_path.parent.parent / "app"  # Assume git checkout
+
+            result = self.runner.run(
+                ["git", "-C", str(app_path), "checkout", "HEAD~1", "--", "fraises.yaml"]
+            )
+
+            if result.ok:
+                # Re-sync the previous version to server
+                self._sync_fraises_yaml(
+                    source_path=app_path / "fraises.yaml", dest_path=config_path
+                )
+
+                # Regenerate and install scaffold from restored config
+                self._regenerate_scaffold(config_path=config_path)
+                self._install_scaffold()
+
+                logger.info("✓ Configuration rolled back")
+                return True
+            else:
+                logger.warning("Could not restore previous config: %s", result.output)
+                return False
+        except Exception as e:
+            logger.error("Config rollback failed: %s", e)
+            return False
