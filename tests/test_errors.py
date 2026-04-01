@@ -242,6 +242,44 @@ class TestMigrationErrors:
         error = MigrationError("Migration failed")
         assert error.migration_context_str == "(no migration context)"
 
+    def test_migration_error_rollback_status_tracking(self):
+        """Test MigrationError tracks rollback attempt and success status."""
+        # Rollback attempted and succeeded
+        error_success = MigrationError(
+            "Migration failed",
+            rollback_attempted=True,
+            rollback_succeeded=True,
+        )
+        assert error_success.rollback_attempted is True
+        assert error_success.rollback_succeeded is True
+
+        # Rollback attempted but failed
+        error_failed = MigrationError(
+            "Migration failed",
+            rollback_attempted=True,
+            rollback_succeeded=False,
+        )
+        assert error_failed.rollback_attempted is True
+        assert error_failed.rollback_succeeded is False
+
+        # Rollback not attempted
+        error_none = MigrationError("Migration failed", rollback_attempted=False)
+        assert error_none.rollback_attempted is False
+        assert error_none.rollback_succeeded is None
+
+    def test_migration_error_rollback_context_preserved_in_dict(self):
+        """Test rollback status is preserved in serialized dict."""
+        error = MigrationError(
+            "Rollback failed",
+            migration_file="20260401_test.py",
+            direction="down",
+            rollback_attempted=True,
+            rollback_succeeded=False,
+        )
+        result = error.to_dict()
+        assert result["context"]["rollback_attempted"] is True
+        assert result["context"]["rollback_succeeded"] is False
+
 
 class TestOtherErrors:
     """Test other error types."""

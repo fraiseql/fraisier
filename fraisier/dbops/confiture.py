@@ -288,10 +288,18 @@ def migrate_down(
 
     if not result.success:
         log.critical("Rollback failed: %s — manual intervention required", result.error)
+        # Create a MigrationError with rollback failure context
+        error = FraisierMigrationError(
+            message=f"Rollback failed: {result.error}",
+            direction="down",
+            db_error=str(result.error) if result.error else "Unknown rollback error",
+            rollback_attempted=True,
+            rollback_succeeded=False,
+        )
         return MigrationResult(
             success=False,
             steps_applied=0,
-            errors=[str(result.error)] if result.error else [],
+            errors=[error],
             execution_time_ms=elapsed_ms,
         )
 
