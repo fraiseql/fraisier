@@ -670,6 +670,49 @@ sudo apt-get install pgbouncer
 
 ---
 
+## Configuration Synchronization (Automatic)
+
+### What Happens During Deploy
+
+Starting with version 1.0+, Fraisier automatically synchronizes `fraises.yaml` from the git repository to the server and regenerates infrastructure files if the configuration changed.
+
+**During `fraisier deploy`:**
+
+1. **Config Sync**: Copies `fraises.yaml` from checked-out app_path
+2. **Change Detection**: Compares hash with previous deployment
+3. **Scaffold Regen**: If config changed, runs `fraisier scaffold`
+4. **Scaffold Install**: If scaffold changed, runs `fraisier scaffold-install --yes`
+5. **Deploy**: Proceeds with migration, restart, health check, etc.
+
+### Single Source of Truth
+
+You now have one source of truth: `fraises.yaml` in git. The server always stays in sync automatically.
+
+**You no longer need to:**
+- Manually copy `fraises.yaml` to server
+- Manually regenerate scaffold files
+- Manually install scaffold files
+
+### How It Works
+
+Config changes are detected using SHA256 hashing:
+
+```
+fraises.yaml (v1) → hash: abc123...
+  ↓ (deploy)
+Server config synced, hash stored
+  ↓ (next deploy)
+fraises.yaml (v2) → hash: def456...
+  ↓ (mismatch detected)
+Scaffold regenerated and installed
+```
+
+### Rollback
+
+If deployment fails, Fraisier automatically restores the previous `fraises.yaml` from git history and regenerates the corresponding scaffold files.
+
+---
+
 ## Next Steps
 
 1. See [development.md](../development.md) for development setup

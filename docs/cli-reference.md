@@ -63,6 +63,15 @@ fraisier deploy FRAISE ENVIRONMENT [OPTIONS]
 | `--skip-health` | Skip the post-deploy health check |
 | `--job NAME` | Specify a job name (for scheduled fraises) |
 
+**Automatic Configuration Synchronization**
+
+When you run `fraisier deploy`, Fraisier automatically:
+- Syncs `fraises.yaml` from git to the server
+- Detects if configuration changed using hash comparison
+- Regenerates and installs scaffold files if needed
+
+This keeps the server in sync with your git repository automatically. See [deployment-guide.md](./deployment-guide.md#configuration-synchronization-automatic) for details.
+
 **Examples:**
 
 ```bash
