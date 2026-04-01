@@ -1,4 +1,3 @@
-# Phase 1: ConfigWatcher class for hash-based change detection
 """Config change detection and hashing."""
 
 import hashlib

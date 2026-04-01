@@ -57,7 +57,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
         try:
             with deployment_timeout(timeout):
-                # Phase 0: Config sync and scaffold regeneration
+                # Config sync and scaffold regeneration
                 try:
                     # Determine config file locations
                     project_name = self.config.get("project_name", self.fraise_name)

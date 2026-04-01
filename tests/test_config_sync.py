@@ -1,4 +1,3 @@
-# Phase 1, Cycle 1-4: ConfigWatcher tests (RED phase)
 """Tests for config synchronization and change detection."""
 
 import pytest
@@ -210,7 +209,6 @@ class TestConfigWatcherSaveHash:
         assert hash_file.exists()
 
 
-# Phase 2: Deployer Base Class Methods tests (RED phase)
 class TestDeployerSyncFraisesYaml:
     """Tests for BaseDeployer._sync_fraises_yaml()."""
 

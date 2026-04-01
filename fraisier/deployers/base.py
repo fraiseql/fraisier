@@ -133,7 +133,6 @@ class BaseDeployer(ABC):
         # Default implementation - subclasses can override
         return True
 
-    # Phase 2: Config sync methods
     def _sync_fraises_yaml(
         self, source_path: Path | None = None, dest_path: Path | None = None
     ) -> None:
