@@ -3,10 +3,13 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentResult, DeploymentStatus
 from fraisier.deployers.etl import ETLDeployer
 from fraisier.deployers.scheduled import ScheduledDeployer
+from fraisier.errors import DeploymentError
 from fraisier.strategies import StrategyResult
 
 
@@ -450,6 +453,123 @@ class TestAPIDeployer:
         assert len(error_context) == 2
         assert "wrapper_1" in error_context
         assert "wrapper_2" in error_context
+
+    def test_install_dependencies_failure_includes_stderr(self, mock_subprocess):
+        """Test install failure includes stderr in context."""
+        from subprocess import CalledProcessError
+
+        config = {
+            "app_path": "/var/www/api",
+            "install": {"command": ["uv", "sync", "--frozen"]},
+        }
+        deployer = APIDeployer(config)
+
+        # Mock install command failure with stderr output
+        error = CalledProcessError(1, ["uv", "sync", "--frozen"])
+        error.stdout = ""
+        error.stderr = "error: version conflict in dependencies"
+        mock_subprocess.side_effect = error
+
+        with pytest.raises(DeploymentError) as exc_info:
+            deployer._install_dependencies()
+
+        assert "exit code 1" in str(exc_info.value)
+        expected_stderr = "error: version conflict in dependencies"
+        assert exc_info.value.context["stderr"] == expected_stderr
+
+    def test_install_dependencies_failure_includes_cwd(self, mock_subprocess):
+        """Test install failure includes cwd in context."""
+        from subprocess import CalledProcessError
+
+        config = {
+            "app_path": "/var/www/api",
+            "install": {"command": ["npm", "install"]},
+        }
+        deployer = APIDeployer(config)
+
+        error = CalledProcessError(1, ["npm", "install"])
+        error.stdout = ""
+        error.stderr = ""
+        mock_subprocess.side_effect = error
+
+        with pytest.raises(DeploymentError) as exc_info:
+            deployer._install_dependencies()
+
+        assert exc_info.value.context["cwd"] == "/var/www/api"
+
+    def test_install_dependencies_failure_suggested_command(self, mock_subprocess):
+        """Test install failure includes suggested debugging command."""
+        from subprocess import CalledProcessError
+
+        config = {
+            "app_path": "/var/www/api",
+            "install": {"command": ["uv", "sync", "--frozen"]},
+        }
+        deployer = APIDeployer(config)
+
+        error = CalledProcessError(1, ["uv", "sync", "--frozen"])
+        error.stdout = ""
+        error.stderr = ""
+        mock_subprocess.side_effect = error
+
+        with pytest.raises(DeploymentError) as exc_info:
+            deployer._install_dependencies()
+
+        suggested = exc_info.value.context["suggested_command"]
+        assert suggested.startswith("cd /var/www/api")
+        assert "uv sync --frozen" in suggested
+
+    def test_install_dependencies_failure_includes_stdout(self, mock_subprocess):
+        """Test install failure captures stdout output."""
+        from subprocess import CalledProcessError
+
+        config = {
+            "app_path": "/var/www/api",
+            "install": {"command": ["pip", "install", "-r", "requirements.txt"]},
+        }
+        deployer = APIDeployer(config)
+
+        error = CalledProcessError(1, ["pip", "install", "-r", "requirements.txt"])
+        error.stdout = "Installing collected packages: numpy\n"
+        error.stderr = "ERROR: Could not find a version that satisfies"
+        mock_subprocess.side_effect = error
+
+        with pytest.raises(DeploymentError) as exc_info:
+            deployer._install_dependencies()
+
+        expected_in_stdout = "Installing collected packages: numpy"
+        assert expected_in_stdout in exc_info.value.context["stdout"]
+
+    def test_install_dependencies_skipped_when_no_command(self, mock_subprocess):
+        """Test install is skipped when no install command configured."""
+        config = {
+            "app_path": "/var/www/api",
+        }
+        deployer = APIDeployer(config)
+
+        deployer._install_dependencies()
+
+        mock_subprocess.assert_not_called()
+
+    def test_install_dependencies_with_sudo_user(self, mock_subprocess):
+        """Test install command includes sudo prefix when user differs."""
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "root",
+            "install": {
+                "command": ["uv", "sync"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer._install_dependencies()
+
+        # Verify sudo was used
+        args, kwargs = mock_subprocess.call_args
+        assert args[0][:3] == ["sudo", "-u", "appuser"]
+        assert kwargs["cwd"] == "/var/www/api"
 
 
 class TestETLDeployer:

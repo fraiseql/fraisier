@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -101,6 +103,11 @@ class GitDeployMixin:
         Runs the configured install command in the app_path directory.
         When install.user is set and differs from deploy_user, the command
         is prefixed with sudo -u. When they are the same, runs directly.
+
+        Raises:
+            DeploymentError: If the install command fails, with detailed context
+                including the command, exit code, stdout, stderr, and a suggested
+                debugging command.
         """
         if not self.install_command or not self.app_path:
             return
@@ -110,7 +117,24 @@ class GitDeployMixin:
         if self.install_user and self.install_user != deploy_user:
             cmd = ["sudo", "-u", self.install_user, *cmd]
         logger.info("Installing dependencies: %s", cmd)
-        self.runner.run(cmd, cwd=self.app_path)
+        try:
+            self.runner.run(cmd, cwd=self.app_path)
+        except subprocess.CalledProcessError as exc:
+            suggested = f"cd {self.app_path} && {shlex.join(cmd)}"
+            raise DeploymentError(
+                f"Install command failed (exit code {exc.returncode}): "
+                f"{shlex.join(exc.cmd) if isinstance(exc.cmd, list) else exc.cmd}\n"
+                f"  Directory: {self.app_path}\n"
+                f"  To debug: {suggested}",
+                context={
+                    "command": exc.cmd,
+                    "cwd": self.app_path,
+                    "exit_code": exc.returncode,
+                    "stdout": exc.stdout or "",
+                    "stderr": exc.stderr or "",
+                    "suggested_command": suggested,
+                },
+            ) from exc
 
     def _git_rollback(
         self,
