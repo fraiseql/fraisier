@@ -50,6 +50,12 @@ fraises:
   my_api:
     type: api
     description: My awesome GraphQL API
+    # Install step runs after git checkout, before DB migrations (#53)
+    # Defined at fraise level and inherited by all environments
+    # Can be overridden at environment level
+    install:
+      command: [uv, sync, --frozen]
+      user: myapp                          # optional: run as this user (sudo -u)
     environments:
       development:
         name: api.myapp.dev
@@ -57,9 +63,6 @@ fraises:
         git_repo: /var/git/api.myapp.dev.git
         app_path: /var/www/api.myapp.dev
         systemd_service: api.myapp.dev.service
-        install:
-          command: [uv, sync, --frozen]   # run after git checkout, before DB migrations
-          user: myapp                      # optional: run as this user (sudo -u)
         database:
           name: myapp_development
           strategy: rebuild  # drop and recreate (dev only!)

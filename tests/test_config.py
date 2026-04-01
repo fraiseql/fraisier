@@ -629,3 +629,87 @@ class TestGetDeployUser:
         config = FraisierConfig(str(config_file))
         assert config.get_deploy_user("my_api", "development") == "fraisier"
         assert config.get_deploy_user("my_api", "production") == "prod-deployer"
+
+
+class TestFraiseInstallInheritance:
+    """Fraise-level install config inherited by environments (#53)."""
+
+    def test_fraise_level_install_inherited(self, tmp_path):
+        """Install at fraise level is inherited by environments."""
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "fraises:\n  api:\n"
+            "    type: api\n"
+            "    install:\n"
+            "      command: [uv, sync, --frozen]\n"
+            "      user: appuser\n"
+            "    environments:\n"
+            "      development:\n"
+            "        app_path: /var/www/dev\n"
+            "      production:\n"
+            "        app_path: /var/www/prod\n"
+        )
+        config = FraisierConfig(str(config_file))
+
+        # Both environments should inherit the install config
+        dev_env = config.get_fraise_environment("api", "development")
+        assert dev_env is not None
+        assert dev_env["install"]["command"] == ["uv", "sync", "--frozen"]
+        assert dev_env["install"]["user"] == "appuser"
+
+        prod_env = config.get_fraise_environment("api", "production")
+        assert prod_env is not None
+        assert prod_env["install"]["command"] == ["uv", "sync", "--frozen"]
+        assert prod_env["install"]["user"] == "appuser"
+
+    def test_environment_install_overrides_fraise_level(self, tmp_path):
+        """Environment-level install overrides fraise-level install."""
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "fraises:\n  api:\n"
+            "    type: api\n"
+            "    install:\n"
+            "      command: [uv, sync, --frozen]\n"
+            "      user: appuser\n"
+            "    environments:\n"
+            "      development:\n"
+            "        app_path: /var/www/dev\n"
+            "      production:\n"
+            "        app_path: /var/www/prod\n"
+            "        install:\n"
+            "          command: [uv, sync, --frozen, --extra=prod]\n"
+            "          user: prod-appuser\n"
+        )
+        config = FraisierConfig(str(config_file))
+
+        # Development inherits from fraise level
+        dev_env = config.get_fraise_environment("api", "development")
+        assert dev_env is not None
+        assert dev_env["install"]["command"] == ["uv", "sync", "--frozen"]
+        assert dev_env["install"]["user"] == "appuser"
+
+        # Production overrides completely
+        prod_env = config.get_fraise_environment("api", "production")
+        assert prod_env is not None
+        prod_cmd = ["uv", "sync", "--frozen", "--extra=prod"]
+        assert prod_env["install"]["command"] == prod_cmd
+        assert prod_env["install"]["user"] == "prod-appuser"
+
+    def test_no_install_inheritance_when_neither_defined(self, tmp_path):
+        """When install not defined anywhere, environments don't get it."""
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "git:\n  provider: github\n  github:\n    webhook_secret: s\n"
+            "fraises:\n  api:\n"
+            "    type: api\n"
+            "    environments:\n"
+            "      development:\n"
+            "        app_path: /var/www/dev\n"
+        )
+        config = FraisierConfig(str(config_file))
+
+        dev_env = config.get_fraise_environment("api", "development")
+        assert dev_env is not None
+        assert "install" not in dev_env

@@ -910,13 +910,17 @@ class FraisierConfig:
             return None
 
         # Merge fraise-level config with environment-specific config
-        return {
+        merged = {
             "fraise_name": fraise_name,
             "environment": environment,
             "type": fraise.get("type"),
             "description": fraise.get("description"),
             **env_config,
         }
+        # Inherit fraise-level install if environment doesn't override it
+        if "install" not in merged and "install" in fraise:
+            merged["install"] = fraise["install"]
+        return merged
 
     def get_fraises_for_branch(self, branch: str) -> list[dict[str, Any]]:
         """Get fraise configurations for a git branch (webhook routing).
