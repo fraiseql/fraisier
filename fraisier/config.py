@@ -233,14 +233,6 @@ class NginxEnvConfig:
             raise ValidationError(
                 "nginx.ssl_key requires nginx.ssl_cert to also be set",
             )
-        # Validate CORS origins and warn about unescaped dots
-        for origin in self.cors_origins:
-            if re.search(r"(?<!\\)\.(?![*+?])", origin):
-                warnings.warn(
-                    f"CORS origin {origin!r} contains unescaped dots — "
-                    "use cors_origins_escaped for nginx regex rendering",
-                    stacklevel=2,
-                )
 
     @property
     def cors_origins_escaped(self) -> list[str]:
@@ -373,7 +365,6 @@ class DeploymentConfig:
     lock_db_path: str = "/var/lib/fraisier/locks.db"
     status_file: str = "deployment_status.json"
     webhook_secret_env: str = "DEPLOYMENT_TOKEN"
-    poll_interval_seconds: int = 60
     deploy_user: str = "fraisier"
     strategies: dict[str, str] = field(default_factory=dict)
     timeouts: dict[str, int] = field(default_factory=dict)
@@ -723,11 +714,6 @@ class FraisierConfig:
             )
 
         _DEPRECATED_DEPLOYMENT_KEYS = {
-            "poll_interval_seconds": (
-                "deployment.poll_interval_seconds is deprecated "
-                "and ignored by the deployment pipeline. "
-                "Use health.deploy_poll_interval_seconds instead."
-            ),
             "webhook_secret_env": (
                 "deployment.webhook_secret_env is deprecated "
                 "and ignored. The webhook reads "
@@ -745,7 +731,6 @@ class FraisierConfig:
             lock_db_path=raw.get("lock_db_path", "/var/lib/fraisier/locks.db"),
             status_file=raw.get("status_file", "deployment_status.json"),
             webhook_secret_env=raw.get("webhook_secret_env", "DEPLOYMENT_TOKEN"),
-            poll_interval_seconds=raw.get("poll_interval_seconds", 60),
             deploy_user=raw.get("deploy_user", "fraisier"),
             strategies=strategies,
             timeouts=raw.get("timeouts", {}) or {},

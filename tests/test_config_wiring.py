@@ -76,28 +76,6 @@ class TestHealthCheckTimeoutWired:
 class TestDeprecationWarnings:
     """Dead config keys emit deprecation warnings during validation."""
 
-    def test_poll_interval_seconds_emits_warning(self, tmp_path):
-        """Config with deployment.poll_interval_seconds emits warning."""
-        from fraisier.config import FraisierConfig
-
-        config_file = tmp_path / "fraises.yaml"
-        config_file.write_text(
-            """\
-deployment:
-  poll_interval_seconds: 30
-fraises: {}
-"""
-        )
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            cfg = FraisierConfig(str(config_file))
-            _ = cfg.deployment  # triggers property access
-
-        deprecation_msgs = [
-            str(x.message) for x in w if issubclass(x.category, DeprecationWarning)
-        ]
-        assert any("poll_interval_seconds" in m for m in deprecation_msgs)
-
     def test_webhook_secret_env_emits_warning(self, tmp_path):
         """Config with deployment.webhook_secret_env emits warning."""
         from fraisier.config import FraisierConfig

@@ -170,6 +170,7 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
     return {
         "scaffold": config.scaffold,
         "deployment": config.deployment,
+        "health": config.health,
         "fraises": fraises_list,
         "fraise_names": config.list_fraises(),
         "project_name": project_name,
