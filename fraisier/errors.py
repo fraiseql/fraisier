@@ -7,7 +7,10 @@ Provides structured error types for different failure scenarios with:
 - Hierarchical structure for flexible exception handling
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fraisier.migration_analyzer import ErrorClassification
 
 
 class FraisierError(Exception):
@@ -234,6 +237,13 @@ class MigrationError(DatabaseError):
         self.rollback_attempted = rollback_attempted
         self.rollback_succeeded = rollback_succeeded
 
+        # Auto-classify error if db_error provided
+        self.classification: ErrorClassification | None = None
+        if db_error:
+            from fraisier.migration_analyzer import classify_migration_error
+
+            self.classification = classify_migration_error(db_error, direction or "up")
+
         # Build context dict with migration-specific fields
         migration_context = {
             "migration_file": migration_file,
@@ -247,6 +257,17 @@ class MigrationError(DatabaseError):
         migration_context = {
             k: v for k, v in migration_context.items() if v is not None
         }
+
+        # Add classification if available
+        if self.classification:
+            migration_context["classification"] = {
+                "error_type": self.classification.error_type,
+                "recoverable": self.classification.recoverable,
+                "rollback_safe": self.classification.rollback_safe,
+                "requires_manual_intervention": (
+                    self.classification.requires_manual_intervention
+                ),
+            }
 
         # Merge with provided context
         merged_context = {**(context or {}), **migration_context}
@@ -278,6 +299,25 @@ class MigrationError(DatabaseError):
             parts.append(f"step {self.step}")
 
         return f"{parts[0]} ({', '.join(parts[1:])})" if len(parts) > 1 else parts[0]
+
+    @property
+    def classification_str(self) -> str:
+        """Return human-readable classification for logging.
+
+        Examples:
+            "constraint error"
+            "transient error (recoverable)"
+            "unknown error"
+            "(no classification)"
+        """
+        if not self.classification:
+            return "(no classification)"
+
+        parts = [self.classification.error_type, "error"]
+        if self.classification.recoverable:
+            parts.append("(recoverable)")
+
+        return " ".join(parts)
 
 
 class DeploymentLockError(DeploymentError):

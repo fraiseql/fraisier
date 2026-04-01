@@ -280,6 +280,62 @@ class TestMigrationErrors:
         assert result["context"]["rollback_attempted"] is True
         assert result["context"]["rollback_succeeded"] is False
 
+    def test_migration_error_auto_classifies_from_db_error(self):
+        """Test MigrationError auto-classifies based on db_error message."""
+        # Constraint error should auto-classify
+        constraint_error = MigrationError(
+            "Migration failed",
+            db_error="column 'new_column' already exists",
+        )
+        assert constraint_error.classification is not None
+        assert constraint_error.classification.error_type == "constraint"
+        assert constraint_error.classification.recoverable is False
+        assert constraint_error.classification.requires_manual_intervention is True
+
+        # Transient error should auto-classify
+        transient_error = MigrationError(
+            "Migration failed",
+            db_error="connection timeout",
+        )
+        assert transient_error.classification is not None
+        assert transient_error.classification.error_type == "transient"
+        assert transient_error.classification.recoverable is True
+
+    def test_migration_error_classification_optional(self):
+        """Test that classification is None when db_error not provided."""
+        error = MigrationError("Migration failed")
+        assert error.classification is None
+
+    def test_migration_error_classification_in_dict(self):
+        """Test classification is included in serialized dict."""
+        error = MigrationError(
+            "Migration failed",
+            db_error="syntax error at or near 'CREAT'",
+        )
+        result = error.to_dict()
+        assert "classification" in result["context"]
+        assert result["context"]["classification"]["error_type"] == "syntax"
+        assert result["context"]["classification"]["recoverable"] is False
+
+    def test_migration_error_classification_str_with_classification(self):
+        """Test classification_str property formats classification nicely."""
+        error = MigrationError(
+            "Migration failed",
+            db_error="column 'x' already exists",
+        )
+        assert error.classification_str == "constraint error"
+
+        transient_error = MigrationError(
+            "Migration failed",
+            db_error="connection timeout",
+        )
+        assert transient_error.classification_str == "transient error (recoverable)"
+
+    def test_migration_error_classification_str_no_classification(self):
+        """Test classification_str returns default when no classification."""
+        error = MigrationError("Migration failed")
+        assert error.classification_str == "(no classification)"
+
 
 class TestOtherErrors:
     """Test other error types."""
