@@ -2,7 +2,19 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command. Fixes #52, #53, #54, #55, #56, #57, #58. 1777+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command, component test commands. Fixes #52, #53, #54, #55, #56, #57, #58, #60. 1801+ tests, zero lint warnings.
+
+### Component Test Commands (#60)
+
+- **feat:** five new CLI commands for testing deployment components in isolation without full deployment risk
+- **feat:** `fraisier test-wrapper <fraise> <env> <wrapper-type> [args...]` — validates and executes wrapper scripts (systemctl, pg) with timing and exit code reporting
+- **feat:** `fraisier test-install <fraise> <env>` — runs the configured install step (e.g., `uv sync`) with detailed error context on failure
+- **feat:** `fraisier test-health <fraise> <env>` — tests health check endpoint, shows URL/timeout/retries configured, reports HTTP status and response time
+- **feat:** `fraisier test-git <fraise> <env>` — validates git operations: clone URL, bare repo exists, app path exists, remote connectivity (fetch --dry-run), current/latest versions
+- **feat:** `fraisier test-database <fraise> <env>` — tests database connectivity: attempts `SELECT 1` query, shows connection time, masks password in display URL
+- **feat:** all commands use rich table output with color-coded status (✓/✗/·) for consistency with validation commands
+- **feat:** early validation checks prevent expensive operations; detailed error messages with recovery suggestions
+- **test:** 24 new unit tests covering all 5 commands, error conditions, helper functions, mocking deployers/subprocess/filesystem
 
 ### Deployment Status Command (#58)
 

@@ -565,5 +565,6 @@ from . import ops as _ops_mod  # noqa: E402, F401
 from . import providers as _providers_mod  # noqa: E402, F401
 from . import scaffold as _scaffold_mod  # noqa: E402, F401
 from . import setup as _setup_mod  # noqa: E402, F401
+from . import test_components as _test_components_mod  # noqa: E402, F401
 from . import test_db as _test_db_mod  # noqa: E402, F401
 from . import version as _version_mod  # noqa: E402, F401
