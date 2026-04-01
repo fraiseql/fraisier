@@ -199,13 +199,13 @@ def update_schema_info(
     The database_version is derived from the current date and the
     number of migration files.
     """
-    from fraisier.dbops.schema import hash_schema
+    from fraisier.dbops.schema import _compute_schema_hash
 
     info = read_version(version_path)
     if info is None:
         info = VersionInfo()
 
-    schema_hash = hash_schema(schema_dir)
+    schema_hash = _compute_schema_hash(schema_dir)
     info.schema_hash = f"sha256:{schema_hash}"
 
     # Count SQL files for sequence number

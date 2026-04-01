@@ -358,52 +358,52 @@ class TestSchemaHash:
     """Test schema hash computation."""
 
     def test_hash_schema_from_directory(self, tmp_path):
-        from fraisier.dbops.schema import hash_schema
+        from fraisier.dbops.schema import _compute_schema_hash
 
         # Create some migration files
         (tmp_path / "001_init.sql").write_text("CREATE TABLE foo (id int);")
         (tmp_path / "002_add_bar.sql").write_text("ALTER TABLE foo ADD bar text;")
 
-        h = hash_schema(tmp_path)
+        h = _compute_schema_hash(tmp_path)
         assert isinstance(h, str)
         assert len(h) == 64  # SHA-256 hex
 
     def test_hash_schema_deterministic(self, tmp_path):
-        from fraisier.dbops.schema import hash_schema
+        from fraisier.dbops.schema import _compute_schema_hash
 
         (tmp_path / "001.sql").write_text("CREATE TABLE x (id int);")
-        h1 = hash_schema(tmp_path)
-        h2 = hash_schema(tmp_path)
+        h1 = _compute_schema_hash(tmp_path)
+        h2 = _compute_schema_hash(tmp_path)
         assert h1 == h2
 
     def test_hash_schema_changes_with_content(self, tmp_path):
-        from fraisier.dbops.schema import hash_schema
+        from fraisier.dbops.schema import _compute_schema_hash
 
         (tmp_path / "001.sql").write_text("CREATE TABLE x (id int);")
-        h1 = hash_schema(tmp_path)
+        h1 = _compute_schema_hash(tmp_path)
 
         (tmp_path / "001.sql").write_text("CREATE TABLE x (id bigint);")
-        h2 = hash_schema(tmp_path)
+        h2 = _compute_schema_hash(tmp_path)
         assert h1 != h2
 
     def test_hash_schema_changes_with_new_file(self, tmp_path):
-        from fraisier.dbops.schema import hash_schema
+        from fraisier.dbops.schema import _compute_schema_hash
 
         (tmp_path / "001.sql").write_text("CREATE TABLE x (id int);")
-        h1 = hash_schema(tmp_path)
+        h1 = _compute_schema_hash(tmp_path)
 
         (tmp_path / "002.sql").write_text("ALTER TABLE x ADD col text;")
-        h2 = hash_schema(tmp_path)
+        h2 = _compute_schema_hash(tmp_path)
         assert h1 != h2
 
     def test_hash_schema_ignores_non_sql_files(self, tmp_path):
-        from fraisier.dbops.schema import hash_schema
+        from fraisier.dbops.schema import _compute_schema_hash
 
         (tmp_path / "001.sql").write_text("CREATE TABLE x (id int);")
-        h1 = hash_schema(tmp_path)
+        h1 = _compute_schema_hash(tmp_path)
 
         (tmp_path / "README.md").write_text("notes")
-        h2 = hash_schema(tmp_path)
+        h2 = _compute_schema_hash(tmp_path)
         assert h1 == h2
 
 

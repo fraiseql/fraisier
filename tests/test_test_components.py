@@ -13,11 +13,21 @@ from click.testing import CliRunner
 from fraisier.cli.test_components import (
     _check_remote_connectivity,
     _get_wrapper_path,
-    test_database,
-    test_git,
-    test_health,
-    test_install,
-    test_wrapper,
+)
+from fraisier.cli.test_components import (
+    test_database as cmd_database,
+)
+from fraisier.cli.test_components import (
+    test_git as cmd_git,
+)
+from fraisier.cli.test_components import (
+    test_health as cmd_health,
+)
+from fraisier.cli.test_components import (
+    test_install as cmd_install,
+)
+from fraisier.cli.test_components import (
+    test_wrapper as cmd_wrapper,
 )
 
 
@@ -49,7 +59,7 @@ class TestTestWrapper:
             mock_req.return_value = config
 
             # Missing command args - Click will enforce that args is required
-            result = runner.invoke(test_wrapper, ["api", "development"])
+            result = runner.invoke(cmd_wrapper, ["api", "development"])
             assert result.exit_code == 2  # Click's exit code for missing args
 
     def test_wrapper_invalid_type(self, runner):
@@ -63,7 +73,7 @@ class TestTestWrapper:
             mock_req.return_value = config
 
             result = runner.invoke(
-                test_wrapper, ["api", "development", "invalid", "restart"]
+                cmd_wrapper, ["api", "development", "invalid", "restart"]
             )
             assert result.exit_code == 1
             assert "Unknown wrapper type" in result.output
@@ -82,7 +92,7 @@ class TestTestWrapper:
             os.environ.pop("FRAISIER_SYSTEMCTL_WRAPPER", None)
 
             result = runner.invoke(
-                test_wrapper, ["api", "development", "systemctl", "restart"]
+                cmd_wrapper, ["api", "development", "systemctl", "restart"]
             )
             assert result.exit_code == 1
             assert "not set" in result.output
@@ -122,7 +132,7 @@ class TestTestInstall:
             config.get_fraise_environment.return_value = None
             mock_req.return_value = config
 
-            result = runner.invoke(test_install, ["api", "development"])
+            result = runner.invoke(cmd_install, ["api", "development"])
             assert result.exit_code == 1
             assert "not found" in result.output
 
@@ -138,7 +148,7 @@ class TestTestInstall:
             mock_req.return_value = config
             mock_get.return_value = None
 
-            result = runner.invoke(test_install, ["api", "development"])
+            result = runner.invoke(cmd_install, ["api", "development"])
             assert result.exit_code == 1
             assert "Unknown fraise type" in result.output
 
@@ -158,7 +168,7 @@ class TestTestInstall:
             deployer.install_command = None
             mock_get.return_value = deployer
 
-            result = runner.invoke(test_install, ["api", "development"])
+            result = runner.invoke(cmd_install, ["api", "development"])
             assert result.exit_code == 1
             assert "No install command configured" in result.output
 
@@ -179,7 +189,7 @@ class TestTestInstall:
             deployer.app_path = "/app"
             mock_get.return_value = deployer
 
-            result = runner.invoke(test_install, ["api", "development"])
+            result = runner.invoke(cmd_install, ["api", "development"])
             assert result.exit_code == 0
             assert "Install step successful" in result.output
 
@@ -197,7 +207,7 @@ class TestTestHealth:
             config.get_fraise_environment.return_value = None
             mock_req.return_value = config
 
-            result = runner.invoke(test_health, ["api", "development"])
+            result = runner.invoke(cmd_health, ["api", "development"])
             assert result.exit_code == 1
             assert "not found" in result.output
 
@@ -213,7 +223,7 @@ class TestTestHealth:
             mock_req.return_value = config
             mock_get.return_value = None
 
-            result = runner.invoke(test_health, ["api", "development"])
+            result = runner.invoke(cmd_health, ["api", "development"])
             assert result.exit_code == 1
             assert "Unknown fraise type" in result.output
 
@@ -232,7 +242,7 @@ class TestTestHealth:
             deployer.health_check_url = None
             mock_get.return_value = deployer
 
-            result = runner.invoke(test_health, ["api", "development"])
+            result = runner.invoke(cmd_health, ["api", "development"])
             assert result.exit_code == 1
             assert "configured for this" in result.output
 
@@ -254,7 +264,7 @@ class TestTestHealth:
             deployer.health_check = Mock(return_value=True)
             mock_get.return_value = deployer
 
-            result = runner.invoke(test_health, ["api", "development"])
+            result = runner.invoke(cmd_health, ["api", "development"])
             assert result.exit_code == 0
             assert "Health check passed" in result.output
 
@@ -276,7 +286,7 @@ class TestTestHealth:
             deployer.health_check = Mock(return_value=False)
             mock_get.return_value = deployer
 
-            result = runner.invoke(test_health, ["api", "development"])
+            result = runner.invoke(cmd_health, ["api", "development"])
             assert result.exit_code == 1
             assert "Health check failed" in result.output
 
@@ -294,7 +304,7 @@ class TestTestGit:
             config.get_fraise_environment.return_value = None
             mock_req.return_value = config
 
-            result = runner.invoke(test_git, ["api", "development"])
+            result = runner.invoke(cmd_git, ["api", "development"])
             assert result.exit_code == 1
             assert "not found" in result.output
 
@@ -310,7 +320,7 @@ class TestTestGit:
             mock_req.return_value = config
             mock_get.return_value = None
 
-            result = runner.invoke(test_git, ["api", "development"])
+            result = runner.invoke(cmd_git, ["api", "development"])
             assert result.exit_code == 1
             assert "Unknown fraise type" in result.output
 
@@ -328,7 +338,7 @@ class TestTestGit:
             deployer = Mock(spec=[])  # No bare_repo attribute
             mock_get.return_value = deployer
 
-            result = runner.invoke(test_git, ["api", "development"])
+            result = runner.invoke(cmd_git, ["api", "development"])
             assert result.exit_code == 1
             assert "does not support" in result.output
 
@@ -360,7 +370,7 @@ class TestTestGit:
 
                 with patch("subprocess.run") as mock_run:
                     mock_run.return_value = Mock(returncode=0)
-                    result = runner.invoke(test_git, ["api", "development"])
+                    result = runner.invoke(cmd_git, ["api", "development"])
                     # Note: The test may not pass all checks depending on state,
                     # but at minimum it should run without errors
                     assert result.exit_code in (0, 1)
@@ -380,7 +390,7 @@ class TestTestDatabase:
             config.get_fraise_environment.return_value = None
             mock_req.return_value = config
 
-            result = runner.invoke(test_database, ["api", "development"])
+            result = runner.invoke(cmd_database, ["api", "development"])
             assert result.exit_code == 1
             assert "not found" in result.output
 
@@ -396,7 +406,7 @@ class TestTestDatabase:
             mock_req.return_value = config
             mock_get.return_value = None
 
-            result = runner.invoke(test_database, ["api", "development"])
+            result = runner.invoke(cmd_database, ["api", "development"])
             assert result.exit_code == 1
             assert "Unknown fraise type" in result.output
 
@@ -415,7 +425,7 @@ class TestTestDatabase:
             deployer.database_config = None
             mock_get.return_value = deployer
 
-            result = runner.invoke(test_database, ["api", "development"])
+            result = runner.invoke(cmd_database, ["api", "development"])
             assert result.exit_code == 1
             assert "No database configuration" in result.output
 
@@ -435,7 +445,7 @@ class TestTestDatabase:
             mock_get.return_value = deployer
 
             with patch.dict("sys.modules", {"psycopg2": None}):
-                result = runner.invoke(test_database, ["api", "development"])
+                result = runner.invoke(cmd_database, ["api", "development"])
                 assert result.exit_code == 1
                 assert "psycopg2 not installed" in result.output
 

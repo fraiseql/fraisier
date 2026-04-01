@@ -1,12 +1,20 @@
 """Tests for file-based deployment locking (fcntl.flock)."""
 
 import multiprocessing
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from fraisier.errors import DeploymentLockError
 from fraisier.locking import file_deployment_lock, is_deployment_locked
+
+
+def _hold_lock(lock_dir: Path, ready_event, release_event) -> None:
+    """Hold a file lock until release_event is set. Must be module-level for spawn."""
+    with file_deployment_lock("myfraise", lock_dir=lock_dir):
+        ready_event.set()
+        release_event.wait(timeout=5)
 
 
 class TestFileDeploymentLock:
@@ -97,17 +105,10 @@ class TestFileDeploymentLock:
 
     def test_cross_process_lock_contention(self, tmp_path):
         """A second process cannot acquire a lock held by the first."""
-
-        def hold_lock(lock_dir, ready_event, release_event):
-            with file_deployment_lock("myfraise", lock_dir=lock_dir):
-                ready_event.set()
-                release_event.wait(timeout=5)
-
-        ready = multiprocessing.Event()
-        release = multiprocessing.Event()
-        proc = multiprocessing.Process(
-            target=hold_lock, args=(tmp_path, ready, release)
-        )
+        ctx = multiprocessing.get_context("spawn")
+        ready = ctx.Event()
+        release = ctx.Event()
+        proc = ctx.Process(target=_hold_lock, args=(tmp_path, ready, release))
         proc.start()
 
         try:

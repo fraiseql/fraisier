@@ -14,10 +14,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def hash_schema(schema_dir: Path) -> str:
+def _compute_schema_hash(schema_dir: Path) -> str:
     """Compute SHA-256 hash of all ``*.sql`` files in *schema_dir*.
 
     Files are sorted by name to ensure deterministic ordering.
+    """
+    h = hashlib.sha256()
+    for sql_file in sorted(schema_dir.glob("*.sql")):
+        h.update(sql_file.name.encode())
+        h.update(sql_file.read_bytes())
+    return h.hexdigest()
+
+
+def hash_schema(schema_dir: Path) -> str:
+    """Compute SHA-256 hash of all ``*.sql`` files in *schema_dir*.
 
     .. deprecated::
         Use ``confiture.core.builder.SchemaBuilder.compute_hash()``
@@ -30,11 +40,7 @@ def hash_schema(schema_dir: Path) -> str:
         DeprecationWarning,
         stacklevel=2,
     )
-    h = hashlib.sha256()
-    for sql_file in sorted(schema_dir.glob("*.sql")):
-        h.update(sql_file.name.encode())
-        h.update(sql_file.read_bytes())
-    return h.hexdigest()
+    return _compute_schema_hash(schema_dir)
 
 
 @dataclass
@@ -61,7 +67,7 @@ def compare_with_template(
     schema has changed since the last template was created (or if no
     stored hash exists).
     """
-    current = hash_schema(schema_dir)
+    current = _compute_schema_hash(schema_dir)
 
     stored = ""
     if hash_file.exists():
