@@ -16,7 +16,7 @@
 {% for rule in sudoers_rules %}
 # {{ rule.description }}
 # Environments: {{ rule.environments | join(', ') }}
-{{ rule.from_user }} ALL=({{ rule.as_user }}) NOPASSWD: {{ rule.cmd }}
+{{ rule.from_user }} ALL=({{ rule.as_user }}) NOPASSWD: {{ rule.cmd }} *
 
 {% endfor %}
 {% endif %}

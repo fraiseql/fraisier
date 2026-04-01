@@ -2232,7 +2232,7 @@ fraises:
 
         content = (tmp_path / "output" / "sudoers").read_text()
         assert "ALL=(myapp)" in content
-        assert "/home/myapp/.local/bin/uv sync --frozen" in content
+        assert "/home/myapp/.local/bin/uv sync --frozen *" in content
 
     def test_sudoers_omits_install_when_no_user(self, tmp_path):
         """Sudoers omits install rule when install.user is not set (#44)."""
