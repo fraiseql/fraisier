@@ -1845,17 +1845,13 @@ fraises:
         content = (tmp_path / "output" / "sudoers").read_text()
         # Development uses default deploy_user
         assert "default-deployer" in content
-        assert "my_api_development" in content
         # Production uses per-env deploy_user
         assert "prod-deployer" in content
-        assert "my_api_production" in content
-        # Per-env command lines use prod-deployer, not default-deployer
-        for line in content.splitlines():
-            if "my_api_production" in line and not line.startswith("#"):
-                assert "prod-deployer" in line
+        # Both users should have wrapper rule with wildcard
+        assert "/usr/local/libexec/fraisier/systemctl-tp *" in content
 
     def test_sudoers_service_names_include_project_prefix(self, tmp_path):
-        """Service names in sudoers must match renderer: {project}_{fraise}_{env}."""
+        """Wrapper uses project prefix for all allowed services."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -1878,15 +1874,15 @@ fraises:
         renderer.render()
 
         content = (tmp_path / "output" / "sudoers").read_text()
-        # Must use project-prefixed service name
-        assert "myproj_my_api_production.service" in content
-        # Must NOT use unprefixed service name
-        for line in content.splitlines():
-            if "systemctl" in line and "daemon-reload" not in line:
-                assert "myproj_my_api_production" in line
+        # Wrapper rule grants access to wrapper with wildcard
+        wrapper_rule = (
+            "deployer ALL=(root) NOPASSWD: "
+            "/usr/local/libexec/fraisier/systemctl-myproj *"
+        )
+        assert wrapper_rule in content
 
-    def test_sudoers_includes_journalctl(self, tmp_path):
-        """Sudoers grants journalctl access for each service (#41)."""
+    def test_sudoers_wrapper_handles_all_services(self, tmp_path):
+        """Sudoers wrapper rule handles all services for the project."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -1911,12 +1907,16 @@ fraises:
         renderer.render()
 
         content = (tmp_path / "output" / "sudoers").read_text()
-        assert "journalctl" in content
-        assert "myproj_my_api_production.service" in content
-        assert "myproj_my_api_development.service" in content
-        # Each env gets its own journalctl rule
-        journal_lines = [line for line in content.splitlines() if "journalctl" in line]
-        assert len(journal_lines) >= 2
+        # Wrapper rule handles all services and actions
+        wrapper_rule = (
+            "deployer ALL=(root) NOPASSWD: "
+            "/usr/local/libexec/fraisier/systemctl-myproj *"
+        )
+        assert wrapper_rule in content
+        # Systemctl wrapper script has the allowed services list
+        wrapper_content = (tmp_path / "output" / "systemctl-wrapper.sh").read_text()
+        assert "myproj_my_api_production.service" in wrapper_content
+        assert "myproj_my_api_development.service" in wrapper_content
 
     def test_sudoers_includes_wrapper_for_rebuild_strategy(self, tmp_path):
         """Sudoers grants wrapper access for rebuild database strategy (#41)."""

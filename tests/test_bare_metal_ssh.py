@@ -156,13 +156,13 @@ class TestServiceManagement:
         return BareMetalProvider(config)
 
     def test_start_service_calls_systemctl_start(self):
-        """start_service() runs 'systemctl start <name>.service' via run_command()."""
+        """start_service() runs 'sudo systemctl start <name>.service' via run_command()."""
         provider = self._make_provider()
 
         with patch.object(provider, "run_command", return_value=(0, "", "")) as mock:
             result = provider.start_service("myapp")
 
-        mock.assert_called_once_with("systemctl start myapp.service", timeout=60)
+        mock.assert_called_once_with("sudo systemctl start myapp.service", timeout=60)
         assert result is True
 
     def test_start_service_returns_false_on_failure(self):
@@ -177,13 +177,13 @@ class TestServiceManagement:
         assert result is False
 
     def test_stop_service_calls_systemctl_stop(self):
-        """stop_service() runs 'systemctl stop <name>.service' via run_command()."""
+        """stop_service() runs 'sudo systemctl stop <name>.service' via run_command()."""
         provider = self._make_provider()
 
         with patch.object(provider, "run_command", return_value=(0, "", "")) as mock:
             result = provider.stop_service("myapp")
 
-        mock.assert_called_once_with("systemctl stop myapp.service", timeout=60)
+        mock.assert_called_once_with("sudo systemctl stop myapp.service", timeout=60)
         assert result is True
 
     def test_stop_service_returns_false_on_failure(self):
@@ -202,7 +202,7 @@ class TestServiceManagement:
         with patch.object(provider, "run_command", return_value=(0, "", "")) as mock:
             result = provider.restart_service("myapp")
 
-        mock.assert_called_once_with("systemctl restart myapp.service", timeout=60)
+        mock.assert_called_once_with("sudo systemctl restart myapp.service", timeout=60)
         assert result is True
 
     def test_restart_service_returns_false_on_failure(self):
@@ -225,7 +225,7 @@ class TestServiceManagement:
         ) as mock:
             result = provider.service_status("myapp")
 
-        mock.assert_called_once_with("systemctl is-active myapp.service")
+        mock.assert_called_once_with("sudo systemctl is-active myapp.service")
         assert result == {"service": "myapp", "active": True, "state": "active"}
 
     def test_service_status_inactive(self):
@@ -253,7 +253,7 @@ class TestServiceManagement:
         with patch.object(provider, "run_command", return_value=(0, "", "")) as mock:
             provider.start_service("myapp", timeout=120)
 
-        mock.assert_called_once_with("systemctl start myapp.service", timeout=120)
+        mock.assert_called_once_with("sudo systemctl start myapp.service", timeout=120)
 
     def test_service_methods_raise_on_run_command_error(self):
         """Service methods propagate RuntimeError from run_command()."""

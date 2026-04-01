@@ -129,6 +129,21 @@ def _collect_allowed_services(
     return services
 
 
+def _collect_deploy_users(
+    config: FraisierConfig, fraises_list: list[dict[str, Any]]
+) -> list[str]:
+    """Collect unique deploy users from all environments.
+
+    Returns a list of unique deploy usernames, preserving order of first appearance.
+    """
+    users: dict[str, None] = {}
+    for fraise in fraises_list:
+        for env_config in fraise.get("environments", {}).values():
+            user = env_config.get("deploy_user", config.scaffold.deploy_user)
+            users[user] = None
+    return list(users.keys())
+
+
 def _any_fraise_has_database(fraises_list: list[dict[str, Any]]) -> bool:
     """Return True if any fraise environment has a database section."""
     for fraise in fraises_list:
@@ -162,6 +177,7 @@ def _build_context(config: FraisierConfig) -> dict[str, Any]:
         "pg_allowed_databases": _collect_pg_allowed_databases(fraises_list),
         "has_database": _any_fraise_has_database(fraises_list),
         "allowed_services": _collect_allowed_services(project_name, fraises_list),
+        "deploy_users": _collect_deploy_users(config, fraises_list),
     }
 
 

@@ -199,7 +199,7 @@ class TestBareMetalProvider:
         ) as mock_run:
             result = provider.stop_service("api")
             assert result is True
-            mock_run.assert_called_once_with("systemctl stop api.service", timeout=60)
+            mock_run.assert_called_once_with("sudo systemctl stop api.service", timeout=60)
 
     def test_stop_service_failure(self):
         """Test stop_service returns False on failure."""
@@ -280,16 +280,16 @@ class TestBareMetalProvider:
             provider, "run_command", return_value=(0, "", "")
         ) as mock_run:
             provider.start_service("myapi")
-            assert mock_run.call_args[0][0] == "systemctl start myapi.service"
+            assert mock_run.call_args[0][0] == "sudo systemctl start myapi.service"
 
             provider.stop_service("myapi")
-            assert mock_run.call_args[0][0] == "systemctl stop myapi.service"
+            assert mock_run.call_args[0][0] == "sudo systemctl stop myapi.service"
 
             provider.restart_service("myapi")
-            assert mock_run.call_args[0][0] == "systemctl restart myapi.service"
+            assert mock_run.call_args[0][0] == "sudo systemctl restart myapi.service"
 
             provider.enable_service("myapi")
-            assert mock_run.call_args[0][0] == "systemctl enable myapi.service"
+            assert mock_run.call_args[0][0] == "sudo systemctl enable myapi.service"
 
     @pytest.mark.asyncio
     async def test_connect_success_with_mocked_asyncssh(self):
