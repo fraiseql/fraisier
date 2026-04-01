@@ -46,6 +46,85 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.lock_timeout = config.get("lock_timeout", 300)
         self._migrations_applied: int = 0
 
+    def _validate_wrapper_scripts(self) -> None:
+        """Validate that required wrapper scripts exist and are executable.
+
+        Raises DeploymentError if any required wrapper script is missing or
+        not executable.
+        """
+        errors = []
+
+        # Check systemctl wrapper
+        systemctl_wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
+        if systemctl_wrapper:
+            wrapper_path = Path(systemctl_wrapper)
+            if not wrapper_path.exists():
+                errors.append(
+                    {
+                        "wrapper": "systemctl",
+                        "path": systemctl_wrapper,
+                        "issue": "File not found",
+                        "fix": (
+                            f"sudo cp scripts/generated/systemctl-wrapper.sh "
+                            f"{systemctl_wrapper}"
+                        ),
+                    }
+                )
+            elif not os.access(systemctl_wrapper, os.X_OK):
+                errors.append(
+                    {
+                        "wrapper": "systemctl",
+                        "path": systemctl_wrapper,
+                        "issue": "Not executable",
+                        "fix": f"sudo chmod 755 {systemctl_wrapper}",
+                    }
+                )
+
+        # Check PostgreSQL wrapper
+        pg_wrapper = os.environ.get("FRAISIER_PG_WRAPPER")
+        if pg_wrapper:
+            wrapper_path = Path(pg_wrapper)
+            if not wrapper_path.exists():
+                errors.append(
+                    {
+                        "wrapper": "pgadmin",
+                        "path": pg_wrapper,
+                        "issue": "File not found",
+                        "fix": f"sudo cp scripts/generated/pg-wrapper.sh {pg_wrapper}",
+                    }
+                )
+            elif not os.access(pg_wrapper, os.X_OK):
+                errors.append(
+                    {
+                        "wrapper": "pgadmin",
+                        "path": pg_wrapper,
+                        "issue": "Not executable",
+                        "fix": f"sudo chmod 755 {pg_wrapper}",
+                    }
+                )
+
+        if errors:
+            error_details = {
+                f"wrapper_{i + 1}": {
+                    "wrapper": error["wrapper"],
+                    "path": error["path"],
+                    "issue": error["issue"],
+                    "remediation": error["fix"],
+                }
+                for i, error in enumerate(errors)
+            }
+
+            msg_lines = ["Required wrapper scripts are missing or not executable:"]
+            msg_lines.extend(
+                f"  - {error['wrapper']}: {error['issue']} at {error['path']}"
+                for error in errors
+            )
+
+            raise DeploymentError(
+                "\n".join(msg_lines),
+                context=error_details,
+            )
+
     def execute(self) -> DeploymentResult:
         """Execute API deployment."""
         start_time = time.time()
@@ -54,6 +133,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         db_pk = self._start_db_record()
 
         timeout = self.config.get("timeout", 600)
+
+        # Validate wrapper scripts before deployment starts
+        self._validate_wrapper_scripts()
 
         try:
             with deployment_timeout(timeout):
