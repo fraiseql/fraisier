@@ -62,6 +62,63 @@ class TestHTTPHealthChecker:
         assert result.success is False
         assert "503" in (result.message or "")
 
+    def test_http_url_error_is_transient(self):
+        """URLError (network failure) is categorized as transient."""
+        import urllib.error
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.URLError("Connection refused"),
+        ):
+            checker = HTTPHealthChecker("http://localhost:8000/health")
+            result = checker.check(timeout=5.0)
+
+        assert result.success is False
+        assert result.transient is True
+        assert "not yet reachable" in (result.message or "").lower()
+
+    def test_http_5xx_is_transient(self):
+        """HTTP 5xx errors are categorized as transient (server error)."""
+        import urllib.error
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(
+                url="http://localhost/health",
+                code=503,
+                msg="Service Unavailable",
+                hdrs=None,
+                fp=None,
+            ),
+        ):
+            checker = HTTPHealthChecker("http://localhost:8000/health")
+            result = checker.check(timeout=5.0)
+
+        assert result.success is False
+        assert result.transient is True
+        assert "may recover" in (result.message or "").lower()
+
+    def test_http_4xx_is_fatal(self):
+        """HTTP 4xx errors are categorized as fatal (client error)."""
+        import urllib.error
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(
+                url="http://localhost/health",
+                code=404,
+                msg="Not Found",
+                hdrs=None,
+                fp=None,
+            ),
+        ):
+            checker = HTTPHealthChecker("http://localhost:8000/health")
+            result = checker.check(timeout=5.0)
+
+        assert result.success is False
+        assert result.transient is False
+        assert "check health endpoint" in (result.message or "").lower()
+
 
 class TestTCPHealthChecker:
     """Tests for TCPHealthChecker."""
@@ -241,6 +298,116 @@ class TestHealthCheckManager:
 
         assert result.success is True
         assert checker.check.call_count == 1
+
+    def test_manager_transient_error_logged_at_info(self):
+        """Transient errors (service warming up) log at INFO level."""
+        checker = MagicMock()
+        transient_fail = HealthCheckResult(
+            success=False,
+            check_type="http",
+            duration=0.1,
+            message="Service not yet reachable",
+            transient=True,
+        )
+        ok = HealthCheckResult(
+            success=True, check_type="http", duration=0.1, message="ok"
+        )
+        checker.check.side_effect = [transient_fail, ok]
+        checker.check_type = "http"
+
+        with patch("time.sleep"):
+            manager = HealthCheckManager(provider="test")
+            with patch.object(manager.logger, "info") as mock_info:
+                result = manager.check_with_retries(
+                    checker, max_retries=3, initial_delay=0.01
+                )
+
+            assert result.success is True
+            # Verify that the transient failure was logged at info, not warning
+            info_calls = [call[0][0] for call in mock_info.call_args_list]
+            assert any("not yet ready" in str(c) for c in info_calls)
+
+    def test_manager_fatal_error_logged_at_warning(self):
+        """Fatal errors (bad config) log at WARNING level."""
+        checker = MagicMock()
+        fatal_fail = HealthCheckResult(
+            success=False,
+            check_type="http",
+            duration=0.1,
+            message="HTTP 404: check endpoint",
+            transient=False,
+        )
+        ok = HealthCheckResult(
+            success=True, check_type="http", duration=0.1, message="ok"
+        )
+        checker.check.side_effect = [fatal_fail, ok]
+        checker.check_type = "http"
+
+        with patch("time.sleep"):
+            manager = HealthCheckManager(provider="test")
+            with patch.object(manager.logger, "warning") as mock_warning:
+                result = manager.check_with_retries(
+                    checker, max_retries=3, initial_delay=0.01
+                )
+
+            assert result.success is True
+            # Verify that the fatal failure was logged at warning
+            warning_calls = [call[0][0] for call in mock_warning.call_args_list]
+            assert any("failed on attempt" in str(c) for c in warning_calls)
+
+    def test_manager_shows_startup_time_on_delayed_success(self):
+        """Success after retries shows startup time."""
+        checker = MagicMock()
+        fail = HealthCheckResult(
+            success=False,
+            check_type="http",
+            duration=0.1,
+            message="fail",
+            transient=True,
+        )
+        ok = HealthCheckResult(
+            success=True, check_type="http", duration=0.1, message="ok"
+        )
+        checker.check.side_effect = [fail, ok]
+        checker.check_type = "http"
+
+        with patch("time.sleep"):
+            manager = HealthCheckManager(provider="test")
+            with patch.object(manager.logger, "info") as mock_info:
+                result = manager.check_with_retries(
+                    checker, max_retries=3, initial_delay=0.01
+                )
+
+            assert result.success is True
+            # Verify success message contains startup time info
+            success_calls = [call[0][0] for call in mock_info.call_args_list]
+            assert any("took" in str(c) and "ready" in str(c) for c in success_calls)
+
+    def test_manager_shows_attempt_count_x_y(self):
+        """Attempt logs show 'X/Y' format."""
+        checker = MagicMock()
+        fail = HealthCheckResult(
+            success=False,
+            check_type="http",
+            duration=0.1,
+            message="fail",
+            transient=True,
+        )
+        checker.check.return_value = fail
+        checker.check_type = "http"
+
+        with patch("time.sleep"):
+            manager = HealthCheckManager(provider="test")
+            with patch.object(manager.logger, "info") as mock_info:
+                manager.check_with_retries(
+                    checker, max_retries=3, initial_delay=0.01
+                )
+
+            # Verify that info logs contain "X/Y" format
+            info_calls = [call[0][0] for call in mock_info.call_args_list]
+            attempt_logs = [c for c in info_calls if "attempt" in str(c).lower()]
+            assert any("1/3" in str(c) for c in attempt_logs)
+            assert any("2/3" in str(c) for c in attempt_logs)
 
     @pytest.mark.asyncio
     async def test_async_check_with_retries_exponential_backoff(self):

@@ -37,6 +37,7 @@ class HealthCheckResult:
         duration: Check duration in seconds
         message: Additional details or error message
         timestamp: When check was performed
+        transient: Whether failure is transient (True), fatal (False), or unknown (None)
     """
 
     def __init__(
@@ -45,6 +46,7 @@ class HealthCheckResult:
         check_type: str,
         duration: float,
         message: str | None = None,
+        transient: bool | None = None,
     ):
         """Initialize health check result.
 
@@ -53,12 +55,15 @@ class HealthCheckResult:
             check_type: Type of check (http, tcp, exec, status_api, etc.)
             duration: Check duration in seconds
             message: Details or error message
+            transient: Whether failure is expected during startup (True), likely
+                a config problem (False), or unknown (None)
         """
         self.success = success
         self.check_type = check_type
         self.duration = duration
         self.message = message
         self.timestamp = time.time()
+        self.transient = transient
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging/serialization."""
@@ -68,6 +73,7 @@ class HealthCheckResult:
             "duration": self.duration,
             "message": self.message,
             "timestamp": self.timestamp,
+            "transient": self.transient,
         }
 
 
@@ -110,7 +116,7 @@ class HTTPHealthChecker(HealthChecker):
             timeout: Request timeout in seconds
 
         Returns:
-            HealthCheckResult with HTTP status
+            HealthCheckResult with HTTP status, categorizing transient vs fatal failures
         """
         start = time.time()
         try:
@@ -124,11 +130,29 @@ class HTTPHealthChecker(HealthChecker):
             )
         except urllib.error.HTTPError as e:
             duration = time.time() - start
+            is_transient = e.code >= 500
+            if is_transient:
+                msg = f"HTTP {e.code}: {e.reason} (server error — may recover on retry)"
+            else:
+                msg = (
+                    f"HTTP {e.code}: {e.reason} "
+                    "(check health endpoint configuration)"
+                )
             return HealthCheckResult(
                 success=False,
                 check_type=self.check_type,
                 duration=duration,
-                message=f"HTTP {e.code}: {e.reason}",
+                message=msg,
+                transient=is_transient,
+            )
+        except urllib.error.URLError as e:
+            duration = time.time() - start
+            return HealthCheckResult(
+                success=False,
+                check_type=self.check_type,
+                duration=duration,
+                message=f"Service not yet reachable: {e.reason}",
+                transient=True,
             )
         except Exception as e:
             duration = time.time() - start
@@ -318,6 +342,7 @@ class HealthCheckManager:
         """
         last_result = None
         delay = initial_delay
+        start_time = time.time()
 
         for attempt in range(max_retries):
             try:
@@ -329,21 +354,41 @@ class HealthCheckManager:
                     last_result = checker.check(timeout=timeout)
 
                     if last_result.success:
-                        self.logger.info(
-                            f"Health check passed on attempt {attempt + 1}",
-                            duration=last_result.duration,
-                        )
+                        if attempt == 0:
+                            self.logger.info(
+                                f"Health check passed on attempt {attempt + 1}/"
+                                f"{max_retries}",
+                                duration=last_result.duration,
+                            )
+                        else:
+                            elapsed = time.time() - start_time
+                            self.logger.info(
+                                f"Health check passed on attempt {attempt + 1}/"
+                                f"{max_retries} "
+                                f"(service took {elapsed:.1f}s to become ready)",
+                                duration=last_result.duration,
+                            )
                         return last_result
 
-                    self.logger.warning(
-                        f"Health check failed on attempt {attempt + 1}",
-                        check_message=last_result.message,
-                        duration=last_result.duration,
-                    )
+                    # Categorize failure: log level depends on transient flag
+                    if last_result.transient is True:
+                        self.logger.info(
+                            f"Health check attempt {attempt + 1}/{max_retries}: "
+                            f"service not yet ready — {last_result.message}",
+                            duration=last_result.duration,
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Health check failed on attempt {attempt + 1}/"
+                            f"{max_retries}",
+                            check_message=last_result.message,
+                            duration=last_result.duration,
+                        )
 
             except Exception as e:
                 self.logger.error(
-                    f"Error during health check attempt {attempt + 1}: {e}",
+                    f"Error during health check attempt {attempt + 1}/"
+                    f"{max_retries}: {e}",
                     _exc_info=True,
                 )
 
@@ -363,8 +408,16 @@ class HealthCheckManager:
                 message=f"All {max_retries} health check attempts failed",
             )
 
+        # Provide recovery hint based on error category
+        if last_result.transient is True:
+            hint = "Service failed to start within expected time. Check service logs."
+        elif last_result.transient is False:
+            hint = "This may be a configuration issue. Check the health endpoint."
+        else:
+            hint = "Check service logs for details."
+
         self.logger.error(
-            f"Health check failed after {max_retries} attempts",
+            f"Health check failed after {max_retries} attempts. {hint}",
             check_message=last_result.message,
         )
         return last_result
