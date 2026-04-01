@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from fraisier.dbops._validation import validate_service_name
@@ -27,11 +28,12 @@ class SystemdServiceManager:
             subprocess.CalledProcessError: If systemctl fails.
         """
         validate_service_name(service_name)
-        self.runner.run(
-            ["sudo", "/usr/bin/systemctl", "stop", service_name],
-            timeout=timeout,
-            check=True,
-        )
+        wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
+        if wrapper:
+            cmd = [wrapper, "stop", service_name]
+        else:
+            cmd = ["sudo", "/usr/bin/systemctl", "stop", service_name]
+        self.runner.run(cmd, timeout=timeout, check=True)
 
     def restart(self, service_name: str, timeout: int = 60) -> None:
         """Restart a systemd service.
@@ -41,11 +43,12 @@ class SystemdServiceManager:
             subprocess.CalledProcessError: If systemctl fails.
         """
         validate_service_name(service_name)
-        self.runner.run(
-            ["sudo", "systemctl", "restart", service_name],
-            timeout=timeout,
-            check=True,
-        )
+        wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
+        if wrapper:
+            cmd = [wrapper, "restart", service_name]
+        else:
+            cmd = ["sudo", "/usr/bin/systemctl", "restart", service_name]
+        self.runner.run(cmd, timeout=timeout, check=True)
 
     def status(self, service_name: str) -> str:
         """Return the active state of a systemd service (e.g. 'active', 'inactive').
@@ -54,9 +57,10 @@ class SystemdServiceManager:
             ValueError: If service_name contains invalid characters.
         """
         validate_service_name(service_name)
-        result = self.runner.run(
-            ["sudo", "systemctl", "is-active", service_name],
-            timeout=30,
-            check=False,
-        )
+        wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
+        if wrapper:
+            cmd = [wrapper, "is-active", service_name]
+        else:
+            cmd = ["sudo", "/usr/bin/systemctl", "is-active", service_name]
+        result = self.runner.run(cmd, timeout=30, check=False)
         return result.stdout.strip()
