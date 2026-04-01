@@ -13,7 +13,7 @@ RestartSec=5
 WatchdogSec=120
 
 # Environment
-EnvironmentFile=/etc/fraisier/webhook.env
+EnvironmentFile=/etc/fraisier/{{ project_name }}.webhook.env
 {% if pg_allowed_databases %}
 Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_name }}
 {% endif %}

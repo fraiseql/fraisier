@@ -310,8 +310,8 @@ class TestPlanWebhookService:
 
         assert len(actions) == 1
         assert actions[0].category == "systemd"
-        assert "fraisier-webhook" in actions[0].description
-        assert "/etc/systemd/system/fraisier-webhook.service" in " ".join(
+        assert "fraisier-tp-webhook" in actions[0].description
+        assert "/etc/systemd/system/fraisier-tp-webhook.service" in " ".join(
             actions[0].command
         )
 
@@ -324,7 +324,7 @@ class TestPlanEnvFiles:
 
         assert len(actions) == 1
         assert actions[0].category == "env"
-        assert "/etc/fraisier/webhook.env" in " ".join(actions[0].command)
+        assert "/etc/fraisier/tp.webhook.env" in " ".join(actions[0].command)
 
     def test_has_idempotency_check(self, tmp_path):
         config = _make_config(tmp_path, MINIMAL_CONFIG)
@@ -491,7 +491,7 @@ class TestEnvFile:
         setup = ServerSetup(config, FakeRunner())
         setup._write_env_file()
 
-        output = Path(config.scaffold.output_dir) / "fraisier-webhook.env"
+        output = Path(config.scaffold.output_dir) / "fraisier-tp.webhook.env"
         assert output.exists()
         content = output.read_text()
         assert "FRAISIER_WEBHOOK_SECRET=" in content
@@ -506,7 +506,7 @@ class TestWebhookTemplate:
 
         renderer = ScaffoldRenderer(config)
         files = renderer.render(dry_run=True)
-        assert "fraisier-webhook.service" in files
+        assert "fraisier-tp-webhook.service" in files
 
     def test_webhook_template_contains_readwrite_paths(self, tmp_path):
         config = _make_config(tmp_path, MINIMAL_CONFIG)
@@ -515,7 +515,7 @@ class TestWebhookTemplate:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        output = Path(config.scaffold.output_dir) / "fraisier-webhook.service"
+        output = Path(config.scaffold.output_dir) / "fraisier-tp-webhook.service"
         assert output.exists()
         content = output.read_text()
         assert "ReadWritePaths=/var/www/my-api-dev" in content

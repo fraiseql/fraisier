@@ -34,7 +34,6 @@ _CORE_TEMPLATES = [
     "core/db_reset.sh.j2",
     "core/db_deploy.sh.j2",
     "core/poll-deploy.service.j2",
-    "core/fraisier-webhook.service.j2",
 ]
 
 # Provider-specific templates
@@ -282,6 +281,26 @@ def _infer_project_name(config: FraisierConfig) -> str:
     return config.project_name
 
 
+def _collect_unique_servers(config: FraisierConfig) -> list[str]:
+    """Return unique server values from environments config, preserving order."""
+    seen: dict[str, None] = {}
+    for env_config in config.environments.values():
+        if isinstance(env_config, dict):
+            server = env_config.get("server")
+            if server:
+                seen[server] = None
+    return list(seen)
+
+
+def _server_slug(server: str) -> str:
+    """Convert a server identifier to a safe filename component.
+
+    Example: ``prod.myserver.com`` → ``prod-myserver-com``
+    """
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", server).lower().strip("-")
+    return slug
+
+
 class ScaffoldRenderer:
     """Renders Jinja2 templates using fraises.yaml context."""
 
@@ -371,6 +390,9 @@ class ScaffoldRenderer:
             if not dry_run:
                 self._render_template("core/systemctl-wrapper.sh.j2", systemctl_out)
 
+        # Webhook service(s) — rendered dynamically to include project name
+        rendered_files.extend(self._render_webhook_services(dry_run))
+
         # PostgreSQL logging config (one per unique environment with a database)
         rendered_files.extend(self._collect_pg_logging(dry_run))
 
@@ -404,6 +426,51 @@ class ScaffoldRenderer:
                 self._render_template(timer_tpl, timer_out)
 
         return rendered_files
+
+    def _webhook_service_name(self, server_slug: str | None = None) -> str:
+        """Return the output filename for a webhook service unit.
+
+        With no slug: ``fraisier-{project}-webhook.service`` (single-server).
+        With a slug: ``fraisier-{project}-webhook-{slug}.service`` (per-server).
+        """
+        project = self.context["project_name"]
+        if server_slug:
+            return f"fraisier-{project}-webhook-{server_slug}.service"
+        return f"fraisier-{project}-webhook.service"
+
+    def _render_webhook_services(self, dry_run: bool) -> list[str]:
+        """Render webhook service unit(s) with project-specific naming.
+
+        Behaviour:
+        - ``--server`` given → one file, context already filtered by server
+        - No ``--server``, no ``environments.server`` config → one file, all paths
+        - No ``--server``, ``environments.server`` configured → one file per server,
+          each with only that server's paths
+        """
+        servers = _collect_unique_servers(self.config)
+
+        if self.server is not None or not servers:
+            # Single file: either explicit server filter or no server config
+            out_name = self._webhook_service_name()
+            if not dry_run:
+                self._render_template("core/fraisier-webhook.service.j2", out_name)
+            return [out_name]
+
+        # Auto per-server: one file per unique server
+        rendered: list[str] = []
+        for server in servers:
+            slug = _server_slug(server)
+            out_name = self._webhook_service_name(slug)
+            if not dry_run:
+                server_context = _build_context(self.config, server)
+                try:
+                    template = self.env.get_template("core/fraisier-webhook.service.j2")
+                    content = template.render(**server_context)
+                except jinja2.TemplateNotFound:
+                    content = "# Placeholder: fraisier-webhook.service.j2\n"
+                self._write_output(out_name, content)
+            rendered.append(out_name)
+        return rendered
 
     def _render_template(self, template_path: str, out_name: str) -> None:
         """Render a single template to output_dir."""

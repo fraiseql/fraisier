@@ -349,11 +349,13 @@ class ServerSetup:
 
     def _plan_webhook_service(self) -> list[SetupAction]:
         output_dir = self.config.scaffold.output_dir
-        src = f"{output_dir}/fraisier-webhook.service"
-        dst = "/etc/systemd/system/fraisier-webhook.service"
+        project = self.config.project_name
+        svc_name = f"fraisier-{project}-webhook.service"
+        src = f"{output_dir}/{svc_name}"
+        dst = f"/etc/systemd/system/{svc_name}"
         return [
             SetupAction(
-                description="Install fraisier-webhook.service",
+                description=f"Install {svc_name}",
                 command=["sudo", "cp", src, dst],
                 category="systemd",
             )
@@ -361,8 +363,10 @@ class ServerSetup:
 
     def _plan_env_files(self) -> list[SetupAction]:
         output_dir = self.config.scaffold.output_dir
-        src = f"{output_dir}/fraisier-webhook.env"
-        dst = "/etc/fraisier/webhook.env"
+        project = self.config.project_name
+        env_file = f"fraisier-{project}.webhook.env"
+        src = f"{output_dir}/{env_file}"
+        dst = f"/etc/fraisier/{project}.webhook.env"
         return [
             SetupAction(
                 description="Install webhook env file",
@@ -434,6 +438,7 @@ class ServerSetup:
         return actions
 
     def _plan_systemd_reload(self) -> list[SetupAction]:
+        project_name = self.config.project_name
         actions = [
             SetupAction(
                 description="Reload systemd daemon",
@@ -441,8 +446,13 @@ class ServerSetup:
                 category="systemd",
             ),
             SetupAction(
-                description="Enable fraisier-webhook.service",
-                command=["sudo", "systemctl", "enable", "fraisier-webhook.service"],
+                description=f"Enable fraisier-{project_name}-webhook.service",
+                command=[
+                    "sudo",
+                    "systemctl",
+                    "enable",
+                    f"fraisier-{project_name}-webhook.service",
+                ],
                 category="systemd",
             ),
         ]
@@ -545,6 +555,8 @@ class ServerSetup:
             f"FRAISIER_CONFIG={config_path}\n"
             "FRAISIER_PORT=8080\n"
         )
-        output = Path(self.config.scaffold.output_dir) / "fraisier-webhook.env"
+        project = self.config.project_name
+        env_filename = f"fraisier-{project}.webhook.env"
+        output = Path(self.config.scaffold.output_dir) / env_filename
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(content)

@@ -2480,7 +2480,7 @@ fraises:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
         assert "FRAISIER_PG_WRAPPER=" in content
         assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
 
@@ -2510,7 +2510,7 @@ fraises:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
         assert "FRAISIER_PG_WRAPPER" not in content
 
 
@@ -2547,12 +2547,12 @@ fraises:
         renderer = ScaffoldRenderer(config, server="server-1")
         renderer.render()
 
-        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
         assert "ReadWritePaths=/var/www/dev" in content
         assert "ReadWritePaths=/var/www/prod" not in content
 
-    def test_webhook_without_server_includes_all_paths(self, tmp_path):
-        """Without --server, webhook includes paths for all environments (backward compatible)."""
+    def test_webhook_without_server_generates_per_server_files(self, tmp_path):
+        """Without --server, when environments.server is configured, one file per server is generated."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -2581,9 +2581,74 @@ fraises:
         renderer = ScaffoldRenderer(config)  # No server specified
         renderer.render()
 
-        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
-        assert "ReadWritePaths=/var/www/dev" in content
-        assert "ReadWritePaths=/var/www/prod" in content
+        dev_content = (tmp_path / "output" / "fraisier-myproj-webhook-server-1.service").read_text()
+        prod_content = (tmp_path / "output" / "fraisier-myproj-webhook-server-2.service").read_text()
+        assert "ReadWritePaths=/var/www/dev" in dev_content
+        assert "ReadWritePaths=/var/www/prod" not in dev_content
+        assert "ReadWritePaths=/var/www/prod" in prod_content
+        assert "ReadWritePaths=/var/www/dev" not in prod_content
+
+    def test_webhook_without_server_no_server_config_single_file(self, tmp_path):
+        """Without --server and no environments.server config, a single webhook file is generated."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render(dry_run=True)
+
+        assert "fraisier-myproj-webhook.service" in files
+        assert "fraisier-myproj-webhook-server-1.service" not in files
+
+    def test_auto_per_server_dry_run_returns_per_server_filenames(self, tmp_path):
+        """dry_run=True includes per-server webhook filenames in the returned list."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+environments:
+  development:
+    server: server-1
+  production:
+    server: server-2
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render(dry_run=True)
+
+        assert "fraisier-myproj-webhook-server-1.service" in files
+        assert "fraisier-myproj-webhook-server-2.service" in files
+        assert "fraisier-myproj-webhook.service" not in files
 
     def test_webhook_server_with_no_matching_environments(self, tmp_path):
         """Webhook for a server with no environments only has default paths."""
@@ -2615,13 +2680,71 @@ fraises:
         renderer = ScaffoldRenderer(config, server="server-3")  # Non-existent server
         renderer.render()
 
-        content = (tmp_path / "output" / "fraisier-webhook.service").read_text()
+        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
         # Should have the default paths but no app paths
         assert "ReadWritePaths=/var/lib/fraisier" in content
         assert "ReadWritePaths=/run/fraisier" in content
         # No app paths for any environment
         assert "ReadWritePaths=/var/www/dev" not in content
         assert "ReadWritePaths=/var/www/prod" not in content
+
+
+class TestWebhookNaming:
+    """Webhook service uses project-specific names (#63)."""
+
+    def _make_config(self, tmp_path, project_name="myproj"):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: {project_name}
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        from fraisier.config import FraisierConfig
+
+        return FraisierConfig(p)
+
+    def test_webhook_filename_uses_project_name(self, tmp_path):
+        """render(dry_run=True) returns fraisier-{project}-webhook.service, not the generic name."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(tmp_path, "myproj")
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render(dry_run=True)
+
+        assert "fraisier-myproj-webhook.service" in files
+        assert "fraisier-webhook.service" not in files
+
+    def test_webhook_filename_reflects_project_name(self, tmp_path):
+        """Different project names produce different service file names."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(tmp_path, "acme")
+        renderer = ScaffoldRenderer(config)
+        files = renderer.render(dry_run=True)
+
+        assert "fraisier-acme-webhook.service" in files
+        assert "fraisier-myproj-webhook.service" not in files
+
+    def test_webhook_environment_file_uses_project_name(self, tmp_path):
+        """EnvironmentFile directive uses /etc/fraisier/{project}.webhook.env."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(tmp_path, "myproj")
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
+        assert "EnvironmentFile=/etc/fraisier/myproj.webhook.env" in content
+        assert "EnvironmentFile=/etc/fraisier/webhook.env" not in content
 
 
 class TestPostgresLogging:
