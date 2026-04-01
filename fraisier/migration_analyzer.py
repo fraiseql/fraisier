@@ -146,3 +146,53 @@ def classify_migration_error(
         rollback_safe=True,
         requires_manual_intervention=True,
     )
+
+
+def get_recovery_suggestions(
+    error_type: str, migration_file: str, db_error: str
+) -> list[str]:
+    """Generate recovery suggestions for a migration error.
+
+    Provides operator-friendly steps to resolve the issue based on error type.
+
+    Args:
+        error_type: Classification from classify_migration_error (e.g., "constraint")
+        migration_file: Name of the migration that failed
+        db_error: Database error message
+
+    Returns:
+        List of actionable recovery suggestions
+    """
+    suggestions_map = {
+        "constraint": [
+            "The migration constraint violation likely indicates the change "
+            "was already applied to this database.",
+            "Manually inspect the database state to verify current schema.",
+            "If the migration is idempotent, retry the deployment.",
+            "If not, manually fix the constraint and retry deployment.",
+        ],
+        "transient": [
+            "This error is temporary (network or connection issue).",
+            "Retry the deployment.",
+            "If retries continue to fail, investigate database connectivity "
+            "and network stability.",
+        ],
+        "syntax": [
+            f"Migration {migration_file} contains a SQL syntax error.",
+            f"Database error: {db_error}",
+            "Fix the migration file and retry the deployment.",
+        ],
+        "permission": [
+            "The database user lacks required permissions for this operation.",
+            "Check that the migration user has appropriate privileges on "
+            "the target database.",
+            "Contact the database administrator to grant required permissions.",
+        ],
+        "unknown": [
+            f"Database error: {db_error}",
+            "Review the database logs for more details about this error.",
+            "Consult documentation or contact support if the issue persists.",
+        ],
+    }
+
+    return suggestions_map.get(error_type, suggestions_map["unknown"])
