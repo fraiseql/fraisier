@@ -160,7 +160,44 @@ fraises:
 
 ---
 
-## Step 3: Create Systemd Service
+## Step 3: Automated Setup with Fraisier Scaffold (Recommended)
+
+### Generate and Install Infrastructure Files
+
+Instead of manually creating systemd services, nginx configs, and sudoers rules, use `fraisier scaffold`:
+
+```bash
+# Generate all infrastructure files
+fraisier scaffold
+
+# Review the generated files
+ls -la scripts/generated/
+
+# Preview what will be installed
+fraisier scaffold-install --dry-run
+
+# Install to system
+fraisier scaffold-install --yes
+```
+
+This automatically:
+- Creates deploy user and app users
+- Generates and installs systemd service files
+- Configures nginx (if multi-fraise setup)
+- Installs sudoers rules with minimal required permissions
+- Installs wrapper scripts for systemctl and PostgreSQL
+- Validates all configurations before installing
+- Installs system dependencies (uv, git, postgresql-client, nginx, certbot)
+
+The generated `scripts/generated/install.sh` is idempotent and safe to re-run.
+
+### Or: Manual Setup (If Customization Needed)
+
+For custom configurations not covered by scaffold, manually create systemd services as shown below.
+
+---
+
+## Step 4: Create Systemd Service (Manual)
 
 ### On Target Server
 
@@ -253,7 +290,7 @@ chmod +x /opt/my-api/bin/start.sh
 
 ---
 
-## Step 4: Deploy
+## Step 5: Deploy
 
 ### Prepare Application
 

@@ -4,15 +4,134 @@
 # Idempotent: safe to re-run
 set -euo pipefail
 
+# Parse options
+DRY_RUN=false
+VALIDATE_ONLY=false
+VERBOSE=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --validate-only)
+      VALIDATE_ONLY=true
+      shift
+      ;;
+    --verbose|-v)
+      VERBOSE=true
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --dry-run         Show what would be installed without executing"
+      echo "  --validate-only   Check prerequisites only (no installation)"
+      echo "  --verbose, -v     Enable verbose output"
+      echo "  --help, -h        Show this help message"
+      exit 0
+      ;;
+    *)
+      echo "Error: Unknown option '$1'" >&2
+      echo "Use --help for usage information" >&2
+      exit 1
+      ;;
+  esac
+done
+
 DEPLOY_USER="{{ scaffold.deploy_user }}"
 PROJECT_DIR="/opt/{{ project_name }}"
 
+# Helper function to run commands conditionally
+_run() {
+  if [[ "$VALIDATE_ONLY" == "true" ]]; then
+    if [[ "$VERBOSE" == "true" ]]; then
+      echo "  [validate] $*"
+    fi
+    return 0
+  elif [[ "$DRY_RUN" == "true" ]]; then
+    echo "  [would run] $*"
+    return 0
+  else
+    if [[ "$VERBOSE" == "true" ]]; then
+      "$@"
+    else
+      "$@" 2>/dev/null || true
+    fi
+  fi
+}
+
+# Helper function to check if file/directory exists
+_check_exists() {
+  local path="$1"
+  local desc="$2"
+  if [[ ! -e "$path" ]]; then
+    echo "  ✗ Missing: $desc ($path)" >&2
+    return 1
+  fi
+  if [[ "$VERBOSE" == "true" ]]; then
+    echo "  ✓ Found: $desc"
+  fi
+  return 0
+}
+
+# Helper function to check prerequisites
+_validate_prerequisites() {
+  local has_errors=false
+
+  echo "Checking prerequisites..."
+
+  # Check if running as root or can use sudo
+  if [[ $EUID -ne 0 ]]; then
+    if ! sudo -n true 2>/dev/null; then
+      echo "  ✗ Not running as root and sudo requires password" >&2
+      has_errors=true
+    else
+      echo "  ✓ sudo access available"
+    fi
+  else
+    echo "  ✓ Running as root"
+  fi
+
+  # Check if install.sh was generated in the correct location
+  if ! _check_exists "${PROJECT_DIR}/scripts/generated/install.sh" "Generated install.sh"; then
+    has_errors=true
+  fi
+
+  # Check if required commands exist
+  for cmd in useradd curl apt-get systemctl visudo; do
+    if ! command -v "$cmd" &>/dev/null; then
+      echo "  ✗ Required command not found: $cmd" >&2
+      has_errors=true
+    elif [[ "$VERBOSE" == "true" ]]; then
+      echo "  ✓ Found: $cmd"
+    fi
+  done
+
+  if [[ "$has_errors" == "true" ]]; then
+    echo "Validation failed. Cannot proceed." >&2
+    return 1
+  fi
+
+  echo "✓ All prerequisites met"
+  return 0
+}
+
 echo "==> Setting up {{ project_name }} server"
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "    (DRY RUN MODE - no changes will be made)"
+elif [[ "$VALIDATE_ONLY" == "true" ]]; then
+  echo "    (VALIDATE ONLY MODE - checking prerequisites)"
+  _validate_prerequisites
+  exit $?
+fi
 
 # Create deploy user if it does not exist
 if ! id -u "${DEPLOY_USER}" &>/dev/null; then
     echo "  Creating user ${DEPLOY_USER}"
-    useradd --system --create-home --shell /usr/sbin/nologin "${DEPLOY_USER}"
+    _run sudo useradd --system --create-home --shell /usr/sbin/nologin "${DEPLOY_USER}"
 else
     echo "  User ${DEPLOY_USER} already exists"
 fi
@@ -24,7 +143,7 @@ fi
 {% if app_user and app_user != scaffold.deploy_user %}
 if ! id -u "{{ app_user }}" &>/dev/null; then
     echo "  Creating app user {{ app_user }}"
-    useradd --system --create-home --shell /usr/sbin/nologin "{{ app_user }}"
+    _run sudo useradd --system --create-home --shell /usr/sbin/nologin "{{ app_user }}"
 else
     echo "  App user {{ app_user }} already exists"
 fi
@@ -35,8 +154,8 @@ fi
 # Create project directory
 if [ ! -d "${PROJECT_DIR}" ]; then
     echo "  Creating ${PROJECT_DIR}"
-    mkdir -p "${PROJECT_DIR}"
-    chown "${DEPLOY_USER}:${DEPLOY_USER}" "${PROJECT_DIR}"
+    _run sudo mkdir -p "${PROJECT_DIR}"
+    _run sudo chown "${DEPLOY_USER}:${DEPLOY_USER}" "${PROJECT_DIR}"
 else
     echo "  ${PROJECT_DIR} already exists"
 fi
@@ -44,15 +163,19 @@ fi
 # Install uv (Astral Python toolchain)
 if ! command -v uv &>/dev/null; then
     echo "  Installing uv"
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    elif [[ "$DRY_RUN" == "true" ]]; then
+        echo "    [would run] curl -LsSf https://astral.sh/uv/install.sh | sh"
+    fi
 else
     echo "  uv already installed: $(uv --version)"
 fi
 
 # Install system dependencies
 echo "  Installing system packages"
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
+_run sudo apt-get update -qq
+_run sudo apt-get install -y -qq --no-install-recommends \
     git \
     postgresql-client \
     nginx \
@@ -64,8 +187,8 @@ PG_WRAPPER_SRC="${PROJECT_DIR}/scripts/generated/pg-wrapper.sh"
 PG_WRAPPER_DST="/usr/local/libexec/fraisier/pgadmin-{{ project_name }}"
 if [ -f "${PG_WRAPPER_SRC}" ]; then
     echo "  Installing PostgreSQL admin wrapper"
-    mkdir -p /usr/local/libexec/fraisier
-    install -m 0755 "${PG_WRAPPER_SRC}" "${PG_WRAPPER_DST}"
+    _run sudo mkdir -p /usr/local/libexec/fraisier
+    _run sudo install -m 0755 "${PG_WRAPPER_SRC}" "${PG_WRAPPER_DST}"
 fi
 
 # Install systemctl wrapper (if generated)
@@ -73,8 +196,8 @@ SYSTEMCTL_WRAPPER_SRC="${PROJECT_DIR}/scripts/generated/systemctl-wrapper.sh"
 SYSTEMCTL_WRAPPER_DST="/usr/local/libexec/fraisier/systemctl-{{ project_name }}"
 if [ -f "${SYSTEMCTL_WRAPPER_SRC}" ]; then
     echo "  Installing systemctl wrapper"
-    mkdir -p /usr/local/libexec/fraisier
-    install -m 0755 "${SYSTEMCTL_WRAPPER_SRC}" "${SYSTEMCTL_WRAPPER_DST}"
+    _run sudo mkdir -p /usr/local/libexec/fraisier
+    _run sudo install -m 0755 "${SYSTEMCTL_WRAPPER_SRC}" "${SYSTEMCTL_WRAPPER_DST}"
 fi
 
 # Install sudoers fragment
@@ -82,8 +205,15 @@ SUDOERS_SRC="${PROJECT_DIR}/scripts/generated/sudoers"
 SUDOERS_DST="/etc/sudoers.d/{{ project_name }}"
 if [ -f "${SUDOERS_SRC}" ]; then
     echo "  Installing sudoers fragment"
-    install -m 0440 "${SUDOERS_SRC}" "${SUDOERS_DST}"
-    visudo -c -f "${SUDOERS_DST}"
+    _run sudo install -m 0440 "${SUDOERS_SRC}" "${SUDOERS_DST}"
+    if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
+        if ! sudo visudo -c -f "${SUDOERS_DST}"; then
+            echo "  ✗ Sudoers syntax error! File was not installed." >&2
+            exit 1
+        fi
+    elif [[ "$DRY_RUN" == "true" ]]; then
+        echo "    [would validate] sudo visudo -c -f ${SUDOERS_DST}"
+    fi
 fi
 
 # Install systemd units
@@ -92,7 +222,7 @@ echo "  Installing systemd units"
 {% for env_name in fraise.get('environments', {}) %}
 {% set svc = project_name ~ '_' ~ fraise.name ~ '_' ~ env_name %}
 if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ svc }}.service" ]; then
-    cp "${PROJECT_DIR}/scripts/generated/systemd/{{ svc }}.service" \
+    _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/{{ svc }}.service" \
        /etc/systemd/system/{{ svc }}.service
 fi
 {% endfor %}
@@ -101,30 +231,34 @@ fi
 # Install timers
 for timer in deploy-checker backup; do
     if [ -f "${PROJECT_DIR}/scripts/generated/systemd/${timer}.timer" ]; then
-        cp "${PROJECT_DIR}/scripts/generated/systemd/${timer}.timer" \
+        _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/${timer}.timer" \
            "/etc/systemd/system/${timer}.timer"
     fi
 done
 
-systemctl daemon-reload
+_run sudo systemctl daemon-reload
 
 # Install nginx config
 if [ -f "${PROJECT_DIR}/scripts/generated/nginx/gateway.conf" ]; then
     echo "  Installing nginx config"
-    cp "${PROJECT_DIR}/scripts/generated/nginx/gateway.conf" \
+    _run sudo cp "${PROJECT_DIR}/scripts/generated/nginx/gateway.conf" \
        /etc/nginx/sites-available/{{ project_name }}
-    ln -sf /etc/nginx/sites-available/{{ project_name }} \
+    _run sudo ln -sf /etc/nginx/sites-available/{{ project_name }} \
            /etc/nginx/sites-enabled/{{ project_name }}
-    nginx -t && systemctl reload nginx
+    if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
+        sudo nginx -t && sudo systemctl reload nginx
+    elif [[ "$DRY_RUN" == "true" ]]; then
+        echo "    [would run] sudo nginx -t && sudo systemctl reload nginx"
+    fi
 fi
 
 {% if has_database %}
 # PostgreSQL logging configuration
 echo "  PostgreSQL logging configs generated in postgresql/"
 echo "  Review and install the one matching this server's environment:"
-echo "    cp ${PROJECT_DIR}/scripts/generated/postgresql/fraisier_<env>.conf \\"
+echo "    sudo cp ${PROJECT_DIR}/scripts/generated/postgresql/fraisier_<env>.conf \\"
 echo "       /etc/postgresql/*/conf.d/fraisier.conf"
-echo "    systemctl reload postgresql"
+echo "    sudo systemctl reload postgresql"
 {% endif %}
 
 echo "==> Setup complete for {{ project_name }}"

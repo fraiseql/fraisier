@@ -308,6 +308,68 @@ fraisier scaffold --dry-run
 
 ---
 
+### fraisier scaffold-install
+
+Install generated scaffold files to system locations (sudoers, systemd units, nginx configs, wrapper scripts, system dependencies).
+
+Must run `fraisier scaffold` first to generate the files. Requires sudo access or root privileges.
+
+```bash
+fraisier scaffold-install [OPTIONS]
+```
+
+**Prerequisites:**
+
+- Must run `fraisier scaffold` first
+- Must have sudo access (or be running as root)
+- Generated files must be in `PROJECT_DIR` (usually `/opt/<project_name>`)
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Preview what would be installed without making changes |
+| `--validate-only` | Check prerequisites only (no installation) |
+| `--yes`, `-y` | Skip confirmation prompt (useful for automation) |
+| `--verbose`, `-v` | Enable verbose output |
+
+**Examples:**
+
+```bash
+# Preview what would be installed
+fraisier scaffold-install --dry-run
+
+# Check prerequisites
+fraisier scaffold-install --validate-only
+
+# Install without confirmation prompt
+fraisier scaffold-install --yes
+
+# Install with verbose output
+fraisier scaffold-install --verbose
+```
+
+**Typical Workflow:**
+
+```bash
+# 1. Generate infrastructure files
+fraisier scaffold
+
+# 2. Review the changes
+git diff scripts/generated/
+
+# 3. Preview installation (without changes)
+fraisier scaffold-install --dry-run
+
+# 4. Install to system
+fraisier scaffold-install --yes
+
+# 5. Verify services are running
+systemctl status <service-name>
+```
+
+---
+
 ### fraisier validate
 
 Run pre-deploy validation checks: `config_valid`, `deploy_user`, and `fraises_have_environments`.
