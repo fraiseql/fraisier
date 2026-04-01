@@ -74,4 +74,3 @@ class TestHealthCheckTimeoutWired:
 
 class TestDeprecationWarnings:
     """Dead config keys emit deprecation warnings during validation."""
-
