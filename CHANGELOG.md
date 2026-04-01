@@ -1,17 +1,8 @@
 # Changelog
 
-## v0.3.10 (2026-04-01)
+## v0.3.11 (2026-04-01)
 
-Feature release: systemctl wrapper for sudoers, SSH systemctl fixes, config sync, and install step improvements. Fixes #46, #52. 1700+ tests, zero lint warnings.
-
-### Sudoers: systemctl Wrapper to Eliminate Wildcards (#41, #46)
-
-- **feat:** `fraisier scaffold` now generates a systemctl wrapper script at `/usr/local/libexec/fraisier/systemctl-<project>` that validates service names and actions against the project's allowlist before executing
-- **feat:** sudoers now uses a single wrapper rule per deploy user instead of 5 per-service rules, eliminating wildcards while maintaining security
-- **feat:** wrapper supports all systemctl actions: start, stop, restart, status, is-active, enable, disable, daemon-reload, show
-- **feat:** systemd service templates inject `FRAISIER_SYSTEMCTL_WRAPPER` env var for local runner execution
-- **fix:** BareMetalProvider now uses `/usr/bin/systemctl` explicitly in all SSH commands, matching sudoers configuration (#46)
-- **fix:** SystemdServiceManager checks `FRAISIER_SYSTEMCTL_WRAPPER` env var, uses wrapper when available (fallback: direct sudo systemctl)
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements. Fixes #52. 1700+ tests, zero lint warnings.
 
 ### Deploy: Automatic Config Synchronization
 
@@ -39,6 +30,19 @@ Feature release: systemctl wrapper for sudoers, SSH systemctl fixes, config sync
 - **feat:** incident files written to `/var/lib/fraisier/incidents/` on failed rollbacks for manual recovery
 - **feat:** comprehensive logging of deployment lifecycle (pending, deploying, success, failed, rolled_back)
 - **test:** 100+ integration tests covering rollback, edge cases, and error scenarios across all deployer types
+
+## v0.3.10 (2026-04-01)
+
+Feature release: systemctl wrapper for sudoers, SSH systemctl fixes. Fixes #46.
+
+### Sudoers: systemctl Wrapper to Eliminate Wildcards (#41, #46)
+
+- **feat:** `fraisier scaffold` now generates a systemctl wrapper script at `/usr/local/libexec/fraisier/systemctl-<project>` that validates service names and actions against the project's allowlist before executing
+- **feat:** sudoers now uses a single wrapper rule per deploy user instead of 5 per-service rules, eliminating wildcards while maintaining security
+- **feat:** wrapper supports all systemctl actions: start, stop, restart, status, is-active, enable, disable, daemon-reload, show
+- **feat:** systemd service templates inject `FRAISIER_SYSTEMCTL_WRAPPER` env var for local runner execution
+- **fix:** BareMetalProvider now uses `/usr/bin/systemctl` explicitly in all SSH commands, matching sudoers configuration (#46)
+- **fix:** SystemdServiceManager checks `FRAISIER_SYSTEMCTL_WRAPPER` env var, uses wrapper when available (fallback: direct sudo systemctl)
 
 ## v0.3.9 (2026-03-31)
 
