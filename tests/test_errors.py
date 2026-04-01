@@ -336,6 +336,29 @@ class TestMigrationErrors:
         error = MigrationError("Migration failed")
         assert error.classification_str == "(no classification)"
 
+    def test_migration_error_classification_preserved_through_serialization(self):
+        """Test classification survives round-trip through dict serialization."""
+        original = MigrationError(
+            "Migration failed",
+            migration_file="20260401_test.py",
+            direction="up",
+            db_error="connection timeout",
+        )
+
+        # Serialize and check classification is in context
+        serialized = original.to_dict()
+        assert "classification" in serialized["context"]
+        assert serialized["context"]["classification"]["error_type"] == "transient"
+        assert serialized["context"]["classification"]["recoverable"] is True
+
+        # Create new error with different classification type
+        error2 = MigrationError(
+            "Test",
+            db_error="unique constraint violation",
+        )
+        assert error2.classification.error_type == "constraint"
+        assert error2.classification.recoverable is False
+
 
 class TestOtherErrors:
     """Test other error types."""
