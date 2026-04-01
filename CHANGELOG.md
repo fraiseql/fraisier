@@ -2,7 +2,18 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation. Fixes #52, #53, #54, #55, #56, #57. 1777+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command. Fixes #52, #53, #54, #55, #56, #57, #58. 1777+ tests, zero lint warnings.
+
+### Deployment Status Command (#58)
+
+- **feat:** new CLI command `fraisier status [fraise] [environment]` shows deployment status and health across all fraises/environments — no args shows global table view, both args show single-fraise details
+- **feat:** global table displays: Fraise | Environment | Deployed SHA | Deployed At | Latest SHA | Status | Health
+- **feat:** status column shows: "deployed ✓" (green) when versions match, "out-of-date" (yellow) when mismatch, "unknown" (dim) when data unavailable
+- **feat:** health column shows: "healthy ✓" (green) when health check passes, "unhealthy" (red) when failing, "not configured" (dim) when no health check defined
+- **feat:** rich formatted output with color-coded status indicators; table columns expand for readability
+- **feat:** pulls deployed version from DB (`tb_fraise_state.current_version` + `last_deployed_at`), latest version from deployer, health status from health_check() call
+- **feat:** new git helper `get_commit_timestamp(git_dir, sha)` returns ISO timestamp for commits (used for audit/reporting)
+- **test:** 6 new tests covering global view, deployed/out-of-date status, configured/unconfigured health, error handling
 
 ### Pre-Deployment Validation Command (#57)
 

@@ -306,6 +306,140 @@ class TestStatus:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
+    def test_status_no_args_shows_global_table(self, mock_config, test_db):
+        """status with no args shows global table across all fraises."""
+        mock_config.list_all_deployments.return_value = [
+            {
+                "fraise": "my_api",
+                "environment": "production",
+                "job": None,
+                "type": "api",
+                "name": "my_api",
+            }
+        ]
+        mock_deployer = MagicMock()
+        mock_deployer.get_current_version.return_value = "abc1234"
+        mock_deployer.get_latest_version.return_value = "abc1234"
+        mock_deployer.health_check.return_value = True
+
+        runner = CliRunner(env={"COLUMNS": "200"})
+        with patch("fraisier.cli.main._get_deployer", return_value=mock_deployer):
+            result = runner.invoke(main, ["status"])
+
+        assert result.exit_code == 0
+        # Check for table content and key data
+        assert "my_api" in result.output
+        assert "production" in result.output
+        assert "abc1234" in result.output
+        assert "deployed" in result.output.lower()
+        assert "healthy" in result.output.lower()
+
+    def test_status_global_deployed(self, mock_config, test_db):
+        """status global view shows deployed when versions match."""
+        mock_config.list_all_deployments.return_value = [
+            {
+                "fraise": "my_api",
+                "environment": "production",
+                "job": None,
+                "type": "api",
+                "name": "my_api",
+            }
+        ]
+        mock_deployer = MagicMock()
+        mock_deployer.get_current_version.return_value = "abc1234"
+        mock_deployer.get_latest_version.return_value = "abc1234"
+        mock_deployer.health_check.return_value = True
+
+        runner = CliRunner(env={"COLUMNS": "200"})
+        with patch("fraisier.cli.main._get_deployer", return_value=mock_deployer):
+            result = runner.invoke(main, ["status"])
+
+        assert result.exit_code == 0
+        assert "deployed" in result.output.lower()
+
+    def test_status_global_out_of_date(self, mock_config, test_db):
+        """status global view shows out-of-date when versions differ."""
+        mock_config.list_all_deployments.return_value = [
+            {
+                "fraise": "my_api",
+                "environment": "production",
+                "job": None,
+                "type": "api",
+                "name": "my_api",
+            }
+        ]
+        mock_deployer = MagicMock()
+        mock_deployer.get_current_version.return_value = "abc1234"
+        mock_deployer.get_latest_version.return_value = "def5678"
+        mock_deployer.health_check.return_value = True
+
+        runner = CliRunner(env={"COLUMNS": "200"})
+        with patch("fraisier.cli.main._get_deployer", return_value=mock_deployer):
+            result = runner.invoke(main, ["status"])
+
+        assert result.exit_code == 0
+        assert "out-of-date" in result.output.lower()
+
+    def test_status_global_health_not_configured(self, mock_config, test_db):
+        """status global view shows not configured when health check not in config."""
+        config_with_no_health = {
+            "type": "api",
+            "app_path": "/var/www/api",
+            "systemd_service": "api.service",
+            "database": {"name": "mydb", "strategy": "migrate"},
+        }
+        mock_config.get_fraise_environment.return_value = config_with_no_health
+        mock_config.list_all_deployments.return_value = [
+            {
+                "fraise": "my_api",
+                "environment": "production",
+                "job": None,
+                "type": "api",
+                "name": "my_api",
+            }
+        ]
+        mock_deployer = MagicMock()
+        mock_deployer.get_current_version.return_value = "abc1234"
+        mock_deployer.get_latest_version.return_value = "abc1234"
+
+        runner = CliRunner(env={"COLUMNS": "200"})
+        with patch("fraisier.cli.main._get_deployer", return_value=mock_deployer):
+            result = runner.invoke(main, ["status"])
+
+        assert result.exit_code == 0
+        assert "not configured" in result.output.lower()
+
+    def test_status_global_unhealthy(self, mock_config, test_db):
+        """status global view shows unhealthy when health check fails."""
+        mock_config.list_all_deployments.return_value = [
+            {
+                "fraise": "my_api",
+                "environment": "production",
+                "job": None,
+                "type": "api",
+                "name": "my_api",
+            }
+        ]
+        mock_deployer = MagicMock()
+        mock_deployer.get_current_version.return_value = "abc1234"
+        mock_deployer.get_latest_version.return_value = "abc1234"
+        mock_deployer.health_check.return_value = False
+
+        runner = CliRunner(env={"COLUMNS": "200"})
+        with patch("fraisier.cli.main._get_deployer", return_value=mock_deployer):
+            result = runner.invoke(main, ["status"])
+
+        assert result.exit_code == 0
+        assert "unhealthy" in result.output.lower()
+
+    def test_status_fraise_without_env_exits_1(self, mock_config):
+        """status with fraise but no environment exits with error."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["status", "my_api"])
+
+        assert result.exit_code == 1
+        assert "both fraise and environment required together" in result.output.lower()
+
 
 class TestList:
     """Tests for the list command."""

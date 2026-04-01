@@ -29,6 +29,29 @@ def get_worktree_sha(worktree: Path) -> str | None:
         return None
 
 
+def get_commit_timestamp(git_dir: Path, sha: str) -> str | None:
+    """Get the author date for a commit as ISO string (YYYY-MM-DD HH:MM:SS ±HHMM).
+
+    Args:
+        git_dir: Path to git directory (bare repo or .git)
+        sha: Commit SHA to look up
+
+    Returns:
+        ISO timestamp string or None if commit not found or git fails
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(git_dir), "log", "-1", "--format=%ci", sha],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        ts = result.stdout.strip()
+        return ts or None
+    except subprocess.CalledProcessError:
+        return None
+
+
 def clone_bare_repo(clone_url: str, bare_repo: Path) -> None:
     """Clone a bare repo if it doesn't already exist."""
     if bare_repo.exists():

@@ -259,18 +259,160 @@ def deploy(
 
 
 @main.command()
-@click.argument("fraise")
-@click.argument("environment")
+@click.argument("fraise", required=False, default=None)
+@click.argument("environment", required=False, default=None)
 @click.pass_context
-def status(ctx: click.Context, fraise: str, environment: str) -> None:
-    """Check status of a fraise in an environment.
+def status(ctx: click.Context, fraise: str | None, environment: str | None) -> None:
+    """Check status of fraise(s).
+
+    Shows deployment status and health.
 
     \b
     Examples:
-        fraisier status my_api production
-        fraisier status etl production
+        fraisier status                        # Global view of all fraises
+        fraisier status my_api production      # Single fraise view
     """
     config = ctx.obj["config"]
+
+    # Validation: if fraise given but environment not, or vice versa
+    if (fraise is None) != (environment is None):
+        console.print(
+            "[red]Error:[/red] Both fraise and environment required together, "
+            "or omit both for global view"
+        )
+        raise SystemExit(1)
+
+    # Global view: show all fraises/environments in a table
+    if fraise is None:
+        _show_global_status(config)
+        return
+
+    # Single fraise view: existing behavior
+    _show_single_status(config, fraise, environment)
+
+
+def _compute_status_string(current: str | None, latest: str | None) -> str:
+    """Compute deployment status string based on versions."""
+    if current == latest and current is not None:
+        return "[green]deployed ✓[/green]"
+    if current is None or latest is None:
+        return "[dim]unknown[/dim]"
+    return "[yellow]out-of-date[/yellow]"
+
+
+def _compute_health_string(fraise_config: dict, deployer) -> str:
+    """Compute health status string based on config and deployer health check."""
+    health_check_cfg = fraise_config.get("health_check", {})
+    has_health = health_check_cfg.get("url") is not None
+    has_timer = fraise_config.get("systemd_timer") is not None
+
+    if not has_health and not has_timer:
+        return "[dim]not configured[/dim]"
+
+    health_ok = deployer.health_check()
+    return "[green]healthy ✓[/green]" if health_ok else "[red]unhealthy[/red]"
+
+
+def _show_global_status(config) -> None:
+    """Display deployment status table for all fraises/environments."""
+    from fraisier.database import get_db
+
+    if config is None:
+        console.print("[yellow]No configuration loaded[/yellow]")
+        return
+
+    table = Table(title="[bold]Deployment Status[/bold]", expand=True)
+    table.add_column("Fraise", style="cyan", min_width=15)
+    table.add_column("Environment", style="magenta", min_width=15)
+    table.add_column("Deployed", style="dim", min_width=10)
+    table.add_column("Deployed At", style="dim", min_width=12)
+    table.add_column("Latest", style="dim", min_width=10)
+    table.add_column("Status", style="yellow", min_width=15)
+    table.add_column("Health", style="yellow", min_width=15)
+
+    # Build deployed version lookup from DB
+    db = get_db()
+    fraise_states = {
+        (s["fraise_name"], s["environment_name"]): s for s in db.get_all_fraise_states()
+    }
+
+    deployments = config.list_all_deployments()
+    if not deployments:
+        console.print("[yellow]No fraises configured[/yellow]")
+        return
+
+    for d in deployments:
+        fraise_name = d["fraise"]
+        environment_name = d["environment"]
+
+        try:
+            fraise_config = config.get_fraise_environment(fraise_name, environment_name)
+            if not fraise_config:
+                table.add_row(
+                    fraise_name,
+                    environment_name,
+                    "-",
+                    "-",
+                    "-",
+                    "[red]error[/red]",
+                    "-",
+                )
+                continue
+
+            # Get deployer to check versions and health
+            deployer = _get_deployer(
+                fraise_config.get("type"), fraise_config, d.get("job")
+            )
+            if not deployer:
+                table.add_row(
+                    fraise_name,
+                    environment_name,
+                    "-",
+                    "-",
+                    "-",
+                    "[red]unsupported type[/red]",
+                    "-",
+                )
+                continue
+
+            current = deployer.get_current_version()
+            latest = deployer.get_latest_version()
+            status_str = _compute_status_string(current, latest)
+            health_str = _compute_health_string(fraise_config, deployer)
+
+            # Get deployed timestamp from DB
+            state = fraise_states.get((fraise_name, environment_name))
+            deployed_at = state["last_deployed_at"][:10] if state else "-"
+
+            table.add_row(
+                fraise_name,
+                environment_name,
+                current or "-",
+                deployed_at,
+                latest or "-",
+                status_str,
+                health_str,
+            )
+
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning:[/yellow] Error checking {fraise_name}/{environment_name}: {e}"
+            )
+            table.add_row(
+                fraise_name,
+                environment_name,
+                "-",
+                "-",
+                "-",
+                "[red]error[/red]",
+                "-",
+            )
+
+    console.print(table)
+
+
+def _show_single_status(config, fraise: str, environment: str) -> None:
+    """Display deployment status for a single fraise/environment."""
     fraise_config = config.get_fraise_environment(fraise, environment)
 
     if not fraise_config:
