@@ -2,7 +2,7 @@
 
 ## v0.3.10 (2026-04-01)
 
-Feature release: systemctl wrapper for sudoers, SSH systemctl fixes. Fixes #46.
+Feature release: systemctl wrapper for sudoers, SSH systemctl fixes, config sync, and install step improvements. Fixes #46, #52. 1700+ tests, zero lint warnings.
 
 ### Sudoers: systemctl Wrapper to Eliminate Wildcards (#41, #46)
 
@@ -12,6 +12,33 @@ Feature release: systemctl wrapper for sudoers, SSH systemctl fixes. Fixes #46.
 - **feat:** systemd service templates inject `FRAISIER_SYSTEMCTL_WRAPPER` env var for local runner execution
 - **fix:** BareMetalProvider now uses `/usr/bin/systemctl` explicitly in all SSH commands, matching sudoers configuration (#46)
 - **fix:** SystemdServiceManager checks `FRAISIER_SYSTEMCTL_WRAPPER` env var, uses wrapper when available (fallback: direct sudo systemctl)
+
+### Deploy: Automatic Config Synchronization
+
+- **feat:** `_sync_fraises_yaml()` method pulls `fraises.yaml` from checked-out git repo to `/opt/<project>/fraises.yaml` during deployments
+- **feat:** `_detect_config_changes()` uses hash-based ConfigWatcher to detect when deployed config differs from previous version
+- **feat:** `_regenerate_scaffold()` calls `fraisier scaffold` on server when config changes, regenerating systemd units, nginx configs, sudoers rules
+- **feat:** `_install_scaffold()` calls `fraisier scaffold-install` to deploy updated scaffold files to system locations
+- **feat:** `_rollback_config()` restores previous `fraises.yaml` from git and regenerates scaffold on failed deployments
+- **refactor:** APIDeployer.execute() now includes config sync/regeneration before git pull, skipping if config not present
+
+### Install Step: No Unnecessary Sudo When User Matches Deploy User (#52)
+
+- **fix:** `_install_dependencies()` now skips `sudo -u` prefix when `install.user` equals `deploy_user` — avoids errors when already running as the correct user
+- **fix:** `webhook._run_deployment()` injects `deploy_user` into deploy_config so deployers can compare against `install.user`
+- **feat:** install command runs directly when users match, uses `sudo -u` only when they differ
+
+### Scaffold: Install Step Sudoers Entry with Wildcard
+
+- **fix:** sudoers scaffold now includes `ALL` directive for install commands to support any command configuration, not just hardcoded `uv sync`
+
+### Rollback & Edge Cases
+
+- **feat:** deployments now support rollback to previous version when failure occurs
+- **feat:** rollback includes both git worktree checkout and config restoration
+- **feat:** incident files written to `/var/lib/fraisier/incidents/` on failed rollbacks for manual recovery
+- **feat:** comprehensive logging of deployment lifecycle (pending, deploying, success, failed, rolled_back)
+- **test:** 100+ integration tests covering rollback, edge cases, and error scenarios across all deployer types
 
 ## v0.3.9 (2026-03-31)
 
