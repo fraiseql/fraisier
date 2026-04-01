@@ -1,8 +1,6 @@
 """Integration tests for config synchronization during deployment."""
 
-from pathlib import Path
 
-import pytest
 
 from fraisier.config_watcher import ConfigWatcher
 from fraisier.deployers.api import APIDeployer

@@ -390,7 +390,7 @@ class TestConfigSyncEdgeCases:
         config_file.write_bytes(b"\x00\x01\x02\x03")
 
         watcher = ConfigWatcher(tmp_path)
-        hash1 = watcher.compute_hash()
+        watcher.compute_hash()  # Verify hash computation works
         watcher.save_hash()
 
         # Modify binary content
