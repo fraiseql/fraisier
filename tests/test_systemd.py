@@ -11,7 +11,8 @@ from fraisier.systemd import SystemdServiceManager
 class TestRestart:
     """SystemdServiceManager.restart() calls systemctl restart via runner."""
 
-    def test_restart_calls_systemctl_restart(self):
+    def test_restart_calls_systemctl_restart(self, monkeypatch):
+        monkeypatch.delenv("FRAISIER_SYSTEMCTL_WRAPPER", raising=False)
         runner = MagicMock()
         runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mgr = SystemdServiceManager(runner)
@@ -24,7 +25,8 @@ class TestRestart:
             check=True,
         )
 
-    def test_restart_with_custom_timeout(self):
+    def test_restart_with_custom_timeout(self, monkeypatch):
+        monkeypatch.delenv("FRAISIER_SYSTEMCTL_WRAPPER", raising=False)
         runner = MagicMock()
         runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mgr = SystemdServiceManager(runner)
@@ -58,7 +60,8 @@ class TestRestart:
 class TestStatus:
     """SystemdServiceManager.status() returns parsed systemctl output."""
 
-    def test_status_returns_active_state(self):
+    def test_status_returns_active_state(self, monkeypatch):
+        monkeypatch.delenv("FRAISIER_SYSTEMCTL_WRAPPER", raising=False)
         runner = MagicMock()
         runner.run.return_value = MagicMock(returncode=0, stdout="active\n", stderr="")
         mgr = SystemdServiceManager(runner)
