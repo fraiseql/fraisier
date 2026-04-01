@@ -125,6 +125,55 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 context=error_details,
             )
 
+    def _sync_config_if_needed(self) -> None:
+        """Sync fraises.yaml from git checkout and regenerate scaffold if changed."""
+        project_name = self.config.get("project_name", self.fraise_name)
+        opt_config = Path("/opt") / project_name / "fraises.yaml"
+        app_config = Path(self.app_path) / "fraises.yaml"
+
+        if app_config.exists():
+            self._sync_fraises_yaml(source_path=app_config, dest_path=opt_config)
+            if self._detect_config_changes(config_path=opt_config):
+                self._regenerate_scaffold(config_path=opt_config)
+                self._install_scaffold()
+
+    def _run_database_migrations(self) -> None:
+        """Run database migrations, stopping the service first for rebuild."""
+        if self._is_rebuild_strategy() and self.systemd_service:
+            logger.info("Stopping service for rebuild: %s", self.systemd_service)
+            self._stop_service()
+        logger.info("Running database migrations")
+        self._run_strategy()
+
+    def _check_health_or_rollback(
+        self,
+        start_time: float,
+        old_version: str | None,
+        db_pk: int | None,
+    ) -> DeploymentResult | None:
+        """Check health post-deployment; roll back and return result if it fails."""
+        logger.info(f"Running health check: {self.health_check_url}")
+        if self._wait_for_health():
+            return None
+        if self._previous_sha:
+            logger.warning(
+                "Health check failed, rolling back to %s",
+                self._previous_sha[:8],
+            )
+            rollback_result = self.rollback()
+            duration = time.time() - start_time
+            result = self._build_rollback_result(rollback_result, old_version, duration)
+            self._complete_db_record(db_pk, result)
+            return result
+        raise HealthCheckError(
+            "Health check failed after deployment",
+            context={
+                "fraise": self.fraise_name,
+                "environment": self.environment,
+                "url": self.health_check_url,
+            },
+        )
+
     def execute(self) -> DeploymentResult:
         """Execute API deployment."""
         start_time = time.time()
@@ -141,22 +190,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             with deployment_timeout(timeout):
                 # Config sync and scaffold regeneration
                 try:
-                    # Determine config file locations
-                    project_name = self.config.get("project_name", self.fraise_name)
-                    opt_dir = Path("/opt") / project_name
-                    opt_config = opt_dir / "fraises.yaml"
-                    app_config = Path(self.app_path) / "fraises.yaml"
-
-                    # Sync config from git checkout
-                    if app_config.exists():
-                        self._sync_fraises_yaml(
-                            source_path=app_config, dest_path=opt_config
-                        )
-
-                        # Check if config changed and regenerate scaffold if needed
-                        if self._detect_config_changes(config_path=opt_config):
-                            self._regenerate_scaffold(config_path=opt_config)
-                            self._install_scaffold()
+                    self._sync_config_if_needed()
                 except Exception as e:
                     logger.warning(f"Config sync failed: {e}")
                     # Continue with deployment - config mismatch is not fatal
@@ -171,17 +205,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
                 # Step 3: Run database migrations via strategy if configured
                 if self.database_config:
-                    # Rebuild drops schemas — stop service first to release
-                    # DB connections and avoid stale OID errors (#12)
-                    if self._is_rebuild_strategy() and self.systemd_service:
-                        logger.info(
-                            "Stopping service for rebuild: %s",
-                            self.systemd_service,
-                        )
-                        self._stop_service()
-
-                    logger.info("Running database migrations")
-                    self._run_strategy()
+                    self._run_database_migrations()
 
                 # Step 4: Restart service
                 if self.systemd_service:
@@ -190,30 +214,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
                 # Step 5: Health check
                 if self.health_check_url:
-                    logger.info(f"Running health check: {self.health_check_url}")
-                    if not self._wait_for_health():
-                        if self._previous_sha:
-                            logger.warning(
-                                "Health check failed, rolling back to "
-                                f"{self._previous_sha[:8]}"
-                            )
-                            rollback_result = self.rollback()
-                            duration = time.time() - start_time
-                            result = self._build_rollback_result(
-                                rollback_result,
-                                old_version,
-                                duration,
-                            )
-                            self._complete_db_record(db_pk, result)
-                            return result
-                        raise HealthCheckError(
-                            "Health check failed after deployment",
-                            context={
-                                "fraise": self.fraise_name,
-                                "environment": self.environment,
-                                "url": self.health_check_url,
-                            },
-                        )
+                    early = self._check_health_or_rollback(
+                        start_time, old_version, db_pk
+                    )
+                    if early is not None:
+                        return early
 
                 new_version = new_sha[:8] if new_sha else None
                 duration = time.time() - start_time

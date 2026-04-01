@@ -1,6 +1,7 @@
 # Fraisier Deployment Guide
 
-Guide for deploying services using Fraisier in production.
+This guide walks through setting up and operating Fraisier deployments on a Linux server —
+from first install through day-to-day operations.
 
 ---
 
@@ -8,717 +9,688 @@ Guide for deploying services using Fraisier in production.
 
 - Linux server (Ubuntu 22.04+, Debian 12+, or similar)
 - Python 3.11+
-- Git access to your repositories
-- SSH access to deployment targets
+- Git
+- systemd
+- sudo access for the initial setup
 
 ---
 
 ## Installation
 
-### 1. System Dependencies
-
 ```bash
-sudo apt-get update
-sudo apt-get install -y python3.11 python3-pip git curl
-
-# Optional: For advanced deployments
-sudo apt-get install -y docker.io postgresql-client
-```
-
-### 2. Install Fraisier
-
-```bash
-# From PyPI (when released)
 pip install fraisier
-
-# Or from source
-git clone https://github.com/fraiseql/fraiseql.git
-cd fraiseql/fraisier
-pip install .
 ```
 
-### 3. Create Deployment User
+Verify:
 
 ```bash
-# Create dedicated user for Fraisier
-sudo useradd -m -s /bin/bash fraisier
-sudo usermod -aG docker fraisier  # If using Docker
-
-# Allow sudo without password for deployment commands
-echo "fraisier ALL=(ALL) NOPASSWD: /bin/systemctl" | sudo tee /etc/sudoers.d/fraisier-systemctl
-```
-
-### 4. Directory Structure
-
-```bash
-# Create Fraisier home
-sudo mkdir -p /opt/fraisier/{config,logs,data}
-sudo chown -R fraisier:fraisier /opt/fraisier
-sudo chmod 700 /opt/fraisier
-
-# Directories:
-# config/      - fraises.yaml, secrets, SSL certs
-# logs/        - Deployment logs
-# data/        - fraisier.db (state database)
+fraisier --version
 ```
 
 ---
 
-## Configuration
+## Configuration: fraises.yaml
 
-### 1. Create fraises.yaml
+`fraises.yaml` is the single source of truth for your deployment configuration. Fraisier
+searches for it in the current directory, `./config/`, `/opt/<project_name>/`, or the path
+set in `$FRAISIER_CONFIG`.
 
-```bash
-sudo vim /opt/fraisier/config/fraises.yaml
-```
-
-**Example**:
+### Minimal example
 
 ```yaml
+name: myapp
+
 git:
   provider: github
   github:
-    # Set via FRAISIER_WEBHOOK_SECRET environment variable
+    webhook_secret: ${FRAISIER_WEBHOOK_SECRET}
+
+scaffold:
+  deploy_user: fraisier       # system user that runs deployments
+  output_dir: scripts/generated
 
 fraises:
   my_api:
     type: api
-    description: My API Service
     environments:
       production:
-        name: my-api
         branch: main
-        app_path: /opt/services/my-api
-        git_repo: https://github.com/user/my-api.git
+        clone_url: https://github.com/org/my-api.git
+        git_repo: /var/lib/fraisier/repos/my-api.git   # local bare repo
+        app_path: /var/www/my-api                       # git worktree
         systemd_service: my-api.service
-        database:
-          name: my_api_prod
-          strategy: apply  # Never rebuild production DB
-          backup_before_deploy: true
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp            # run install as application user
+        service:
+          user: myapp
+          exec: "/var/www/my-api/.venv/bin/gunicorn myapp.wsgi"
+          port: 8000
         health_check:
-          url: https://api.mycompany.com/health
+          url: http://localhost:8000/health
           timeout: 30
+          retries: 5
+        database:
+          strategy: migrate
+          database_url: ${DATABASE_URL}
+          admin_url: ${DATABASE_ADMIN_URL}
+          confiture_config: confiture.yaml
+          migrations_dir: db/migrations
+
+branch_mapping:
+  main:
+    fraise: my_api
+    environment: production
 ```
 
-### 2. Environment Secrets
+### How secrets work
+
+Use `${ENV_VAR}` syntax in `fraises.yaml`. Fraisier resolves these at runtime. Never commit
+actual secrets. A typical environment file at `/etc/myapp/prod.env`:
 
 ```bash
-# Create .env file
-sudo vim /opt/fraisier/config/.env
-```
-
-**Content**:
-
-```bash
-# Git provider webhook secret
-FRAISIER_WEBHOOK_SECRET=your-secret-here
-
-# Database credentials (if needed)
-DATABASE_URL=postgresql://user:pass@localhost/fraisier
-
-# Notifications (optional)
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-```
-
-### 3. Load Environment
-
-```bash
-# For systemd service
-# Add to [Service] section:
-# EnvironmentFile=/opt/fraisier/config/.env
-
-# For manual runs
-sudo -u fraisier bash -c 'source /opt/fraisier/config/.env && fraisier list'
+FRAISIER_WEBHOOK_SECRET=<min 32 chars, random>
+DATABASE_URL=postgresql://myapp:pass@localhost/myapp_production
+DATABASE_ADMIN_URL=postgresql://postgres@/postgres?host=/var/run/postgresql
 ```
 
 ---
 
-## Deployment Targets Setup
+## Server Setup (one-time)
 
-### 1. Systemd Service (Bare Metal)
+`fraisier setup` provisions the server: creates users, directories, permissions, sudoers
+rules, and installs systemd units. You run this once per environment, or again after
+significant config changes.
 
-For each service managed by Fraisier:
+### 1. Generate scaffold files
 
-```bash
-sudo vim /etc/systemd/system/my-api.service
-```
-
-**Example**:
-
-```ini
-[Unit]
-Description=My API Service
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/opt/services/my-api
-ExecStart=/usr/bin/python /opt/services/my-api/app.py
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable the service:
+Scaffold generates all infrastructure files from `fraises.yaml` — systemd units, nginx
+configs, sudoers fragments, wrapper scripts, and more.
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable my-api.service
+fraisier scaffold
 ```
 
-### 2. Docker Compose
-
-For containerized deployments:
+Review what was generated:
 
 ```bash
-mkdir -p /opt/services/my-api
-cd /opt/services/my-api
+git diff scripts/generated/
+```
 
-# Create docker-compose.yml
-cat > docker-compose.yml << EOF
-version: '3.8'
-services:
-  api:
-    image: my-api:latest
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgres://...
-    restart: unless-stopped
-EOF
+For a multi-server setup where each server only needs its own environments:
+
+```bash
+fraisier scaffold --server prod.myserver.com
+```
+
+### 2. Preview and install scaffold
+
+```bash
+# Preview without changes
+fraisier scaffold-install --dry-run
+
+# Install to the system (copies to /etc/systemd/system/, /etc/sudoers.d/, etc.)
+sudo fraisier scaffold-install --yes
+```
+
+### 3. Run server setup
+
+```bash
+sudo fraisier setup
+```
+
+`fraisier setup` performs these steps:
+
+1. Creates `deploy_user` (e.g. `fraisier`) and any application users defined under
+   `service.user` in each environment
+2. Creates system directories:
+   - `/var/lib/fraisier/repos/` — bare git repositories
+   - `/var/lib/fraisier/status/` — deployment status files
+   - `/run/fraisier/` — lock files
+3. Sets ownership and permissions on `app_path` so the deploy user can write to the
+   worktree while the application user owns the running code
+4. Configures `git config --global safe.directory` for the app paths
+5. Installs the sudoers fragment (`/etc/sudoers.d/<project>`)
+6. Installs the webhook systemd unit and application service units
+7. Reloads systemd: `systemctl daemon-reload`
+
+Filter to a specific environment or server:
+
+```bash
+sudo fraisier setup --environment production
+sudo fraisier setup --server prod.myserver.com
 ```
 
 ---
 
-## Fraisier Service Setup
+## The Git Model: bare repo + worktree
 
-### 1. Create Systemd Service for Fraisier
+Fraisier does not use `git pull` in the traditional sense. It uses:
 
-```bash
-sudo vim /etc/systemd/system/fraisier.service
+- **Bare repository** (`git_repo`): a local mirror of the remote, e.g.
+  `/var/lib/fraisier/repos/my-api.git`. This is never modified by the application.
+- **Worktree** (`app_path`): the checked-out application code, e.g. `/var/www/my-api`.
+  Only Fraisier writes here, via `git checkout`.
+
+On every deployment:
+
+```
+git -C /var/lib/fraisier/repos/my-api.git fetch origin
+git --work-tree=/var/www/my-api --git-dir=.../my-api.git checkout -f origin/main
 ```
 
-**Content**:
+This means:
+- Rollback is instant — it just checks out the previous SHA
+- There is no risk of merge conflicts or dirty state in the worktree
+- The bare repo is the only copy on disk that tracks history
 
-```ini
-[Unit]
-Description=Fraisier Deployment Orchestrator
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=fraisier
-Group=fraisier
-WorkingDirectory=/opt/fraisier
-EnvironmentFile=/opt/fraisier/config/.env
-
-# Webhook server
-ExecStart=/usr/local/bin/fraisier-webhook
-
-StandardOutput=journal
-StandardError=journal
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### 2. Enable Service
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable fraisier.service
-sudo systemctl start fraisier.service
-sudo systemctl status fraisier.service
-```
-
-> **Note**: Deployments triggered via webhook run asynchronously as
-> background tasks within the `fraisier-webhook` process. The HTTP 200
-> response does not indicate deployment success. Monitor via
-> `fraisier status` or the `/api/status/{fraise_name}` endpoint.
+The bare repo is created automatically on first deploy from `clone_url`.
 
 ---
 
-## Nginx Reverse Proxy
+## First Deployment
 
-Setup Nginx to expose Fraisier webhook endpoint:
-
-```bash
-sudo vim /etc/nginx/sites-available/fraisier
-```
-
-**Content**:
-
-```nginx
-upstream fraisier {
-    server 127.0.0.1:8000;
-}
-
-server {
-    listen 80;
-    listen [::]:80;
-    server_name deploy.mycompany.com;
-
-    # Redirect to HTTPS
-    return 301 https://$server_name$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name deploy.mycompany.com;
-
-    ssl_certificate /etc/ssl/certs/fraisier.crt;
-    ssl_certificate_key /etc/ssl/private/fraisier.key;
-
-    # Security headers
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-
-    # Fraisier webhook
-    location /webhook {
-        proxy_pass http://fraisier;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Timeout for long deployments
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 300s;
-    }
-
-    # Health check
-    location /health {
-        proxy_pass http://fraisier;
-        access_log off;
-    }
-}
-```
-
-Enable site:
+### 1. Validate readiness
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/fraisier /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
----
-
-## Git Webhook Configuration
-
-### GitHub
-
-1. Go to repository settings → Webhooks
-2. Create webhook:
-   - **Payload URL**: `https://deploy.mycompany.com/webhook`
-   - **Content type**: `application/json`
-   - **Secret**: Set to `FRAISIER_WEBHOOK_SECRET`
-   - **Events**: Push events
-3. Click "Add webhook"
-
-### GitLab
-
-1. Go to repository → Settings → Webhooks
-2. Create webhook:
-   - **URL**: `https://deploy.mycompany.com/webhook`
-   - **Trigger**: Push events
-   - **Secret token**: Set to `FRAISIER_WEBHOOK_SECRET`
-3. Click "Add webhook"
-
-### Gitea
-
-1. Go to repository → Settings → Webhooks
-2. Create webhook:
-   - **Target URL**: `https://deploy.mycompany.com/webhook`
-   - **HTTP method**: POST
-   - **Content type**: JSON
-   - **Secret**: Set to `FRAISIER_WEBHOOK_SECRET`
-3. Click "Add webhook"
-
----
-
-## Testing Deployment
-
-### 1. Verify Configuration
-
-```bash
-# Switch to fraisier user
-sudo -u fraisier bash
-
-# Set environment
-source /opt/fraisier/config/.env
-
-# Validate config
 fraisier validate
-
-# List fraises
-fraisier list
+fraisier validate-deployment my_api production
 ```
 
-### 2. Dry-Run Deployment
+`validate-deployment` checks that the bare repo exists or is fetchable, credentials are set,
+wrapper scripts are present, and systemd services are known.
+
+### 2. Deploy
 
 ```bash
-# Test deployment without actually deploying
-fraisier deploy my_api production --dry-run
-```
-
-### 3. Manual Deployment
-
-```bash
-# Actually deploy
 fraisier deploy my_api production
-
-# Check deployment history
-fraisier history --fraise my_api
-
-# Check status
-fraisier status my_api production
 ```
 
-### 4. Test Webhook
+The deployment sequence:
+
+1. **Config sync**: copies `fraises.yaml` from the git worktree to `/opt/<project>/` and
+   detects whether it changed. If changed, regenerates and installs scaffold automatically.
+2. **Git fetch + checkout**: fetches from `clone_url`, checks out `branch` into `app_path`.
+3. **Install dependencies**: runs `install.command` (e.g. `uv sync --frozen`) in `app_path`,
+   optionally as `install.user` via `sudo -u`.
+4. **Database migrations**: runs the configured strategy (see below).
+5. **Service restart**: calls `systemctl restart` via the restricted wrapper script.
+6. **Health check**: polls `health_check.url` with exponential backoff until the service
+   responds healthy or retries are exhausted.
+7. **Auto-rollback on failure**: if the health check fails and a previous SHA is available,
+   Fraisier undoes migrations, checks out the old SHA, restarts the service, and marks the
+   deployment as `ROLLED_BACK`.
+
+### 3. Monitor progress
 
 ```bash
-# Simulate a push to main branch
-curl -X POST https://deploy.mycompany.com/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: push" \
-  -H "X-Hub-Signature-256: sha256=test" \
-  -d '{
-    "ref": "refs/heads/main",
-    "repository": {"full_name": "user/my-api"},
-    "pusher": {"name": "user"},
-    "head_commit": {"id": "abc123"}
-  }'
+# Live status
+fraisier status my_api production
 
-# Check deployment status
-fraisier history --limit 5
+# All fraises at once
+fraisier status-all
+
+# Recent deployments
+fraisier history --fraise my_api --limit 10
 ```
 
 ---
 
-## Monitoring & Logs
+## Database Migration Strategies
 
-### View Logs
+| Strategy | What it does | When to use |
+|---|---|---|
+| `migrate` | Runs `confiture migrate up` | Standard schema changes |
+| `apply` | Alias for `migrate` | Same as above |
+| `rebuild` | Stops service, drops schemas, recreates from scratch | Development and staging only |
+| `restore_migrate` | Restores from a production backup, then migrates up | Refreshing staging from prod |
+
+For production, always use `migrate`. Never use `rebuild` on production — it destroys data.
+
+### Irreversible migrations
+
+If a migration cannot be rolled back (e.g. a destructive schema change), use:
 
 ```bash
-# Fraisier service logs
-sudo journalctl -u fraisier.service -f
+fraisier deploy my_api production --no-rollback
+```
 
-# Deployment logs
-sudo journalctl -u fraisier.service -f
+This disables the automatic rollback-on-health-check-failure. Combined with `--skip-health`:
+
+```bash
+fraisier deploy my_api production --no-rollback --skip-health
+```
+
+### Running migrations manually
+
+```bash
+# Apply pending migrations
+fraisier db migrate my_api -e production
+
+# Roll back one step
+fraisier db migrate my_api -e production -d down
+```
+
+---
+
+## Multi-Environment Setup
+
+A typical setup has staging and production on separate servers. In `fraises.yaml`, assign
+each environment a server:
+
+```yaml
+environments:
+  staging:
+    server: staging.myserver.com
+  production:
+    server: prod.myserver.com
+```
+
+Then on each server, run scaffold and setup filtered to that server:
+
+```bash
+# On staging.myserver.com
+fraisier scaffold --server staging.myserver.com
+sudo fraisier scaffold-install --yes
+sudo fraisier setup --server staging.myserver.com
+
+# On prod.myserver.com
+fraisier scaffold --server prod.myserver.com
+sudo fraisier scaffold-install --yes
+sudo fraisier setup --server prod.myserver.com
+```
+
+The `--server` filter ensures that:
+- Systemd units are only generated for environments assigned to that server
+- The webhook service's `ReadWritePaths` only includes paths that exist locally
+- Sudoers entries only reference local service names
+
+### Branch mapping for multiple environments
+
+```yaml
+branch_mapping:
+  main:
+    fraise: my_api
+    environment: production
+  staging:
+    fraise: my_api
+    environment: staging
+```
+
+Pushing to `main` triggers a production deployment; pushing to `staging` triggers a staging
+deployment.
+
+---
+
+## Security Model
+
+### Two-user model
+
+Fraisier separates deployment and application concerns into two system users:
+
+| User | Purpose | Has access to |
+|---|---|---|
+| `deploy_user` (e.g. `fraisier`) | Runs fraisier, the webhook, git operations | `app_path` (write), systemctl wrapper, pg wrapper |
+| `service.user` (e.g. `myapp`) | Runs the application process | `app_path` (read), database |
+
+The deploy user never runs the application. The application user never touches deployment
+infrastructure.
+
+### Wrapper scripts
+
+Fraisier generates two restricted wrapper scripts and installs them via sudoers:
+
+**`systemctl-wrapper.sh`** — `deploy_user` can only restart the specific services listed in
+`fraises.yaml`. It cannot stop, start, or touch any other service.
+
+**`pg-wrapper.sh`** — `deploy_user` can only run `psql`/`pg_dump` against the specific
+database names in `fraises.yaml`. Required for `rebuild` and `restore_migrate` strategies.
+
+These wrappers are referenced via environment variables:
+
+```bash
+FRAISIER_SYSTEMCTL_WRAPPER=/path/to/systemctl-wrapper.sh
+FRAISIER_PG_WRAPPER=/path/to/pg-wrapper.sh
+```
+
+Check that wrapper scripts are in place before deploying:
+
+```bash
+fraisier validate-deployment my_api production
+```
+
+Or test them individually:
+
+```bash
+fraisier test-wrapper my_api production systemctl restart
+fraisier test-wrapper my_api production pg psql
+```
+
+### Webhook security
+
+- HMAC signature verification (GitHub, Gitea, Bitbucket) or token comparison (GitLab)
+- Requires `FRAISIER_WEBHOOK_SECRET` (minimum 32 characters)
+- Rate-limited to 10 requests/minute per IP
+- Webhook requests that fail signature verification are rejected with 403
+
+---
+
+## Webhook Setup
+
+### 1. Start the webhook server
+
+The scaffold generates a systemd unit (`fraisier-<project>-webhook.service`). Enable it:
+
+```bash
+sudo systemctl enable fraisier-myapp-webhook.service
+sudo systemctl start fraisier-myapp-webhook.service
+```
+
+The webhook server listens on port 8080 by default. Configure via environment variables:
+
+```bash
+FRAISIER_WEBHOOK_SECRET=...
+FRAISIER_PORT=8080              # default
+FRAISIER_HOST=0.0.0.0           # default
+FRAISIER_GIT_PROVIDER=github    # github, gitlab, gitea, or bitbucket
+```
+
+### 2. Configure the webhook in your git provider
+
+**GitHub**: Repository → Settings → Webhooks → Add webhook
+- Payload URL: `https://deploy.mycompany.com/webhook`
+- Content type: `application/json`
+- Secret: value of `FRAISIER_WEBHOOK_SECRET`
+- Events: Just the push event
+
+**GitLab**: Repository → Settings → Webhooks
+- URL: `https://deploy.mycompany.com/webhook`
+- Secret token: value of `FRAISIER_WEBHOOK_SECRET`
+- Trigger: Push events
+
+**Gitea** / **Bitbucket**: Similar — set target URL and secret.
+
+### 3. Verify webhook delivery
+
+```bash
+fraisier webhooks --limit 10
+```
+
+---
+
+## Operational Procedures
+
+### Checking deployment status
+
+```bash
+# Single fraise
+fraisier status my_api production
+
+# All fraises in a table
+fraisier status-all
+
+# Last deployment from the status file
+fraisier deploy-status
+
+# Deployment history
+fraisier history --fraise my_api --environment production --limit 20
+
+# Statistics
+fraisier stats --fraise my_api --days 7
+```
+
+### Manual rollback
+
+```bash
+# Roll back to the last known good SHA
+fraisier rollback my_api production
+
+# Roll back to a specific commit
+fraisier rollback my_api production --to-version abc1234
+```
+
+Rollback runs the reverse migration steps, checks out the old code, and restarts the service.
+
+### Viewing logs
+
+```bash
+# Webhook server logs
+sudo journalctl -u fraisier-myapp-webhook.service -f
 
 # Application logs
-tail -f /opt/fraisier/logs/fraisier.log
+sudo journalctl -u my-api.service -f
+
+# Deployment activity (fraisier's own output)
+sudo journalctl -u fraisier-myapp-webhook.service --since "1 hour ago"
 ```
 
-### Database Inspection
+### Checking health
 
 ```bash
-sudo -u fraisier sqlite3 /opt/fraisier/data/fraisier.db
+# All services
+fraisier health
 
-# View recent deployments
-SELECT * FROM tb_deployment LIMIT 10;
+# Production only
+fraisier health --env production
 
-# View deployment statistics
-SELECT * FROM v_deployment_stats;
-
-# Exit
-.quit
+# Wait until healthy (useful in scripts)
+fraisier health --env production --wait
 ```
 
-### Monitoring with Prometheus (Future)
+### Pre-deployment validation
 
-Fraisier will expose Prometheus metrics at `/metrics`.
+Before deploying to production, check readiness:
+
+```bash
+fraisier validate-deployment my_api production
+```
+
+Checks performed:
+- Configuration is valid
+- Bare repository is reachable
+- Required environment variables are set
+- Wrapper scripts exist and are executable
+- Systemd service is known to systemd
+- Database credentials are valid (if database configured)
+
+### Conditional deployment
+
+Deploy only if the remote has new commits:
+
+```bash
+fraisier deploy my_api production --if-changed
+```
+
+Useful in cron jobs or CI pipelines where you want to avoid no-op deployments.
 
 ---
 
-## Health Checks
+## Diagnostic Commands
 
-### Application Health
+When a deployment fails, the `test-*` commands isolate which component is broken.
 
-```bash
-# Check if Fraisier is running
-curl https://deploy.mycompany.com/health
-
-# Response (success):
-{"status": "healthy", "version": "0.1.0"}
-
-# Response (failure):
-HTTP 503 Service Unavailable
-```
-
-### Deployment Health
+### Test git operations
 
 ```bash
-# Check if recent deployments succeeded
-fraisier stats --days 7
-
-# Should show high success rate
+fraisier test-git my_api production
 ```
 
----
+Checks: bare repo exists, remote is reachable, current version, latest version.
 
-## Backup & Disaster Recovery
-
-### Database Backup
+### Test install step
 
 ```bash
-# Manual backup
-sudo -u fraisier cp /opt/fraisier/data/fraisier.db /opt/fraisier/backups/fraisier.db.$(date +%Y%m%d)
-
-# Automated backup (cron)
-sudo crontab -e
-
-# Add:
-
-0 2 * * * /usr/bin/sqlite3 /opt/fraisier/data/fraisier.db ".backup /opt/fraisier/backups/fraisier-$(date +\%Y\%m\%d).db"
+fraisier test-install my_api production
 ```
 
-### Configuration Backup
+Runs the `install.command` in `app_path` and reports the outcome and any error output.
+
+### Test health check
 
 ```bash
-# Backup configuration files
-tar -czf /opt/backups/fraisier-config-$(date +%Y%m%d).tar.gz /opt/fraisier/config/
-
-# Store off-server
-scp fraisier-config-*.tar.gz backup@backup.server:/backups/
+fraisier test-health my_api production
 ```
 
-### Restore from Backup
+Performs one health check against `health_check.url` and reports HTTP status and response.
+
+### Test database connection
 
 ```bash
-# Stop Fraisier
-sudo systemctl stop fraisier.service
-
-# Restore database
-sudo cp /opt/fraisier/backups/fraisier.db.backup /opt/fraisier/data/fraisier.db
-sudo chown fraisier:fraisier /opt/fraisier/data/fraisier.db
-
-# Restart
-sudo systemctl start fraisier.service
+fraisier test-database my_api production
 ```
+
+Opens a connection using `database_url` and verifies the database is reachable and the
+schema is in the expected state.
+
+### Test wrapper scripts
+
+```bash
+fraisier test-wrapper my_api production systemctl restart
+fraisier test-wrapper my_api production pg psql
+```
+
+Verifies that the wrapper script is in place, executable, and that the sudo rule allows
+the deploy user to invoke it.
 
 ---
 
 ## Troubleshooting
 
-### Deployment Fails
+### Deployment fails immediately
 
 ```bash
-# Check Fraisier logs
-sudo journalctl -u fraisier.service -n 50
-
-# Check deployment details
+# Check the last deployment record
 fraisier history --fraise my_api --limit 1
 
-# Check service status
-fraisier status my_api production
+# Run full pre-flight check
+fraisier validate-deployment my_api production
 
-# Try manual deployment
-fraisier deploy my_api production  # Check deployment output
+# Test each component individually
+fraisier test-git my_api production
+fraisier test-install my_api production
+fraisier test-health my_api production
 ```
 
-### Webhook Not Triggering
+### Health check fails after deploy (auto-rollback triggered)
+
+The deployment status will show `ROLLED_BACK`. To investigate:
 
 ```bash
-# Check webhook events were received
+fraisier status my_api production
+sudo journalctl -u my-api.service -n 100
+fraisier test-health my_api production
+```
+
+If rollback also failed, an incident file is written to
+`/var/lib/fraisier/incidents/<fraise>_<timestamp>.json`.
+
+### Wrapper script errors
+
+`Error: FRAISIER_SYSTEMCTL_WRAPPER not set` or `not executable`:
+
+```bash
+# Check the env var is set in the deploy user's environment
+sudo -u fraisier env | grep FRAISIER
+
+# Check the script exists and is executable
+ls -la $FRAISIER_SYSTEMCTL_WRAPPER
+
+# Regenerate and reinstall if needed
+fraisier scaffold
+sudo fraisier scaffold-install --yes
+```
+
+### Webhook not triggering deployments
+
+```bash
+# Check events were received
 fraisier webhooks --limit 20
 
-# If processed=0, webhook wasn't matched
-# Check branch_mapping in fraises.yaml
+# If events show but no deployment started, check branch_mapping
+fraisier validate
 
-# Test webhook manually
-curl -X POST http://localhost:8000/webhook ...
+# Test manually
+curl -X POST http://localhost:8080/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: push" \
+  -d '{"ref":"refs/heads/main","repository":{"full_name":"org/my-api"}}'
 ```
 
-### Database Locked
+### Config sync regenerated scaffold unexpectedly
+
+During deploy, if `fraises.yaml` changed in git, Fraisier automatically regenerates and
+installs scaffold. If the regenerated files differ from what is on disk, systemd units may
+be updated. To see what changed:
 
 ```bash
-# If "database is locked" error:
-# Kill any hanging processes
-sudo pkill -f fraisier
-
-# Check database integrity
-sudo -u fraisier sqlite3 /opt/fraisier/data/fraisier.db "PRAGMA integrity_check;"
-
-# If corrupted, restore from backup
+git diff HEAD~1 -- fraises.yaml
+fraisier scaffold --dry-run
 ```
 
-### Service Won't Start
+### Database migration errors
+
+Migration errors include the migration filename, direction, database error, rollback status,
+and recovery suggestions. Read the full error output from:
 
 ```bash
-# Check for port conflicts
-sudo lsof -i :8000  # Fraisier webhook port
+fraisier history --fraise my_api --limit 1
+fraisier test-database my_api production
+```
 
-# Check logs
-sudo journalctl -u fraisier.service -n 20
+For a production migration that cannot be rolled back automatically:
 
-# Manually test
-sudo -u fraisier fraisier-webhook
+```bash
+# Check current migration state
+fraisier db migrate my_api -e production -d down  # careful: rolls back one step
+fraisier db-check
+```
+
+### Deployment lock stuck
+
+If a deploy was interrupted, the lock file may be left behind:
+
+```bash
+# File-backend lock
+ls -la /run/fraisier/
+
+# Remove stale lock (only if no deploy is actually running)
+sudo rm /run/fraisier/my_api.lock
 ```
 
 ---
 
-## Upgrading
-
-### Backup First
+## Upgrading Fraisier
 
 ```bash
-sudo -u fraisier cp /opt/fraisier/data/fraisier.db /opt/fraisier/backups/fraisier-pre-upgrade.db
-```
-
-### Update Package
-
-```bash
-# Stop Fraisier
-sudo systemctl stop fraisier.service
-
-# Upgrade
 pip install --upgrade fraisier
 
-# Restart
-sudo systemctl start fraisier.service
-
-# Verify
-fraisier --version
-```
-
-### Check for Breaking Changes
-
-See [RELEASE_NOTES.md](../RELEASE_NOTES.md) for breaking changes between versions.
-
----
-
-## Security Hardening
-
-### File Permissions
-
-```bash
-# Restrict configuration access
-sudo chmod 700 /opt/fraisier/config
-sudo chmod 600 /opt/fraisier/config/.env
-sudo chmod 600 /opt/fraisier/config/fraises.yaml
-```
-
-### Firewall Rules
-
-```bash
-# Allow webhook traffic only
-sudo ufw allow 443/tcp  # HTTPS
-sudo ufw allow 22/tcp   # SSH
-sudo ufw default deny incoming
-sudo ufw enable
-```
-
-### SSL/TLS Certificates
-
-```bash
-# Using Let's Encrypt
-sudo certbot certonly --nginx -d deploy.mycompany.com
-
-# Auto-renewal
-sudo systemctl enable certbot.timer
-sudo systemctl start certbot.timer
-```
-
-### Rate Limiting (Nginx)
-
-```nginx
-# Add to nginx config
-limit_req_zone $binary_remote_addr zone=webhook_limit:10m rate=10r/m;
-
-location /webhook {
-    limit_req zone=webhook_limit burst=20 nodelay;
-    proxy_pass http://fraisier;
-}
+# Regenerate scaffold after upgrading (templates may have changed)
+fraisier scaffold
+git diff scripts/generated/
+sudo fraisier scaffold-install --yes
 ```
 
 ---
 
-## Performance Tuning
+## Configuration Reference
 
-### Database Optimization
+See the [CLI Reference](./cli-reference.md) for all commands and flags.
 
-```bash
-# Analyze and optimize database
-sudo -u fraisier sqlite3 /opt/fraisier/data/fraisier.db << EOF
-PRAGMA optimize;
-VACUUM;
-EOF
+For the full `fraises.yaml` schema, all fields are documented inline in the config validator
+at `fraisier/config.py`. The key top-level sections are:
 
-# Schedule weekly optimization
-sudo crontab -e
-# Add: 0 3 * * 0 /usr/bin/sqlite3 /opt/fraisier/data/fraisier.db "PRAGMA optimize; VACUUM;"
-```
-
-### Connection Pooling
-
-For PostgreSQL:
-
-```bash
-# Use pgBouncer for connection pooling
-sudo apt-get install pgbouncer
-```
+| Section | Purpose |
+|---|---|
+| `name` | Project name; prefixes all generated service and file names |
+| `git` | Git provider and webhook secret |
+| `scaffold` | Infrastructure generation settings (output dir, deploy user, systemd/nginx defaults) |
+| `deployment` | Lock backend, status file path, default timeout |
+| `health` | Global health check defaults |
+| `notifications` | Slack/Discord/webhook notifications on success/failure/rollback |
+| `environments` | Server assignment per environment (for multi-server filtering) |
+| `branch_mapping` | Maps git branches to fraise/environment pairs |
+| `fraises` | Per-fraise config: type, environments, install, service, database, health_check, nginx |
 
 ---
 
-## Configuration Synchronization (Automatic)
-
-### What Happens During Deploy
-
-Starting with version 1.0+, Fraisier automatically synchronizes `fraises.yaml` from the git repository to the server and regenerates infrastructure files if the configuration changed.
-
-**During `fraisier deploy`:**
-
-1. **Config Sync**: Copies `fraises.yaml` from checked-out app_path
-2. **Change Detection**: Compares hash with previous deployment
-3. **Scaffold Regen**: If config changed, runs `fraisier scaffold`
-4. **Scaffold Install**: If scaffold changed, runs `fraisier scaffold-install --yes`
-5. **Deploy**: Proceeds with migration, restart, health check, etc.
-
-### Single Source of Truth
-
-You now have one source of truth: `fraises.yaml` in git. The server always stays in sync automatically.
-
-**You no longer need to:**
-- Manually copy `fraises.yaml` to server
-- Manually regenerate scaffold files
-- Manually install scaffold files
-
-### How It Works
-
-Config changes are detected using SHA256 hashing:
-
-```
-fraises.yaml (v1) → hash: abc123...
-  ↓ (deploy)
-Server config synced, hash stored
-  ↓ (next deploy)
-fraises.yaml (v2) → hash: def456...
-  ↓ (mismatch detected)
-Scaffold regenerated and installed
-```
-
-### Rollback
-
-If deployment fails, Fraisier automatically restores the previous `fraises.yaml` from git history and regenerates the corresponding scaffold files.
-
----
-
-## Next Steps
-
-1. See [development.md](../development.md) for development setup
-2. See [architecture.md](./architecture.md) for technical details
-3. See [../roadmap.md](../roadmap.md) for upcoming features
-
----
-
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-04-01

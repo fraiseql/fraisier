@@ -2518,7 +2518,7 @@ class TestWebhookServerFiltering:
     """Webhook service filters ReadWritePaths by server (#62)."""
 
     def test_webhook_includes_only_local_server_paths(self, tmp_path):
-        """Webhook service only includes ReadWritePaths for environments on the specified server."""
+        """Webhook service only includes ReadWritePaths for environments on the host."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -2552,7 +2552,7 @@ fraises:
         assert "ReadWritePaths=/var/www/prod" not in content
 
     def test_webhook_without_server_generates_per_server_files(self, tmp_path):
-        """Without --server, when environments.server is configured, one file per server is generated."""
+        """Without --server and environments.server set, one file per server is made."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -2581,15 +2581,19 @@ fraises:
         renderer = ScaffoldRenderer(config)  # No server specified
         renderer.render()
 
-        dev_content = (tmp_path / "output" / "fraisier-myproj-webhook-server-1.service").read_text()
-        prod_content = (tmp_path / "output" / "fraisier-myproj-webhook-server-2.service").read_text()
+        dev_content = (
+            tmp_path / "output" / "fraisier-myproj-webhook-server-1.service"
+        ).read_text()
+        prod_content = (
+            tmp_path / "output" / "fraisier-myproj-webhook-server-2.service"
+        ).read_text()
         assert "ReadWritePaths=/var/www/dev" in dev_content
         assert "ReadWritePaths=/var/www/prod" not in dev_content
         assert "ReadWritePaths=/var/www/prod" in prod_content
         assert "ReadWritePaths=/var/www/dev" not in prod_content
 
     def test_webhook_without_server_no_server_config_single_file(self, tmp_path):
-        """Without --server and no environments.server config, a single webhook file is generated."""
+        """Without --server and no environments.server, one webhook file is made."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -2713,7 +2717,7 @@ fraises:
         return FraisierConfig(p)
 
     def test_webhook_filename_uses_project_name(self, tmp_path):
-        """render(dry_run=True) returns fraisier-{project}-webhook.service, not the generic name."""
+        """render(dry_run=True) returns fraisier-{project}-webhook.service filename."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         config = self._make_config(tmp_path, "myproj")
@@ -3333,7 +3337,7 @@ fraises: {{}}
         assert "not found" in result.output.lower()
 
     def test_scaffold_then_install_workflow(self, tmp_path):
-        """Complete workflow: scaffold generates files, then scaffold-install processes them."""
+        """Complete workflow: scaffold generates files, scaffold-install installs."""
         from click.testing import CliRunner
 
         from fraisier.cli import main

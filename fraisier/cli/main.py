@@ -396,7 +396,8 @@ def _show_global_status(config) -> None:
 
         except Exception as e:
             console.print(
-                f"[yellow]Warning:[/yellow] Error checking {fraise_name}/{environment_name}: {e}"
+                f"[yellow]Warning:[/yellow] Error checking "
+                f"{fraise_name}/{environment_name}: {e}"
             )
             table.add_row(
                 fraise_name,

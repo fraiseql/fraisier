@@ -11,11 +11,38 @@ fraisier [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `-c`, `--config PATH` | Path to `fraises.yaml` configuration file |
+| `--verbose`, `-v` | Enable debug logging |
 | `--help` | Show help and exit |
 
 ---
 
 ## Core Commands
+
+### fraisier init
+
+Initialise a new `fraises.yaml` in the current directory from a template.
+
+```bash
+fraisier init [--output DIR] [--template TEMPLATE] [--force]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--output DIR` | Output directory (default: current directory) |
+| `--template TEMPLATE` | Starter template: `generic`, `django`, `rails`, `node` (default: `generic`) |
+| `--force` | Overwrite existing `fraises.yaml` |
+
+**Examples:**
+
+```bash
+fraisier init
+fraisier init --template django
+fraisier init --output config/ --template node
+```
+
+---
 
 ### fraisier list
 
@@ -60,7 +87,9 @@ fraisier deploy FRAISE ENVIRONMENT [OPTIONS]
 |--------|-------------|
 | `--dry-run` | Show what would happen without deploying |
 | `--force` | Deploy even if current and latest versions match |
+| `--if-changed` | Deploy only if the remote has new commits |
 | `--skip-health` | Skip the post-deploy health check |
+| `--no-rollback` | Disable automatic rollback on health check failure |
 | `--job NAME` | Specify a job name (for scheduled fraises) |
 
 **Automatic Configuration Synchronization**
@@ -89,6 +118,51 @@ fraisier deploy my_api staging --skip-health
 
 # Deploy a specific job within a scheduled fraise
 fraisier deploy my_etl production --job nightly_sync
+
+# Deploy only if there are new commits
+fraisier deploy my_api production --if-changed
+
+# Deploy an irreversible migration (no auto-rollback on failure)
+fraisier deploy my_api production --no-rollback
+```
+
+---
+
+### fraisier rollback
+
+Roll back a fraise to its previous deployment.
+
+```bash
+fraisier rollback FRAISE ENVIRONMENT [OPTIONS]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+- `ENVIRONMENT` (required) -- Target environment.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--to-version SHA` | Roll back to a specific git commit SHA |
+| `--force` | Skip confirmation prompt |
+
+Rollback checks out the previous (or specified) commit, reverses database migrations by
+the same number of steps that were applied in the failed deployment, and restarts the
+service.
+
+**Examples:**
+
+```bash
+# Roll back to the previous deployment
+fraisier rollback my_api production
+
+# Roll back to a specific SHA
+fraisier rollback my_api production --to-version abc1234
+
+# Roll back without confirmation
+fraisier rollback my_api production --force
 ```
 
 ---
@@ -294,6 +368,43 @@ fraisier backup my_api -e production --mode slim
 
 ## Infrastructure Commands
 
+### fraisier setup
+
+Provision the server: create system users, directories, permissions, sudoers rules, and
+install systemd units. Run once per server, or again after significant config changes.
+Requires sudo / root.
+
+```bash
+fraisier setup [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Show what would be provisioned without making changes |
+| `--environment ENV` | Provision only this environment |
+| `--server HOSTNAME` | Provision only environments assigned to this server |
+| `--yes`, `-y` | Skip confirmation prompt |
+
+**Examples:**
+
+```bash
+# Provision everything defined in fraises.yaml
+sudo fraisier setup
+
+# Provision only production
+sudo fraisier setup --environment production
+
+# Provision only environments on this host
+sudo fraisier setup --server prod.myserver.com
+
+# Preview without changes
+fraisier setup --dry-run
+```
+
+---
+
 ### fraisier scaffold
 
 Generate infrastructure files from `fraises.yaml`. Outputs systemd units, nginx configuration, GitHub Actions workflows, sudoers rules, `install.sh`, `confiture.yaml`, and shell scripts.
@@ -307,12 +418,16 @@ fraisier scaffold [--dry-run]
 | Option | Description |
 |--------|-------------|
 | `--dry-run` | Show what files would be generated without writing them |
+| `--server HOSTNAME` | Only generate files for environments assigned to this server |
 
 **Examples:**
 
 ```bash
 fraisier scaffold
 fraisier scaffold --dry-run
+
+# On a multi-server setup, generate only this server's files
+fraisier scaffold --server prod.myserver.com
 ```
 
 ---
@@ -375,6 +490,36 @@ fraisier scaffold-install --yes
 
 # 5. Verify services are running
 systemctl status <service-name>
+```
+
+---
+
+### fraisier validate-deployment
+
+Run a comprehensive readiness check for a specific fraise/environment before deploying.
+Checks config validity, bare repo reachability, required env vars, wrapper scripts, systemd
+service registration, and database credentials.
+
+```bash
+fraisier validate-deployment FRAISE ENVIRONMENT [--json]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+- `ENVIRONMENT` (required) -- Target environment.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output results as structured JSON |
+
+**Examples:**
+
+```bash
+fraisier validate-deployment my_api production
+fraisier validate-deployment my_api production --json
 ```
 
 ---
@@ -653,4 +798,147 @@ fraisier provider-test TYPE [-f CONFIG]
 ```bash
 fraisier provider-test bare_metal
 fraisier provider-test docker_compose -f docker-provider.yaml
+```
+
+---
+
+## Diagnostic Commands
+
+These commands isolate individual deployment components for debugging. Run them when a
+deployment fails to identify exactly which step is broken.
+
+### fraisier test-git
+
+Test git operations: bare repo existence, remote reachability, current and latest versions.
+
+```bash
+fraisier test-git FRAISE ENVIRONMENT
+```
+
+**Examples:**
+
+```bash
+fraisier test-git my_api production
+```
+
+---
+
+### fraisier test-install
+
+Run the `install.command` (e.g. `uv sync --frozen`) in `app_path` and report the result.
+
+```bash
+fraisier test-install FRAISE ENVIRONMENT
+```
+
+**Examples:**
+
+```bash
+fraisier test-install my_api production
+```
+
+---
+
+### fraisier test-health
+
+Perform one health check against `health_check.url` and report the HTTP status and response.
+
+```bash
+fraisier test-health FRAISE ENVIRONMENT
+```
+
+**Examples:**
+
+```bash
+fraisier test-health my_api production
+```
+
+---
+
+### fraisier test-database
+
+Open a connection using `database_url` and verify the database is reachable and the schema
+is in the expected state.
+
+```bash
+fraisier test-database FRAISE ENVIRONMENT
+```
+
+**Examples:**
+
+```bash
+fraisier test-database my_api production
+```
+
+---
+
+### fraisier test-wrapper
+
+Verify that a wrapper script is present, executable, and that the sudoers rule allows the
+deploy user to invoke it.
+
+```bash
+fraisier test-wrapper FRAISE ENVIRONMENT WRAPPER_TYPE COMMAND [ARGS...]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+- `ENVIRONMENT` (required) -- Target environment.
+- `WRAPPER_TYPE` (required) -- `systemctl` or `pg`.
+- `COMMAND` (required) -- Command to test (e.g. `restart`, `psql`).
+
+**Examples:**
+
+```bash
+# Test that the deploy user can restart the service via wrapper
+fraisier test-wrapper my_api production systemctl restart
+
+# Test that the pg wrapper can connect to the database
+fraisier test-wrapper my_api production pg psql
+```
+
+---
+
+## Ship Commands
+
+### fraisier ship
+
+Bump the version and ship: commit, push, and optionally open a pull request or deploy.
+
+```bash
+fraisier ship patch|minor|major [OPTIONS]
+```
+
+**Arguments:**
+
+- `patch|minor|major` (required) -- The version component to bump.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--no-bump` | Skip the version bump |
+| `--dry-run` | Show what would happen without making changes |
+| `--no-deploy` | Skip deployment after merging |
+| `--pr` | Open a pull request instead of pushing directly |
+| `--pr-base BRANCH` | Base branch for the pull request (default: `main`) |
+| `--skip-checks` | Skip pre-ship checks (lint, tests) |
+| `--version-file PATH` | Path to a custom `version.json` |
+| `--pyproject PATH` | Path to a custom `pyproject.toml` |
+
+**Examples:**
+
+```bash
+# Bump patch, commit, push, deploy
+fraisier ship patch
+
+# Bump minor, open a PR to main
+fraisier ship minor --pr
+
+# Bump major, dry run
+fraisier ship major --dry-run
+
+# Ship without bumping (e.g. docs-only change)
+fraisier ship patch --no-bump
 ```
