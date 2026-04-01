@@ -359,6 +359,66 @@ class TestMigrationErrors:
         assert error2.classification.error_type == "constraint"
         assert error2.classification.recoverable is False
 
+    def test_migration_error_format_for_operator_includes_migration_context(self):
+        """Test format_for_operator includes migration filename and direction."""
+        error = MigrationError(
+            "Migration failed",
+            migration_file="20260401_add_column.py",
+            direction="up",
+            db_error="column 'new_column' already exists",
+        )
+
+        formatted = error.format_for_operator()
+
+        assert "20260401_add_column.py" in formatted
+        assert "up" in formatted
+        assert "column 'new_column' already exists" in formatted
+
+    def test_migration_error_format_for_operator_includes_recovery(self):
+        """Test format_for_operator includes recovery suggestions."""
+        error = MigrationError(
+            "Migration failed",
+            migration_file="20260401_add_column.py",
+            direction="up",
+            db_error="column 'new_column' already exists",
+        )
+
+        formatted = error.format_for_operator()
+
+        # Should include recovery guidance
+        assert "recovery" in formatted.lower() or "suggest" in formatted.lower()
+        # Should reference context from recovery suggestions
+        assert "inspect" in formatted.lower() or "database" in formatted.lower()
+
+    def test_migration_error_format_for_operator_with_rollback_status(self):
+        """Test format_for_operator indicates rollback status."""
+        # Rollback succeeded
+        success_error = MigrationError(
+            "Migration failed",
+            db_error="syntax error",
+            rollback_attempted=True,
+            rollback_succeeded=True,
+        )
+        formatted_success = success_error.format_for_operator()
+        assert "rollback" in formatted_success.lower()
+        assert (
+            "success" in formatted_success.lower()
+            or "succeeded" in formatted_success.lower()
+        )
+
+        # Rollback failed
+        failed_error = MigrationError(
+            "Migration failed",
+            db_error="syntax error",
+            rollback_attempted=True,
+            rollback_succeeded=False,
+        )
+        formatted_failed = failed_error.format_for_operator()
+        assert "rollback" in formatted_failed.lower()
+        assert (
+            "failed" in formatted_failed.lower() or "manual" in formatted_failed.lower()
+        )
+
 
 class TestOtherErrors:
     """Test other error types."""

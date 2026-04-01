@@ -319,6 +319,50 @@ class MigrationError(DatabaseError):
 
         return " ".join(parts)
 
+    def format_for_operator(self) -> str:
+        """Return human-readable error message with recovery suggestions.
+
+        Formats the error for operators who need to understand and fix the issue.
+        Includes context, classification, recovery suggestions, and rollback status.
+
+        Returns:
+            Formatted error message suitable for display in CLI or logs
+        """
+        lines = ["Database migration failed!"]
+
+        # Add migration context
+        if self.migration_file:
+            lines.append("")
+            lines.append(f"Failed migration: {self.migration_file} ({self.direction})")
+        if self.db_error:
+            lines.append(f"Error: {self.db_error}")
+
+        # Add rollback status
+        if self.rollback_attempted is not None:
+            lines.append("")
+            if self.rollback_succeeded:
+                lines.append("✓ Automatic rollback succeeded.")
+            else:
+                lines.append(
+                    "✗ Automatic rollback FAILED — manual intervention required!"
+                )
+
+        # Add recovery suggestions
+        if self.classification:
+            from fraisier.migration_analyzer import get_recovery_suggestions
+
+            suggestions = get_recovery_suggestions(
+                self.classification.error_type,
+                self.migration_file or "migration",
+                self.db_error or "error",
+            )
+            lines.append("")
+            lines.append("Recovery options:")
+            for i, suggestion in enumerate(suggestions, 1):
+                lines.append(f"{i}. {suggestion}")
+
+        return "\n".join(lines)
+
 
 class DeploymentLockError(DeploymentError):
     """Deployment lock acquisition failed."""
