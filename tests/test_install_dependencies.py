@@ -95,6 +95,50 @@ class TestInstallDependenciesExecution:
             cwd="/var/www/api",
         )
 
+    def test_no_sudo_when_install_user_equals_deploy_user(self):
+        """When install.user equals deploy_user, command runs without sudo."""
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "myapp",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "myapp",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        deployer._install_dependencies()
+
+        # Should run without sudo since install_user == deploy_user
+        mock_runner.run.assert_called_once_with(
+            ["uv", "sync", "--frozen"],
+            cwd="/var/www/api",
+        )
+
+    def test_sudo_when_install_user_differs_from_deploy_user(self):
+        """When install.user differs from deploy_user, command uses sudo."""
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "myapp",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        deployer._install_dependencies()
+
+        # Should use sudo since install_user != deploy_user
+        mock_runner.run.assert_called_once_with(
+            ["sudo", "-u", "myapp", "uv", "sync", "--frozen"],
+            cwd="/var/www/api",
+        )
+
     def test_skips_when_no_app_path(self):
         """Install is skipped when there is no app_path."""
         config = {

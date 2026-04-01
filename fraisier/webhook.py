@@ -181,12 +181,15 @@ async def _run_deployment(
         fraise_type = fraise_config.get("type")
 
         # Inject identity + git info so deployer records correctly
+        config = get_config()
+        deploy_user = config.get_deploy_user(fraise_name, environment)
         deploy_config = {
             **fraise_config,
             "fraise_name": fraise_name,
             "environment": environment,
             "branch": git_branch or fraise_config.get("branch", "main"),
             "git_commit": git_commit,
+            "deploy_user": deploy_user,
         }
 
         # Get deployer
