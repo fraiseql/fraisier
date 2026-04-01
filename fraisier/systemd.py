@@ -28,7 +28,7 @@ class SystemdServiceManager:
         """
         validate_service_name(service_name)
         self.runner.run(
-            ["sudo", "systemctl", "stop", service_name],
+            ["sudo", "/usr/bin/systemctl", "stop", service_name],
             timeout=timeout,
             check=True,
         )

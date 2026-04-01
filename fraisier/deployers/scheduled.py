@@ -44,7 +44,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
 
         try:
             result = self.runner.run(
-                ["systemctl", "is-active", self.systemd_timer],
+                ["/usr/bin/systemctl", "is-active", self.systemd_timer],
                 check=False,
             )
             return result.returncode != 0
@@ -72,13 +72,13 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             if self.systemd_timer:
                 logger.info(f"Enabling timer: {self.systemd_timer}")
                 self.runner.run(
-                    ["sudo", "systemctl", "daemon-reload"],
+                    ["sudo", "/usr/bin/systemctl", "daemon-reload"],
                 )
                 self.runner.run(
-                    ["sudo", "systemctl", "enable", self.systemd_timer],
+                    ["sudo", "/usr/bin/systemctl", "enable", self.systemd_timer],
                 )
                 self.runner.run(
-                    ["sudo", "systemctl", "start", self.systemd_timer],
+                    ["sudo", "/usr/bin/systemctl", "start", self.systemd_timer],
                 )
 
             new_version = new_sha[:8] if new_sha else self._get_timer_state()
@@ -93,7 +93,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
         try:
             result = self.runner.run(
                 [
-                    "systemctl",
+                    "/usr/bin/systemctl",
                     "show",
                     self.systemd_timer,
                     "--property=ActiveState",
@@ -111,7 +111,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             return True
         try:
             result = self.runner.run(
-                ["systemctl", "is-active", self.systemd_timer],
+                ["/usr/bin/systemctl", "is-active", self.systemd_timer],
                 check=False,
             )
             return result.returncode == 0
@@ -132,7 +132,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             if self.systemd_timer:
                 logger.info(f"Restarting timer: {self.systemd_timer}")
                 self.runner.run(
-                    ["sudo", "systemctl", "restart", self.systemd_timer],
+                    ["sudo", "/usr/bin/systemctl", "restart", self.systemd_timer],
                 )
 
             new_version = target[:8] if target else self._get_timer_state()
