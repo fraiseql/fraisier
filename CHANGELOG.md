@@ -2,7 +2,7 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, deployment validation. Fixes #52, #53, #54, #55. 1721+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, deployment validation. Fixes #52, #53, #54, #55, #56. 1751+ tests, zero lint warnings.
 
 ### Deploy: Wrapper Script Validation (#54)
 
@@ -37,6 +37,16 @@ Feature release: config synchronization, automatic scaffold regeneration, instal
 - **feat:** structured `DeploymentError` context includes `suggested_command` (e.g., `cd /var/www/api && uv sync --frozen`) for operators to reproduce failures manually
 - **feat:** error messages are human-readable and actionable: operators can quickly diagnose why install failed without accessing logs
 - **test:** 6 new tests covering failure scenarios, context capture, and edge cases (no-op when unconfigured, sudo prefix handling)
+
+### Health Check: Clarify Recoverable vs Fatal Failures (#56)
+
+- **feat:** `HealthCheckResult` now includes `transient: bool | None` field to categorize failures — service warming up (transient) vs configuration issue (fatal)
+- **feat:** `HTTPHealthChecker` distinguishes error types: `URLError` and HTTP 5xx → `transient=True`, HTTP 4xx → `transient=False`
+- **feat:** `check_with_retries()` shows attempt count as `X/Y` format (e.g., "attempt 2/5") instead of bare attempt number
+- **feat:** transient failures log at INFO level (expected during startup), fatal failures log at WARNING level (requires intervention)
+- **feat:** success after retry shows startup time: "(service took 3.2s to become ready)" — helps operators understand warm-up duration
+- **feat:** final exhaustion message includes context-specific recovery hint based on error category
+- **test:** 7 new tests covering error categorization, log level routing, startup time tracking, and attempt formatting
 
 ### Scaffold: Install Step Sudoers Entry with Wildcard
 
