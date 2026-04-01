@@ -214,7 +214,7 @@ class ScaffoldRenderer:
                     )
                     raise ValueError(msg)
 
-    def render(self, dry_run: bool = False) -> list[str]:  # noqa: PLR0912
+    def render(self, dry_run: bool = False) -> list[str]:
         """Render all templates.
 
         Args:
