@@ -156,3 +156,92 @@ def validate(ctx: click.Context, as_json: bool) -> None:
             )
 
     raise SystemExit(0 if all_passed else 1)
+
+
+@main.command(name="validate-deployment")
+@click.argument("fraise")
+@click.argument("environment")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def validate_deployment(
+    ctx: click.Context, fraise: str, environment: str, as_json: bool
+) -> None:
+    """Validate a fraise/environment is ready for deployment.
+
+    Checks: git repo, app_path, database config, systemd service, wrappers,
+    sudoers, health endpoint, and install dependencies.
+
+    \b
+    Examples:
+        fraisier validate-deployment my_api production
+        fraisier validate-deployment my_api staging --json
+    """
+    import json
+
+    from fraisier.validation import DeploymentReadinessValidator
+
+    config = ctx.obj["config"]
+
+    fraise_config = config.get_fraise_environment(fraise, environment)
+    if not fraise_config:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"
+        )
+        raise SystemExit(1)
+
+    validator = DeploymentReadinessValidator(fraise_config)
+    results = validator.run_all()
+
+    all_passed = all(r.passed for r in results if r.severity == "error")
+    has_errors = any(not r.passed and r.severity == "error" for r in results)
+
+    if as_json:
+        data = {
+            "passed": all_passed,
+            "checks": [r.to_dict() for r in results],
+        }
+        click.echo(json.dumps(data, indent=2))
+    else:
+        # Rich table output
+        console.print(
+            f"\n[bold]Deployment Readiness: {fraise} / {environment}[/bold]\n"
+        )
+
+        table = Table(show_header=False, show_lines=False)
+        table.add_column("", style="dim", width=3)
+        table.add_column("Check", style="cyan")
+        table.add_column("Status", no_wrap=False)
+
+        errors = [r for r in results if not r.passed and r.severity == "error"]
+        warnings = [r for r in results if not r.passed and r.severity == "warning"]
+        passed = [r for r in results if r.passed]
+
+        for r in passed:
+            table.add_row("✓", r.name, f"[green]{r.message or 'OK'}[/green]")
+
+        for r in warnings:
+            msg = r.message or "warning"
+            table.add_row("⚠", r.name, f"[yellow]{msg}[/yellow]")
+
+        for r in errors:
+            msg = r.message or "failed"
+            table.add_row("✗", r.name, f"[red]{msg}[/red]")
+
+        console.print(table)
+
+        # Summary line
+        summary_parts = []
+        if errors:
+            summary_parts.append(f"[red]{len(errors)} failed[/red]")
+        if warnings:
+            summary_parts.append(f"[yellow]{len(warnings)} warning[/yellow]")
+        if passed:
+            summary_parts.append(f"[green]{len(passed)} passed[/green]")
+
+        status_color = "green" if not has_errors else "red"
+        status_text = "READY" if not has_errors else "NOT READY"
+        summary_text = f"\nSummary: {', '.join(summary_parts)} → "
+        summary_text += f"[{status_color}]{status_text}[/{status_color}]\n"
+        console.print(summary_text)
+
+    raise SystemExit(0 if all_passed else 1)

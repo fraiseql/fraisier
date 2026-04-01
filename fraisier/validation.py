@@ -9,6 +9,7 @@ Also provides drift detection for scaffolded files.
 
 import hashlib
 import logging
+import os
 import pwd
 import subprocess
 from dataclasses import dataclass
@@ -486,3 +487,418 @@ def detect_drift(
             )
 
     return drifted
+
+
+# ---------------------------------------------------------------------------
+# Deployment readiness validation
+# ---------------------------------------------------------------------------
+
+
+class DeploymentReadinessValidator:
+    """Validates a single fraise/environment pair is ready for deployment."""
+
+    def __init__(self, fraise_config: dict[str, Any]):
+        """Initialize with fraise+env config dict.
+
+        Args:
+            fraise_config: Merged config dict from get_fraise_environment(),
+                includes fraise_name, environment, type, etc.
+        """
+        self.fraise_config = fraise_config
+        self.fraise_name = fraise_config.get("fraise_name", "unknown")
+        self.environment = fraise_config.get("environment", "unknown")
+
+    def run_all(self) -> list[ValidationCheckResult]:
+        """Run all deployment readiness checks."""
+        results: list[ValidationCheckResult] = []
+
+        checks = [
+            self._check_config_accessible,
+            self._check_git_repo_accessible,
+            self._check_app_path_writable,
+            self._check_database_config_complete,
+            self._check_systemd_service_exists,
+            self._check_wrapper_scripts_valid,
+            self._check_sudoers_installed,
+            self._check_health_check_reachable,
+            self._check_install_command_available,
+        ]
+
+        for check in checks:
+            result = check()
+            if isinstance(result, list):
+                results.extend(result)
+            else:
+                results.append(result)
+
+        return results
+
+    def _check_config_accessible(self) -> ValidationCheckResult:
+        """Check that fraise_config was resolved and has required keys."""
+        if not self.fraise_config:
+            return ValidationCheckResult(
+                name="config_accessible",
+                passed=False,
+                message=(
+                    f"Fraise '{self.fraise_name}' environment '{self.environment}' "
+                    "not found"
+                ),
+                severity="error",
+            )
+
+        required_keys = ["fraise_name", "environment", "app_path"]
+        missing = [k for k in required_keys if k not in self.fraise_config]
+        if missing:
+            return ValidationCheckResult(
+                name="config_accessible",
+                passed=False,
+                message=f"Config missing keys: {', '.join(missing)}",
+                severity="error",
+            )
+
+        return ValidationCheckResult(name="config_accessible", passed=True)
+
+    def _check_git_repo_accessible(self) -> ValidationCheckResult:
+        """Check git clone_url or bare git_repo is accessible."""
+        clone_url = self.fraise_config.get("clone_url")
+        git_repo = self.fraise_config.get("git_repo")
+
+        if not clone_url and not git_repo:
+            # Neither is configured — skip
+            return ValidationCheckResult(
+                name="git_repo_accessible",
+                passed=True,
+                message="not configured (skipped)",
+            )
+
+        if clone_url:
+            try:
+                subprocess.run(
+                    ["git", "ls-remote", "--exit-code", clone_url],
+                    capture_output=True,
+                    timeout=15,
+                    check=True,
+                )
+                return ValidationCheckResult(
+                    name="git_repo_accessible",
+                    passed=True,
+                    message=f"Reachable: {clone_url}",
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                return ValidationCheckResult(
+                    name="git_repo_accessible",
+                    passed=False,
+                    message=(
+                        f"Cannot reach git repo: {clone_url}. "
+                        "Check the URL, credentials, and network."
+                    ),
+                    severity="error",
+                )
+
+        if git_repo:
+            if Path(git_repo).is_dir():
+                return ValidationCheckResult(
+                    name="git_repo_accessible",
+                    passed=True,
+                    message=f"Bare repo exists: {git_repo}",
+                )
+            return ValidationCheckResult(
+                name="git_repo_accessible",
+                passed=False,
+                message=(
+                    f"Bare git repo directory not found: {git_repo}. "
+                    f"Fix: sudo mkdir -p {git_repo} && "
+                    f"sudo git init --bare {git_repo}"
+                ),
+                severity="error",
+            )
+
+        return ValidationCheckResult(
+            name="git_repo_accessible", passed=True, message="not configured"
+        )
+
+    def _check_app_path_writable(self) -> ValidationCheckResult:
+        """Check app_path exists and is writable."""
+        app_path = self.fraise_config.get("app_path")
+        if not app_path:
+            return ValidationCheckResult(
+                name="app_path_writable",
+                passed=False,
+                message="app_path not configured",
+                severity="error",
+            )
+
+        app_dir = Path(app_path)
+        if not app_dir.is_dir():
+            return ValidationCheckResult(
+                name="app_path_writable",
+                passed=False,
+                message=(
+                    f"{app_path} does not exist. "
+                    f"Fix: sudo mkdir -p {app_path} && "
+                    f"sudo chown ${{deploy_user}} {app_path}"
+                ),
+                severity="error",
+            )
+
+        if not os.access(app_path, os.W_OK):
+            return ValidationCheckResult(
+                name="app_path_writable",
+                passed=False,
+                message=(
+                    f"{app_path} is not writable. "
+                    f"Fix: sudo chown ${{deploy_user}} {app_path}"
+                ),
+                severity="error",
+            )
+
+        return ValidationCheckResult(name="app_path_writable", passed=True)
+
+    def _check_database_config_complete(self) -> ValidationCheckResult:
+        """Check database config is present and complete if configured."""
+        db_config = self.fraise_config.get("database")
+
+        if not db_config:
+            # Not configured — skip
+            return ValidationCheckResult(
+                name="database_config_complete",
+                passed=True,
+                message="not configured (skipped)",
+            )
+
+        required_db_fields = ["host", "dbname", "user", "strategy"]
+        missing = [f for f in required_db_fields if not db_config.get(f)]
+
+        if missing:
+            return ValidationCheckResult(
+                name="database_config_complete",
+                passed=False,
+                message=(
+                    f"Database config incomplete. Missing: {', '.join(missing)}. "
+                    f"Fix: add {', '.join(missing)} to database section"
+                ),
+                severity="error",
+            )
+
+        return ValidationCheckResult(name="database_config_complete", passed=True)
+
+    def _check_systemd_service_exists(self) -> ValidationCheckResult:
+        """Check systemd service is installed and active."""
+        service_name = self.fraise_config.get("systemd_service")
+
+        if not service_name:
+            return ValidationCheckResult(
+                name="systemd_service_exists",
+                passed=True,
+                message="not configured (skipped)",
+            )
+
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", service_name],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            status = result.stdout.decode().strip()
+
+            if status == "unknown":
+                return ValidationCheckResult(
+                    name="systemd_service_exists",
+                    passed=False,
+                    message=(
+                        f"Service '{service_name}' unknown. "
+                        f"Fix: ensure service unit file exists at "
+                        f"/etc/systemd/system/{service_name}.service"
+                    ),
+                    severity="error",
+                )
+
+            if status != "active":
+                return ValidationCheckResult(
+                    name="systemd_service_exists",
+                    passed=False,
+                    message=(
+                        f"Service '{service_name}' is {status}. "
+                        f"Fix: sudo systemctl start {service_name}"
+                    ),
+                    severity="error",
+                )
+
+            return ValidationCheckResult(
+                name="systemd_service_exists",
+                passed=True,
+                message=f"Service '{service_name}' is active",
+            )
+
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return ValidationCheckResult(
+                name="systemd_service_exists",
+                passed=False,
+                message="systemctl command not available",
+                severity="error",
+            )
+
+    def _check_wrapper_scripts_valid(self) -> ValidationCheckResult:
+        """Check wrapper scripts (systemctl, pg) are present and executable."""
+        systemctl_wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
+        pg_wrapper = os.environ.get("FRAISIER_PG_WRAPPER")
+
+        issues: list[str] = []
+
+        if not systemctl_wrapper:
+            issues.append(
+                "FRAISIER_SYSTEMCTL_WRAPPER env var not set. "
+                "Fix: export FRAISIER_SYSTEMCTL_WRAPPER=/path/to/systemctl-wrapper"
+            )
+        elif not Path(systemctl_wrapper).exists():
+            issues.append(
+                f"FRAISIER_SYSTEMCTL_WRAPPER file not found: {systemctl_wrapper}"
+            )
+        elif not os.access(systemctl_wrapper, os.X_OK):
+            issues.append(
+                f"FRAISIER_SYSTEMCTL_WRAPPER not executable: {systemctl_wrapper}. "
+                f"Fix: chmod 755 {systemctl_wrapper}"
+            )
+
+        if not pg_wrapper:
+            issues.append(
+                "FRAISIER_PG_WRAPPER env var not set. "
+                "Fix: export FRAISIER_PG_WRAPPER=/path/to/pg-wrapper"
+            )
+        elif not Path(pg_wrapper).exists():
+            issues.append(f"FRAISIER_PG_WRAPPER file not found: {pg_wrapper}")
+        elif not os.access(pg_wrapper, os.X_OK):
+            issues.append(
+                f"FRAISIER_PG_WRAPPER not executable: {pg_wrapper}. "
+                f"Fix: chmod 755 {pg_wrapper}"
+            )
+
+        if issues:
+            return ValidationCheckResult(
+                name="wrapper_scripts_valid",
+                passed=False,
+                message=" — ".join(issues),
+                severity="error",
+            )
+
+        return ValidationCheckResult(name="wrapper_scripts_valid", passed=True)
+
+    def _check_sudoers_installed(self) -> ValidationCheckResult:
+        """Check sudoers file is installed for this project."""
+        project_name = self.fraise_name
+        sudoers_path = Path(f"/etc/sudoers.d/{project_name}")
+
+        try:
+            sudoers_exists = sudoers_path.exists()
+        except PermissionError:
+            # Can't check due to permissions; treat as missing
+            sudoers_exists = False
+
+        if not sudoers_exists:
+            return ValidationCheckResult(
+                name="sudoers_installed",
+                passed=False,
+                message=(
+                    f"Sudoers file not installed: {sudoers_path}. "
+                    f"Fix: run 'fraisier scaffold-install' to install sudo rules"
+                ),
+                severity="warning",
+            )
+
+        return ValidationCheckResult(
+            name="sudoers_installed",
+            passed=True,
+            message=f"Sudoers installed: {sudoers_path}",
+        )
+
+    def _check_health_check_reachable(self) -> ValidationCheckResult:
+        """Check health check endpoint responds (no retries)."""
+        from fraisier.health_check import HTTPHealthChecker
+
+        health_config = self.fraise_config.get("health_check")
+
+        if not health_config:
+            return ValidationCheckResult(
+                name="health_check_reachable",
+                passed=True,
+                message="not configured (skipped)",
+            )
+
+        url = health_config.get("url")
+        if not url:
+            return ValidationCheckResult(
+                name="health_check_reachable",
+                passed=True,
+                message="URL not configured (skipped)",
+            )
+
+        checker = HTTPHealthChecker(url)
+        result = checker.check(timeout=3.0)
+
+        if result.success:
+            return ValidationCheckResult(
+                name="health_check_reachable",
+                passed=True,
+                message=f"Healthy: {result.message}",
+            )
+        else:
+            return ValidationCheckResult(
+                name="health_check_reachable",
+                passed=False,
+                message=(
+                    f"Health check failed: {result.message or 'no response'}. "
+                    f"Fix: ensure {url} is reachable and responding"
+                ),
+                severity="error",
+            )
+
+    def _check_install_command_available(self) -> ValidationCheckResult:
+        """Check install command binary is available."""
+        import shutil
+
+        install_config = self.fraise_config.get("install")
+
+        if not install_config:
+            return ValidationCheckResult(
+                name="install_command_available",
+                passed=True,
+                message="not configured (skipped)",
+            )
+
+        command = install_config.get("command")
+        if not command:
+            return ValidationCheckResult(
+                name="install_command_available",
+                passed=True,
+                message="command not configured (skipped)",
+            )
+
+        # Extract first token (the command itself)
+        command_parts = command.split()
+        if not command_parts:
+            return ValidationCheckResult(
+                name="install_command_available",
+                passed=False,
+                message="install command is empty",
+                severity="error",
+            )
+
+        command_name = command_parts[0]
+
+        if shutil.which(command_name):
+            return ValidationCheckResult(
+                name="install_command_available",
+                passed=True,
+                message=f"Command available: {command_name}",
+            )
+        else:
+            return ValidationCheckResult(
+                name="install_command_available",
+                passed=False,
+                message=(
+                    f"Install command not found: {command_name}. "
+                    f"Fix: install {command_name} or update install.command"
+                ),
+                severity="error",
+            )

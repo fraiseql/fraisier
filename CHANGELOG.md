@@ -2,7 +2,15 @@
 
 ## v0.3.11 (2026-04-01)
 
-Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, deployment validation. Fixes #52, #53, #54, #55, #56. 1751+ tests, zero lint warnings.
+Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation. Fixes #52, #53, #54, #55, #56, #57. 1777+ tests, zero lint warnings.
+
+### Pre-Deployment Validation Command (#57)
+
+- **feat:** new CLI command `fraisier validate-deployment <fraise> <environment>` validates infrastructure readiness before deployments — checks git repo, app_path, database config, systemd service, wrapper scripts, sudoers, health endpoint, and install dependencies
+- **feat:** 9 targeted checks with severity levels — errors (blocking) and warnings (advisory) — each with actionable remediation hints
+- **feat:** rich formatted output with ✓/✗/⚠ indicators and summary status (READY/NOT READY); supports `--json` for scripting
+- **feat:** exit code 1 only on error-severity failures — warnings don't block (sudoers, health check timeouts are informational)
+- **test:** 26 new tests covering all 9 checks with real filesystem operations, mocking only network/subprocess/environment
 
 ### Deploy: Wrapper Script Validation (#54)
 
