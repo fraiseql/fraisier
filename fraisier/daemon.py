@@ -115,6 +115,54 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
         if not fraise_config:
             raise ValueError(f"Project '{request.project}' not found")
 
+        # Handle dry-run mode
+        if request.options.get("dry_run"):
+            logger.info(
+                "Dry-run mode: showing deployment plan", event="deployment_dry_run"
+            )
+
+            # Get deployer to show what would happen
+            deployer = _get_deployer(fraise_config.get("type"), fraise_config)
+
+            if deployer is None:
+                raise ValueError(f"Unknown fraise type '{fraise_config.get('type')}'")
+
+            # Check if deployment is needed
+            force = request.options.get("force", False)
+            if not force and not deployer.is_deployment_needed():
+                current_version = deployer.get_current_version()
+                latest_version = deployer.get_latest_version()
+                logger.info(
+                    "Dry-run: No deployment needed, versions match",
+                    event="deployment_dry_run_skipped",
+                    current_version=current_version,
+                    latest_version=latest_version,
+                )
+                return DeploymentResult(
+                    success=True,
+                    status="dry_run_no_changes",
+                    message=f"Dry-run: Already up to date (current: {current_version})",
+                    deployed_version=current_version,
+                )
+
+            # Show what would be deployed
+            current_version = deployer.get_current_version()
+            latest_version = deployer.get_latest_version()
+            logger.info(
+                "Dry-run: Would deploy",
+                event="deployment_dry_run_plan",
+                current_version=current_version,
+                latest_version=latest_version,
+                changes=f"{current_version} -> {latest_version}",
+            )
+
+            return DeploymentResult(
+                success=True,
+                status="dry_run_plan",
+                message=f"Dry-run: Would deploy {current_version} -> {latest_version}",
+                deployed_version=current_version,
+            )
+
         # Set deployment options from request
         if request.options.get("force"):
             # Force deployment even if versions match

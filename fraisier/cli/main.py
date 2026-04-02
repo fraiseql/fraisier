@@ -442,6 +442,7 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
 )
 @click.option("--force", is_flag=True, help="Force deployment even if up to date")
 @click.option("--no-cache", is_flag=True, help="Skip deployment caches")
+@click.option("--dry-run", is_flag=True, help="Show deployment plan without executing")
 @click.option(
     "--timeout", type=int, default=300, help="Timeout in seconds (default: 300)"
 )
@@ -453,6 +454,7 @@ def trigger_deploy(
     branch: str | None,
     force: bool,
     no_cache: bool,
+    dry_run: bool,
     timeout: int,
 ) -> None:
     """Trigger deployment by writing to systemd socket.
@@ -501,6 +503,7 @@ def trigger_deploy(
         "options": {
             "force": force,
             "no_cache": no_cache,
+            "dry_run": dry_run,
         },
         "metadata": {
             "cli_user": ctx.obj.get("user", "unknown"),

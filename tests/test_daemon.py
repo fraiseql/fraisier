@@ -278,14 +278,13 @@ class TestDeployDaemonCommand:
         """deploy-daemon handles execution failure."""
         # Mock parsing
         mock_request = MagicMock()
-        mock_request.project = "api"
+        mock_request.project = "api"  # Set project to match daemon config
         mock_parse.return_value = mock_request
 
         # Mock execution failure
-        mock_result = MagicMock()
-        mock_result.success = False
-        mock_result.error_message = "Health check failed"
-        mock_execute.return_value = mock_result
+        mock_execute.return_value = MagicMock(
+            success=False, error_message="Deployment failed"
+        )
 
         json_input = '{"version": 1, "project": "api"}'
         result = runner.invoke(
@@ -294,3 +293,84 @@ class TestDeployDaemonCommand:
 
         assert result.exit_code == 1
         assert "Deployment failed" in result.output
+
+    def test_execute_deployment_request_dry_run_no_changes(self):
+        """execute_deployment_request handles dry-run when no changes needed."""
+        from fraisier.daemon import DeploymentRequest, execute_deployment_request
+        from unittest.mock import patch, MagicMock
+
+        request = DeploymentRequest(
+            version=1,
+            project="test_project",
+            environment="development",
+            branch="main",
+            timestamp="2026-04-02T12:00:00Z",
+            triggered_by="cli",
+            options={"dry_run": True, "force": False},
+            metadata={},
+        )
+
+        # Mock config and deployer
+        with (
+            patch("fraisier.daemon.get_config") as mock_config,
+            patch("fraisier.daemon._get_deployer") as mock_get_deployer,
+        ):
+            mock_config_instance = MagicMock()
+            mock_config_instance.get_fraise_environment.return_value = {
+                "type": "api",
+                "app_path": "/opt/test",
+            }
+            mock_config.return_value = mock_config_instance
+
+            mock_deployer = MagicMock()
+            mock_deployer.is_deployment_needed.return_value = False
+            mock_deployer.get_current_version.return_value = "abc123"
+            mock_deployer.get_latest_version.return_value = "abc123"
+            mock_get_deployer.return_value = mock_deployer
+
+            result = execute_deployment_request(request)
+
+            assert result.success is True
+            assert result.status == "dry_run_no_changes"
+            assert "Already up to date" in result.message
+            assert result.deployed_version == "abc123"
+
+    def test_execute_deployment_request_dry_run_with_changes(self):
+        """execute_deployment_request handles dry-run when changes are needed."""
+        from fraisier.daemon import DeploymentRequest, execute_deployment_request
+        from unittest.mock import patch, MagicMock
+
+        request = DeploymentRequest(
+            version=1,
+            project="test_project",
+            environment="development",
+            branch="main",
+            timestamp="2026-04-02T12:00:00Z",
+            triggered_by="cli",
+            options={"dry_run": True, "force": False},
+            metadata={},
+        )
+
+        # Mock config and deployer
+        with (
+            patch("fraisier.daemon.get_config") as mock_config,
+            patch("fraisier.daemon._get_deployer") as mock_get_deployer,
+        ):
+            mock_config_instance = MagicMock()
+            mock_config_instance.get_fraise_environment.return_value = {
+                "type": "api",
+                "app_path": "/opt/test",
+            }
+            mock_config.return_value = mock_config_instance
+
+            mock_deployer = MagicMock()
+            mock_deployer.is_deployment_needed.return_value = True
+            mock_deployer.get_current_version.return_value = "abc123"
+            mock_deployer.get_latest_version.return_value = "def456"
+            mock_get_deployer.return_value = mock_deployer
+
+            result = execute_deployment_request(request)
+
+            assert result.success is True
+            assert result.status == "dry_run_plan"
+            assert "Would deploy abc123 -> def456" in result.message

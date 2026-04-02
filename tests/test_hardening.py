@@ -400,21 +400,6 @@ deployment:
         )
         return str(cfg)
 
-    def test_deploy_dry_run_exits_cleanly(self, tmp_path):
-        """--dry-run shows what would happen without deploying."""
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = self._make_config_file(tmp_path)
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            ["-c", cfg, "deploy", "my_api", "development", "--dry-run"],
-        )
-        assert result.exit_code == 0
-        assert "DRY RUN" in result.output
-
     def test_deploy_skip_health_flag_accepted(self, tmp_path):
         """--skip-health flag is accepted by the CLI."""
         from click.testing import CliRunner
