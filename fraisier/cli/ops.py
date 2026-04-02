@@ -233,7 +233,6 @@ def webhooks(limit: int) -> None:
     console.print(table)
 
 
-
 @main.command(name="metrics")
 @click.option("--port", "-p", default=8001, type=int, help="Port for metrics server")
 @click.option("--address", "-a", default="localhost", help="Address to bind to")

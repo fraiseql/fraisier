@@ -512,7 +512,6 @@ class ScaffoldRenderer:
         if not fraise_config:
             return
 
-
         # Update context with environment-specific values
         socket_context = dict(self.context)
         socket_context.update(
