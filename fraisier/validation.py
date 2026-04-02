@@ -875,7 +875,18 @@ class DeploymentReadinessValidator:
             )
 
         # Extract first token (the command itself)
-        command_parts = command.split()
+        if isinstance(command, str):
+            command_parts = command.split()
+        elif isinstance(command, list):
+            command_parts = command
+        else:
+            return ValidationCheckResult(
+                name="install_command_available",
+                passed=False,
+                message="install command must be a string or list",
+                severity="error",
+            )
+
         if not command_parts:
             return ValidationCheckResult(
                 name="install_command_available",

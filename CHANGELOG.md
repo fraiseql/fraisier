@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.3.12 (2026-04-02)
+
+Feature release: validate-deployment now supports list-format install.command, and version management supports syncing to multiple files including __init__.py. Fixes #66, #65. All tests pass.
+
+### validate-deployment: List Format install.command Support (#66)
+
+- **fix:** `_check_install_command_available` validation function now handles both string and list formats for `install.command` configuration
+- **fix:** previously crashed with `AttributeError: 'list' object has no attribute 'split'` when `install.command` was configured as a list (the correct format per schema)
+- **fix:** updated logic to extract command name from first element of list when `install.command` is a list, or split string when it's a string
+- **fix:** added type checking to return appropriate error message for invalid command types
+- **test:** existing validation tests pass, confirming fix works with both formats
+
+### Version Management: Multi-File Sync Support (#65)
+
+- **feat:** extend version management to sync version.json with multiple target files using custom regex patterns
+- **feat:** new `VersionSyncConfig` and `VersionSyncTarget` classes for configuring multi-file sync
+- **feat:** auto-discovery of common version files: pyproject.toml and __init__.py files with __version__
+- **feat:** atomic writes across all target files — all succeed or all rollback on failure
+- **feat:** backward compatible with existing pyproject.toml sync
+- **feat:** `bump_version()` now accepts `sync_config` parameter for multi-file syncing
+- **test:** 8 new tests covering sync config creation, auto-discovery, multi-file syncing, and atomic rollback
+- **refactor:** improved regex handling with compiled patterns for efficiency
+
 ## v0.3.11 (2026-04-01)
 
 Feature release: config synchronization, automatic scaffold regeneration, install step improvements, enhanced error reporting, health check clarity, pre-deployment validation, deployment status command, component test commands, multi-server scaffold filtering, migration error recovery guidance. Fixes #52, #53, #54, #55, #56, #57, #58, #60, #61, #62. 1811+ tests, zero lint warnings.

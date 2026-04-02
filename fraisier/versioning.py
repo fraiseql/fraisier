@@ -72,6 +72,60 @@ class VersionInfo:
         return cls(**filtered)
 
 
+@dataclass
+class VersionSyncTarget:
+    """Configuration for syncing version to a target file."""
+
+    path: Path
+    regex: str
+
+    def __post_init__(self) -> None:
+        """Compile regex for efficiency."""
+        self._compiled_regex = re.compile(self.regex, re.MULTILINE)
+
+
+@dataclass
+class VersionSyncConfig:
+    """Configuration for version syncing to multiple files."""
+
+    targets: list[VersionSyncTarget]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VersionSyncConfig":
+        """Create from dict configuration."""
+        targets = [
+            VersionSyncTarget(
+                path=Path(target_data["path"]), regex=target_data["regex"]
+            )
+            for target_data in data.get("sync_to", [])
+        ]
+        return cls(targets=targets)
+
+    @classmethod
+    def auto_discover(cls, root_path: Path) -> "VersionSyncConfig":
+        """Auto-discover common version files to sync."""
+        targets = []
+
+        # pyproject.toml
+        pyproject_path = root_path / "pyproject.toml"
+        if pyproject_path.exists():
+            targets.append(
+                VersionSyncTarget(
+                    path=pyproject_path, regex=r'^(version\s*=\s*")([^"]+)(")'
+                )
+            )
+
+        # __init__.py files with __version__
+        init_targets = [
+            VersionSyncTarget(path=init_file, regex=r'^(__version__\s*=\s*")([^"]+)(")')
+            for init_file in root_path.rglob("*/__init__.py")
+            if init_file.read_text().find("__version__") != -1
+        ]
+        targets.extend(init_targets)
+
+        return cls(targets=targets)
+
+
 def write_version(info: VersionInfo, path: Path) -> None:
     """Write version info to a JSON file."""
     path.write_text(json.dumps(info.to_dict(), indent=2) + "\n")
@@ -88,18 +142,19 @@ def read_version(path: Path) -> VersionInfo | None:
 def bump_version(
     path: Path,
     part: str,
-    pyproject_path: Path | None = None,
+    sync_config: VersionSyncConfig | None = None,
+    pyproject_path: Path | None = None,  # Deprecated: use sync_config
 ) -> VersionInfo:
-    """Atomically bump the version in *path* and optionally *pyproject_path*.
+    """Atomically bump the version in *path* and optionally sync to target files.
 
-    Uses temp-file + rename for atomicity.  If *pyproject_path* is given,
-    both files are written together — if either write fails, neither file
-    is modified.
+    Uses temp-file + rename for atomicity. If sync targets are specified,
+    all files are written together — if any write fails, no files are modified.
 
     Args:
         path: Path to version.json.
         part: "major", "minor", or "patch".
-        pyproject_path: Optional path to pyproject.toml to keep in sync.
+        sync_config: Optional configuration for syncing to multiple target files.
+        pyproject_path: Deprecated: use sync_config instead.
 
     Returns:
         Updated VersionInfo.
@@ -144,21 +199,30 @@ def bump_version(
         json.dumps({**info.to_dict(), "version": new_version}, indent=2) + "\n"
     )
 
-    tmp_version = Path(tempfile.mktemp(dir=path.parent, suffix=".tmp"))
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    tmp_version = Path(tmp_path)
     try:
         tmp_version.write_text(version_content)
 
-        # Sync pyproject.toml before committing version.json
-        if pyproject_path is not None:
+        # Sync to target files before committing version.json
+        if sync_config is not None:
+            sync_version_to_targets(new_version, sync_config)
+        elif pyproject_path is not None:
+            # Backward compatibility
             sync_pyproject_version(new_version, pyproject_path)
 
         # Commit version.json last (atomic rename)
         tmp_version.rename(path)
     except OSError:
         # Rollback: remove temp, leave originals untouched.
-        # If pyproject was already written, restore from backup.
+        # If targets were already written, restore from backup.
         tmp_version.unlink(missing_ok=True)
         raise
+    finally:
+        # Clean up temp file descriptor
+        import os
+
+        os.close(tmp_fd)
 
     info.version = new_version
     return info
@@ -178,6 +242,42 @@ def sync_pyproject_version(version: str, pyproject_path: Path) -> None:
     content = pyproject_path.read_text()
     new_content = _PYPROJECT_VERSION_RE.sub(rf"\g<1>{version}\g<3>", content)
     pyproject_path.write_text(new_content)
+
+
+def sync_version_to_targets(version: str, sync_config: VersionSyncConfig) -> None:
+    """Update version in all configured target files.
+
+    Uses atomic writes - if any target fails, no targets are modified.
+
+    Raises FileNotFoundError if any target file does not exist.
+    """
+    # First, validate all targets exist and create backups
+    backups = []
+    for target in sync_config.targets:
+        if not target.path.exists():
+            raise FileNotFoundError(f"Target file not found: {target.path}")
+
+        # Create backup
+        backup_path = target.path.with_suffix(target.path.suffix + ".bak")
+        backup_path.write_text(target.path.read_text())
+        backups.append((target.path, backup_path))
+
+    try:
+        # Update all targets
+        for target in sync_config.targets:
+            content = target.path.read_text()
+            new_content = target._compiled_regex.sub(rf"\g<1>{version}\g<3>", content)
+            target.path.write_text(new_content)
+    except Exception:
+        # Rollback all targets to backups
+        for original_path, backup_path in backups:
+            if backup_path.exists():
+                original_path.write_text(backup_path.read_text())
+        raise
+    finally:
+        # Clean up backups
+        for _, backup_path in backups:
+            backup_path.unlink(missing_ok=True)
 
 
 def derive_database_version(*, sequence: int) -> str:

@@ -6,6 +6,8 @@ import pytest
 
 from fraisier.versioning import (
     VersionInfo,
+    VersionSyncConfig,
+    VersionSyncTarget,
     bump_version,
     derive_database_version,
     has_version_changed,
@@ -13,6 +15,7 @@ from fraisier.versioning import (
     parse_semver,
     read_version,
     sync_pyproject_version,
+    sync_version_to_targets,
     write_version,
 )
 
@@ -139,6 +142,52 @@ class TestBumpVersion:
         with pytest.raises(FileNotFoundError):
             bump_version(path, "patch")
 
+    def test_bump_with_sync_config(self, tmp_path):
+        """bump_version syncs to configured targets."""
+        # Set up version.json
+        path = self._write_version_file(tmp_path, "1.0.0")
+
+        # Set up target file
+        target_file = tmp_path / "version.py"
+        target_file.write_text('__version__ = "1.0.0"\n')
+
+        # Configure sync
+        config = VersionSyncConfig(
+            targets=[
+                VersionSyncTarget(
+                    path=target_file, regex=r'^(__version__\s*=\s*")([^"]+)(")'
+                )
+            ]
+        )
+
+        result = bump_version(path, "minor", sync_config=config)
+        assert result.version == "1.1.0"
+
+        # Check target was updated
+        content = target_file.read_text()
+        assert '__version__ = "1.1.0"' in content
+
+    def test_bump_sync_config_rollback_on_failure(self, tmp_path):
+        """bump_version rolls back version.json if target sync fails."""
+        # Set up version.json
+        path = self._write_version_file(tmp_path, "1.0.0")
+
+        # Set up config with non-existent target
+        config = VersionSyncConfig(
+            targets=[
+                VersionSyncTarget(
+                    path=tmp_path / "missing.txt", regex=r'version\s*=\s*"([^"]+)"'
+                )
+            ]
+        )
+
+        with pytest.raises(FileNotFoundError):
+            bump_version(path, "patch", sync_config=config)
+
+        # version.json should be unchanged due to rollback
+        info = read_version(path)
+        assert info.version == "1.0.0"
+
 
 class TestSyncPyprojectVersion:
     """Test sync_pyproject_version."""
@@ -150,6 +199,111 @@ class TestSyncPyprojectVersion:
         sync_pyproject_version("2.0.0", pyproject)
         content = pyproject.read_text()
         assert 'version = "2.0.0"' in content
+
+
+class TestVersionSyncConfig:
+    """Test VersionSyncConfig functionality."""
+
+    def test_from_dict_creates_targets(self):
+        """Creates sync config from dict with sync_to list."""
+        data = {
+            "sync_to": [
+                {"path": "pyproject.toml", "regex": r'version\s*=\s*"([^"]+)"'},
+                {"path": "src/__init__.py", "regex": r'__version__\s*=\s*"([^"]+)"'},
+            ]
+        }
+        config = VersionSyncConfig.from_dict(data)
+        assert len(config.targets) == 2
+        assert str(config.targets[0].path) == "pyproject.toml"
+        assert config.targets[0].regex == r'version\s*=\s*"([^"]+)"'
+
+    def test_auto_discover_pyproject(self, tmp_path):
+        """Auto-discovers pyproject.toml."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('[project]\nname = "myapp"\nversion = "0.1.0"\n')
+
+        config = VersionSyncConfig.auto_discover(tmp_path)
+        assert len(config.targets) == 1
+        assert config.targets[0].path == pyproject
+
+    def test_auto_discover_init_files(self, tmp_path):
+        """Auto-discovers __init__.py files with __version__."""
+        init_file = tmp_path / "src" / "mypackage" / "__init__.py"
+        init_file.parent.mkdir(parents=True)
+        init_file.write_text('__version__ = "1.0.0"\n')
+
+        config = VersionSyncConfig.auto_discover(tmp_path)
+        assert len(config.targets) == 1
+        assert config.targets[0].path == init_file
+
+    def test_auto_discover_skips_init_without_version(self, tmp_path):
+        """Skips __init__.py files without __version__."""
+        init_file = tmp_path / "src" / "mypackage" / "__init__.py"
+        init_file.parent.mkdir(parents=True)
+        init_file.write_text('name = "mypackage"\n')
+
+        config = VersionSyncConfig.auto_discover(tmp_path)
+        assert len(config.targets) == 0
+
+
+class TestSyncVersionToTargets:
+    """Test sync_version_to_targets functionality."""
+
+    def test_sync_single_target(self, tmp_path):
+        """Updates version in a single target file."""
+        target_file = tmp_path / "version.txt"
+        target_file.write_text('VERSION = "1.0.0"')
+
+        config = VersionSyncConfig(
+            targets=[
+                VersionSyncTarget(
+                    path=target_file, regex=r'^(VERSION\s*=\s*")([^"]+)(")'
+                )
+            ]
+        )
+
+        sync_version_to_targets("2.0.0", config)
+        content = target_file.read_text()
+        assert 'VERSION = "2.0.0"' in content
+
+    def test_sync_multiple_targets(self, tmp_path):
+        """Updates version in multiple target files atomically."""
+        file1 = tmp_path / "file1.txt"
+        file1.write_text('version = "1.0.0"')
+        file2 = tmp_path / "file2.txt"
+        file2.write_text('__version__ = "1.0.0"')
+
+        config = VersionSyncConfig(
+            targets=[
+                VersionSyncTarget(path=file1, regex=r'^(version\s*=\s*")([^"]+)(")'),
+                VersionSyncTarget(
+                    path=file2, regex=r'^(__version__\s*=\s*")([^"]+)(")'
+                ),
+            ]
+        )
+
+        sync_version_to_targets("2.0.0", config)
+        assert 'version = "2.0.0"' in file1.read_text()
+        assert '__version__ = "2.0.0"' in file2.read_text()
+
+    def test_sync_rollback_on_failure(self, tmp_path):
+        """Rolls back all changes if any target fails."""
+        file1 = tmp_path / "file1.txt"
+        file1.write_text('version = "1.0.0"')
+        file2 = tmp_path / "file2.txt"  # This file won't exist
+
+        config = VersionSyncConfig(
+            targets=[
+                VersionSyncTarget(path=file1, regex=r'version\s*=\s*"([^"]+)"'),
+                VersionSyncTarget(path=file2, regex=r'__version__\s*=\s*"([^"]+)"'),
+            ]
+        )
+
+        with pytest.raises(FileNotFoundError):
+            sync_version_to_targets("2.0.0", config)
+
+        # file1 should be unchanged due to rollback
+        assert 'version = "1.0.0"' in file1.read_text()
 
 
 class TestDeriveAndCompare:
