@@ -1,60 +1,73 @@
 # Fraisier
 
-**Atomic deploy + migrate with automatic rollback.**
+**Atomic deployment + migration orchestration for Python applications.**
 
-Deploy your PostgreSQL application to bare metal or Docker, with database
-migrations that actually work. Preflight check, migrate up, restart, health
-check — and `confiture migrate down` if anything fails.
+Deploy Django, FastAPI, Flask, or any Python web app with database migrations that work reliably. Supports Django migrations, Alembic, Peewee, and Confiture. Coordinates preflight → migrate → restart → health check → rollback as one atomic operation.
 
 ```
 preflight → migrate up → restart → health check → done
                 │                        │
                 │ failure                 │ failure
-                ▼                        ▼
-         (no changes)            migrate down → git rollback
+                 ▼                        ▼
+          (no changes)            migrate down → git rollback
 ```
+
+Works with PostgreSQL databases. Deploy to bare metal or Docker Compose.
 
 ---
 
 ## Why Fraisier?
 
-Every deployment tool treats database migrations as an afterthought:
+Deployment tools treat database migrations as an afterthought. Fraisier makes them first-class citizens.
+
+### The problem
+
+Most deployment tools get migrations wrong:
 
 | Tool | Migration story |
 |------|----------------|
-| **Kamal** | Piggybacks on Rails entrypoint — no locking, no rollback |
-| **Dokku** | Manual `dokku run <app> rake db:migrate` |
-| **CI scripts** | Brittle `ssh && migrate && restart` — breaks at the worst moment |
-| **Migration tools** | Run migrations with zero awareness of deployment state |
+| **Kamal** | Rails migrations happen in the entrypoint — no coordination with deployment |
+| **Dokku** | Manual `dokku run <app> python manage.py migrate` after deploy |
+| **CI scripts** | Brittle `ssh && migrate && restart` that fails spectacularly |
+| **Migration tools** | Run migrations with zero awareness of app deployment state |
 
-**Nobody coordinates preflight → migrate → deploy → health check → rollback as
-a single atomic workflow.** Fraisier does.
+### Fraisier's approach
 
-### Who is this for?
+**Atomic coordination**: Preflight checks → framework-specific migrations → service restart → health validation → automatic rollback on failure.
 
-Teams running PostgreSQL applications using [confiture](https://github.com/fraiseql/confiture)
-for migrations on bare metal or Docker Compose. You've been burned by:
+**Multi-framework support**: Works with Django, Alembic, Peewee, and Confiture.
 
-- A migration that locked a table during deploy
-- A deploy that went live before the migration finished
-- A failed migration with no way to roll back the schema
-- A rollback that reverted the app but left the schema inconsistent
+### Who this is for
 
-### When NOT to use Fraisier
+Python developers deploying web applications who want:
+- Reliable database migrations during deployment
+- Support for major Python frameworks (Django, FastAPI, Flask)
+- Automatic rollback when things go wrong
+- Clean coordination between app and database
+- Production-grade deployment workflows
 
-- **Kubernetes**: Use Helm, ArgoCD, or Flux. Fraisier manages systemd services and Docker Compose, not pods.
-- **Multiple databases**: Fraisier is PostgreSQL-only via confiture. MySQL, MongoDB, etc. are not supported.
-- **Large fleets (10+ servers)**: Fraisier targets 1-3 servers. For larger fleets, use Ansible, Terraform, or a proper orchestrator.
-- **No database migrations**: If your app doesn't have a database or doesn't use confiture, fraisier's main value proposition doesn't apply.
+### When to look elsewhere
 
-### Compared to
+Fraisier is great for Python web apps with PostgreSQL, but here are better tools for other scenarios:
 
-| Tool | Strength | Fraisier's difference |
-|------|----------|----------------------|
-| **Kamal** | Zero-config Docker deploy | No migration awareness, no atomic rollback |
-| **Dokku** | Heroku-like git push | Migrations are manual, no preflight checks |
-| **Coolify** | Web UI, broad language support | Fraisier is CLI-first, PostgreSQL-deep |
-| **Ansible** | Infrastructure automation | Fraisier is deploy-only, not infra management |
+- **Kubernetes**: Use Helm, ArgoCD, or Flux for container orchestration
+- **Large fleets (10+ servers)**: Use Ansible, Terraform, or Pulumi for infrastructure management
+- **Non-PostgreSQL databases**: Only supports PostgreSQL
+- **Non-Python apps**: Designed for Python frameworks
+- **Serverless**: Use Vercel, Netlify, or cloud-specific deployment tools
+- **Complex multi-service apps**: Consider Docker Swarm or Kubernetes for service meshes
+
+### Framework support
+
+Fraisier supports major Python migration frameworks:
+
+| Framework | Configuration | Use case |
+|-----------|---------------|----------|
+| **Django** | `framework: django` | Django projects with `manage.py migrate` |
+| **Alembic** | `framework: alembic` | SQLAlchemy projects with Alembic |
+| **Flask-Migrate** | `framework: flask_migrate` | Flask + SQLAlchemy projects |
+| **Peewee** | `framework: peewee` | Peewee ORM projects |
+| **Confiture** | `framework: confiture` | FraiseQL or custom PostgreSQL schemas |
 
 ---
 
@@ -68,187 +81,214 @@ pip install fraisier
 uv add fraisier
 ```
 
-### 2. Initialize
+### 2. Configure
+
+Create `fraises.yaml`:
+
+```yaml
+fraises:
+  my_app:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/myapp
+        systemd_service: myapp.service
+        database:
+          framework: django  # or alembic, peewee, confiture
+          name: myapp_prod
+        health_check:
+          url: http://localhost:8000/health
+```
+
+### 3. Deploy
 
 ```bash
-fraisier init
+fraisier deploy my_app production
 ```
 
-This creates a `fraises.yaml` with sensible defaults.
+Fraisier handles: git pull → migrate → restart → health check → rollback on failure.
 
-### 3. Preview
+### 4. Ship new versions
 
 ```bash
-fraisier deploy my_api production --dry-run
-```
-
-```
-╭──────── DRY RUN ────────╮
-│  Target      my_api -> production
-│  Strategy    migrate
-│  Preflight   check reversibility + duplicates
-│  Migration   confiture migrate up
-│  Restart     gunicorn-myapi.service
-│  Health      http://localhost:8000/health (timeout: 30s)
-│  Rollback    confiture migrate down (if health check fails)
-╰─────────────────────────╯
-```
-
-### 4. Deploy
-
-```bash
-fraisier deploy my_api production
-```
-
-### 5. Ship (bump + commit + push + deploy)
-
-```bash
-fraisier ship patch              # 1.0.0 -> 1.0.1, commit, push, deploy
-fraisier ship patch --no-deploy  # Skip deploy after push
+fraisier ship patch    # Bump version, commit, push, deploy
 ```
 
 ---
 
 ## How It Works
 
-### Deployment strategies
+### The deployment flow
 
-Three database-aware strategies, configured per environment:
+1. **Git**: Pull latest code to deployment directory
+2. **Database**: Run migrations with framework-specific commands
+3. **Service**: Restart systemd service or Docker containers
+4. **Health**: Verify application is responding
+5. **Rollback**: If anything fails, rollback migrations and git
 
-| Strategy | Environment | What it does |
-|----------|-------------|-------------|
-| `rebuild` | development | Drop DB, rebuild schema from scratch via `confiture migrate rebuild` |
-| `restore_migrate` | staging | Restore production backup, then `confiture migrate up` |
-| `migrate` | production | Preflight → `confiture migrate up` → restart → health check. Rollback via `confiture migrate down` on failure |
+### Framework integration
 
-### Rollback
+Fraisier calls the appropriate migration commands for each framework:
 
-When a health check fails after migration, Fraisier:
+- **Django**: `python manage.py migrate`
+- **Alembic**: `alembic upgrade head`
+- **Peewee**: Custom Peewee migration runner
+- **Confiture**: `confiture migrate up`
 
-1. Calls `confiture migrate down --steps=N` to reverse exactly the migrations applied
-2. Checks out the previous git commit
-3. Restarts the service
+### Rollback coordination
 
-Use `--no-rollback` to deploy irreversible migrations (those without down files).
+When health checks fail, Fraisier:
+1. Rolls back database migrations (framework-specific down commands)
+2. Reverts git to previous commit
+3. Restarts services
 
 ---
 
 ## Configuration
 
-Fraisier reads `fraises.yaml`. A *fraise* is a deployable service (API, worker, ETL, scheduled job).
+Fraisier uses `fraises.yaml` for configuration. A *fraise* is a deployable application component.
+
+### Django example
 
 ```yaml
 fraises:
-  my_api:
+  myapp:
     type: api
     environments:
       production:
-        branch: main
-        app_path: /var/www/my-api
-        systemd_service: gunicorn-myapi.service
+        app_path: /var/www/myapp
+        systemd_service: myapp.service
         database:
-          name: myapp_production
-          strategy: migrate
-          confiture_config: confiture.yaml
+          framework: django
+          name: myapp_prod
+          django:
+            settings_module: myapp.settings
         health_check:
           url: http://localhost:8000/health
-          timeout: 30
+```
 
-branch_mapping:
-  main:
-    fraise: my_api
-    environment: production
+### FastAPI + Alembic example
+
+```yaml
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /opt/api
+        systemd_service: api.service
+        database:
+          framework: alembic
+          name: api_prod
+          alembic:
+            script_location: migrations
+            ini_path: alembic.ini
+        health_check:
+          url: http://localhost:8000/health
+```
+
+### Flask + Peewee example
+
+```yaml
+fraises:
+  web:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/web
+        systemd_service: web.service
+        database:
+          framework: peewee
+          name: web_prod
+          peewee:
+            models_module: app.models
+        health_check:
+          url: http://localhost:8000/health
 ```
 
 ---
 
-## CLI Reference
+## Commands
 
-### Core
+### Core deployment
 
 ```
-fraisier init                                    Scaffold fraises.yaml
-fraisier deploy <fraise> <env> [--dry-run]       Deploy a fraise
-fraisier deploy <fraise> <env> --no-rollback     Allow irreversible migrations
-fraisier ship patch|minor|major [--dry-run]      Bump, commit, push, deploy
+fraisier init                                    Create fraises.yaml config
+fraisier deploy <fraise> <env> [--dry-run]       Deploy application
+fraisier deploy <fraise> <env> --no-rollback     Skip rollback on failure
+fraisier status <fraise> <env>                   Show deployment status
+fraisier rollback <fraise> <env>                 Rollback to previous version
+fraisier list [--flat]                           List configured applications
+fraisier health [--json]                         Check all health endpoints
+```
+
+### Version management
+
+```
+fraisier ship patch|minor|major [--dry-run]      Bump version, commit, push, deploy
 fraisier ship patch --no-deploy                  Ship without deploying
-fraisier list [--flat]                           List all fraises
-fraisier status <fraise> <env>                   Check fraise status
-fraisier rollback <fraise> <env>                 Roll back to previous version
-fraisier health [--json]                         Check all service health
+fraisier version show                            Show current version
+fraisier version bump patch|minor|major          Bump version number
 ```
 
-### Database
+### Database operations
 
 ```
-fraisier db migrate <fraise> -e <env>            Run database migrations
-fraisier db reset <fraise> -e <env>              Reset from template (dev)
-fraisier backup <fraise> -e <env>                Database backup
+fraisier db migrate <fraise> -e <env>            Run migrations only
+fraisier db reset <fraise> -e <env>              Reset database (development)
+fraisier backup <fraise> -e <env>                Create database backup
 ```
 
 ### Infrastructure
 
 ```
 fraisier scaffold [--dry-run]                    Generate systemd, nginx, CI files
-fraisier providers                               List deployment providers
-fraisier provider-test <type>                    Run provider pre-flight checks
-```
-
-### Versioning
-
-```
-fraisier version show                            Show version.json
-fraisier version bump patch|minor|major          Bump version atomically
+fraisier providers                               List supported providers
+fraisier provider-test <type>                    Test provider connectivity
 ```
 
 ---
 
-## Deployment Providers
+## Deployment targets
 
-| Provider | Description |
-|----------|------------|
-| `bare_metal` | SSH + systemd — the default for VPS deployments |
-| `docker_compose` | Docker Compose stacks with container exec for migrations |
+Fraisier supports different deployment environments:
 
----
-
-## Git Providers
-
-Auto-detected from webhook headers. Supports per-fraise overrides.
-
-| Provider | Self-hosted |
-|----------|-------------|
-| GitHub / GitHub Enterprise | Yes |
-| GitLab / self-hosted GitLab | Yes |
-| Gitea / Forgejo | Yes |
-| Bitbucket Cloud / Server | Yes |
+| Target | Description |
+|--------|-------------|
+| **Bare metal** | Direct systemd service management on Linux servers |
+| **Docker Compose** | Containerized deployments with docker-compose |
 
 ---
 
-## Webhook Server
+## Requirements
 
-Event-driven deploys triggered by git push:
+- **Python**: 3.8+
+- **PostgreSQL**: Database server (local or remote)
+- **Git**: Version control
+- **Systemd**: Service management (bare metal deployments)
 
-```bash
-fraisier-webhook    # starts on port 8080
-```
+### Framework-specific requirements
 
-Configure your Git server to send push events to `https://your-server/webhook`.
-The webhook auto-detects the Git provider from request headers.
+- **Django**: Django installed, `manage.py` with migrate command
+- **Alembic**: alembic package, `alembic.ini` configuration
+- **Peewee**: peewee package, migration files
+- **Confiture**: confiture package, schema configuration
 
 ---
 
-## Part of the FraiseQL Ecosystem
+## Contributing
 
-| Tool | Purpose |
-|------|---------|
-| **confiture** | PostgreSQL schema migrations |
-| **pgGit** | Database version control |
-| **fraiseql** | Compiled GraphQL engine (Rust runtime) |
-| **pg_tviews** | Incremental materialized views |
+Fraisier welcomes contributions! Areas needing help:
+
+- **New framework support**: Add migration strategies for Tortoise, PonyORM, etc.
+- **Provider plugins**: Cloud platforms, container orchestrators
+- **Documentation**: Tutorials, examples, troubleshooting guides
+- **Testing**: Integration tests, CI improvements
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
 ## License
 
-MIT
+MIT - see [LICENSE](LICENSE) file
