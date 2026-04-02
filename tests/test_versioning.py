@@ -10,9 +10,7 @@ from fraisier.strategies import (
     ConfitureMigrateStrategy,
     DjangoMigrateStrategy,
     PeeweeMigrateStrategy,
-    ValidationResult,
 )
-
 from fraisier.versioning import (
     VersionInfo,
     VersionSyncConfig,
