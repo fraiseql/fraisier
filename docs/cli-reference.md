@@ -70,7 +70,9 @@ fraisier list --flat
 
 ### fraisier deploy
 
-Deploy a fraise to an environment.
+**⚠️ DEPRECATED** -- Deploy a fraise to an environment.
+
+> **Note:** This command is deprecated. Use `fraisier trigger-deploy` for new deployments. This command will be removed in v1.0.0.
 
 ```bash
 fraisier deploy FRAISE ENVIRONMENT [OPTIONS]
@@ -124,6 +126,92 @@ fraisier deploy my_api production --if-changed
 
 # Deploy an irreversible migration (no auto-rollback on failure)
 fraisier deploy my_api production --no-rollback
+```
+
+---
+
+### fraisier trigger-deploy
+
+Trigger deployment by writing to systemd socket.
+
+Connects to the deployment socket for the specified fraise and environment, sends a JSON deployment request, and waits for completion.
+
+```bash
+fraisier trigger-deploy FRAISE ENVIRONMENT [OPTIONS]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise to deploy.
+- `ENVIRONMENT` (required) -- Target environment.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--branch BRANCH` | Git branch to deploy (defaults to configured branch) |
+| `--force` | Force deployment even if up to date |
+| `--no-cache` | Skip deployment caches |
+| `--timeout SEC` | Timeout in seconds (default: 300) |
+
+**Examples:**
+
+```bash
+# Standard deployment
+fraisier trigger-deploy my_api production
+
+# Deploy specific branch
+fraisier trigger-deploy my_api development --branch feature-x
+
+# Force redeploy
+fraisier trigger-deploy my_api staging --force
+
+# Long-running deployment
+fraisier trigger-deploy my_etl production --timeout 3600
+```
+
+---
+
+### fraisier deployment-status
+
+Show the last deployment status for a fraise.
+
+Reads the deployment status from the socket-activated daemon's status file and displays current deployment information.
+
+```bash
+fraisier deployment-status FRAISE [OPTIONS]
+```
+
+**Arguments:**
+
+- `FRAISE` (required) -- Name of the fraise.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output in JSON format |
+
+**Examples:**
+
+```bash
+# Human-readable status
+fraisier deployment-status my_api
+
+# JSON output for scripting
+fraisier deployment-status my_api --json
+```
+
+**Sample Output:**
+
+```
+Project: my_api
+Environment: production
+Status: success ✓
+Deployed: abc1234 (2026-04-02T11:15:23Z)
+Available: def5678
+Health Check: healthy ✓
+Duration: 2m 34s
 ```
 
 ---
@@ -221,7 +309,9 @@ fraisier status-all --type api
 
 ### fraisier deploy-status
 
-Show the last deployment status from `deployment_status.json`.
+**⚠️ DEPRECATED** -- Show the last deployment status from `deployment_status.json`.
+
+> **Note:** This command is deprecated. Use `fraisier deployment-status` for socket-activated deployments. This command will be removed in v1.0.0.
 
 ```bash
 fraisier deploy-status [--status-file PATH]

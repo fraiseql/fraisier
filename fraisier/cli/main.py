@@ -179,6 +179,14 @@ def deploy(
     """Deploy a fraise to an environment.
 
     \b
+    ⚠️  DEPRECATED: This command is deprecated. Use 'fraisier trigger-deploy' instead.
+
+    For webhook-triggered deployments, use socket activation:
+        fraisier trigger-deploy <fraise> <environment>
+
+    For local testing, this command still works but will be removed in v1.0.0.
+
+    \b
     FRAISE is the fraise name (e.g., my_api, etl, backup)
     ENVIRONMENT is the target environment (e.g., development, staging, production)
 
@@ -204,6 +212,13 @@ def deploy(
     fraise_type = fraise_config.get("type")
 
     ctx.obj["skip_health"] = skip_health
+
+    # Show deprecation warning
+    console.print(
+        "[yellow]⚠️  Warning:[/yellow] 'fraisier deploy' is deprecated.\n"
+        "[dim]Use 'fraisier trigger-deploy' for new deployments.\n"
+        "This command will be removed in v1.0.0.[/dim]\n"
+    )
 
     if dry_run:
         _print_dry_run(config, fraise, environment, fraise_config)
@@ -636,7 +651,12 @@ def trigger_deploy(
                     break
                 # Service may send back data, but we ignore it for now
         except TimeoutError:
-            console.print(f"[red]Error:[/red] Socket timeout after {timeout} seconds")
+            console.print(
+                f"[red]Error:[/red] Deployment timed out after {timeout} seconds\n"
+                f"[yellow]Hint:[/yellow] The deployment may still be running in the background.\n"
+                f"  Check status: fraisier deployment-status {fraise}\n"
+                f"  For long deployments, increase timeout: --timeout {timeout * 2}"
+            )
             raise SystemExit(1) from None
 
         console.print("[green]✓[/green] Deployment triggered successfully")
@@ -659,10 +679,11 @@ def trigger_deploy(
         raise SystemExit(1) from None
     except PermissionError:
         console.print(
-            f"[red]Error:[/red] Permission denied connecting to socket: {socket_path}"
-        )
-        console.print(
-            "[yellow]Hint:[/yellow] Check socket permissions and user membership."
+            f"[red]Error:[/red] Permission denied connecting to socket: {socket_path}\n"
+            f"[yellow]Hint:[/yellow] Socket is restricted to web user group.\n"
+            f"  Check socket ownership: ls -la {socket_path}\n"
+            f"  Ensure current user is in web group: groups {ctx.obj.get('user', 'current_user')}\n"
+            f"  Add to group if needed: sudo usermod -a -G www-data {ctx.obj.get('user', 'current_user')}"
         )
         raise SystemExit(1) from None
     except Exception as e:
