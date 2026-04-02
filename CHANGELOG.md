@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.2] - 2026-04-02
+## [0.4.2] - 2026-04-03
 
 ### Added
 
@@ -27,3 +27,27 @@
 
 - `SSHRunner._build_ssh_prefix()` now delegates shared option building to a new
   `_build_ssh_options()` helper, so SSH and SCP commands stay in sync.
+
+### Fixed
+
+- **Scaffold socket/service units** — resolved four bugs in the generated
+  socket-activated deploy daemon units (closes #72):
+  - Service unit renamed to `fraisier-{project}-{fraise}-{env}-deploy@.service`
+    (template unit required by `Accept=yes`; systemd spawns one instance per
+    connection). Fraise name is now included in the filename to avoid collisions
+    when multiple fraises share an environment name.
+  - `ProtectHome` removed from the deploy service unit; fraisier is installed as
+    a `uv` tool entirely within `~/.local`, which `ProtectHome` (any value) makes
+    inaccessible.
+  - `Environment=FRAISIER_CONFIG` added to the deploy service unit so the daemon
+    can locate `fraises.yaml` in a clean systemd environment. The path defaults to
+    `/opt/fraisier/fraises.yaml` and is configurable via `scaffold.config_path`.
+  - `StandardOutputFormat=json` removed from the deploy service unit; the key is
+    unavailable on systemd 252–253 (Debian 12 / Ubuntu 22.04).
+
+- **`scaffold.systemd_service` per-environment override** — set
+  `systemd_service: api.printoptim.dev.service` on any environment to use a
+  custom unit filename instead of the generated `{project}_{fraise}_{env}`
+  pattern. The override propagates to `install.sh` and `systemctl-wrapper.sh`.
+  Validated at config load time. (`service.service_name` is also supported as a
+  nested alternative under the `service:` key.)
