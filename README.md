@@ -1,15 +1,15 @@
 # Fraisier
 
-**Atomic deployment + migration orchestration for Python applications.**
+**Socket-activated deployment + migration orchestration for Python applications.**
 
-Deploy Django, FastAPI, Flask, or any Python web app with database migrations that work reliably. Supports Django migrations, Alembic, Peewee, and Confiture. Coordinates preflight → migrate → restart → health check → rollback as one atomic operation.
+Deploy Django, FastAPI, Flask, or any Python web app with database migrations that work reliably. Uses systemd socket activation for secure, web-triggered deployments. Supports Django migrations, Alembic, Peewee, and Confiture. Coordinates preflight → migrate → restart → health check → rollback as one atomic operation.
 
 ```
-preflight → migrate up → restart → health check → done
-                │                        │
-                │ failure                 │ failure
-                 ▼                        ▼
-          (no changes)            migrate down → git rollback
+webhook → socket → daemon → preflight → migrate up → restart → health check → done
+          │          │          │          │            │          │            │
+          │ failure   │ failure   │ failure   │ failure     │ failure   │ failure
+           ▼          ▼          ▼          ▼            ▼          ▼
+    (no changes)  (no changes)  (no changes)  migrate down → git rollback
 ```
 
 Works with PostgreSQL databases. Deploy to bare metal or Docker Compose.
@@ -103,7 +103,7 @@ fraises:
 ### 3. Deploy
 
 ```bash
-fraisier deploy my_app production
+fraisier trigger-deploy my_app production
 ```
 
 Fraisier handles: git pull → migrate → restart → health check → rollback on failure.
@@ -214,9 +214,9 @@ fraises:
 
 ```
 fraisier init                                    Create fraises.yaml config
-fraisier deploy <fraise> <env> [--dry-run]       Deploy application
-fraisier deploy <fraise> <env> --no-rollback     Skip rollback on failure
-fraisier status <fraise> <env>                   Show deployment status
+fraisier trigger-deploy <fraise> <env> [--dry-run]  Deploy application
+fraisier trigger-deploy <fraise> <env> --force       Force deployment
+fraisier deployment-status <fraise>                  Show deployment status
 fraisier rollback <fraise> <env>                 Rollback to previous version
 fraisier list [--flat]                           List configured applications
 fraisier health [--json]                         Check all health endpoints

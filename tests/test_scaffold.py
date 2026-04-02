@@ -2447,12 +2447,15 @@ fraises:
         renderer.render()
 
         content = (tmp_path / "output" / "install.sh").read_text()
-        # Must use project-prefixed service name
+        # Must use project-prefixed service names
         assert "myproj_my_api_production.service" in content
+        # Must include socket/service units with project prefix
+        assert "fraisier-myproj-production-deploy.socket" in content
+        assert "fraisier-myproj-production-deploy.service" in content
         # Must NOT use unprefixed service name in cp commands
         for line in content.splitlines():
             if "cp " in line and ".service" in line:
-                assert "myproj_" in line
+                assert "myproj_" in line or "fraisier-myproj-" in line
 
     def test_webhook_service_sets_pg_wrapper_env(self, tmp_path):
         """Webhook service sets FRAISIER_PG_WRAPPER when wrapper exists."""

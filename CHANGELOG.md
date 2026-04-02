@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.4.0 (2026-04-02)
+
+**MAJOR BREAKING CHANGE**: Socket-activated deployments only. Removed legacy `fraisier deploy` and `fraisier deploy-status` commands. All deployments now use systemd socket activation.
+
+### Socket-Activated Deployments (Breaking Change)
+
+- **BREAKING:** Removed `fraisier deploy` command entirely
+- **BREAKING:** Removed `fraisier deploy-status` command entirely
+- **feat:** New `fraisier trigger-deploy` command for socket-activated deployments
+- **feat:** New `fraisier deployment-status` command for checking deployment status
+- **feat:** Socket activation provides secure, web-triggered deployments via Unix sockets
+- **feat:** Per-project socket isolation prevents conflicts on multi-project servers
+- **feat:** Built-in concurrency control with reject/queue modes
+- **feat:** `--dry-run` support shows deployment plan without executing
+- **feat:** Enhanced monitoring via systemd journal and status files
+- **feat:** Automatic user isolation (deployments run as correct user)
+- **feat:** Zero sudo configuration required for web-triggered deployments
+
+### Migration Guide
+
+**For existing users:**
+1. Generate new systemd units: `fraisier scaffold`
+2. Install units: `fraisier scaffold-install --yes`
+3. Enable sockets: `sudo systemctl enable fraisier-*-deploy.socket`
+4. Start sockets: `sudo systemctl start fraisier-*-deploy.socket`
+5. Update deployment scripts: Replace `fraisier deploy` with `fraisier trigger-deploy`
+
+**Benefits:**
+- ✅ No sudo configuration needed
+- ✅ Automatic permission isolation
+- ✅ Concurrent deployment control
+- ✅ Enhanced security and monitoring
+- ✅ Webhook-friendly JSON protocol
+
+### Implementation Details
+
+- **Socket paths:** `/run/fraisier/{project}-{environment}/deploy.sock`
+- **Security:** Socket owned by web user, accessible by web group only
+- **Concurrency:** Reject mode (default) or queue mode configurable
+- **Status files:** `/run/fraisier/{project}-{env}.last_deployment`
+- **Systemd integration:** Automatic service spawning on socket activation
+
 ## v0.3.12 (2026-04-02)
 
 Feature release: validate-deployment now supports list-format install.command, and version management supports syncing to multiple files including __init__.py. Fixes #66, #65. All tests pass.

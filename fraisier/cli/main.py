@@ -10,7 +10,7 @@ from rich.tree import Tree
 
 from fraisier.config import get_config
 
-from ._helpers import _get_deployer, _print_dry_run, console
+from ._helpers import _get_deployer, console
 
 
 @click.group()
@@ -531,7 +531,7 @@ def trigger_deploy(
         except TimeoutError:
             console.print(
                 f"[red]Error:[/red] Deployment timed out after {timeout} seconds\n"
-                f"[yellow]Hint:[/yellow] The deployment may still be running in the background.\n"
+                f"[yellow]Hint:[/yellow] The deployment may still be running in the background.\n"  # noqa: E501
                 f"  Check status: fraisier deployment-status {fraise}\n"
                 f"  For long deployments, increase timeout: --timeout {timeout * 2}"
             )
@@ -560,8 +560,8 @@ def trigger_deploy(
             f"[red]Error:[/red] Permission denied connecting to socket: {socket_path}\n"
             f"[yellow]Hint:[/yellow] Socket is restricted to web user group.\n"
             f"  Check socket ownership: ls -la {socket_path}\n"
-            f"  Ensure current user is in web group: groups {ctx.obj.get('user', 'current_user')}\n"
-            f"  Add to group if needed: sudo usermod -a -G www-data {ctx.obj.get('user', 'current_user')}"
+            f"  Ensure current user is in web group: groups {ctx.obj.get('user', 'current_user')}\n"  # noqa: E501
+            f"  Add to group if needed: sudo usermod -a -G www-data {ctx.obj.get('user', 'current_user')}"  # noqa: E501
         )
         raise SystemExit(1) from None
     except Exception as e:

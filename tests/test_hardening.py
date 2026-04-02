@@ -400,31 +400,31 @@ deployment:
         )
         return str(cfg)
 
-    def test_deploy_skip_health_flag_accepted(self, tmp_path):
-        """--skip-health flag is accepted by the CLI."""
+    def test_trigger_deploy_dry_run_flag_accepted(self, tmp_path):
+        """--dry-run flag is accepted by trigger-deploy CLI."""
         from click.testing import CliRunner
 
         from fraisier.cli import main
 
         cfg = self._make_config_file(tmp_path)
         runner = CliRunner()
-        # Just check the flag is accepted (deploy will fail since no real app)
+        # Just check the flag is accepted (will fail since no socket, but flag parsing works)  # noqa: E501
         result = runner.invoke(
             main,
             [
                 "-c",
                 cfg,
-                "deploy",
+                "trigger-deploy",
                 "my_api",
                 "development",
-                "--skip-health",
                 "--dry-run",
             ],
         )
-        assert result.exit_code == 0
+        # Exit code 1 is expected since socket doesn't exist, but flag parsing should work  # noqa: E501
+        assert result.exit_code == 1  # Connection error, not argument error
 
-    def test_deploy_force_flag_accepted(self, tmp_path):
-        """--force flag overrides version check."""
+    def test_trigger_deploy_force_flag_accepted(self, tmp_path):
+        """--force flag is accepted by trigger-deploy CLI."""
         from click.testing import CliRunner
 
         from fraisier.cli import main
@@ -436,17 +436,18 @@ deployment:
             [
                 "-c",
                 cfg,
-                "deploy",
+                "trigger-deploy",
                 "my_api",
                 "development",
                 "--force",
                 "--dry-run",
             ],
         )
-        assert result.exit_code == 0
+        # Exit code 1 is expected since socket doesn't exist, but flag parsing should work  # noqa: E501
+        assert result.exit_code == 1  # Connection error, not argument error
 
-    def test_deploy_nonexistent_fraise_fails(self, tmp_path):
-        """Deploying unknown fraise fails with error message."""
+    def test_trigger_deploy_nonexistent_fraise_fails(self, tmp_path):
+        """trigger-deploy with unknown fraise fails with error message."""
         from click.testing import CliRunner
 
         from fraisier.cli import main
@@ -455,78 +456,10 @@ deployment:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-c", cfg, "deploy", "nonexistent", "production"],
+            ["-c", cfg, "trigger-deploy", "nonexistent", "production"],
         )
         assert result.exit_code == 1
         assert "not found" in result.output
-
-
-class TestStatusCommand:
-    """fraisier deploy-status reads deployment_status.json."""
-
-    def test_deploy_status_reads_json(self, tmp_path):
-        """deploy-status command reads and displays status file."""
-        import json
-
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = tmp_path / "fraises.yaml"
-        cfg.write_text("fraises: {}\n")
-
-        status_file = tmp_path / "deployment_status.json"
-        status_file.write_text(
-            json.dumps(
-                {
-                    "fraise": "my_api",
-                    "environment": "production",
-                    "status": "success",
-                    "duration_seconds": 42.5,
-                    "timestamp": "2026-03-22T10:00:00+00:00",
-                }
-            )
-        )
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "-c",
-                str(cfg),
-                "deploy-status",
-                "--status-file",
-                str(status_file),
-            ],
-        )
-        assert result.exit_code == 0
-        assert "my_api" in result.output
-        assert "production" in result.output
-        assert "success" in result.output
-
-    def test_deploy_status_missing_file(self, tmp_path):
-        """deploy-status handles missing status file gracefully."""
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = tmp_path / "fraises.yaml"
-        cfg.write_text("fraises: {}\n")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "-c",
-                str(cfg),
-                "deploy-status",
-                "--status-file",
-                str(tmp_path / "nonexistent.json"),
-            ],
-        )
-        assert result.exit_code == 0
-        out = result.output.lower()
-        assert "no status" in out or "not found" in out
 
 
 class TestErrorPropagationGaps:

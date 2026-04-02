@@ -296,8 +296,9 @@ class TestDeployDaemonCommand:
 
     def test_execute_deployment_request_dry_run_no_changes(self):
         """execute_deployment_request handles dry-run when no changes needed."""
+        from unittest.mock import MagicMock, patch
+
         from fraisier.daemon import DeploymentRequest, execute_deployment_request
-        from unittest.mock import patch, MagicMock
 
         request = DeploymentRequest(
             version=1,
@@ -337,8 +338,9 @@ class TestDeployDaemonCommand:
 
     def test_execute_deployment_request_dry_run_with_changes(self):
         """execute_deployment_request handles dry-run when changes are needed."""
+        from unittest.mock import MagicMock, patch
+
         from fraisier.daemon import DeploymentRequest, execute_deployment_request
-        from unittest.mock import patch, MagicMock
 
         request = DeploymentRequest(
             version=1,
