@@ -263,6 +263,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "scaffold": config.scaffold,
         "deployment": config.deployment,
         "health": config.health,
+        "webhook": config.webhook,
         "fraises": fraises_list,
         "local_fraises": local_fraises,
         "fraise_names": config.list_fraises(),
@@ -393,6 +394,9 @@ class ScaffoldRenderer:
         # Webhook service(s) — rendered dynamically to include project name
         rendered_files.extend(self._render_webhook_services(dry_run))
 
+        # Socket-activated deploy units — per project-environment
+        rendered_files.extend(self._render_deploy_socket_services(dry_run))
+
         # PostgreSQL logging config (one per unique environment with a database)
         rendered_files.extend(self._collect_pg_logging(dry_run))
 
@@ -471,6 +475,92 @@ class ScaffoldRenderer:
                 self._write_output(out_name, content)
             rendered.append(out_name)
         return rendered
+
+    def _render_deploy_socket_services(self, dry_run: bool) -> list[str]:
+        """Render socket-activated deploy units for each project-environment combo."""
+        rendered: list[str] = []
+        project = self.context["project_name"]
+
+        for fraise in self.context["fraises"]:
+            fraise_name = fraise["name"]
+            for env_name in fraise.get("environments", {}):
+                # Socket unit
+                socket_name = f"systemd/fraisier-{project}-{env_name}-deploy.socket"
+                rendered.append(socket_name)
+                if not dry_run:
+                    self._render_deploy_socket(fraise_name, env_name, socket_name)
+
+                # Service unit
+                service_name = f"systemd/fraisier-{project}-{env_name}-deploy.service"
+                rendered.append(service_name)
+                if not dry_run:
+                    self._render_deploy_service(fraise_name, env_name, service_name)
+
+        return rendered
+
+    def _render_deploy_socket(
+        self, fraise_name: str, env_name: str, out_name: str
+    ) -> None:
+        """Render a deploy socket unit."""
+        # Get webhook config from fraise environment
+        fraise_config = None
+        for f in self.context["fraises"]:
+            if f["name"] == fraise_name:
+                fraise_config = f
+                break
+
+        if not fraise_config:
+            return
+
+        env_config = fraise_config.get("environments", {}).get(env_name, {})
+
+        # Update context with environment-specific values
+        socket_context = dict(self.context)
+        socket_context.update(
+            {
+                "fraise_name": fraise_name,
+                "environment": env_name,
+            }
+        )
+
+        try:
+            template = self.env.get_template("core/deploy-socket.j2")
+            content = template.render(**socket_context)
+        except jinja2.TemplateNotFound:
+            content = "# Placeholder: core/deploy-socket.j2\n"
+
+        self._write_output(out_name, content)
+
+    def _render_deploy_service(
+        self, fraise_name: str, env_name: str, out_name: str
+    ) -> None:
+        """Render a deploy service unit."""
+        # Get webhook config from fraise environment
+        fraise_config = None
+        for f in self.context["fraises"]:
+            if f["name"] == fraise_name:
+                fraise_config = f
+                break
+
+        if not fraise_config:
+            return
+
+        # Update context with environment-specific values
+        service_context = dict(self.context)
+        service_context.update(
+            {
+                "fraise_name": fraise_name,
+                "environment": env_name,
+            }
+        )
+
+        try:
+            template = self.env.get_template("core/deploy-service.j2")
+            content = template.render(**service_context)
+        except jinja2.TemplateNotFound:
+            content = "# Placeholder: core/deploy-service.j2\n"
+
+        self._write_output(out_name, content)
 
     def _render_template(self, template_path: str, out_name: str) -> None:
         """Render a single template to output_dir."""

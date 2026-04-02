@@ -228,6 +228,23 @@ fi
 {% endfor %}
 {% endfor %}
 
+# Install socket-activated deploy units
+echo "  Installing socket-activated deploy units"
+{% for fraise in fraises %}
+{% for env_name in fraise.get('environments', {}) %}
+{% set socket_name = 'fraisier-' ~ project_name ~ '-' ~ env_name ~ '-deploy.socket' %}
+{% set service_name = 'fraisier-' ~ project_name ~ '-' ~ env_name ~ '-deploy.service' %}
+if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ socket_name }}" ]; then
+    _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/{{ socket_name }}" \
+       /etc/systemd/system/{{ socket_name }}
+fi
+if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ service_name }}" ]; then
+    _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/{{ service_name }}" \
+       /etc/systemd/system/{{ service_name }}
+fi
+{% endfor %}
+{% endfor %}
+
 # Install timers
 for timer in deploy-checker backup; do
     if [ -f "${PROJECT_DIR}/scripts/generated/systemd/${timer}.timer" ]; then

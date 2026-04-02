@@ -545,6 +545,261 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
 @main.command()
 @click.argument("fraise")
 @click.argument("environment")
+@click.option(
+    "--branch",
+    default=None,
+    help="Git branch to deploy (defaults to configured branch)",
+)
+@click.option("--force", is_flag=True, help="Force deployment even if up to date")
+@click.option("--no-cache", is_flag=True, help="Skip deployment caches")
+@click.option(
+    "--timeout", type=int, default=300, help="Timeout in seconds (default: 300)"
+)
+@click.pass_context
+def trigger_deploy(
+    ctx: click.Context,
+    fraise: str,
+    environment: str,
+    branch: str | None,
+    force: bool,
+    no_cache: bool,
+    timeout: int,
+) -> None:
+    """Trigger deployment by writing to systemd socket.
+
+    Connects to the deployment socket for the specified fraise and environment,
+    sends a JSON deployment request, and waits for completion.
+
+    \b
+    Examples:
+        fraisier trigger-deploy my_api production
+        fraisier trigger-deploy my_api development --branch feature-x
+        fraisier trigger-deploy my_api staging --force --timeout 600
+    """
+    import json
+    import socket
+    import time
+    from pathlib import Path
+
+    config = ctx.obj["config"]
+
+    # Validate fraise/environment exists
+    fraise_config = config.get_fraise_environment(fraise, environment)
+    if not fraise_config:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"
+        )
+        raise SystemExit(1)
+
+    # Determine branch
+    if not branch:
+        branch = fraise_config.get("branch", "main")
+
+    # Build socket path: /run/fraisier/{project}-{environment}/deploy.sock
+    project_name = config.project_name
+    socket_dir = Path("/run/fraisier") / f"{project_name}-{environment}"
+    socket_path = socket_dir / "deploy.sock"
+
+    # Build deployment request
+    request = {
+        "version": 1,
+        "project": project_name,
+        "environment": environment,
+        "branch": branch,
+        "timestamp": time.time(),
+        "triggered_by": "cli",
+        "options": {
+            "force": force,
+            "no_cache": no_cache,
+        },
+        "metadata": {
+            "cli_user": ctx.obj.get("user", "unknown"),
+        },
+    }
+
+    try:
+        # Connect to socket
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(str(socket_path))
+
+        # Send JSON request
+        json_data = json.dumps(request, default=str)
+        sock.sendall(json_data.encode("utf-8"))
+        sock.shutdown(socket.SHUT_WR)
+
+        # Wait for socket to close (indicates service completion)
+        try:
+            while True:
+                data = sock.recv(1024)
+                if not data:
+                    break
+                # Service may send back data, but we ignore it for now
+        except TimeoutError:
+            console.print(f"[red]Error:[/red] Socket timeout after {timeout} seconds")
+            raise SystemExit(1) from None
+
+        console.print("[green]✓[/green] Deployment triggered successfully")
+        sock.close()
+
+    except FileNotFoundError:
+        console.print(
+            f"[red]Error:[/red] Deployment socket not found: {socket_path}\n"
+            f"[yellow]Hint:[/yellow] Ensure systemd socket is enabled and running:\n"
+            f"  systemctl enable fraisier-{project_name}-{environment}-deploy.socket\n"
+            f"  systemctl start fraisier-{project_name}-{environment}-deploy.socket"
+        )
+        raise SystemExit(1) from None
+    except ConnectionRefusedError:
+        console.print(
+            f"[red]Error:[/red] Cannot connect to deployment socket: {socket_path}\n"
+            f"[yellow]Hint:[/yellow] Socket service may not be running. Check status:\n"
+            f"  systemctl status fraisier-{project_name}-{environment}-deploy.socket"
+        )
+        raise SystemExit(1) from None
+    except PermissionError:
+        console.print(
+            f"[red]Error:[/red] Permission denied connecting to socket: {socket_path}"
+        )
+        console.print(
+            "[yellow]Hint:[/yellow] Check socket permissions and user membership."
+        )
+        raise SystemExit(1) from None
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to trigger deployment: {e}")
+        raise SystemExit(1) from e
+
+
+@main.command()
+@click.argument("fraise")
+@click.option("--json", is_flag=True, help="Output in JSON format")
+@click.pass_context
+def deployment_status(ctx: click.Context, fraise: str, json: bool) -> None:
+    """Show the last deployment status for a fraise.
+
+    Reads the deployment status from the socket-activated daemon's status file
+    and displays current deployment information.
+
+    \b
+    Examples:
+        fraisier deployment-status my_api
+        fraisier deployment-status my_api --json
+    """
+    import json
+    from pathlib import Path
+
+    config = ctx.obj["config"]
+
+    # Find the fraise configuration
+    fraise_config = config.get_fraise(fraise)
+    if not fraise_config:
+        console.print(f"[red]Error:[/red] Fraise '{fraise}' not found")
+        raise SystemExit(1)
+
+    # Get all environments for this fraise
+    environments = list(fraise_config.get("environments", {}).keys())
+    if not environments:
+        console.print(
+            f"[red]Error:[/red] No environments configured for fraise '{fraise}'"
+        )
+        raise SystemExit(1)
+
+    project_name = config.project_name
+
+    # Try to read status for each environment
+    status_found = False
+    for env in environments:
+        status_path = Path("/run/fraisier") / f"{project_name}-{env}.last_deployment"
+
+        if not status_path.exists():
+            continue
+
+        try:
+            data = json.loads(status_path.read_text())
+            status_found = True
+
+            if json:
+                # Output raw JSON
+                import sys
+
+                json.dump(data, sys.stdout, indent=2)
+                print()  # newline
+            else:
+                # Human-readable output
+                _display_deployment_status(data, env)
+
+        except (json.JSONDecodeError, OSError) as e:
+            console.print(f"[red]Error reading status for {env}:[/red] {e}")
+            continue
+
+    if not status_found:
+        console.print("[yellow]No deployment status found[/yellow]")
+        console.print(
+            f"[dim]Looked in: /run/fraisier/{project_name}-*.last_deployment[/dim]"
+        )
+        console.print(
+            "[dim]No deployments run yet, or socket activation not configured.[/dim]"
+        )
+
+
+def _display_deployment_status(data: dict, environment: str) -> None:
+    """Display deployment status in human-readable format."""
+    status_val = data.get("status", "unknown")
+
+    if status_val == "success":
+        status_str = "[green]success[/green]"
+        icon = "✓"
+    elif status_val == "failed":
+        status_str = "[red]failed[/red]"
+        icon = "✗"
+    elif status_val == "in_progress":
+        status_str = "[yellow]in progress[/yellow]"
+        icon = "⋯"
+    elif status_val == "queued":
+        status_str = "[blue]queued[/blue]"
+        icon = "⋯"
+    else:
+        status_str = f"[yellow]{status_val}[/yellow]"
+        icon = "?"
+
+    console.print(f"[bold]Project:[/bold]     {data.get('project', '?')}")
+    console.print(f"[bold]Environment:[/bold] {environment}")
+    console.print(f"[bold]Status:[/bold]       {status_str} {icon}")
+
+    deployed_version = data.get("deployed_version")
+    if deployed_version:
+        deployed_at = data.get("deployed_at", "")
+        if deployed_at:
+            console.print(
+                f"[bold]Deployed:[/bold]     {deployed_version} ({deployed_at})"
+            )
+        else:
+            console.print(f"[bold]Deployed:[/bold]     {deployed_version}")
+
+    latest_version = data.get("latest_version")
+    if latest_version and latest_version != deployed_version:
+        console.print(f"[bold]Available:[/bold]    {latest_version}")
+
+    health = data.get("health_check_status")
+    if health:
+        if health == "healthy":
+            health_str = "[green]healthy ✓[/green]"
+        else:
+            health_str = f"[red]{health} ✗[/red]"
+        console.print(f"[bold]Health Check:[/bold] {health_str}")
+
+    duration = data.get("duration_seconds")
+    if duration is not None:
+        console.print(f"[bold]Duration:[/bold]     {duration:.1f}s")
+
+    error = data.get("error")
+    if error:
+        console.print(f"[bold]Error:[/bold]        {error}")
+
+
+@main.command()
+@click.argument("fraise")
+@click.argument("environment")
 @click.option("--to-version", default=None, help="Target SHA to roll back to")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt")
 @click.pass_context

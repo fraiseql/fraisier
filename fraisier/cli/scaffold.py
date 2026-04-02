@@ -179,10 +179,13 @@ def scaffold_install(
             console.print(
                 "\n[green]✓ Installation complete![/green]\n"
                 "[cyan]Next steps:[/cyan]\n"
-                "  1. Verify services are running:\n"
-                "     systemctl status <service-name>\n"
-                "  2. Check deployment:\n"
-                "     fraisier deploy <fraise> <environment>"
+                "  1. Enable and start socket units:\n"
+                "     sudo systemctl enable fraisier-{project}-*-deploy.socket\n"
+                "     sudo systemctl start fraisier-{project}-*-deploy.socket\n"
+                "  2. Verify socket units are listening:\n"
+                "     systemctl status fraisier-{project}-*-deploy.socket\n"
+                "  3. Test deployment:\n"
+                "     fraisier trigger-deploy <fraise> <environment>"
             )
     else:
         if validate_only or dry_run:

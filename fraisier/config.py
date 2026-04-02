@@ -885,6 +885,11 @@ class FraisierConfig:
                 result[branch] = []
         return result
 
+    @property
+    def webhook(self) -> dict[str, Any]:
+        """Get global webhook configuration."""
+        return self._config.get("webhook", {})
+
     def get_fraise(self, fraise_name: str) -> dict[str, Any] | None:
         """Get configuration for a fraise (all environments)."""
         return self.fraises.get(fraise_name)

@@ -1,0 +1,27 @@
+[Unit]
+Description=Fraisier Deploy Service - {{ project_name }}-{{ environment }}
+Requires=fraisier-{{ project_name }}-{{ environment }}-deploy.socket
+After=fraisier-{{ project_name }}-{{ environment }}-deploy.socket
+Documentation=https://fraisier.readthedocs.io/en/latest/socket-deployment.html
+
+[Service]
+Type=simple
+User={{ scaffold.deploy_user }}
+WorkingDirectory=/home/{{ scaffold.deploy_user }}
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier deploy-daemon --project={{ project_name }}
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+StandardOutputFormat=json
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+# Logging
+SyslogIdentifier=fraisier-{{ project_name }}-{{ environment }}
+
+[Install]
+WantedBy=multi-user.target
