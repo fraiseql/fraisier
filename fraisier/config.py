@@ -28,6 +28,7 @@ _GIT_URL_RE = re.compile(
 
 _VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
+_UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
 
 # snake_case -> systemd PascalCase mapping for security directives
 SECURITY_DIRECTIVE_MAP: dict[str, str] = {
@@ -106,13 +107,11 @@ class ServiceConfig:
     security: dict[str, str | bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.service_name is not None:
-            _UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
-            if not _UNIT_NAME_RE.match(self.service_name):
-                raise ValidationError(
-                    f"service.service_name contains invalid characters: "
-                    f"{self.service_name!r}",
-                )
+        if self.service_name is not None and not _UNIT_NAME_RE.match(self.service_name):
+            raise ValidationError(
+                f"service.service_name contains invalid characters: "
+                f"{self.service_name!r}",
+            )
         if self.port is not None and not (1 <= self.port <= 65535):
             raise ValidationError(
                 f"service.port must be 1-65535, got {self.port}",
@@ -534,7 +533,6 @@ class FraisierConfig:
         # systemd_service name validation
         systemd_service = env.get("systemd_service")
         if systemd_service is not None:
-            _UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
             base = str(systemd_service)
             base = base.removesuffix(".service")
             if not base or not _UNIT_NAME_RE.match(base):

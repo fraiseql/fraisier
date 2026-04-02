@@ -247,8 +247,7 @@ fi
 echo "  Installing systemd units"
 {% for fraise in fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set _svc_raw = (env_config or {}).get('systemd_service') or (env_config or {}).get('service', {}).get('service_name') or (project_name ~ '_' ~ fraise.name ~ '_' ~ env_name) %}
-{% set svc = _svc_raw[:-8] if _svc_raw.endswith('.service') else _svc_raw %}
+{% set svc = env_config.service_base %}
 if [ -f "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" ]; then
     _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" \
        /etc/systemd/system/{{ svc }}.service

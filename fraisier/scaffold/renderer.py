@@ -257,6 +257,7 @@ def _collect_deduplicated_sudoers_rules(
 
 def _build_context(config: FraisierConfig, server: str | None = None) -> dict[str, Any]:
     """Build the Jinja2 template context from config."""
+    project_name = _infer_project_name(config)
     fraises_list = []
     for name in config.list_fraises():
         fraise = config.get_fraise(name)
@@ -266,6 +267,17 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
             # Resolve server_name from routing config if present
             entry.setdefault("server_name", None)
             entry.setdefault("location", None)
+            # Enrich each env_config with the precomputed service_base so
+            # templates can use it directly without duplicating the resolution logic.
+            enriched = {}
+            for env_name, env_config in entry.get("environments", {}).items():
+                ec = dict(env_config or {})
+                ec["service_base"] = _resolve_service_base(
+                    project_name, name, env_name, ec
+                )
+                enriched[env_name] = ec
+            if enriched:
+                entry["environments"] = enriched
             fraises_list.append(entry)
 
     # Build local_fraises: filtered to only environments on the given server
@@ -285,7 +297,6 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
     else:
         local_fraises = fraises_list
 
-    project_name = _infer_project_name(config)
     return {
         "scaffold": config.scaffold,
         "deployment": config.deployment,
