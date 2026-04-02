@@ -9,7 +9,10 @@ import logging
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .framework_config import FrameworkConfig
 
 
 class JSONFormatter(logging.Formatter):
@@ -327,6 +330,22 @@ def get_contextual_logger(name: str) -> ContextualLogger:
     """
     logger = logging.getLogger(name)
     return ContextualLogger(name, logger)
+
+
+def setup_logging_from_config(config: "FrameworkConfig") -> logging.Logger:
+    """Setup logging using framework configuration.
+
+    Args:
+        config: FrameworkConfig instance
+
+    Returns:
+        Configured root logger
+    """
+
+    log_level = config.get("logging.level", "INFO")
+    json_output = config.get("logging.format", "text") == "json"
+
+    return setup_structured_logging(log_level=log_level, json_output=json_output)
 
 
 def setup_logging(

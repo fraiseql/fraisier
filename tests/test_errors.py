@@ -10,7 +10,7 @@ from fraisier.errors import (
     DeploymentError,
     DeploymentLockError,
     DeploymentTimeoutError,
-    FraisierError,
+    FrameworkError,
     GitProviderError,
     HealthCheckError,
     MigrationError,
@@ -24,12 +24,12 @@ from fraisier.errors import (
 )
 
 
-class TestFraisierError:
+class TestFrameworkError:
     """Test base FraisierError class."""
 
     def test_basic_exception(self):
         """Test basic exception creation."""
-        error = FraisierError("Test error")
+        error = FrameworkError("Test error")
         assert str(error) == "Test error"
         assert error.message == "Test error"
         assert error.code == "FRAISIER_ERROR"
@@ -37,38 +37,63 @@ class TestFraisierError:
 
     def test_exception_with_code(self):
         """Test exception with custom code."""
-        error = FraisierError("Test", code="CUSTOM_ERROR")
+        error = FrameworkError("Test", code="CUSTOM_ERROR")
         assert error.code == "CUSTOM_ERROR"
 
     def test_exception_with_context(self):
         """Test exception with context."""
         context = {"deployment_id": "deploy-123", "provider": "bare_metal"}
-        error = FraisierError("Test", context=context)
+        error = FrameworkError("Test", context=context)
         assert error.context == context
 
     def test_exception_recoverable(self):
         """Test recoverable flag."""
-        error = FraisierError("Test", recoverable=True)
+        error = FrameworkError("Test", recoverable=True)
         assert error.recoverable is True
 
     def test_exception_with_cause(self):
         """Test exception cause chaining."""
         cause = ValueError("Original error")
-        error = FraisierError("Test", cause=cause)
+        error = FrameworkError("Test", cause=cause)
         assert error.cause is cause
         # __cause__ may not be set depending on implementation
         assert "Original error" in str(error) or error.cause is cause
 
     def test_exception_to_dict(self):
+        error = FrameworkError(
+            "Test error", code="TEST_ERROR", context={"key": "value"}
+        )
+        result = error.to_dict()
+        expected = {
+            "error_type": "FrameworkError",
+            "code": "TEST_ERROR",
+            "message": "Test error",
+            "recovery_hint": "Check the logs for more details.",
+            "context": {"key": "value"},
+            "recoverable": False,
+        }
+        assert result == expected
+
+    def test_exception_format_for_cli(self):
+        error = FrameworkError(
+            "Something went wrong", code="TEST_ERROR", context={"attempts": 3}
+        )
+        formatted = error.format_for_cli()
+        assert "[red]Error:[/red] Something went wrong" in formatted
+        assert "[dim]Code:[/dim] TEST_ERROR" in formatted
+        assert (
+            "[yellow]Suggestion:[/yellow] Check the logs for more details." in formatted
+        )
+        assert "[dim]Context:[/dim] attempts=3" in formatted
         """Test serialization to dict."""
-        error = FraisierError(
+        error = FrameworkError(
             "Test error",
             code="TEST_CODE",
             context={"key": "value"},
             recoverable=True,
         )
         result = error.to_dict()
-        assert result["error_type"] == "FraisierError"
+        assert result["error_type"] == "FrameworkError"
         assert result["message"] == "Test error"
         assert result["code"] == "TEST_CODE"
         assert result["context"] == {"key": "value"}
@@ -81,7 +106,7 @@ class TestDeploymentErrors:
     def test_deployment_error(self):
         """Test DeploymentError."""
         error = DeploymentError("Deployment failed")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "DEPLOYMENT_ERROR"
 
     def test_deployment_timeout_error(self):
@@ -115,7 +140,7 @@ class TestProviderErrors:
     def test_provider_error(self):
         """Test ProviderError."""
         error = ProviderError("Provider error")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "PROVIDER_ERROR"
 
     def test_provider_unavailable_error(self):
@@ -138,7 +163,7 @@ class TestDatabaseErrors:
     def test_database_error(self):
         """Test DatabaseError."""
         error = DatabaseError("Database error")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "DATABASE_ERROR"
 
     def test_database_connection_error(self):
@@ -426,31 +451,31 @@ class TestOtherErrors:
     def test_configuration_error(self):
         """Test ConfigurationError."""
         error = ConfigurationError("Invalid config")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "CONFIG_ERROR"
 
     def test_validation_error(self):
         """Test ValidationError."""
         error = ValidationError("Validation failed")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "VALIDATION_ERROR"
 
     def test_not_found_error(self):
         """Test NotFoundError."""
         error = NotFoundError("Resource not found")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "NOT_FOUND"
 
     def test_git_provider_error(self):
         """Test GitProviderError."""
         error = GitProviderError("Git error")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "GIT_PROVIDER_ERROR"
 
     def test_webhook_error(self):
         """Test WebhookError."""
         error = WebhookError("Webhook failed")
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert error.code == "WEBHOOK_ERROR"
 
 
@@ -462,7 +487,7 @@ class TestErrorInheritance:
         error = DeploymentTimeoutError("Timeout")
         assert isinstance(error, DeploymentTimeoutError)
         assert isinstance(error, DeploymentError)
-        assert isinstance(error, FraisierError)
+        assert isinstance(error, FrameworkError)
         assert isinstance(error, Exception)
 
     def test_provider_unavailable_is_recoverable(self):
@@ -473,7 +498,7 @@ class TestErrorInheritance:
     def test_all_errors_have_codes(self):
         """Test all errors have unique codes."""
         error_classes = [
-            FraisierError,
+            FrameworkError,
             ConfigurationError,
             DeploymentError,
             DeploymentTimeoutError,

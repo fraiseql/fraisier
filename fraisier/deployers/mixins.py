@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fraisier.errors import DeploymentError, FraisierError
+from fraisier.errors import DeploymentError, FrameworkError
 from fraisier.git.operations import (
     clone_bare_repo,
     fetch_and_checkout,
@@ -165,10 +165,10 @@ class GitDeployMixin:
             ],
         )
 
-    def _wrap_error(self, exc: Exception) -> FraisierError:
-        """Wrap a bare exception into a structured FraisierError."""
+    def _wrap_error(self, exc: Exception) -> FrameworkError:
+        """Wrap a bare exception into a structured FrameworkError."""
         ctx = {"fraise": self.fraise_name, "environment": self.environment}
-        if isinstance(exc, FraisierError):
+        if isinstance(exc, FrameworkError):
             exc.context.update(ctx)
             return exc
         return DeploymentError(str(exc), context=ctx, cause=exc)

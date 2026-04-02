@@ -927,7 +927,6 @@ class TestAPIDeployerChdirForStrategy:
             mock_strategy = MagicMock()
 
             def capture_cwd(*args, **kwargs):
-
                 cwd_during_strategy.append(str(Path.cwd()))
                 return StrategyResult(success=True)
 

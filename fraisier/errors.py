@@ -13,10 +13,10 @@ if TYPE_CHECKING:
     from fraisier.migration_analyzer import ErrorClassification
 
 
-class FraisierError(Exception):
-    """Base exception for all Fraisier errors.
+class FrameworkError(Exception):
+    """Base exception for all framework errors.
 
-    All Fraisier errors inherit from this and provide:
+    All framework errors inherit from this and provide:
     - Standard error code for identification
     - Optional context dict for debugging
     - Recoverable flag for automated recovery
@@ -69,14 +69,27 @@ class FraisierError(Exception):
             "recoverable": self.recoverable,
         }
 
+    def format_for_cli(self) -> str:
+        """Format error for CLI display with consistent styling."""
+        lines = [
+            f"[red]Error:[/red] {self.message}",
+            f"[dim]Code:[/dim] {self.code}",
+        ]
+        if self.recovery_hint:
+            lines.append(f"[yellow]Suggestion:[/yellow] {self.recovery_hint}")
+        if self.context:
+            context_str = ", ".join(f"{k}={v}" for k, v in self.context.items())
+            lines.append(f"[dim]Context:[/dim] {context_str}")
+        return "\n".join(lines)
 
-class ConfigurationError(FraisierError):
+
+class ConfigurationError(FrameworkError):
     """Configuration loading or validation errors."""
 
     code = "CONFIG_ERROR"
 
 
-class DeploymentError(FraisierError):
+class DeploymentError(FrameworkError):
     """Deployment execution errors."""
 
     code = "DEPLOYMENT_ERROR"
@@ -108,7 +121,7 @@ class HealthCheckError(DeploymentError):
     )
 
 
-class ProviderError(FraisierError):
+class ProviderError(FrameworkError):
     """Provider-related errors."""
 
     code = "PROVIDER_ERROR"
@@ -154,7 +167,7 @@ class RollbackError(DeploymentError):
     )
 
 
-class DatabaseError(FraisierError):
+class DatabaseError(FrameworkError):
     """Database operation errors."""
 
     code = "DATABASE_ERROR"
@@ -376,25 +389,25 @@ class DeploymentLockError(DeploymentError):
     )
 
 
-class NotFoundError(FraisierError):
+class NotFoundError(FrameworkError):
     """Requested resource not found."""
 
     code = "NOT_FOUND"
 
 
-class ValidationError(FraisierError):
+class ValidationError(FrameworkError):
     """Input validation failed."""
 
     code = "VALIDATION_ERROR"
 
 
-class GitProviderError(FraisierError):
+class GitProviderError(FrameworkError):
     """Git provider related errors."""
 
     code = "GIT_PROVIDER_ERROR"
 
 
-class WebhookError(FraisierError):
+class WebhookError(FrameworkError):
     """Webhook processing errors."""
 
     code = "WEBHOOK_ERROR"

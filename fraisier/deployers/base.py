@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from fraisier.errors import FraisierError
+    from fraisier.errors import FrameworkError
     from fraisier.runners import CommandRunner
 
 logger = logging.getLogger("fraisier")
@@ -37,7 +37,7 @@ class DeploymentResult:
     new_version: str | None = None
     duration_seconds: float = 0.0
     error_message: str | None = None
-    error: FraisierError | None = None
+    error: FrameworkError | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
 

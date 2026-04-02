@@ -17,14 +17,14 @@ from fraisier.errors import (
     ConfigurationError,
     DeploymentError,
     DeploymentTimeoutError,
-    FraisierError,
+    FrameworkError,
     HealthCheckError,
 )
 from fraisier.metrics import MetricsRecorder
 
 
 class TestErrorHandlingAudit:
-    """Deployment failures must produce structured FraisierError with context."""
+    """Deployment failures must produce structured FrameworkError with context."""
 
     def test_api_deployer_git_pull_failure_raises_deployment_error(self):
         """APIDeployer._git_pull failure wraps as DeploymentError."""
@@ -39,7 +39,7 @@ class TestErrorHandlingAudit:
         result = deployer.execute()
         assert not result.success
         assert result.status == DeploymentStatus.FAILED
-        assert isinstance(result.error, FraisierError)
+        assert isinstance(result.error, FrameworkError)
         assert result.error.context.get("fraise") == "my_api"
         assert result.error.context.get("environment") == "production"
 
@@ -88,7 +88,7 @@ class TestErrorHandlingAudit:
         )
         result = deployer.execute()
         assert not result.success
-        assert isinstance(result.error, FraisierError)
+        assert isinstance(result.error, FrameworkError)
         assert result.error.context.get("fraise") == "etl_job"
 
     def test_scheduled_deployer_failure_produces_structured_error(self):
@@ -106,11 +106,11 @@ class TestErrorHandlingAudit:
         ):
             result = deployer.execute()
         assert not result.success
-        assert isinstance(result.error, FraisierError)
+        assert isinstance(result.error, FrameworkError)
         assert result.error.context.get("fraise") == "cron_job"
 
     def test_deployment_result_carries_error_object(self):
-        """DeploymentResult.error is always a FraisierError on failure."""
+        """DeploymentResult.error is always a FrameworkError on failure."""
         deployer = APIDeployer(
             {
                 "fraise_name": "api",
@@ -121,11 +121,11 @@ class TestErrorHandlingAudit:
         result = deployer.execute()
         assert not result.success
         assert result.error is not None
-        assert isinstance(result.error, FraisierError)
+        assert isinstance(result.error, FrameworkError)
         assert result.error.recoverable is not None  # explicit flag
 
     def test_error_to_dict_includes_context(self):
-        """FraisierError.to_dict() includes context for structured logging."""
+        """FrameworkError.to_dict() includes context for structured logging."""
         err = DeploymentError(
             "deploy failed",
             context={"fraise": "api", "environment": "prod"},

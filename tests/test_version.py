@@ -551,6 +551,21 @@ class TestCliVersionFlag:
 
         assert re.search(r"\d+\.\d+\.\d+", result.output)
 
+    def test_version_full_flag_outputs_system_info(self):
+        from fraisier.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["version", "--full"])
+
+        assert result.exit_code == 0
+        assert "Fraisier v" in result.output
+        # Should contain system information
+        assert (
+            "Python" in result.output
+            or "systemd" in result.output
+            or "platform" in result.output
+        )
+
 
 class TestDeployTemplateVersionGating:
     """Test that deploy.yml template includes version gating."""

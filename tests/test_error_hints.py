@@ -6,7 +6,7 @@ from fraisier.errors import (
     DeploymentError,
     DeploymentLockError,
     DeploymentTimeoutError,
-    FraisierError,
+    FrameworkError,
     HealthCheckError,
     ProviderConnectionError,
     RollbackError,
@@ -17,8 +17,8 @@ class TestRecoveryHints:
     """Test that error types include recovery hints."""
 
     def test_base_error_has_recovery_hint(self):
-        """Test FraisierError.to_dict includes recovery_hint."""
-        err = FraisierError("something failed")
+        """Test FrameworkError.to_dict includes recovery_hint."""
+        err = FrameworkError("something failed")
         d = err.to_dict()
         assert "recovery_hint" in d
 

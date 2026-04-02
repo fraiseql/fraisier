@@ -31,7 +31,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.4.0"
+version = "0.4.1"
 
 [project.optional-dependencies]
 all-databases = [
@@ -74,7 +74,28 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests requiring external services (deselect with '-m \"not integration\"')",
+    "e2e: marks end-to-end tests",
 ]
+
+[tool.coverage.run]
+source = ["fraisier"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "fraisier/_env.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+fail_under = 85
+
+[tool.coverage.html]
+directory = "htmlcov"
 
 [tool.ruff]
 line-length = 88

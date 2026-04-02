@@ -10,9 +10,42 @@ from ._helpers import console
 from .main import main
 
 
+def _get_systemd_version() -> str:
+    """Get systemd version string, or 'Not detected' if unavailable."""
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["systemctl", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            # First line is like "systemd 249 (249.7-1-arch)"
+            return result.stdout.split("\n")[0]
+    except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "Not detected"
+
+
+def _show_full_version(fraisier_version: str) -> None:
+    """Display detailed version and system information."""
+    import platform
+    import sys
+
+    console.print(f"[bold]Fraisier[/bold] v{fraisier_version}")
+    console.print(
+        f"[bold]Python[/bold]   {sys.version.split()[0]} ({platform.platform()})"
+    )
+    console.print(f"[bold]Systemd[/bold]  {_get_systemd_version()}")
+
+
 @main.group(name="version", invoke_without_command=True)
+@click.option("--full", is_flag=True, help="Show detailed system information")
 @click.pass_context
-def version_group(ctx: click.Context) -> None:
+def version_group(ctx: click.Context, full: bool) -> None:
     """Version management commands.
 
     \b
@@ -22,13 +55,17 @@ def version_group(ctx: click.Context) -> None:
     \b
     Examples:
         fraisier version            # Show package version
+        fraisier version --full     # Show system details
         fraisier version show       # Show version.json info
         fraisier version bump patch # Bump patch version
     """
     if ctx.invoked_subcommand is None:
         from fraisier import __version__
 
-        console.print(f"Fraisier v{__version__}")
+        if full:
+            _show_full_version(__version__)
+        else:
+            console.print(f"Fraisier v{__version__}")
 
 
 @version_group.command(name="show")
