@@ -141,6 +141,31 @@ def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[st
     return list(allowed)
 
 
+def _resolve_service_base(
+    project_name: str,
+    fraise_name: str,
+    env_name: str,
+    env_config: dict[str, Any],
+) -> str:
+    """Return the systemd service unit base name (without .service suffix).
+
+    Resolution order:
+    1. ``systemd_service`` at the environment top level (validated at config load)
+    2. ``service.service_name`` (nested under the service: key)
+    3. Default: ``{project}_{fraise}_{env}``
+    """
+    systemd_service = env_config.get("systemd_service")
+    if systemd_service:
+        base = str(systemd_service)
+        return base.removesuffix(".service")
+
+    override = (env_config.get("service") or {}).get("service_name")
+    if override:
+        return override
+
+    return f"{project_name}_{fraise_name}_{env_name}"
+
+
 def _collect_allowed_services(
     project_name: str, fraises_list: list[dict[str, Any]]
 ) -> list[str]:
@@ -153,9 +178,11 @@ def _collect_allowed_services(
         fraise_name = fraise.get("name", "")
         if not fraise_name:
             continue
-        for env_name in fraise.get("environments", {}):
-            svc = f"{project_name}_{fraise_name}_{env_name}.service"
-            services.append(svc)
+        for env_name, env_config in fraise.get("environments", {}).items():
+            base = _resolve_service_base(
+                project_name, fraise_name, env_name, env_config or {}
+            )
+            services.append(f"{base}.service")
     return services
 
 
@@ -404,8 +431,9 @@ class ScaffoldRenderer:
         project = self.context["project_name"]
         for fraise in self.context["fraises"]:
             name = fraise["name"]
-            for env_name in fraise.get("environments", {}):
-                svc_name = f"systemd/{project}_{name}_{env_name}.service"
+            for env_name, env_config in fraise.get("environments", {}).items():
+                base = _resolve_service_base(project, name, env_name, env_config or {})
+                svc_name = f"systemd/{base}.service"
                 rendered_files.append(svc_name)
                 if not dry_run:
                     self._render_systemd_service(fraise, env_name, svc_name)
@@ -477,21 +505,22 @@ class ScaffoldRenderer:
         return rendered
 
     def _render_deploy_socket_services(self, dry_run: bool) -> list[str]:
-        """Render socket-activated deploy units for each project-environment combo."""
+        """Render socket-activated deploy units for each fraise-environment combo."""
         rendered: list[str] = []
         project = self.context["project_name"]
 
         for fraise in self.context["fraises"]:
             fraise_name = fraise["name"]
             for env_name in fraise.get("environments", {}):
-                # Socket unit
-                socket_name = f"systemd/fraisier-{project}-{env_name}-deploy.socket"
+                # Socket unit — one per fraise+env to avoid filename collisions
+                prefix = f"fraisier-{project}-{fraise_name}-{env_name}-deploy"
+                socket_name = f"systemd/{prefix}.socket"
                 rendered.append(socket_name)
                 if not dry_run:
                     self._render_deploy_socket(fraise_name, env_name, socket_name)
 
-                # Service unit
-                service_name = f"systemd/fraisier-{project}-{env_name}-deploy.service"
+                # Service unit (template unit: @.service required by Accept=yes)
+                service_name = f"systemd/{prefix}@.service"
                 rendered.append(service_name)
                 if not dry_run:
                     self._render_deploy_service(fraise_name, env_name, service_name)

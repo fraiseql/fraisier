@@ -85,6 +85,7 @@ _VALID_SERVICE_TYPES = {
 class ServiceConfig:
     """Per-environment systemd service configuration."""
 
+    service_name: str | None = None
     user: str | None = None
     group: str | None = None
     port: int | None = None
@@ -105,6 +106,13 @@ class ServiceConfig:
     security: dict[str, str | bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.service_name is not None:
+            _UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
+            if not _UNIT_NAME_RE.match(self.service_name):
+                raise ValidationError(
+                    f"service.service_name contains invalid characters: "
+                    f"{self.service_name!r}",
+                )
         if self.port is not None and not (1 <= self.port <= 65535):
             raise ValidationError(
                 f"service.port must be 1-65535, got {self.port}",
@@ -173,6 +181,7 @@ class ServiceConfig:
             return default
 
         return cls(
+            service_name=svc.get("service_name"),
             user=svc.get("user"),
             group=svc.get("group"),
             port=_get("port"),
@@ -350,6 +359,7 @@ class ScaffoldConfig:
 
     output_dir: str = "scripts/generated"
     deploy_user: str = "fraisier"
+    config_path: str = "/opt/fraisier/fraises.yaml"
     systemd: SystemdScaffoldConfig = field(default_factory=SystemdScaffoldConfig)
     nginx: NginxScaffoldConfig = field(default_factory=NginxScaffoldConfig)
     github_actions: GithubActionsScaffoldConfig = field(
@@ -519,6 +529,18 @@ class FraisierConfig:
                 errors.append(
                     f"{fraise_name}: '{field}' must be a number, "
                     f"got {type(val).__name__}"
+                )
+
+        # systemd_service name validation
+        systemd_service = env.get("systemd_service")
+        if systemd_service is not None:
+            _UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
+            base = str(systemd_service)
+            base = base.removesuffix(".service")
+            if not base or not _UNIT_NAME_RE.match(base):
+                errors.append(
+                    f"{fraise_name}: systemd_service contains invalid characters: "
+                    f"{systemd_service!r}"
                 )
 
         # clone_url format validation
@@ -747,6 +769,7 @@ class FraisierConfig:
         return ScaffoldConfig(
             output_dir=raw.get("output_dir", "scripts/generated"),
             deploy_user=deploy_user,
+            config_path=raw.get("config_path", "/opt/fraisier/fraises.yaml"),
             systemd=SystemdScaffoldConfig(
                 security_hardening=raw_systemd.get("security_hardening", True),
                 memory_max_default=raw_systemd.get("memory_max_default", "4G"),

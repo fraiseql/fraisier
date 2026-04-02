@@ -2449,9 +2449,9 @@ fraises:
         content = (tmp_path / "output" / "install.sh").read_text()
         # Must use project-prefixed service names
         assert "myproj_my_api_production.service" in content
-        # Must include socket/service units with project prefix
-        assert "fraisier-myproj-production-deploy.socket" in content
-        assert "fraisier-myproj-production-deploy.service" in content
+        # Must include socket/service units with project+fraise prefix
+        assert "fraisier-myproj-my_api-production-deploy.socket" in content
+        assert "fraisier-myproj-my_api-production-deploy@.service" in content
         # Must NOT use unprefixed service name in cp commands
         for line in content.splitlines():
             if "cp " in line and ".service" in line:
@@ -3424,23 +3424,23 @@ scaffold:
         renderer.render()
         return tmp_path / "output"
 
-    def test_socket_uses_accept_no(self, tmp_path):
-        """Accept=no is required — deploy-daemon handles connections itself.
+    def test_socket_uses_accept_yes(self, tmp_path):
+        """Accept=yes is required — deploy-daemon reads from stdin (pre-connected
+        socket).
 
-        Accept=yes requires a template service unit; using it with a regular
-        service causes systemd to log 'Invalid argument' and refuse to start
-        the service (issue #72, Bug 1).
+        Accept=yes requires a template service unit named deploy@.service so
+        systemd can spawn one instance per connection (issue #72, Bug 1).
         """
         out = self._render(tmp_path)
-        socket_path = out / "systemd" / "fraisier-myproj-production-deploy.socket"
+        socket_path = out / "systemd" / "fraisier-myproj-api-production-deploy.socket"
         socket = socket_path.read_text()
-        assert "Accept=no" in socket
+        assert "Accept=yes" in socket
 
-    def test_socket_does_not_use_accept_yes(self, tmp_path):
+    def test_socket_does_not_use_accept_no(self, tmp_path):
         out = self._render(tmp_path)
-        socket_path = out / "systemd" / "fraisier-myproj-production-deploy.socket"
+        socket_path = out / "systemd" / "fraisier-myproj-api-production-deploy.socket"
         socket = socket_path.read_text()
-        assert "Accept=yes" not in socket
+        assert "Accept=no" not in socket
 
     def test_service_has_no_standard_output_format(self, tmp_path):
         """StandardOutputFormat=json must not appear in the service unit.
@@ -3451,7 +3451,7 @@ scaffold:
         """
         out = self._render(tmp_path)
         service = (
-            out / "systemd" / "fraisier-myproj-production-deploy.service"
+            out / "systemd" / "fraisier-myproj-api-production-deploy@.service"
         ).read_text()
         assert "StandardOutputFormat" not in service
 
@@ -3459,7 +3459,7 @@ scaffold:
         """StandardOutput=journal must remain after removing the format key."""
         out = self._render(tmp_path)
         service = (
-            out / "systemd" / "fraisier-myproj-production-deploy.service"
+            out / "systemd" / "fraisier-myproj-api-production-deploy@.service"
         ).read_text()
         assert "StandardOutput=journal" in service
         assert "StandardError=journal" in service
@@ -3474,12 +3474,226 @@ scaffold:
         """
         out = self._render(tmp_path)
         service = (
-            out / "systemd" / "fraisier-myproj-production-deploy.service"
+            out / "systemd" / "fraisier-myproj-api-production-deploy@.service"
         ).read_text()
-        assert "ProtectHome" not in service
+        assert "ProtectHome=" not in service
 
     def test_socket_listens_on_expected_path(self, tmp_path):
         out = self._render(tmp_path)
-        socket_path = out / "systemd" / "fraisier-myproj-production-deploy.socket"
+        socket_path = out / "systemd" / "fraisier-myproj-api-production-deploy.socket"
         socket = socket_path.read_text()
-        assert "ListenStream=/run/fraisier/myproj-production/deploy.sock" in socket
+        assert "ListenStream=/run/fraisier/myproj-api-production/deploy.sock" in socket
+
+    def test_service_exec_uses_project_name(self, tmp_path):
+        """deploy-daemon --project must receive the top-level project name.
+
+        trigger-deploy sends {"project": "<project_name>", ...} in the JSON payload;
+        the daemon validates incoming requests against its --project flag.
+        Using the fraise name here would cause validation failures (issue #72, Bug 4
+        correction).
+        """
+        out = self._render(tmp_path)
+        service = (
+            out / "systemd" / "fraisier-myproj-api-production-deploy@.service"
+        ).read_text()
+        assert "--project=myproj" in service
+        assert "--project=api" not in service
+
+    def test_socket_and_service_filenames_include_fraise_name(self, tmp_path):
+        """Unit filenames include the fraise name to avoid collisions.
+
+        Without the fraise name, two fraises sharing the same environment name
+        would overwrite each other's socket/service files (issue #72, Bug 4).
+        """
+        out = self._render(tmp_path)
+        sdir = out / "systemd"
+        assert (sdir / "fraisier-myproj-api-production-deploy.socket").exists()
+        assert (sdir / "fraisier-myproj-api-production-deploy@.service").exists()
+        assert not (sdir / "fraisier-myproj-production-deploy.socket").exists()
+        assert not (sdir / "fraisier-myproj-production-deploy@.service").exists()
+
+    def test_service_sets_fraisier_config_default(self, tmp_path):
+        """Service unit sets FRAISIER_CONFIG to the default system-wide path.
+
+        The deploy daemon starts in a clean systemd environment with no config
+        path set. Without this env var, it cannot locate fraises.yaml (issue #72,
+        Bug 5).
+        """
+        out = self._render(tmp_path)
+        service = (
+            out / "systemd" / "fraisier-myproj-api-production-deploy@.service"
+        ).read_text()
+        assert "Environment=FRAISIER_CONFIG=/opt/fraisier/fraises.yaml" in service
+
+    def test_service_config_path_is_configurable(self, tmp_path):
+        """scaffold.config_path overrides the FRAISIER_CONFIG value in the unit."""
+        from fraisier.config import FraisierConfig
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+scaffold:
+  output_dir: {tmp_path / "output"}
+  deploy_user: myproj_deploy
+  config_path: /etc/myapp/fraises.yaml
+"""
+        )
+        config = FraisierConfig(p)
+        ScaffoldRenderer(config).render()
+        svc_path = (
+            tmp_path / "output" / "systemd"
+            / "fraisier-myproj-api-production-deploy@.service"
+        )
+        service = svc_path.read_text()
+        assert "Environment=FRAISIER_CONFIG=/etc/myapp/fraises.yaml" in service
+        assert "/opt/fraisier/fraises.yaml" not in service
+
+
+class TestServiceNameOverride:
+    """service.service_name overrides the generated systemd unit filename."""
+
+    def _render(self, tmp_path, yaml_extra: str = ""):
+        from fraisier.config import FraisierConfig
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: printoptim
+fraises:
+  api:
+    type: api
+    environments:
+      dev:
+        app_path: /var/www/dev
+        service:
+          service_name: api.printoptim.dev
+      production:
+        app_path: /var/www/prod
+scaffold:
+  deploy_user: printoptim_deploy
+  output_dir: {tmp_path / "output"}
+{yaml_extra}
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+        return tmp_path / "output"
+
+    def test_service_file_uses_override_name(self, tmp_path):
+        """Renderer writes the unit file using the overridden name."""
+        out = self._render(tmp_path)
+        assert (out / "systemd" / "api.printoptim.dev.service").exists()
+        assert not (out / "systemd" / "printoptim_api_dev.service").exists()
+
+    def test_default_name_used_when_no_override(self, tmp_path):
+        """Environments without service_name still use the default pattern."""
+        out = self._render(tmp_path)
+        assert (out / "systemd" / "printoptim_api_production.service").exists()
+
+    def test_systemctl_wrapper_uses_override_name(self, tmp_path):
+        """allowed_services list in the systemctl wrapper uses the override."""
+        out = self._render(tmp_path)
+        wrapper = (out / "systemctl-wrapper.sh").read_text()
+        assert "api.printoptim.dev.service" in wrapper
+        assert "printoptim_api_dev.service" not in wrapper
+
+    def test_install_sh_uses_override_name(self, tmp_path):
+        """install.sh cp command targets the overridden filename."""
+        out = self._render(tmp_path)
+        install = (out / "install.sh").read_text()
+        assert "api.printoptim.dev.service" in install
+        assert "printoptim_api_dev.service" not in install
+
+
+class TestSystemdServiceField:
+    """systemd_service at env top level overrides the generated unit filename."""
+
+    def _render(self, tmp_path, yaml: str):
+        from fraisier.config import FraisierConfig
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml)
+        config = FraisierConfig(p)
+        ScaffoldRenderer(config).render()
+        return tmp_path / "output"
+
+    def _base_yaml(self, tmp_path, dev_name: str) -> str:
+        return f"""
+name: printoptim
+fraises:
+  api:
+    type: api
+    environments:
+      dev:
+        app_path: /var/www/dev
+        systemd_service: {dev_name}
+      production:
+        app_path: /var/www/prod
+scaffold:
+  deploy_user: printoptim_deploy
+  output_dir: {tmp_path / "output"}
+"""
+
+    def test_systemd_service_with_suffix(self, tmp_path):
+        """systemd_service with .service suffix produces the correct filename."""
+        yaml = self._base_yaml(tmp_path, "api.printoptim.dev.service")
+        out = self._render(tmp_path, yaml)
+        assert (out / "systemd" / "api.printoptim.dev.service").exists()
+        assert not (out / "systemd" / "printoptim_api_dev.service").exists()
+
+    def test_systemd_service_without_suffix(self, tmp_path):
+        """systemd_service without .service suffix produces the correct filename."""
+        out = self._render(tmp_path, self._base_yaml(tmp_path, "api.printoptim.dev"))
+        assert (out / "systemd" / "api.printoptim.dev.service").exists()
+        assert not (out / "systemd" / "printoptim_api_dev.service").exists()
+
+    def test_systemd_service_propagates_to_wrapper_and_install(self, tmp_path):
+        """Override appears in systemctl-wrapper.sh allowed list and install.sh."""
+        yaml = self._base_yaml(tmp_path, "api.printoptim.dev.service")
+        out = self._render(tmp_path, yaml)
+        wrapper = (out / "systemctl-wrapper.sh").read_text()
+        assert "api.printoptim.dev.service" in wrapper
+        assert "printoptim_api_dev.service" not in wrapper
+        install = (out / "install.sh").read_text()
+        assert "api.printoptim.dev.service" in install
+        assert "printoptim_api_dev.service" not in install
+
+    def test_systemd_service_invalid_chars_raises_at_load_time(self, tmp_path):
+        """Invalid systemd_service raises ValidationError at config load."""
+        import pytest
+
+        from fraisier.config import FraisierConfig, ValidationError
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(f"""
+name: printoptim
+fraises:
+  api:
+    type: api
+    environments:
+      dev:
+        app_path: /var/www/dev
+        systemd_service: bad/name
+scaffold:
+  deploy_user: printoptim_deploy
+  output_dir: {tmp_path / "output"}
+""")
+        with pytest.raises(ValidationError, match="systemd_service"):
+            FraisierConfig(p)
+
+    def test_default_env_still_uses_generated_name(self, tmp_path):
+        """Environments without systemd_service use the default pattern."""
+        yaml = self._base_yaml(tmp_path, "api.printoptim.dev.service")
+        out = self._render(tmp_path, yaml)
+        assert (out / "systemd" / "printoptim_api_production.service").exists()

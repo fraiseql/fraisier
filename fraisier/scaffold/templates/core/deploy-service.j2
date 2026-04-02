@@ -1,7 +1,7 @@
 [Unit]
-Description=Fraisier Deploy Service - {{ project_name }}-{{ environment }}
-Requires=fraisier-{{ project_name }}-{{ environment }}-deploy.socket
-After=fraisier-{{ project_name }}-{{ environment }}-deploy.socket
+Description=Fraisier Deploy Service - {{ project_name }}-{{ fraise_name }}-{{ environment }}
+Requires=fraisier-{{ project_name }}-{{ fraise_name }}-{{ environment }}-deploy.socket
+After=fraisier-{{ project_name }}-{{ fraise_name }}-{{ environment }}-deploy.socket
 Documentation=https://fraisier.readthedocs.io/en/latest/socket-deployment.html
 
 [Service]
@@ -12,8 +12,11 @@ ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier deploy-daemon --p
 StandardInput=socket
 StandardOutput=journal
 StandardError=journal
+Environment=FRAISIER_CONFIG={{ scaffold.config_path }}
 
 # Security hardening
+# ProtectHome intentionally omitted: fraisier is installed as a uv tool and
+# runs from ~/.local, which ProtectHome (any value) makes inaccessible.
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=strict

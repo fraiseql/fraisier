@@ -246,8 +246,9 @@ fi
 # Install systemd units
 echo "  Installing systemd units"
 {% for fraise in fraises %}
-{% for env_name in fraise.get('environments', {}) %}
-{% set svc = project_name ~ '_' ~ fraise.name ~ '_' ~ env_name %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% set _svc_raw = (env_config or {}).get('systemd_service') or (env_config or {}).get('service', {}).get('service_name') or (project_name ~ '_' ~ fraise.name ~ '_' ~ env_name) %}
+{% set svc = _svc_raw[:-8] if _svc_raw.endswith('.service') else _svc_raw %}
 if [ -f "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" ]; then
     _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" \
        /etc/systemd/system/{{ svc }}.service
@@ -259,8 +260,8 @@ fi
 echo "  Installing socket-activated deploy units"
 {% for fraise in fraises %}
 {% for env_name in fraise.get('environments', {}) %}
-{% set socket_name = 'fraisier-' ~ project_name ~ '-' ~ env_name ~ '-deploy.socket' %}
-{% set service_name = 'fraisier-' ~ project_name ~ '-' ~ env_name ~ '-deploy.service' %}
+{% set socket_name = 'fraisier-' ~ project_name ~ '-' ~ fraise.name ~ '-' ~ env_name ~ '-deploy.socket' %}
+{% set service_name = 'fraisier-' ~ project_name ~ '-' ~ fraise.name ~ '-' ~ env_name ~ '-deploy@.service' %}
 if [ -f "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" ]; then
     _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" \
        /etc/systemd/system/{{ socket_name }}

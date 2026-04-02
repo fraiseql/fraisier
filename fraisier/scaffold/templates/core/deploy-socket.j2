@@ -1,13 +1,13 @@
 [Unit]
-Description=Fraisier Deploy Socket - {{ project_name }}-{{ environment }}
+Description=Fraisier Deploy Socket - {{ project_name }}-{{ fraise_name }}-{{ environment }}
 Documentation=https://fraisier.readthedocs.io/en/latest/socket-deployment.html
 
 [Socket]
-ListenStream=/run/fraisier/{{ project_name }}-{{ environment }}/deploy.sock
+ListenStream=/run/fraisier/{{ project_name }}-{{ fraise_name }}-{{ environment }}/deploy.sock
 SocketUser={{ scaffold.socket_user|default('www-data') }}
 SocketGroup={{ scaffold.socket_group|default('www-data') }}
 SocketMode=0660
-Accept=no
+Accept=yes
 
 [Install]
 WantedBy=sockets.target
