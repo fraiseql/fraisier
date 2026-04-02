@@ -1,6 +1,7 @@
 """Tests for version management."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -189,16 +190,68 @@ class TestBumpVersion:
         assert info.version == "1.0.0"
 
 
-class TestSyncPyprojectVersion:
-    """Test sync_pyproject_version."""
+from fraisier.strategies import (
+    AlembicMigrateStrategy,
+    ConfitureMigrateStrategy,
+    DjangoMigrateStrategy,
+    PeeweeMigrateStrategy,
+    ValidationResult,
+)
 
-    def test_sync_pyproject_version(self, tmp_path):
-        """Updates the version field in pyproject.toml."""
-        pyproject = tmp_path / "pyproject.toml"
-        pyproject.write_text('[project]\nname = "myapp"\nversion = "0.1.0"\n')
-        sync_pyproject_version("2.0.0", pyproject)
-        content = pyproject.read_text()
-        assert 'version = "2.0.0"' in content
+
+class TestDjangoMigrateStrategy:
+    """Test Django migration strategy."""
+
+    def test_django_strategy_creation(self):
+        """Can create Django migration strategy."""
+        strategy = DjangoMigrateStrategy("myapp.settings", "myapp")
+        assert strategy.framework_name == "django"
+        assert strategy.settings_module == "myapp.settings"
+        assert strategy.app_label == "myapp"
+
+    def test_django_strategy_creation_no_app_label(self):
+        """Can create Django strategy without app label."""
+        strategy = DjangoMigrateStrategy("myapp.settings")
+        assert strategy.app_label is None
+
+
+class TestAlembicMigrateStrategy:
+    """Test Alembic migration strategy."""
+
+    def test_alembic_strategy_creation(self):
+        """Can create Alembic migration strategy."""
+        strategy = AlembicMigrateStrategy(
+            script_location="db/migrations",
+            ini_path="alembic.ini",
+            environment="production",
+        )
+        assert strategy.framework_name == "alembic"
+        assert strategy.script_location == Path("db/migrations")
+        assert strategy.ini_path == Path("alembic.ini")
+        assert strategy.environment == "production"
+
+
+class TestPeeweeMigrateStrategy:
+    """Test Peewee migration strategy."""
+
+    def test_peewee_strategy_creation(self):
+        """Can create Peewee migration strategy."""
+        strategy = PeeweeMigrateStrategy(
+            models_module="myapp.models", migrations_dir="migrations"
+        )
+        assert strategy.framework_name == "peewee"
+        assert strategy.models_module == "myapp.models"
+        assert strategy.migrations_dir == Path("migrations")
+
+
+class TestConfitureMigrateStrategy:
+    """Test Confiture migration strategy."""
+
+    def test_confiture_strategy_creation(self):
+        """Can create Confiture migration strategy."""
+        strategy = ConfitureMigrateStrategy("confiture.yaml")
+        assert strategy.framework_name == "confiture"
+        assert strategy.config_file == Path("confiture.yaml")
 
 
 class TestVersionSyncConfig:

@@ -40,6 +40,69 @@ class StrategyResult:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ValidationResult:
+    """Result of migration strategy validation."""
+
+    valid: bool
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MigrationResult:
+    """Result of migration operation."""
+
+    success: bool
+    migrations_applied: int = 0
+    current_version: Optional[str] = None
+    target_version: Optional[str] = None
+    errors: list[str] = field(default_factory=list)
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+class MigrationStrategy(ABC):
+    """Enhanced strategy interface for multiple migration frameworks."""
+
+    @property
+    @abstractmethod
+    def framework_name(self) -> str:
+        """Name of the migration framework."""
+
+    @abstractmethod
+    def validate_setup(self, project_dir: Path) -> ValidationResult:
+        """Validate migration setup and dependencies."""
+
+    @abstractmethod
+    def get_current_version(self, project_dir: Path) -> Optional[str]:
+        """Get current migration version."""
+
+    @abstractmethod
+    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+        """Get latest available migration version."""
+
+    @abstractmethod
+    def migrate_up(
+        self,
+        project_dir: Path,
+        target: Optional[str] = None,
+        database_url: Optional[str] = None,
+    ) -> MigrationResult:
+        """Apply migrations to target version (default: latest)."""
+
+    @abstractmethod
+    def migrate_down(
+        self, project_dir: Path, target: str, database_url: Optional[str] = None
+    ) -> MigrationResult:
+        """Rollback migrations to target version."""
+
+    @abstractmethod
+    def get_migration_history(
+        self, project_dir: Path, limit: int = 10
+    ) -> list[Dict[str, Any]]:
+        """Get recent migration history."""
+
+
 class Strategy(ABC):
     """Base class for database deployment strategies."""
 
@@ -546,3 +609,767 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         return RestoreMigrateStrategy(config, admin_url=admin_url)
     valid = "migrate, rebuild, restore_migrate"
     raise ValueError(f"Unknown strategy '{name}'. Valid: {valid}")
+
+
+# Migration Framework Strategies
+
+
+class DjangoMigrateStrategy(MigrationStrategy):
+    """Django migration strategy."""
+
+    def __init__(self, settings_module: str, app_label: Optional[str] = None):
+        self.settings_module = settings_module
+        self.app_label = app_label
+
+    @property
+    def framework_name(self) -> str:
+        return "django"
+
+    def validate_setup(self, project_dir: Path) -> ValidationResult:
+        """Validate Django migration setup."""
+        errors = []
+        warnings = []
+
+        # Check manage.py exists
+        manage_py = project_dir / "manage.py"
+        if not manage_py.exists():
+            errors.append("manage.py not found")
+
+        # Check Django is installed
+        try:
+            import django
+        except ImportError:
+            errors.append("Django not installed")
+
+        # Check settings module can be imported
+        if not errors:
+            try:
+                import os
+
+                os.environ.setdefault("DJANGO_SETTINGS_MODULE", self.settings_module)
+                import django
+
+                django.setup()
+            except Exception as e:
+                errors.append(
+                    f"Cannot setup Django with settings module '{self.settings_module}': {e}"
+                )
+
+        return ValidationResult(
+            valid=len(errors) == 0, errors=errors, warnings=warnings
+        )
+
+    def get_current_version(self, project_dir: Path) -> Optional[str]:
+        """Get current Django migration version."""
+        try:
+            from django.core.management import execute_from_command_line
+            from io import StringIO
+            import sys
+
+            # Capture output of showmigrations
+            old_stdout = sys.stdout
+            sys.stdout = captured_output = StringIO()
+
+            try:
+                # Run showmigrations command
+                if self.app_label:
+                    execute_from_command_line(
+                        ["manage.py", "showmigrations", self.app_label]
+                    )
+                else:
+                    execute_from_command_line(["manage.py", "showmigrations"])
+
+                output = captured_output.getvalue()
+                # Parse the last applied migration
+                lines = output.strip().split("\n")
+                applied_migrations = [
+                    line.strip()
+                    for line in lines
+                    if line.strip().endswith("]") and "[" in line
+                ]
+
+                if applied_migrations:
+                    # Return the last applied migration name
+                    last_migration = applied_migrations[-1]
+                    # Extract migration name from [X] format
+                    if "[" in last_migration and "]" in last_migration:
+                        return last_migration.split("]")[0].split("[")[-1].strip()
+
+            finally:
+                sys.stdout = old_stdout
+
+        except Exception as e:
+            log.warning(f"Failed to get Django migration version: {e}")
+
+        return None
+
+    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+        """Get latest available Django migration."""
+        try:
+            from django.db import migrations
+            from django.apps import apps
+
+            if self.app_label:
+                app_config = apps.get_app_config(self.app_label)
+                migration_module = migrations.get_migration_module(app_config)
+                # Get the latest migration name
+                migration_names = [
+                    name for name in dir(migration_module) if not name.startswith("_")
+                ]
+                if migration_names:
+                    return max(migration_names)  # Assuming lexical ordering
+            else:
+                # Check all apps for latest migration
+                latest_migration = None
+                for app_config in apps.get_app_configs():
+                    try:
+                        migration_module = migrations.get_migration_module(app_config)
+                        migration_names = [
+                            name
+                            for name in dir(migration_module)
+                            if not name.startswith("_")
+                        ]
+                        if migration_names:
+                            app_latest = max(migration_names)
+                            if (
+                                latest_migration is None
+                                or app_latest > latest_migration
+                            ):
+                                latest_migration = app_latest
+                    except Exception:
+                        continue
+                return latest_migration
+
+        except Exception as e:
+            log.warning(f"Failed to get latest Django migration: {e}")
+
+        return None
+
+    def migrate_up(
+        self,
+        project_dir: Path,
+        target: Optional[str] = None,
+        database_url: Optional[str] = None,
+    ) -> MigrationResult:
+        """Apply Django migrations."""
+        try:
+            from django.core.management import execute_from_command_line
+            import os
+
+            # Set working directory
+            old_cwd = os.getcwd()
+            os.chdir(project_dir)
+
+            try:
+                # Build migrate command
+                cmd = ["manage.py", "migrate"]
+                if self.app_label:
+                    cmd.append(self.app_label)
+                if target:
+                    cmd.append(target)
+
+                # Execute migration
+                execute_from_command_line(cmd)
+
+                return MigrationResult(
+                    success=True,
+                    migrations_applied=1,  # Django doesn't report count easily
+                    target_version=target or "latest",
+                )
+
+            finally:
+                os.chdir(old_cwd)
+
+        except Exception as e:
+            return MigrationResult(
+                success=False, errors=[str(e)], target_version=target
+            )
+
+    def migrate_down(
+        self, project_dir: Path, target: str, database_url: Optional[str] = None
+    ) -> MigrationResult:
+        """Rollback Django migrations."""
+        try:
+            from django.core.management import execute_from_command_line
+            import os
+
+            # Set working directory
+            old_cwd = os.getcwd()
+            os.chdir(project_dir)
+
+            try:
+                # Build migrate command for rollback
+                cmd = ["manage.py", "migrate"]
+                if self.app_label:
+                    cmd.extend([self.app_label, target])
+                else:
+                    # For all apps, we need to specify target differently
+                    cmd.append(target)
+
+                # Execute rollback
+                execute_from_command_line(cmd)
+
+                return MigrationResult(
+                    success=True,
+                    migrations_applied=1,  # Django doesn't report count easily
+                    target_version=target,
+                )
+
+            finally:
+                os.chdir(old_cwd)
+
+        except Exception as e:
+            return MigrationResult(
+                success=False, errors=[str(e)], target_version=target
+            )
+
+    def get_migration_history(
+        self, project_dir: Path, limit: int = 10
+    ) -> list[Dict[str, Any]]:
+        """Get Django migration history."""
+        # Django doesn't have a simple way to get migration history
+        # This is a simplified implementation
+        try:
+            current = self.get_current_version(project_dir)
+            latest = self.get_latest_version(project_dir)
+
+            history = []
+            if current:
+                history.append(
+                    {
+                        "version": current,
+                        "applied": True,
+                        "description": f"Django migration {current}",
+                    }
+                )
+            if latest and latest != current:
+                history.append(
+                    {
+                        "version": latest,
+                        "applied": False,
+                        "description": f"Django migration {latest}",
+                    }
+                )
+
+            return history[:limit]
+
+        except Exception as e:
+            log.warning(f"Failed to get Django migration history: {e}")
+            return []
+
+
+class AlembicMigrateStrategy(MigrationStrategy):
+    """Alembic migration strategy for SQLAlchemy."""
+
+    def __init__(
+        self,
+        script_location: str | Path,
+        ini_path: str | Path,
+        environment: Optional[str] = None,
+    ):
+        self.script_location = Path(script_location)
+        self.ini_path = Path(ini_path)
+        self.environment = environment
+
+    @property
+    def framework_name(self) -> str:
+        return "alembic"
+
+    def validate_setup(self, project_dir: Path) -> ValidationResult:
+        """Validate Alembic migration setup."""
+        errors = []
+        warnings = []
+
+        # Check alembic.ini exists
+        if not self.ini_path.exists():
+            errors.append(f"alembic.ini not found: {self.ini_path}")
+
+        # Check script location exists
+        script_dir = project_dir / self.script_location
+        if not script_dir.exists():
+            errors.append(f"Alembic script location not found: {script_dir}")
+
+        # Check env.py exists
+        env_py = script_dir / "env.py"
+        if not env_py.exists():
+            errors.append(f"Alembic env.py not found: {env_py}")
+
+        # Check alembic is installed
+        try:
+            import alembic
+        except ImportError:
+            errors.append("alembic not installed")
+
+        return ValidationResult(
+            valid=len(errors) == 0, errors=errors, warnings=warnings
+        )
+
+    def get_current_version(self, project_dir: Path) -> Optional[str]:
+        """Get current Alembic migration version."""
+        try:
+            from alembic import command
+            from alembic.config import Config
+            from io import StringIO
+            import sys
+
+            # Create alembic config
+            config = Config(str(self.ini_path))
+            config.set_main_option("script_location", str(self.script_location))
+
+            # Capture output of current command
+            old_stdout = sys.stdout
+            sys.stdout = captured_output = StringIO()
+
+            try:
+                # Run alembic current
+                command.current(config)
+                output = captured_output.getvalue().strip()
+
+                # Parse current revision from output
+                # Output format: "Current revision(s) for 'main':\n123456789abc (head)"
+                lines = output.split("\n")
+                for line in lines:
+                    if line.strip() and not line.startswith("Current revision"):
+                        # Extract revision hash
+                        revision = line.split()[0]
+                        return revision
+
+            finally:
+                sys.stdout = old_stdout
+
+        except Exception as e:
+            log.warning(f"Failed to get Alembic current version: {e}")
+
+        return None
+
+    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+        """Get latest available Alembic migration."""
+        try:
+            from alembic import script
+            from alembic.config import Config
+
+            config = Config(str(self.ini_path))
+            config.set_main_option("script_location", str(self.script_location))
+
+            script_dir = script.ScriptDirectory.from_config(config)
+            head_revision = script_dir.get_current_head()
+
+            return head_revision
+
+        except Exception as e:
+            log.warning(f"Failed to get Alembic latest version: {e}")
+
+        return None
+
+    def migrate_up(
+        self,
+        project_dir: Path,
+        target: Optional[str] = None,
+        database_url: Optional[str] = None,
+    ) -> MigrationResult:
+        """Apply Alembic migrations."""
+        try:
+            from alembic import command
+            from alembic.config import Config
+
+            # Create alembic config
+            config = Config(str(self.ini_path))
+            config.set_main_option("script_location", str(self.script_location))
+
+            # Set database URL if provided
+            if database_url:
+                config.set_main_option("sqlalchemy.url", database_url)
+
+            # Determine target revision
+            target_revision = target or "head"
+
+            # Execute upgrade
+            command.upgrade(config, target_revision)
+
+            return MigrationResult(
+                success=True,
+                migrations_applied=1,  # Alembic doesn't easily report count
+                target_version=target_revision,
+            )
+
+        except Exception as e:
+            return MigrationResult(
+                success=False, errors=[str(e)], target_version=target
+            )
+
+    def migrate_down(
+        self, project_dir: Path, target: str, database_url: Optional[str] = None
+    ) -> MigrationResult:
+        """Rollback Alembic migrations."""
+        try:
+            from alembic import command
+            from alembic.config import Config
+
+            # Create alembic config
+            config = Config(str(self.ini_path))
+            config.set_main_option("script_location", str(self.script_location))
+
+            # Set database URL if provided
+            if database_url:
+                config.set_main_option("sqlalchemy.url", database_url)
+
+            # Execute downgrade
+            command.downgrade(config, target)
+
+            return MigrationResult(
+                success=True,
+                migrations_applied=1,  # Alembic doesn't easily report count
+                target_version=target,
+            )
+
+        except Exception as e:
+            return MigrationResult(
+                success=False, errors=[str(e)], target_version=target
+            )
+
+    def get_migration_history(
+        self, project_dir: Path, limit: int = 10
+    ) -> list[Dict[str, Any]]:
+        """Get Alembic migration history."""
+        try:
+            from alembic import script
+            from alembic.config import Config
+
+            config = Config(str(self.ini_path))
+            config.set_main_option("script_location", str(self.script_location))
+
+            script_dir = script.ScriptDirectory.from_config(config)
+
+            # Get revision history
+            history = []
+            for revision in script_dir.walk_revisions():
+                history.append(
+                    {
+                        "version": revision.revision,
+                        "description": revision.doc or f"Migration {revision.revision}",
+                        "applied": False,  # Alembic doesn't track applied status easily
+                    }
+                )
+                if len(history) >= limit:
+                    break
+
+            return history
+
+        except Exception as e:
+            log.warning(f"Failed to get Alembic migration history: {e}")
+            return []
+
+
+class PeeweeMigrateStrategy(MigrationStrategy):
+    """Peewee ORM migration strategy."""
+
+    def __init__(self, models_module: str, migrations_dir: str | Path):
+        self.models_module = models_module
+        self.migrations_dir = Path(migrations_dir)
+
+    @property
+    def framework_name(self) -> str:
+        return "peewee"
+
+    def validate_setup(self, project_dir: Path) -> ValidationResult:
+        """Validate Peewee migration setup."""
+        errors = []
+        warnings = []
+
+        # Check migrations directory exists
+        migrations_path = project_dir / self.migrations_dir
+        if not migrations_path.exists():
+            errors.append(f"Peewee migrations directory not found: {migrations_path}")
+
+        # Check Peewee is installed
+        try:
+            import peewee
+        except ImportError:
+            errors.append("peewee not installed")
+
+        # Try to import models module
+        if self.models_module:
+            try:
+                __import__(self.models_module)
+            except ImportError:
+                errors.append(
+                    f"Cannot import Peewee models module: {self.models_module}"
+                )
+
+        return ValidationResult(
+            valid=len(errors) == 0, errors=errors, warnings=warnings
+        )
+
+    def get_current_version(self, project_dir: Path) -> Optional[str]:
+        """Get current Peewee migration version."""
+        try:
+            from playhouse.migrate import migrate
+
+            # Peewee doesn't have a simple way to get current version
+            # We'd need to track this in a separate table or file
+            # For now, return None (not implemented)
+            return None
+
+        except Exception as e:
+            log.warning(f"Failed to get Peewee current version: {e}")
+            return None
+
+    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+        """Get latest available Peewee migration."""
+        try:
+            migrations_path = project_dir / self.migrations_dir
+            if not migrations_path.exists():
+                return None
+
+            # Find migration files (typically numbered Python files)
+            migration_files = sorted(migrations_path.glob("*.py"))
+            if migration_files:
+                # Extract version from filename (assuming format like 0001_initial.py)
+                latest_file = migration_files[-1]
+                version = latest_file.stem.split("_")[0]
+                try:
+                    int(version)  # Validate it's numeric
+                    return version
+                except ValueError:
+                    pass
+
+            return None
+
+        except Exception as e:
+            log.warning(f"Failed to get Peewee latest version: {e}")
+            return None
+
+    def migrate_up(
+        self,
+        project_dir: Path,
+        target: Optional[str] = None,
+        database_url: Optional[str] = None,
+    ) -> MigrationResult:
+        """Apply Peewee migrations."""
+        try:
+            # Import the models module to ensure database is set up
+            if self.models_module:
+                __import__(self.models_module)
+
+            # Peewee migration execution is complex and depends on the specific setup
+            # For now, we'll mark as not implemented and return a warning
+            return MigrationResult(
+                success=False,
+                errors=["Peewee migration execution not yet implemented"],
+                target_version=target or "latest",
+            )
+
+        except Exception as e:
+            return MigrationResult(
+                success=False, errors=[str(e)], target_version=target
+            )
+
+    def migrate_down(
+        self, project_dir: Path, target: str, database_url: Optional[str] = None
+    ) -> MigrationResult:
+        """Rollback Peewee migrations."""
+        # Peewee rollback is also complex
+        return MigrationResult(
+            success=False,
+            errors=["Peewee migration rollback not yet implemented"],
+            target_version=target,
+        )
+
+    def get_migration_history(
+        self, project_dir: Path, limit: int = 10
+    ) -> list[Dict[str, Any]]:
+        """Get Peewee migration history."""
+        try:
+            migrations_path = project_dir / self.migrations_dir
+            if not migrations_path.exists():
+                return []
+
+            history = []
+            migration_files = sorted(migrations_path.glob("*.py"))[-limit:]
+
+            for migration_file in migration_files:
+                version = migration_file.stem.split("_")[0]
+                name = "_".join(migration_file.stem.split("_")[1:])
+                history.append(
+                    {
+                        "version": version,
+                        "description": name.replace("_", " ").title(),
+                        "applied": False,  # Peewee doesn't track applied status easily
+                    }
+                )
+
+            return history
+
+        except Exception as e:
+            log.warning(f"Failed to get Peewee migration history: {e}")
+            return []
+
+
+class ConfitureMigrateStrategy(MigrationStrategy):
+    """Confiture migration strategy for FraiseQL and other frameworks."""
+
+    def __init__(self, config_file: str | Path = "confiture.yaml"):
+        self.config_file = Path(config_file)
+
+    @property
+    def framework_name(self) -> str:
+        return "confiture"
+
+    def validate_setup(self, project_dir: Path) -> ValidationResult:
+        """Validate Confiture migration setup."""
+        errors = []
+        warnings = []
+
+        config_path = project_dir / self.config_file
+        if not config_path.exists():
+            errors.append(f"Confiture config file not found: {config_path}")
+
+        # Check Confiture is available
+        try:
+            from fraisier.dbops.confiture import preflight
+        except ImportError:
+            errors.append("Confiture migration tools not available")
+
+        return ValidationResult(
+            valid=len(errors) == 0, errors=errors, warnings=warnings
+        )
+
+    def get_current_version(self, project_dir: Path) -> Optional[str]:
+        """Get current Confiture migration version."""
+        try:
+            from fraisier.dbops.confiture import _resolve_config, _load_env
+
+            config = _resolve_config(self.config_file, None)
+            env = _load_env(self.config_file)
+
+            with Migrator.from_config(
+                env, migrations_dir=project_dir / "db" / "migrations"
+            ) as m:
+                applied_versions = m.get_applied_versions()
+                return applied_versions[-1] if applied_versions else None
+
+        except Exception as e:
+            log.warning(f"Failed to get current Confiture version: {e}")
+            return None
+
+    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+        """Get latest available Confiture migration."""
+        try:
+            from fraisier.dbops.confiture import _resolve_config, _load_env
+
+            config = _resolve_config(self.config_file, None)
+            env = _load_env(self.config_file)
+
+            with Migrator.from_config(
+                env, migrations_dir=project_dir / "db" / "migrations"
+            ) as m:
+                pending_files = m.find_pending()
+                if pending_files:
+                    # Extract version from filename (format: YYYYMMDDHHMMSS_description.up.sql)
+                    latest_file = max(pending_files)
+                    # Version is the timestamp prefix
+                    version = latest_file.name.split("_", 1)[0]
+                    return version
+
+                # If no pending, latest is the current
+                applied_versions = m.get_applied_versions()
+                return applied_versions[-1] if applied_versions else None
+
+        except Exception as e:
+            log.warning(f"Failed to get latest Confiture version: {e}")
+            return None
+
+    def migrate_up(
+        self,
+        project_dir: Path,
+        target: Optional[str] = None,
+        database_url: Optional[str] = None,
+    ) -> MigrationResult:
+        """Apply Confiture migrations."""
+        from fraisier.dbops.confiture import migrate_up
+
+        try:
+            config_path = project_dir / self.config_file
+            migrations_dir = project_dir / "db" / "migrations"
+
+            # Run preflight check
+            from fraisier.dbops.confiture import preflight
+
+            preflight(
+                config_path, migrations_dir=migrations_dir, database_url=database_url
+            )
+
+            # Run migration
+            result = migrate_up(
+                config_path, migrations_dir=migrations_dir, database_url=database_url
+            )
+
+            return MigrationResult(
+                success=result.success,
+                migrations_applied=result.steps_applied,
+                errors=result.errors,
+                target_version=target or "latest",
+            )
+
+        except Exception as e:
+            return MigrationResult(
+                success=False, errors=[str(e)], target_version=target
+            )
+
+    def migrate_down(
+        self, project_dir: Path, target: str, database_url: Optional[str] = None
+    ) -> MigrationResult:
+        """Rollback Confiture migrations."""
+        from fraisier.dbops.confiture import migrate_down
+
+        try:
+            config_path = project_dir / self.config_file
+            migrations_dir = project_dir / "db" / "migrations"
+
+            # Run rollback
+            result = migrate_down(
+                config_path, migrations_dir=migrations_dir, database_url=database_url
+            )
+
+            return MigrationResult(
+                success=result.success,
+                migrations_applied=result.steps_applied,
+                errors=result.errors,
+                target_version=target,
+            )
+
+        except Exception as e:
+            return MigrationResult(
+                success=False, errors=[str(e)], target_version=target
+            )
+
+    def get_migration_history(
+        self, project_dir: Path, limit: int = 10
+    ) -> list[Dict[str, Any]]:
+        """Get Confiture migration history."""
+        try:
+            from fraisier.dbops.confiture import _resolve_config, _load_env
+
+            config = _resolve_config(self.config_file, None)
+            env = _load_env(self.config_file)
+
+            with Migrator.from_config(
+                env, migrations_dir=project_dir / "db" / "migrations"
+            ) as m:
+                applied = m.get_applied_migrations_with_timestamps()
+                # Convert to our format
+                history = []
+                for migration in applied[-limit:]:
+                    history.append(
+                        {
+                            "version": migration["version"],
+                            "applied": True,
+                            "description": f"Confiture migration {migration['version']}",
+                            "timestamp": migration.get("applied_at"),
+                        }
+                    )
+                return history
+
+        except Exception as e:
+            log.warning(f"Failed to get Confiture migration history: {e}")
+            return []
