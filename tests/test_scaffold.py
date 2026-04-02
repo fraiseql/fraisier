@@ -3464,20 +3464,19 @@ scaffold:
         assert "StandardOutput=journal" in service
         assert "StandardError=journal" in service
 
-    def test_service_protect_home_is_read_only(self, tmp_path):
-        """ProtectHome=yes makes /home inaccessible, breaking uv tool installs.
+    def test_service_has_no_protect_home(self, tmp_path):
+        """ProtectHome must not appear in the deploy service unit.
 
-        fraisier is installed via 'uv tool install' to ~/.local/bin/fraisier.
-        ProtectHome=yes causes systemd to refuse to exec the binary with
-        'No such file or directory'. read-only allows exec without write access
-        (issue #72, Bug 3).
+        fraisier is installed via 'uv tool install' as a symlink chain
+        entirely within /home (~/.local/bin → ~/.local/share/uv/tools/...).
+        Any ProtectHome value — including read-only — causes systemd 252 to
+        fail to exec the binary with ENOENT (issue #72, Bug 3).
         """
         out = self._render(tmp_path)
         service = (
             out / "systemd" / "fraisier-myproj-production-deploy.service"
         ).read_text()
-        assert "ProtectHome=read-only" in service
-        assert "ProtectHome=yes" not in service
+        assert "ProtectHome" not in service
 
     def test_socket_listens_on_expected_path(self, tmp_path):
         out = self._render(tmp_path)
