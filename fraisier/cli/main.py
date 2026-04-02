@@ -482,6 +482,67 @@ def _show_single_status(config, fraise: str, environment: str) -> None:
 
 
 @main.command()
+@click.option("--project", required=True, help="Project name to deploy")
+@click.pass_context
+def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
+    """Run deployment daemon that reads JSON from stdin.
+
+    This command reads a JSON deployment request from stdin and executes
+    the deployment. Used internally by systemd socket activation.
+
+    \b
+    Example:
+        echo '{"version": 1, "project": "api", "environment": "dev", ...}' | \\
+        fraisier deploy-daemon --project=api
+    """
+    import sys
+
+    from fraisier.daemon import execute_deployment_request, parse_deployment_request
+
+    # Read JSON from stdin
+    try:
+        json_input = sys.stdin.read().strip()
+        if not json_input:
+            console.print("[red]Error:[/red] No input received on stdin")
+            raise SystemExit(1)
+    except Exception as e:
+        console.print(f"[red]Error reading stdin:[/red] {e}")
+        raise SystemExit(1) from None
+
+    # Parse and validate request
+    try:
+        request = parse_deployment_request(json_input)
+    except ValueError as e:
+        console.print(f"[red]Error parsing request:[/red] {e}")
+        raise SystemExit(1) from None
+
+    # Validate project matches
+    if request.project != project:
+        console.print(
+            f"[red]Error:[/red] Project mismatch: requested '{request.project}' "
+            f"but daemon configured for '{project}'"
+        )
+        raise SystemExit(1)
+
+    # Execute deployment
+    try:
+        result = execute_deployment_request(request)
+    except Exception as e:
+        console.print(f"[red]Error executing deployment:[/red] {e}")
+        raise SystemExit(1) from None
+
+    # Exit with appropriate code
+    if result.success:
+        console.print(f"[green]Deployment successful[/green] - {result.message}")
+        if result.deployed_version:
+            console.print(f"Version: {result.deployed_version}")
+        raise SystemExit(0)
+    else:
+        console.print(f"[red]Deployment failed[/red] - {result.error_message}")
+        raise SystemExit(1)
+
+
+@main.command()
 @click.argument("fraise")
 @click.argument("environment")
 @click.option("--to-version", default=None, help="Target SHA to roll back to")
