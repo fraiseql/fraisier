@@ -3549,7 +3549,9 @@ scaffold:
         config = FraisierConfig(p)
         ScaffoldRenderer(config).render()
         svc_path = (
-            tmp_path / "output" / "systemd"
+            tmp_path
+            / "output"
+            / "systemd"
             / "fraisier-myproj-api-production-deploy@.service"
         )
         service = svc_path.read_text()
