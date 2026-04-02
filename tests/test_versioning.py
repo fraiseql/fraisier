@@ -5,6 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from fraisier.strategies import (
+    AlembicMigrateStrategy,
+    ConfitureMigrateStrategy,
+    DjangoMigrateStrategy,
+    PeeweeMigrateStrategy,
+    ValidationResult,
+)
+
 from fraisier.versioning import (
     VersionInfo,
     VersionSyncConfig,
@@ -15,7 +23,6 @@ from fraisier.versioning import (
     is_valid_semver,
     parse_semver,
     read_version,
-    sync_pyproject_version,
     sync_version_to_targets,
     write_version,
 )
@@ -188,15 +195,6 @@ class TestBumpVersion:
         # version.json should be unchanged due to rollback
         info = read_version(path)
         assert info.version == "1.0.0"
-
-
-from fraisier.strategies import (
-    AlembicMigrateStrategy,
-    ConfitureMigrateStrategy,
-    DjangoMigrateStrategy,
-    PeeweeMigrateStrategy,
-    ValidationResult,
-)
 
 
 class TestDjangoMigrateStrategy:

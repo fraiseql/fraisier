@@ -905,7 +905,10 @@ class AlembicMigrateStrategy(MigrationStrategy):
 
         # Check alembic is installed
         try:
-            import alembic
+            import importlib.util
+
+            if importlib.util.find_spec("alembic") is None:  # type: ignore[attr-defined]
+                raise ImportError("alembic not found")
         except ImportError:
             errors.append("alembic not installed")
 
@@ -1093,7 +1096,10 @@ class PeeweeMigrateStrategy(MigrationStrategy):
 
         # Check Peewee is installed
         try:
-            import peewee
+            import importlib.util
+
+            if importlib.util.find_spec("peewee") is None:  # type: ignore[attr-defined]
+                raise ImportError("peewee not found")
         except ImportError:
             errors.append("peewee not installed")
 
@@ -1234,7 +1240,10 @@ class ConfitureMigrateStrategy(MigrationStrategy):
 
         # Check Confiture is available
         try:
-            from fraisier.dbops.confiture import preflight
+            import importlib.util
+
+            if importlib.util.find_spec("confiture") is None:  # type: ignore[attr-defined]
+                raise ImportError("confiture not found")
         except ImportError:
             errors.append("Confiture migration tools not available")
 
