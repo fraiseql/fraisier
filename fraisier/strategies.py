@@ -13,7 +13,7 @@ import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 
 from fraisier.dbops._validation import validate_pg_identifier
 from fraisier.dbops.confiture import (
@@ -27,6 +27,12 @@ from fraisier.dbops.operations import (
     run_psql,
     terminate_backends,
 )
+
+# Import Migrator for Confiture strategy (optional import)
+try:
+    from confiture.core.migrator import Migrator
+except ImportError:
+    Migrator = None  # type: ignore
 
 log = logging.getLogger(__name__)
 
@@ -55,10 +61,10 @@ class MigrationResult:
 
     success: bool
     migrations_applied: int = 0
-    current_version: Optional[str] = None
-    target_version: Optional[str] = None
+    current_version: str | None = None
+    target_version: str | None = None
     errors: list[str] = field(default_factory=list)
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class MigrationStrategy(ABC):
@@ -74,32 +80,32 @@ class MigrationStrategy(ABC):
         """Validate migration setup and dependencies."""
 
     @abstractmethod
-    def get_current_version(self, project_dir: Path) -> Optional[str]:
+    def get_current_version(self, project_dir: Path) -> str | None:
         """Get current migration version."""
 
     @abstractmethod
-    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+    def get_latest_version(self, project_dir: Path) -> str | None:
         """Get latest available migration version."""
 
     @abstractmethod
     def migrate_up(
         self,
         project_dir: Path,
-        target: Optional[str] = None,
-        database_url: Optional[str] = None,
+        target: str | None = None,
+        database_url: str | None = None,
     ) -> MigrationResult:
         """Apply migrations to target version (default: latest)."""
 
     @abstractmethod
     def migrate_down(
-        self, project_dir: Path, target: str, database_url: Optional[str] = None
+        self, project_dir: Path, target: str, database_url: str | None = None
     ) -> MigrationResult:
         """Rollback migrations to target version."""
 
     @abstractmethod
     def get_migration_history(
         self, project_dir: Path, limit: int = 10
-    ) -> list[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get recent migration history."""
 
 
@@ -280,7 +286,6 @@ class RebuildStrategy(Strategy):
         import yaml
         from confiture.config.environment import Environment
         from confiture.core.builder import SchemaBuilder
-        from confiture.core.migrator import Migrator
 
         # Load environment from config YAML.
         raw: dict = yaml.safe_load(  # type: ignore[assignment]
@@ -617,7 +622,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
 class DjangoMigrateStrategy(MigrationStrategy):
     """Django migration strategy."""
 
-    def __init__(self, settings_module: str, app_label: Optional[str] = None):
+    def __init__(self, settings_module: str, app_label: str | None = None):
         self.settings_module = settings_module
         self.app_label = app_label
 
@@ -652,19 +657,21 @@ class DjangoMigrateStrategy(MigrationStrategy):
                 django.setup()
             except Exception as e:
                 errors.append(
-                    f"Cannot setup Django with settings module '{self.settings_module}': {e}"
+                    f"Cannot setup Django with settings module "
+                    f"'{self.settings_module}': {e}"
                 )
 
         return ValidationResult(
             valid=len(errors) == 0, errors=errors, warnings=warnings
         )
 
-    def get_current_version(self, project_dir: Path) -> Optional[str]:
+    def get_current_version(self, project_dir: Path) -> str | None:
         """Get current Django migration version."""
         try:
-            from django.core.management import execute_from_command_line
-            from io import StringIO
             import sys
+            from io import StringIO
+
+            from django.core.management import execute_from_command_line
 
             # Capture output of showmigrations
             old_stdout = sys.stdout
@@ -703,11 +710,11 @@ class DjangoMigrateStrategy(MigrationStrategy):
 
         return None
 
-    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+    def get_latest_version(self, project_dir: Path) -> str | None:
         """Get latest available Django migration."""
         try:
-            from django.db import migrations
             from django.apps import apps
+            from django.db import migrations
 
             if self.app_label:
                 app_config = apps.get_app_config(self.app_label)
@@ -748,16 +755,17 @@ class DjangoMigrateStrategy(MigrationStrategy):
     def migrate_up(
         self,
         project_dir: Path,
-        target: Optional[str] = None,
-        database_url: Optional[str] = None,
+        target: str | None = None,
+        database_url: str | None = None,
     ) -> MigrationResult:
         """Apply Django migrations."""
         try:
-            from django.core.management import execute_from_command_line
             import os
 
+            from django.core.management import execute_from_command_line
+
             # Set working directory
-            old_cwd = os.getcwd()
+            old_cwd = Path.cwd()
             os.chdir(project_dir)
 
             try:
@@ -786,15 +794,16 @@ class DjangoMigrateStrategy(MigrationStrategy):
             )
 
     def migrate_down(
-        self, project_dir: Path, target: str, database_url: Optional[str] = None
+        self, project_dir: Path, target: str, database_url: str | None = None
     ) -> MigrationResult:
         """Rollback Django migrations."""
         try:
-            from django.core.management import execute_from_command_line
             import os
 
+            from django.core.management import execute_from_command_line
+
             # Set working directory
-            old_cwd = os.getcwd()
+            old_cwd = Path.cwd()
             os.chdir(project_dir)
 
             try:
@@ -825,7 +834,7 @@ class DjangoMigrateStrategy(MigrationStrategy):
 
     def get_migration_history(
         self, project_dir: Path, limit: int = 10
-    ) -> list[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get Django migration history."""
         # Django doesn't have a simple way to get migration history
         # This is a simplified implementation
@@ -865,7 +874,7 @@ class AlembicMigrateStrategy(MigrationStrategy):
         self,
         script_location: str | Path,
         ini_path: str | Path,
-        environment: Optional[str] = None,
+        environment: str | None = None,
     ):
         self.script_location = Path(script_location)
         self.ini_path = Path(ini_path)
@@ -904,13 +913,14 @@ class AlembicMigrateStrategy(MigrationStrategy):
             valid=len(errors) == 0, errors=errors, warnings=warnings
         )
 
-    def get_current_version(self, project_dir: Path) -> Optional[str]:
+    def get_current_version(self, project_dir: Path) -> str | None:
         """Get current Alembic migration version."""
         try:
+            import sys
+            from io import StringIO
+
             from alembic import command
             from alembic.config import Config
-            from io import StringIO
-            import sys
 
             # Create alembic config
             config = Config(str(self.ini_path))
@@ -942,7 +952,7 @@ class AlembicMigrateStrategy(MigrationStrategy):
 
         return None
 
-    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+    def get_latest_version(self, project_dir: Path) -> str | None:
         """Get latest available Alembic migration."""
         try:
             from alembic import script
@@ -964,8 +974,8 @@ class AlembicMigrateStrategy(MigrationStrategy):
     def migrate_up(
         self,
         project_dir: Path,
-        target: Optional[str] = None,
-        database_url: Optional[str] = None,
+        target: str | None = None,
+        database_url: str | None = None,
     ) -> MigrationResult:
         """Apply Alembic migrations."""
         try:
@@ -998,7 +1008,7 @@ class AlembicMigrateStrategy(MigrationStrategy):
             )
 
     def migrate_down(
-        self, project_dir: Path, target: str, database_url: Optional[str] = None
+        self, project_dir: Path, target: str, database_url: str | None = None
     ) -> MigrationResult:
         """Rollback Alembic migrations."""
         try:
@@ -1029,7 +1039,7 @@ class AlembicMigrateStrategy(MigrationStrategy):
 
     def get_migration_history(
         self, project_dir: Path, limit: int = 10
-    ) -> list[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get Alembic migration history."""
         try:
             from alembic import script
@@ -1100,11 +1110,9 @@ class PeeweeMigrateStrategy(MigrationStrategy):
             valid=len(errors) == 0, errors=errors, warnings=warnings
         )
 
-    def get_current_version(self, project_dir: Path) -> Optional[str]:
+    def get_current_version(self, project_dir: Path) -> str | None:
         """Get current Peewee migration version."""
         try:
-            from playhouse.migrate import migrate
-
             # Peewee doesn't have a simple way to get current version
             # We'd need to track this in a separate table or file
             # For now, return None (not implemented)
@@ -1114,7 +1122,7 @@ class PeeweeMigrateStrategy(MigrationStrategy):
             log.warning(f"Failed to get Peewee current version: {e}")
             return None
 
-    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+    def get_latest_version(self, project_dir: Path) -> str | None:
         """Get latest available Peewee migration."""
         try:
             migrations_path = project_dir / self.migrations_dir
@@ -1142,8 +1150,8 @@ class PeeweeMigrateStrategy(MigrationStrategy):
     def migrate_up(
         self,
         project_dir: Path,
-        target: Optional[str] = None,
-        database_url: Optional[str] = None,
+        target: str | None = None,
+        database_url: str | None = None,
     ) -> MigrationResult:
         """Apply Peewee migrations."""
         try:
@@ -1165,7 +1173,7 @@ class PeeweeMigrateStrategy(MigrationStrategy):
             )
 
     def migrate_down(
-        self, project_dir: Path, target: str, database_url: Optional[str] = None
+        self, project_dir: Path, target: str, database_url: str | None = None
     ) -> MigrationResult:
         """Rollback Peewee migrations."""
         # Peewee rollback is also complex
@@ -1177,7 +1185,7 @@ class PeeweeMigrateStrategy(MigrationStrategy):
 
     def get_migration_history(
         self, project_dir: Path, limit: int = 10
-    ) -> list[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get Peewee migration history."""
         try:
             migrations_path = project_dir / self.migrations_dir
@@ -1234,12 +1242,11 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             valid=len(errors) == 0, errors=errors, warnings=warnings
         )
 
-    def get_current_version(self, project_dir: Path) -> Optional[str]:
+    def get_current_version(self, project_dir: Path) -> str | None:
         """Get current Confiture migration version."""
         try:
-            from fraisier.dbops.confiture import _resolve_config, _load_env
+            from fraisier.dbops.confiture import _load_env
 
-            config = _resolve_config(self.config_file, None)
             env = _load_env(self.config_file)
 
             with Migrator.from_config(
@@ -1252,12 +1259,11 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             log.warning(f"Failed to get current Confiture version: {e}")
             return None
 
-    def get_latest_version(self, project_dir: Path) -> Optional[str]:
+    def get_latest_version(self, project_dir: Path) -> str | None:
         """Get latest available Confiture migration."""
         try:
-            from fraisier.dbops.confiture import _resolve_config, _load_env
+            from fraisier.dbops.confiture import _load_env
 
-            config = _resolve_config(self.config_file, None)
             env = _load_env(self.config_file)
 
             with Migrator.from_config(
@@ -1265,7 +1271,8 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             ) as m:
                 pending_files = m.find_pending()
                 if pending_files:
-                    # Extract version from filename (format: YYYYMMDDHHMMSS_description.up.sql)
+                    # Extract version from filename
+                    # (format: YYYYMMDDHHMMSS_description.up.sql)
                     latest_file = max(pending_files)
                     # Version is the timestamp prefix
                     version = latest_file.name.split("_", 1)[0]
@@ -1282,8 +1289,8 @@ class ConfitureMigrateStrategy(MigrationStrategy):
     def migrate_up(
         self,
         project_dir: Path,
-        target: Optional[str] = None,
-        database_url: Optional[str] = None,
+        target: str | None = None,
+        database_url: str | None = None,
     ) -> MigrationResult:
         """Apply Confiture migrations."""
         from fraisier.dbops.confiture import migrate_up
@@ -1317,7 +1324,7 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             )
 
     def migrate_down(
-        self, project_dir: Path, target: str, database_url: Optional[str] = None
+        self, project_dir: Path, target: str, database_url: str | None = None
     ) -> MigrationResult:
         """Rollback Confiture migrations."""
         from fraisier.dbops.confiture import migrate_down
@@ -1345,29 +1352,26 @@ class ConfitureMigrateStrategy(MigrationStrategy):
 
     def get_migration_history(
         self, project_dir: Path, limit: int = 10
-    ) -> list[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get Confiture migration history."""
         try:
-            from fraisier.dbops.confiture import _resolve_config, _load_env
+            from fraisier.dbops.confiture import _load_env
 
-            config = _resolve_config(self.config_file, None)
             env = _load_env(self.config_file)
-
             with Migrator.from_config(
                 env, migrations_dir=project_dir / "db" / "migrations"
             ) as m:
                 applied = m.get_applied_migrations_with_timestamps()
                 # Convert to our format
-                history = []
-                for migration in applied[-limit:]:
-                    history.append(
-                        {
-                            "version": migration["version"],
-                            "applied": True,
-                            "description": f"Confiture migration {migration['version']}",
-                            "timestamp": migration.get("applied_at"),
-                        }
-                    )
+                history = [
+                    {
+                        "version": migration["version"],
+                        "applied": True,
+                        "description": (f"Confiture migration {migration['version']}"),
+                        "timestamp": migration.get("applied_at"),
+                    }
+                    for migration in applied[-limit:]
+                ]
                 return history
 
         except Exception as e:
