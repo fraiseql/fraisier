@@ -75,6 +75,8 @@ class TestReadMigrationFile:
 class TestRunDryRun:
     @pytest.mark.asyncio
     async def test_dry_run_does_not_execute(self, tmp_path, capsys):
+        from unittest.mock import MagicMock
+
         from fraisier.db.adapter import DatabaseType
 
         pg_dir = tmp_path / "postgresql"
@@ -82,7 +84,7 @@ class TestRunDryRun:
         (pg_dir / "001_test.sql").write_text("CREATE TABLE t (id INT);")
 
         mock_adapter = AsyncMock()
-        mock_adapter.database_type.return_value = DatabaseType.POSTGRESQL
+        mock_adapter.database_type = MagicMock(return_value=DatabaseType.POSTGRESQL)
 
         runner = MigrationRunner(str(tmp_path))
         await runner.run(mock_adapter, dry_run=True)
@@ -93,13 +95,15 @@ class TestRunDryRun:
 
     @pytest.mark.asyncio
     async def test_run_empty_migrations_returns_skipped(self, tmp_path):
+        from unittest.mock import MagicMock
+
         from fraisier.db.adapter import DatabaseType
 
         pg_dir = tmp_path / "postgresql"
         pg_dir.mkdir()
 
         mock_adapter = AsyncMock()
-        mock_adapter.database_type.return_value = DatabaseType.POSTGRESQL
+        mock_adapter.database_type = MagicMock(return_value=DatabaseType.POSTGRESQL)
 
         runner = MigrationRunner(str(tmp_path))
         result = await runner.run(mock_adapter)
@@ -111,13 +115,15 @@ class TestRunDryRun:
 class TestRunMigrationsConvenience:
     @pytest.mark.asyncio
     async def test_run_migrations_convenience(self, tmp_path):
+        from unittest.mock import MagicMock
+
         from fraisier.db.adapter import DatabaseType
 
         pg_dir = tmp_path / "postgresql"
         pg_dir.mkdir()
 
         mock_adapter = AsyncMock()
-        mock_adapter.database_type.return_value = DatabaseType.POSTGRESQL
+        mock_adapter.database_type = MagicMock(return_value=DatabaseType.POSTGRESQL)
 
         result = await run_migrations(mock_adapter, migrations_dir=str(tmp_path))
         assert result["migrations_run"] == 0

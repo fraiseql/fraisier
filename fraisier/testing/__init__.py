@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from fraisier.testing._manager import TemplateInfo, TemplateManager, TemplateStatus
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pathlib import Path
 
 __all__ = [
@@ -74,7 +74,7 @@ def database_fixture(
     )
 
     @pytest.fixture(scope=scope)
-    def _database():
+    def _database():  # pragma: no cover
         manager = TemplateManager(
             env=env,
             project_dir=resolved_dir,

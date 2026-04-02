@@ -128,14 +128,19 @@ class TestUpdateAndDelete:
         mock_cursor = AsyncMock()
         mock_cursor.fetchone.return_value = {"id": 42}
 
-        mock_conn = AsyncMock()
-        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_conn.__aexit__ = AsyncMock(return_value=None)
-        mock_conn.cursor.return_value.__aenter__ = AsyncMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_cursor_ctx = MagicMock()
+        mock_cursor_ctx.__aenter__ = AsyncMock(return_value=mock_cursor)
+        mock_cursor_ctx.__aexit__ = AsyncMock(return_value=None)
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor_ctx
+
+        mock_conn_ctx = MagicMock()
+        mock_conn_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn_ctx.__aexit__ = AsyncMock(return_value=None)
 
         mock_pool = MagicMock()
-        mock_pool.connection.return_value = mock_conn
+        mock_pool.connection.return_value = mock_conn_ctx
         adapter._pool = mock_pool
 
         result = await adapter.insert(
@@ -153,14 +158,19 @@ class TestUpdateAndDelete:
         mock_cursor.rowcount = 1
         mock_cursor.fetchone.return_value = (99,)
 
-        mock_conn = AsyncMock()
-        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_conn.__aexit__ = AsyncMock(return_value=None)
-        mock_conn.cursor.return_value.__aenter__ = AsyncMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_cursor_ctx = MagicMock()
+        mock_cursor_ctx.__aenter__ = AsyncMock(return_value=mock_cursor)
+        mock_cursor_ctx.__aexit__ = AsyncMock(return_value=None)
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor_ctx
+
+        mock_conn_ctx = MagicMock()
+        mock_conn_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn_ctx.__aexit__ = AsyncMock(return_value=None)
 
         mock_pool = MagicMock()
-        mock_pool.connection.return_value = mock_conn
+        mock_pool.connection.return_value = mock_conn_ctx
         adapter._pool = mock_pool
 
         rows = await adapter.execute_update(
@@ -178,14 +188,19 @@ class TestUpdateAndDelete:
         mock_cursor.rowcount = 1
         mock_cursor.fetchone.return_value = {"id": 77}
 
-        mock_conn = AsyncMock()
-        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_conn.__aexit__ = AsyncMock(return_value=None)
-        mock_conn.cursor.return_value.__aenter__ = AsyncMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_cursor_ctx = MagicMock()
+        mock_cursor_ctx.__aenter__ = AsyncMock(return_value=mock_cursor)
+        mock_cursor_ctx.__aexit__ = AsyncMock(return_value=None)
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor_ctx
+
+        mock_conn_ctx = MagicMock()
+        mock_conn_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn_ctx.__aexit__ = AsyncMock(return_value=None)
 
         mock_pool = MagicMock()
-        mock_pool.connection.return_value = mock_conn
+        mock_pool.connection.return_value = mock_conn_ctx
         adapter._pool = mock_pool
 
         rows = await adapter.execute_update(

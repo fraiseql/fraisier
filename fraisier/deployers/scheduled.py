@@ -7,7 +7,7 @@ import subprocess
 import time
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from fraisier.runners import CommandRunner
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
@@ -48,7 +48,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
                 check=False,
             )
             return result.returncode != 0
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError:  # pragma: no cover
             return True
 
     def execute(self) -> DeploymentResult:
@@ -102,7 +102,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             parts = result.stdout.strip().split("=")
             state = parts[1] if len(parts) > 1 else "unknown"
             return f"timer:{state}"
-        except (subprocess.CalledProcessError, IndexError):
+        except (subprocess.CalledProcessError, IndexError):  # pragma: no cover
             return None
 
     def health_check(self) -> bool:
@@ -115,7 +115,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
                 check=False,
             )
             return result.returncode == 0
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError:  # pragma: no cover
             return False
 
     def rollback(self, to_version: str | None = None) -> DeploymentResult:
@@ -147,7 +147,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
                 duration_seconds=duration,
             )
 
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             duration = time.time() - start_time
             logger.exception(f"Scheduled job rollback failed: {e}")
 

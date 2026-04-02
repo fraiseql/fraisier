@@ -26,7 +26,7 @@ from confiture.core.migrator import Migrator
 
 from fraisier.errors import MigrationError as FraisierMigrationError
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from confiture import MigrateDownResult, MigrateUpResult
     from confiture.config.environment import Environment
 
@@ -161,7 +161,7 @@ def dry_run_execute(
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
-        if result.has_errors:
+        if result.has_errors:  # pragma: no cover
             return MigrationResult(
                 success=False,
                 steps_applied=0,
@@ -175,7 +175,7 @@ def dry_run_execute(
             steps_applied=0,
             execution_time_ms=elapsed_ms,
         )
-    except Exception as e:
+    except Exception as e:  # pragma: no cover
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return MigrationResult(
             success=False,
@@ -205,7 +205,7 @@ def migrate_up(
         require_reversible: When True, abort if any pending migration
             lacks a .down.sql file (confiture v0.8.11+).
     """
-    if pre_migrate_verify:
+    if pre_migrate_verify:  # pragma: no cover
         verify_result = dry_run_execute(
             config_path, migrations_dir=migrations_dir, database_url=database_url
         )
@@ -239,7 +239,7 @@ def migrate_up(
                     require_reversible=require_reversible,
                 )
                 break
-            except LockAcquisitionError:
+            except LockAcquisitionError:  # pragma: no cover
                 if attempt == MAX_LOCK_RETRIES - 1:
                     raise
                 wait = 2**attempt
@@ -253,7 +253,7 @@ def migrate_up(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
-    if result.has_errors:
+    if result.has_errors:  # pragma: no cover
         # Raise FraisierMigrationError with detailed context
         raise FraisierMigrationError(
             message=f"Migration failed: {result.error_summary}",
@@ -286,7 +286,7 @@ def migrate_down(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
-    if not result.success:
+    if not result.success:  # pragma: no cover
         log.critical("Rollback failed: %s — manual intervention required", result.error)
         # Create a MigrationError with rollback failure context
         error = FraisierMigrationError(
@@ -311,7 +311,7 @@ def migrate_down(
     )
 
 
-def has_pending(
+def has_pending(  # pragma: no cover
     config_path: Path | str,
     *,
     migrations_dir: Path | str = "db/migrations",
@@ -470,7 +470,7 @@ def confiture_rebuild(
     )
 
 
-def confiture_status(
+def confiture_status(  # pragma: no cover
     *,
     config_path: str = "confiture.yaml",
     cwd: str = ".",

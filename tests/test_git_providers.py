@@ -157,6 +157,60 @@ class TestGitLabProvider:
         assert event.commit_sha == "abc123"
         assert event.sender == "developer"
 
+    def test_get_default_base_url(self):
+        provider = GitLab({"webhook_secret": "secret"})
+        assert provider.get_default_base_url() == "https://gitlab.com"
+
+    def test_verify_signature_missing_token(self):
+        provider = GitLab({"webhook_secret": "secret"})
+        result = provider.verify_webhook_signature(b"payload", {})
+        assert result is False
+
+    def test_parse_webhook_push_tag_event(self):
+        """Test parsing GitLab push event for a tag ref."""
+        provider = GitLab({"webhook_secret": "secret"})
+        payload = {
+            "ref": "refs/tags/v1.0.0",
+            "checkout_sha": "def456",
+            "project": {},
+        }
+        headers = {"x-gitlab-event": "Push Hook"}
+        event = provider.parse_webhook_event(headers, payload)
+        assert event.is_tag is True
+        assert event.branch == "v1.0.0"
+
+    def test_parse_webhook_tag_push_hook(self):
+        """Test parsing GitLab Tag Push Hook event."""
+        provider = GitLab({"webhook_secret": "secret"})
+        payload = {
+            "object_kind": "tag_push",
+            "ref": "refs/tags/v2.0.0",
+            "checkout_sha": "ghi789",
+            "project": {},
+        }
+        headers = {"x-gitlab-event": "Tag Push Hook"}
+        event = provider.parse_webhook_event(headers, payload)
+        assert event.is_tag is True
+        assert event.is_push is True
+        assert event.branch == "v2.0.0"
+
+    def test_parse_webhook_merge_request_event(self):
+        """Test parsing GitLab Merge Request Hook event."""
+        provider = GitLab({"webhook_secret": "secret"})
+        payload = {
+            "object_kind": "merge_request",
+            "object_attributes": {
+                "source_branch": "feature-x",
+                "last_commit": {"id": "abc111"},
+            },
+            "project": {},
+        }
+        headers = {"x-gitlab-event": "Merge Request Hook"}
+        event = provider.parse_webhook_event(headers, payload)
+        assert event.is_merge_request is True
+        assert event.branch == "feature-x"
+        assert event.commit_sha == "abc111"
+
 
 class TestGiteaProvider:
     """Tests for Gitea provider."""
@@ -200,6 +254,54 @@ class TestGiteaProvider:
         assert event.branch == "main"
         assert event.commit_sha == "abc123def456"
         assert event.sender == "developer"
+
+    def test_get_default_base_url(self):
+        provider = Gitea({"webhook_secret": "secret"})
+        assert "gitea" in provider.get_default_base_url()
+
+    def test_verify_signature_missing_header(self):
+        provider = Gitea({"webhook_secret": "secret"})
+        result = provider.verify_webhook_signature(b"payload", {})
+        assert result is False
+
+    def test_parse_webhook_push_tag_ref(self):
+        """Test parsing Gitea push event for a tag ref."""
+        provider = Gitea({"webhook_secret": "secret"})
+        payload = {
+            "ref": "refs/tags/v1.0.0",
+            "after": "def456",
+        }
+        headers = {"x-gitea-event": "push"}
+        event = provider.parse_webhook_event(headers, payload)
+        assert event.is_tag is True
+        assert event.branch == "v1.0.0"
+
+    def test_parse_webhook_create_tag_event(self):
+        """Test parsing Gitea create tag event."""
+        provider = Gitea({"webhook_secret": "secret"})
+        payload = {
+            "ref_type": "tag",
+            "ref": "v1.2.3",
+        }
+        headers = {"x-gitea-event": "create"}
+        event = provider.parse_webhook_event(headers, payload)
+        assert event.is_tag is True
+        assert event.is_push is True
+        assert event.branch == "v1.2.3"
+
+    def test_parse_webhook_pull_request_event(self):
+        """Test parsing Gitea pull_request event."""
+        provider = Gitea({"webhook_secret": "secret"})
+        payload = {
+            "pull_request": {
+                "head": {"ref": "feature-y", "sha": "xyz999"},
+            },
+        }
+        headers = {"x-gitea-event": "pull_request"}
+        event = provider.parse_webhook_event(headers, payload)
+        assert event.is_merge_request is True
+        assert event.branch == "feature-y"
+        assert event.commit_sha == "xyz999"
 
 
 class TestBitbucketProvider:

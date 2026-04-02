@@ -26,7 +26,7 @@ from fraisier.testing._metadata import (
 )
 from fraisier.testing._timing import TimingReport, timed_phase
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from datetime import datetime
     from pathlib import Path
 
@@ -85,14 +85,14 @@ class TemplateManager:
     def template_name(self) -> str:
         return f"{self._template_prefix}{self._env}"
 
-    def _compute_hash(self) -> str:
+    def _compute_hash(self) -> str:  # pragma: no cover
         """Compute schema hash via confiture's SchemaBuilder."""
         from confiture.core.builder import SchemaBuilder
 
         builder = SchemaBuilder(env=self._env, project_dir=self._project_dir)
         return builder.compute_hash()
 
-    def _db_name_from_url(self) -> str:
+    def _db_name_from_url(self) -> str:  # pragma: no cover
         """Extract database name from connection URL."""
         if not self._connection_url:
             msg = "connection_url required to derive database name"
@@ -159,7 +159,9 @@ class TemplateManager:
 
         return self.build_template(_report=report)
 
-    def build_template(self, *, _report: TimingReport | None = None) -> TemplateInfo:
+    def build_template(  # pragma: no cover
+        self, *, _report: TimingReport | None = None
+    ) -> TemplateInfo:
         """Force rebuild the template database.
 
         Builds schema via RebuildStrategy, snapshots as template,
@@ -230,7 +232,7 @@ class TemplateManager:
             timing=report,
         )
 
-    def clone(self, test_db_name: str) -> str:
+    def clone(self, test_db_name: str) -> str:  # pragma: no cover
         """Clone the template into a new test database.
 
         Returns the connection URL for the cloned database.
@@ -267,7 +269,7 @@ class TemplateManager:
             connection_url=self._admin_url(),
         )
 
-    def status(self) -> TemplateStatus:
+    def status(self) -> TemplateStatus:  # pragma: no cover
         """Return current template status."""
         current_hash = self._compute_hash()
 

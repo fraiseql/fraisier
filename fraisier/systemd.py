@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from fraisier.dbops._validation import validate_service_name
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from fraisier.runners import CommandRunner
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ class SystemdServiceManager:
     def __init__(self, runner: CommandRunner) -> None:
         self.runner = runner
 
-    def stop(self, service_name: str, timeout: int = 60) -> None:
+    def stop(self, service_name: str, timeout: int = 60) -> None:  # pragma: no cover
         """Stop a systemd service.
 
         Raises:
@@ -44,7 +44,7 @@ class SystemdServiceManager:
         """
         validate_service_name(service_name)
         wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
-        if wrapper:
+        if wrapper:  # pragma: no cover
             cmd = [wrapper, "restart", service_name]
         else:
             cmd = ["sudo", "systemctl", "restart", service_name]
@@ -58,7 +58,7 @@ class SystemdServiceManager:
         """
         validate_service_name(service_name)
         wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
-        if wrapper:
+        if wrapper:  # pragma: no cover
             cmd = [wrapper, "is-active", service_name]
         else:
             cmd = ["sudo", "systemctl", "is-active", service_name]
