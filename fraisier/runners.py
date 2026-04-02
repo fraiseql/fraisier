@@ -10,7 +10,10 @@ from __future__ import annotations
 import logging
 import shlex
 import subprocess
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -74,22 +77,79 @@ class SSHRunner:
         self.key_path = key_path
         self.strict_host_key = strict_host_key
 
-    def _build_ssh_prefix(self) -> list[str]:
-        """Build the SSH command prefix (everything before the remote cmd)."""
+    def _build_ssh_options(self) -> list[str]:
+        """Build shared SSH/SCP options (host-key policy, batch mode, identity)."""
         host_key_policy = "accept-new" if self.strict_host_key else "no"
-        prefix = [
-            "ssh",
+        opts = [
             "-o",
             f"StrictHostKeyChecking={host_key_policy}",
             "-o",
             "BatchMode=yes",
-            "-p",
-            str(self.port),
         ]
         if self.key_path:
-            prefix.extend(["-i", self.key_path])
-        prefix.append(f"{self.user}@{self.host}")
-        return prefix
+            opts.extend(["-i", self.key_path])
+        return opts
+
+    def _build_ssh_prefix(self) -> list[str]:
+        """Build the SSH command prefix (everything before the remote cmd)."""
+        return [
+            "ssh",
+            *self._build_ssh_options(),
+            "-p",
+            str(self.port),
+            f"{self.user}@{self.host}",
+        ]
+
+    def upload(
+        self, local_path: Path, remote_path: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Upload a single file to the remote host using scp."""
+        scp_cmd = [
+            "scp",
+            *self._build_ssh_options(),
+            "-P",
+            str(self.port),
+            str(local_path),
+            f"{self.user}@{self.host}:{remote_path}",
+        ]
+        return subprocess.run(
+            scp_cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        )
+
+    def upload_tree(self, local_dir: Path, remote_dir: str) -> None:
+        """Upload a directory tree to the remote host via tar piped over SSH."""
+        tar = subprocess.Popen(
+            ["tar", "czf", "-", "-C", str(local_dir), "."],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        remote_cmd = (
+            f"mkdir -p {shlex.quote(remote_dir)}"
+            f" && tar xzf - -C {shlex.quote(remote_dir)}"
+        )
+        ssh_cmd = [*self._build_ssh_prefix(), remote_cmd]
+        ssh_result = subprocess.run(
+            ssh_cmd,
+            stdin=tar.stdout,
+            capture_output=True,
+            check=False,
+        )
+        if tar.stdout:
+            tar.stdout.close()
+        _, tar_stderr = tar.communicate()
+
+        if tar.returncode != 0:
+            raise subprocess.CalledProcessError(
+                tar.returncode, "tar", stderr=tar_stderr
+            )
+        if ssh_result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                ssh_result.returncode, ssh_cmd, stderr=ssh_result.stderr
+            )
 
     def run(
         self,

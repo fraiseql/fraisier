@@ -1,7 +1,9 @@
 """Tests for fraisier.runners — command runner abstraction."""
 
 import subprocess
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from fraisier.runners import (
     CommandRunner,
@@ -122,6 +124,121 @@ class TestSSHRunner:
         prefix = runner._build_ssh_prefix()
         idx = prefix.index("-p")
         assert prefix[idx + 1] == "2222"
+
+    def test_ssh_options_shared_with_scp(self):
+        runner = SSHRunner(host="h", user="u", key_path="/id_ed25519")
+        opts = runner._build_ssh_options()
+        assert "StrictHostKeyChecking=accept-new" in opts
+        assert "BatchMode=yes" in opts
+        assert "-i" in opts
+        assert "/id_ed25519" in opts
+        # No host or port in options (those are caller's responsibility)
+        assert "u@h" not in opts
+        assert "-p" not in opts
+
+    def test_upload_builds_scp_command(self, tmp_path):
+        runner = SSHRunner(host="prod.example.com", user="root", port=22)
+        local_file = tmp_path / "fraises.yaml"
+        local_file.write_text("name: test\n")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.upload(local_file, "/opt/fraisier/fraises.yaml")
+
+        called = mock_run.call_args[0][0]
+        assert called[0] == "scp"
+        assert "-P" in called
+        assert "22" in called
+        assert str(local_file) in called
+        assert "root@prod.example.com:/opt/fraisier/fraises.yaml" in called
+
+    def test_upload_uses_port_capital_P(self, tmp_path):
+        runner = SSHRunner(host="h", user="u", port=2222)
+        local_file = tmp_path / "f.txt"
+        local_file.write_text("")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.upload(local_file, "/tmp/f.txt")
+
+        called = mock_run.call_args[0][0]
+        idx = called.index("-P")
+        assert called[idx + 1] == "2222"
+
+    def test_upload_tree_pipes_tar_over_ssh(self, tmp_path):
+        runner = SSHRunner(host="h", user="u")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "file.txt").write_text("hello")
+
+        fake_ssh = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+
+        with (
+            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = mock_proc
+            mock_run.return_value = fake_ssh
+
+            runner.upload_tree(src, "/tmp/remote")
+
+        tar_cmd = mock_popen.call_args[0][0]
+        assert tar_cmd[0] == "tar"
+        assert str(src) in tar_cmd
+
+        ssh_cmd = mock_run.call_args[0][0]
+        assert ssh_cmd[0] == "ssh"
+        assert any("/tmp/remote" in str(part) for part in ssh_cmd)
+
+    def test_upload_tree_raises_on_tar_failure(self, tmp_path):
+        runner = SSHRunner(host="h", user="u")
+        src = tmp_path / "src"
+        src.mkdir()
+
+        with (
+            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.returncode = 1
+            mock_proc.communicate.return_value = (b"", b"tar error")
+            mock_popen.return_value = mock_proc
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b""
+            )
+
+            with pytest.raises(subprocess.CalledProcessError):
+                runner.upload_tree(src, "/tmp/remote")
+
+    def test_upload_tree_raises_on_ssh_failure(self, tmp_path):
+        runner = SSHRunner(host="h", user="u")
+        src = tmp_path / "src"
+        src.mkdir()
+
+        with (
+            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = mock_proc
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=255, stdout=b"", stderr=b"ssh: connection refused"
+            )
+
+            with pytest.raises(subprocess.CalledProcessError):
+                runner.upload_tree(src, "/tmp/remote")
 
 
 class TestRunnerFromConfig:

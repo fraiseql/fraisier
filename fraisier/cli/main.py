@@ -1420,6 +1420,7 @@ def rollback(
 
 
 # Import submodules to register their commands with `main`
+from . import bootstrap as _bootstrap_mod  # noqa: E402, F401
 from . import db as _db_mod  # noqa: E402, F401
 from . import health as _health_mod  # noqa: E402, F401
 from . import ops as _ops_mod  # noqa: E402, F401

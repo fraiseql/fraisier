@@ -8,6 +8,8 @@ set -euo pipefail
 DRY_RUN=false
 VALIDATE_ONLY=false
 VERBOSE=false
+STANDALONE=false
+SCAFFOLD_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -23,14 +25,25 @@ while [[ $# -gt 0 ]]; do
       VERBOSE=true
       shift
       ;;
+    --standalone)
+      STANDALONE=true
+      shift
+      ;;
+    --scaffold-dir)
+      SCAFFOLD_DIR="$2"
+      STANDALONE=true
+      shift 2
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --dry-run         Show what would be installed without executing"
-      echo "  --validate-only   Check prerequisites only (no installation)"
-      echo "  --verbose, -v     Enable verbose output"
-      echo "  --help, -h        Show this help message"
+      echo "  --dry-run                 Show what would be installed without executing"
+      echo "  --validate-only           Check prerequisites only (no installation)"
+      echo "  --verbose, -v             Enable verbose output"
+      echo "  --standalone              Run without requiring PROJECT_DIR to exist"
+      echo "  --scaffold-dir <path>     Path to scaffold files (implies --standalone)"
+      echo "  --help, -h                Show this help message"
       exit 0
       ;;
     *)
@@ -43,6 +56,18 @@ done
 
 DEPLOY_USER="{{ scaffold.deploy_user }}"
 PROJECT_DIR="/opt/{{ project_name }}"
+
+# Determine the directory containing scaffold files.
+# In standalone mode the caller specifies the path (or we default to this
+# script's own directory).  In normal mode the files live inside the cloned
+# project at the well-known generated path.
+if [[ "$STANDALONE" == "true" ]]; then
+  if [[ -z "$SCAFFOLD_DIR" ]]; then
+    SCAFFOLD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  fi
+else
+  SCAFFOLD_DIR="${PROJECT_DIR}/scripts/generated"
+fi
 
 # Helper function to run commands conditionally
 _run() {
@@ -95,9 +120,11 @@ _validate_prerequisites() {
     echo "  ✓ Running as root"
   fi
 
-  # Check if install.sh was generated in the correct location
-  if ! _check_exists "${PROJECT_DIR}/scripts/generated/install.sh" "Generated install.sh"; then
-    has_errors=true
+  # Check if install.sh was generated in the correct location (skip in standalone mode)
+  if [[ "$STANDALONE" != "true" ]]; then
+    if ! _check_exists "${SCAFFOLD_DIR}/install.sh" "Generated install.sh"; then
+      has_errors=true
+    fi
   fi
 
   # Check if required commands exist
@@ -183,7 +210,7 @@ _run sudo apt-get install -y -qq --no-install-recommends \
     python3-certbot-nginx
 
 # Install PostgreSQL admin wrapper (if generated)
-PG_WRAPPER_SRC="${PROJECT_DIR}/scripts/generated/pg-wrapper.sh"
+PG_WRAPPER_SRC="${SCAFFOLD_DIR}/pg-wrapper.sh"
 PG_WRAPPER_DST="/usr/local/libexec/fraisier/pgadmin-{{ project_name }}"
 if [ -f "${PG_WRAPPER_SRC}" ]; then
     echo "  Installing PostgreSQL admin wrapper"
@@ -192,7 +219,7 @@ if [ -f "${PG_WRAPPER_SRC}" ]; then
 fi
 
 # Install systemctl wrapper (if generated)
-SYSTEMCTL_WRAPPER_SRC="${PROJECT_DIR}/scripts/generated/systemctl-wrapper.sh"
+SYSTEMCTL_WRAPPER_SRC="${SCAFFOLD_DIR}/systemctl-wrapper.sh"
 SYSTEMCTL_WRAPPER_DST="/usr/local/libexec/fraisier/systemctl-{{ project_name }}"
 if [ -f "${SYSTEMCTL_WRAPPER_SRC}" ]; then
     echo "  Installing systemctl wrapper"
@@ -201,7 +228,7 @@ if [ -f "${SYSTEMCTL_WRAPPER_SRC}" ]; then
 fi
 
 # Install sudoers fragment
-SUDOERS_SRC="${PROJECT_DIR}/scripts/generated/sudoers"
+SUDOERS_SRC="${SCAFFOLD_DIR}/sudoers"
 SUDOERS_DST="/etc/sudoers.d/{{ project_name }}"
 if [ -f "${SUDOERS_SRC}" ]; then
     echo "  Installing sudoers fragment"
@@ -221,8 +248,8 @@ echo "  Installing systemd units"
 {% for fraise in fraises %}
 {% for env_name in fraise.get('environments', {}) %}
 {% set svc = project_name ~ '_' ~ fraise.name ~ '_' ~ env_name %}
-if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ svc }}.service" ]; then
-    _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/{{ svc }}.service" \
+if [ -f "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" ]; then
+    _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" \
        /etc/systemd/system/{{ svc }}.service
 fi
 {% endfor %}
@@ -234,12 +261,12 @@ echo "  Installing socket-activated deploy units"
 {% for env_name in fraise.get('environments', {}) %}
 {% set socket_name = 'fraisier-' ~ project_name ~ '-' ~ env_name ~ '-deploy.socket' %}
 {% set service_name = 'fraisier-' ~ project_name ~ '-' ~ env_name ~ '-deploy.service' %}
-if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ socket_name }}" ]; then
-    _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/{{ socket_name }}" \
+if [ -f "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" ]; then
+    _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" \
        /etc/systemd/system/{{ socket_name }}
 fi
-if [ -f "${PROJECT_DIR}/scripts/generated/systemd/{{ service_name }}" ]; then
-    _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/{{ service_name }}" \
+if [ -f "${SCAFFOLD_DIR}/systemd/{{ service_name }}" ]; then
+    _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ service_name }}" \
        /etc/systemd/system/{{ service_name }}
 fi
 {% endfor %}
@@ -247,8 +274,8 @@ fi
 
 # Install timers
 for timer in deploy-checker backup; do
-    if [ -f "${PROJECT_DIR}/scripts/generated/systemd/${timer}.timer" ]; then
-        _run sudo cp "${PROJECT_DIR}/scripts/generated/systemd/${timer}.timer" \
+    if [ -f "${SCAFFOLD_DIR}/systemd/${timer}.timer" ]; then
+        _run sudo cp "${SCAFFOLD_DIR}/systemd/${timer}.timer" \
            "/etc/systemd/system/${timer}.timer"
     fi
 done
@@ -256,9 +283,9 @@ done
 _run sudo systemctl daemon-reload
 
 # Install nginx config
-if [ -f "${PROJECT_DIR}/scripts/generated/nginx/gateway.conf" ]; then
+if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ]; then
     echo "  Installing nginx config"
-    _run sudo cp "${PROJECT_DIR}/scripts/generated/nginx/gateway.conf" \
+    _run sudo cp "${SCAFFOLD_DIR}/nginx/gateway.conf" \
        /etc/nginx/sites-available/{{ project_name }}
     _run sudo ln -sf /etc/nginx/sites-available/{{ project_name }} \
            /etc/nginx/sites-enabled/{{ project_name }}
@@ -273,7 +300,7 @@ fi
 # PostgreSQL logging configuration
 echo "  PostgreSQL logging configs generated in postgresql/"
 echo "  Review and install the one matching this server's environment:"
-echo "    sudo cp ${PROJECT_DIR}/scripts/generated/postgresql/fraisier_<env>.conf \\"
+echo "    sudo cp ${SCAFFOLD_DIR}/postgresql/fraisier_<env>.conf \\"
 echo "       /etc/postgresql/*/conf.d/fraisier.conf"
 echo "    sudo systemctl reload postgresql"
 {% endif %}
