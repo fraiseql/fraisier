@@ -1512,3 +1512,24 @@ class TestDockerComposeWorkflow:
         # No rollback possible (no previous tag)
         result = await provider.rollback()
         assert result is False
+
+
+class TestUnsupportedHealthCheckType:
+    """check_health returns False for unsupported HealthCheckType."""
+
+    @pytest.mark.asyncio
+    async def test_unsupported_check_type_returns_false(self):
+        config = {"host": "server.com"}
+        provider = BareMetalProvider(config)
+
+        health_check = HealthCheck(
+            type=HealthCheckType.HTTP,
+            url="http://localhost/health",
+            retries=1,
+        )
+
+        # Override dispatch to return empty mapping so no type is supported.
+        with patch.object(provider, "_health_check_dispatch", return_value={}):
+            result = await provider.check_health(health_check)
+
+        assert result is False

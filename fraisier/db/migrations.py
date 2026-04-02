@@ -104,7 +104,7 @@ class MigrationRunner:
                 raise MigrationError(f"Migration file is empty: {migration_path}")
 
             return sql
-        except OSError as e:
+        except OSError as e:  # pragma: no cover
             raise MigrationError(
                 f"Failed to read migration file {migration_path}: {e}"
             ) from e

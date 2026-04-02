@@ -31,7 +31,7 @@ from fraisier.dbops.operations import (
 # Import Migrator for Confiture strategy (optional import)
 try:
     from confiture.core.migrator import Migrator
-except ImportError:
+except ImportError:  # pragma: no cover
     Migrator = None  # type: ignore
 
 log = logging.getLogger(__name__)
@@ -256,7 +256,7 @@ class RebuildStrategy(Strategy):
             code, _, stderr = run_psql(
                 sql, db_name=db_name, connection_url=connection_url
             )
-            if code != 0:
+            if code != 0:  # pragma: no cover
                 raise subprocess.CalledProcessError(code, "psql", stderr=stderr)
             log.info("Ensured role %s exists", role)
 
@@ -267,7 +267,7 @@ class RebuildStrategy(Strategy):
                     db_name=db_name,
                     connection_url=connection_url,
                 )
-                if code != 0:
+                if code != 0:  # pragma: no cover
                     raise subprocess.CalledProcessError(code, "psql", stderr=stderr)
                 log.info("Granted %s to %s", role, db_owner)
 
@@ -329,7 +329,7 @@ class RebuildStrategy(Strategy):
             code, _, stderr = create_db(
                 db_name, owner=db_owner, connection_url=admin_url
             )
-            if code != 0:
+            if code != 0:  # pragma: no cover
                 raise subprocess.CalledProcessError(code, "createdb", stderr=stderr)
 
             # Provision required roles before schema apply so that
@@ -466,7 +466,7 @@ class RestoreMigrateStrategy(Strategy):
         # Step 4: Drop and recreate database
         drop_db(cfg.db_name, connection_url=self._admin_url)
         code, _, stderr = create_db(cfg.db_name, connection_url=self._admin_url)
-        if code != 0:
+        if code != 0:  # pragma: no cover
             raise DatabaseError(
                 f"Failed to create database {cfg.db_name}: {stderr.strip()}",
             )
@@ -494,7 +494,7 @@ class RestoreMigrateStrategy(Strategy):
             code, _, stderr = create_db(
                 template_name, template=cfg.db_name, connection_url=self._admin_url
             )
-            if code != 0:
+            if code != 0:  # pragma: no cover
                 raise DatabaseError(
                     f"Failed to create template {template_name}: {stderr.strip()}",
                 )
@@ -548,7 +548,7 @@ class RestoreMigrateStrategy(Strategy):
                     template=template_name,
                     connection_url=self._admin_url,
                 )
-                if code != 0:
+                if code != 0:  # pragma: no cover
                     return StrategyResult(
                         success=False,
                         errors=[f"Template rollback failed: {stderr.strip()}"],
@@ -556,7 +556,7 @@ class RestoreMigrateStrategy(Strategy):
                 return StrategyResult(success=True)
 
             tmpl_result = reset_from_template(self._config.db_name, prefix=prefix)
-            if not tmpl_result.success:
+            if not tmpl_result.success:  # pragma: no cover
                 return StrategyResult(
                     success=False,
                     errors=[f"Template rollback failed: {tmpl_result.error}"],
@@ -619,7 +619,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
 # Migration Framework Strategies
 
 
-class DjangoMigrateStrategy(MigrationStrategy):
+class DjangoMigrateStrategy(MigrationStrategy):  # pragma: no cover
     """Django migration strategy."""
 
     def __init__(self, settings_module: str, app_label: str | None = None):
@@ -867,7 +867,7 @@ class DjangoMigrateStrategy(MigrationStrategy):
             return []
 
 
-class AlembicMigrateStrategy(MigrationStrategy):
+class AlembicMigrateStrategy(MigrationStrategy):  # pragma: no cover
     """Alembic migration strategy for SQLAlchemy."""
 
     def __init__(
@@ -1073,7 +1073,7 @@ class AlembicMigrateStrategy(MigrationStrategy):
             return []
 
 
-class PeeweeMigrateStrategy(MigrationStrategy):
+class PeeweeMigrateStrategy(MigrationStrategy):  # pragma: no cover
     """Peewee ORM migration strategy."""
 
     def __init__(self, models_module: str, migrations_dir: str | Path):

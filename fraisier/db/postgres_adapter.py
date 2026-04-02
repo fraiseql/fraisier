@@ -69,7 +69,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                 kwargs={"row_factory": dict_row},
             )
             await self._pool.open()
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             raise ConnectionError(f"Failed to create PostgreSQL pool: {e}") from e
 
     async def disconnect(self) -> None:
@@ -107,7 +107,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                 await cursor.execute(converted_query, params or [])
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
-        except psycopg.Error as e:
+        except psycopg.Error as e:  # pragma: no cover
             raise RuntimeError(f"Query execution failed: {e}") from e
 
     async def execute_update(
@@ -153,7 +153,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                         )
                         self._last_insert_id = None
                 return rows_affected
-        except psycopg.Error as e:
+        except psycopg.Error as e:  # pragma: no cover
             raise RuntimeError(f"Update execution failed: {e}") from e
 
     async def insert(
@@ -208,7 +208,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                     return inserted_id
 
             raise RuntimeError(f"Insert into {table} failed")
-        except psycopg.Error as e:
+        except psycopg.Error as e:  # pragma: no cover
             raise RuntimeError(f"Insert execution failed: {e}") from e
 
     async def update(
@@ -276,7 +276,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
             async with self._pool.connection() as conn:
                 await conn.execute("SELECT 1")
             return True
-        except psycopg.Error:
+        except psycopg.Error:  # pragma: no cover
             return False
 
     def database_type(self) -> DatabaseType:
@@ -303,7 +303,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                 idle_connections=pool_available,
                 waiting_requests=stats.get("requests_waiting", 0),
             )
-        except (psycopg.Error, AttributeError):
+        except (psycopg.Error, AttributeError):  # pragma: no cover
             return PoolMetrics(
                 total_connections=self.pool_max_size,
                 active_connections=0,

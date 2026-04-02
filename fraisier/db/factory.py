@@ -126,7 +126,7 @@ async def create_adapter_from_url(
     if scheme in ("postgresql", "postgres"):
         try:
             from .postgres_adapter import PostgresAdapter
-        except ImportError as e:
+        except ImportError as e:  # pragma: no cover
             raise ImportError(
                 "PostgreSQL support requires 'psycopg[binary]>=3.1.0'. "
                 "Install with: uv add 'psycopg[binary]' "

@@ -1014,8 +1014,15 @@ def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> 
     socket_unit_check = _diagnose_systemd_socket_unit(socket_unit)
 
     issues_found, suggestions = _build_diagnostic_issues(
-        socket_check, status_check, systemd_check, socket_unit_check,
-        service_name, socket_unit, socket_path, ctx, fraise,
+        socket_check,
+        status_check,
+        systemd_check,
+        socket_unit_check,
+        service_name,
+        socket_unit,
+        socket_path,
+        ctx,
+        fraise,
     )
 
     diagnostic_results = {
@@ -1028,8 +1035,13 @@ def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> 
     }
 
     _output_diagnose_results(
-        json, fraise, environment, diagnostic_results,
-        status_check, issues_found, suggestions,
+        json,
+        fraise,
+        environment,
+        diagnostic_results,
+        status_check,
+        issues_found,
+        suggestions,
     )
 
 
