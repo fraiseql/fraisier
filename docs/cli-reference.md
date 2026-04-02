@@ -70,9 +70,9 @@ fraisier list --flat
 
 ### fraisier deploy
 
-**⚠️ DEPRECATED** -- Deploy a fraise to an environment.
+**REMOVED** -- Deploy a fraise to an environment.
 
-> **Note:** This command is deprecated. Use `fraisier trigger-deploy` for new deployments. This command will be removed in v1.0.0.
+> **Note:** This command has been removed. Use `fraisier trigger-deploy` for all deployments.
 
 ```bash
 fraisier deploy FRAISE ENVIRONMENT [OPTIONS]
@@ -307,15 +307,7 @@ fraisier status-all --type api
 
 ---
 
-### fraisier deploy-status
 
-**⚠️ DEPRECATED** -- Show the last deployment status from `deployment_status.json`.
-
-> **Note:** This command is deprecated. Use `fraisier deployment-status` for socket-activated deployments. This command will be removed in v1.0.0.
-
-```bash
-fraisier deploy-status [--status-file PATH]
-```
 
 **Options:**
 

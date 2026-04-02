@@ -11,7 +11,7 @@ Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_n
 {% if allowed_services %}
 Environment=FRAISIER_SYSTEMCTL_WRAPPER=/usr/local/libexec/fraisier/systemctl-{{ project_name }}
 {% endif %}
-ExecStart=/usr/local/bin/fraisier deploy {{ fraise_names | first }} production --if-changed
+ExecStart=/usr/local/bin/fraisier trigger-deploy {{ fraise_names | first }} production --force
 
 # Security hardening
 NoNewPrivileges=true

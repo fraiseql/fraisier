@@ -265,31 +265,38 @@ webhook:
 
 The daemon will POST deployment results to this URL after each deployment.
 
-## Migration from Sudoers
+## Setup
 
-### Before (Sudoers)
+Socket activation is the primary deployment method in Fraisier 0.4.0+.
+
+### Basic Setup
+
+1. **Generate units**: `fraisier scaffold`
+2. **Install units**: `fraisier scaffold-install --yes`
+3. **Enable sockets**: `sudo systemctl enable fraisier-*-deploy.socket`
+4. **Start sockets**: `sudo systemctl start fraisier-*-deploy.socket`
+
+### Webhook Integration
+
+Configure your webhook to trigger deployments:
 
 ```bash
-# Web app runs as www-data
-sudo -u fraisier_deploy fraisier deploy myapp production
-# ❌ Permission errors, sudo configuration needed
+# GitHub webhook example
+fraisier trigger-deploy myapp production --branch $GITHUB_HEAD_REF
 ```
 
-### After (Socket)
+### Deployment Workflow
 
 ```bash
-# Web app runs as www-data
+# Trigger deployment
 fraisier trigger-deploy myapp production
-# ✅ No sudo, automatic user isolation
+
+# Check status
+fraisier deployment-status myapp
+
+# View logs
+journalctl -u fraisier-myapp-production-deploy.service
 ```
-
-### Migration Steps
-
-1. **Generate socket units**: `fraisier scaffold`
-2. **Install units**: `fraisier scaffold-install`
-3. **Update webhooks**: Replace `sudo fraisier deploy` with `fraisier trigger-deploy`
-4. **Remove sudoers rules**: After testing socket deployment works
-5. **Monitor**: Watch for deployment failures in journal/status files
 
 ## Troubleshooting
 

@@ -236,58 +236,6 @@ def webhooks(limit: int) -> None:
     console.print(table)
 
 
-@main.command(name="deploy-status")
-@click.option(
-    "--status-file",
-    "-s",
-    default="deployment_status.json",
-    help="Path to deployment status JSON file",
-)
-@click.pass_context
-def deploy_status(_ctx: click.Context, status_file: str) -> None:
-    """Show the last deployment status from status file.
-
-    Reads the deployment_status.json written by the deploy runner
-    and displays its contents.
-
-    \b
-    Examples:
-        fraisier deploy-status
-        fraisier deploy-status --status-file /run/myapp/status.json
-    """
-    status_path = Path(status_file)
-    if not status_path.exists():
-        console.print("[yellow]No status file found[/yellow]")
-        console.print(f"[dim]Looked for: {status_path}[/dim]")
-        return
-
-    try:
-        data = json.loads(status_path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        console.print(f"[red]Error reading status file:[/red] {e}")
-        raise SystemExit(1) from e
-
-    # Display status
-    status_val = data.get("status", "unknown")
-    if status_val == "success":
-        status_str = "[green]success[/green]"
-    elif status_val == "failed":
-        status_str = "[red]failed[/red]"
-    else:
-        status_str = f"[yellow]{status_val}[/yellow]"
-
-    console.print(f"[bold]Fraise:[/bold]      {data.get('fraise', '?')}")
-    console.print(f"[bold]Environment:[/bold] {data.get('environment', '?')}")
-    console.print(f"[bold]Status:[/bold]      {status_str}")
-    duration = data.get("duration_seconds")
-    if duration is not None:
-        console.print(f"[bold]Duration:[/bold]    {duration:.1f}s")
-    ts = data.get("timestamp", "")
-    if ts:
-        console.print(f"[bold]Timestamp:[/bold]   {ts}")
-    if data.get("error"):
-        console.print(f"[bold]Error:[/bold]       {data['error']}")
-
 
 @main.command(name="metrics")
 @click.option("--port", "-p", default=8001, type=int, help="Port for metrics server")

@@ -32,7 +32,8 @@ def main(ctx: click.Context, config: str | None, verbose: bool) -> None:
     \b
     Examples:
         fraisier list
-        fraisier deploy my_api production
+        fraisier trigger-deploy my_api production
+        fraisier deployment-status my_api
         fraisier providers
         fraisier provider-info bare_metal
         fraisier provider-test docker_compose -f config.yaml
@@ -145,132 +146,6 @@ def list(ctx: click.Context, flat: bool) -> None:
                     fraise_branch.add(f"[magenta]{env}[/magenta] -> {name}")
 
         console.print(tree)
-
-
-@main.command()
-@click.argument("fraise")
-@click.argument("environment")
-@click.option("--dry-run", is_flag=True, help="Show what would be deployed")
-@click.option("--force", is_flag=True, help="Deploy even if versions match")
-@click.option("--skip-health", is_flag=True, help="Skip health check after deploy")
-@click.option("--job", "-j", help="Specific job name (for scheduled fraises)")
-@click.option(
-    "--if-changed",
-    is_flag=True,
-    help="Only deploy if versions differ (quiet, for systemd timers)",
-)
-@click.option(
-    "--no-rollback",
-    is_flag=True,
-    help="Allow irreversible migrations (skip rollback safety)",
-)
-@click.pass_context
-def deploy(
-    ctx: click.Context,
-    fraise: str,
-    environment: str,
-    dry_run: bool,
-    force: bool,
-    skip_health: bool,
-    job: str | None,
-    if_changed: bool,
-    no_rollback: bool,
-) -> None:
-    """Deploy a fraise to an environment.
-
-    \b
-    ⚠️  DEPRECATED: This command is deprecated. Use 'fraisier trigger-deploy' instead.
-
-    For webhook-triggered deployments, use socket activation:
-        fraisier trigger-deploy <fraise> <environment>
-
-    For local testing, this command still works but will be removed in v1.0.0.
-
-    \b
-    FRAISE is the fraise name (e.g., my_api, etl, backup)
-    ENVIRONMENT is the target environment (e.g., development, staging, production)
-
-    \b
-    Examples:
-        fraisier deploy my_api production
-        fraisier deploy etl production --dry-run
-        fraisier deploy backup production --job local_backup
-    """
-    config = ctx.obj["config"]
-    fraise_config = config.get_fraise_environment(fraise, environment)
-
-    if not fraise_config:
-        console.print(
-            f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"
-        )
-        console.print("\nAvailable fraises:")
-        for f in config.list_fraises_detailed():
-            envs = ", ".join(f["environments"])
-            console.print(f"  {f['name']}: {envs}")
-        raise SystemExit(1)
-
-    fraise_type = fraise_config.get("type")
-
-    ctx.obj["skip_health"] = skip_health
-
-    # Show deprecation warning
-    console.print(
-        "[yellow]⚠️  Warning:[/yellow] 'fraisier deploy' is deprecated.\n"
-        "[dim]Use 'fraisier trigger-deploy' for new deployments.\n"
-        "This command will be removed in v1.0.0.[/dim]\n"
-    )
-
-    if dry_run:
-        _print_dry_run(config, fraise, environment, fraise_config)
-        return
-
-    # Pass --no-rollback flag through to deployer config
-    if no_rollback:
-        fraise_config["allow_irreversible"] = True
-
-    # Get deployer based on type
-    deployer = _get_deployer(fraise_type, fraise_config, job)
-
-    if deployer is None:
-        console.print(f"[red]Error:[/red] Unknown fraise type '{fraise_type}'")
-        raise SystemExit(1)
-
-    # Check if deployment is needed
-    if not force and not deployer.is_deployment_needed():
-        if if_changed:
-            click.echo("No changes, skipping.")
-        else:
-            console.print(
-                f"[yellow]Fraise '{fraise}/{environment}' "
-                f"is already up to date[/yellow]"
-            )
-            current = deployer.get_current_version()
-            console.print(f"Current version: {current}")
-        return
-
-    # Execute deployment with lock (file or database backend)
-    from fraisier.locking import deployment_lock
-
-    console.print(f"[green]Deploying {fraise} -> {environment}...[/green]")
-
-    try:
-        with deployment_lock(fraise):
-            result = deployer.execute()
-    except Exception as e:
-        if "already running" in str(e).lower():
-            console.print(f"[red]Error:[/red] Deploy already running for '{fraise}'")
-            raise SystemExit(1) from None
-        raise
-
-    if result.success:
-        console.print("[green]Deployment successful![/green]")
-        console.print(f"  Version: {result.old_version} -> {result.new_version}")
-        console.print(f"  Duration: {result.duration_seconds:.1f}s")
-    else:
-        console.print("[red]Deployment failed![/red]")
-        console.print(f"  Status: {result.status.value}")
-        console.print(f"  Error: {result.error_message}")
-        raise SystemExit(1)
 
 
 @main.command()
