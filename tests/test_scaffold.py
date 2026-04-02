@@ -3395,3 +3395,77 @@ fraises: {{}}
         assert "scaffold-install" in result.output
         assert "--dry-run" in result.output
         assert "--yes" in result.output
+
+
+class TestDeploySocketServiceUnits:
+    """Regression tests for issue #72 — socket/service unit correctness."""
+
+    def _render(self, tmp_path):
+        from fraisier.config import FraisierConfig
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+scaffold:
+  output_dir: {tmp_path / "output"}
+  deploy_user: myproj_deploy
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+        return tmp_path / "output"
+
+    def test_socket_uses_accept_no(self, tmp_path):
+        """Accept=no is required — deploy-daemon handles connections itself.
+
+        Accept=yes requires a template service unit; using it with a regular
+        service causes systemd to log 'Invalid argument' and refuse to start
+        the service (issue #72, Bug 1).
+        """
+        out = self._render(tmp_path)
+        socket_path = out / "systemd" / "fraisier-myproj-production-deploy.socket"
+        socket = socket_path.read_text()
+        assert "Accept=no" in socket
+
+    def test_socket_does_not_use_accept_yes(self, tmp_path):
+        out = self._render(tmp_path)
+        socket_path = out / "systemd" / "fraisier-myproj-production-deploy.socket"
+        socket = socket_path.read_text()
+        assert "Accept=yes" not in socket
+
+    def test_service_has_no_standard_output_format(self, tmp_path):
+        """StandardOutputFormat=json must not appear in the service unit.
+
+        This key was introduced in systemd 255; Debian 12 / Ubuntu 22.04
+        ship systemd 252-253 and log a parse warning, breaking deployments
+        (issue #72, Bug 2).
+        """
+        out = self._render(tmp_path)
+        service = (
+            out / "systemd" / "fraisier-myproj-production-deploy.service"
+        ).read_text()
+        assert "StandardOutputFormat" not in service
+
+    def test_service_still_has_journal_output(self, tmp_path):
+        """StandardOutput=journal must remain after removing the format key."""
+        out = self._render(tmp_path)
+        service = (
+            out / "systemd" / "fraisier-myproj-production-deploy.service"
+        ).read_text()
+        assert "StandardOutput=journal" in service
+        assert "StandardError=journal" in service
+
+    def test_socket_listens_on_expected_path(self, tmp_path):
+        out = self._render(tmp_path)
+        socket_path = out / "systemd" / "fraisier-myproj-production-deploy.socket"
+        socket = socket_path.read_text()
+        assert "ListenStream=/run/fraisier/myproj-production/deploy.sock" in socket

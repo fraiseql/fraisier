@@ -12,7 +12,6 @@ ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier deploy-daemon --p
 StandardInput=socket
 StandardOutput=journal
 StandardError=journal
-StandardOutputFormat=json
 
 # Security hardening
 PrivateTmp=yes
