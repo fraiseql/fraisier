@@ -274,7 +274,7 @@ fraisier db reset my_api -e development --force
 
 ### fraisier db migrate
 
-Run database migrations via confiture.
+Run database migrations using the configured framework (Django, Alembic, etc.).
 
 ```bash
 fraisier db migrate FRAISE -e ENV [-d up|down]
@@ -407,7 +407,7 @@ fraisier setup --dry-run
 
 ### fraisier scaffold
 
-Generate infrastructure files from `fraises.yaml`. Outputs systemd units, nginx configuration, GitHub Actions workflows, sudoers rules, `install.sh`, `confiture.yaml`, and shell scripts.
+Generate infrastructure files from `fraises.yaml`. Outputs systemd units, nginx configuration, GitHub Actions workflows, sudoers rules, `install.sh`, and shell scripts.
 
 ```bash
 fraisier scaffold [--dry-run]

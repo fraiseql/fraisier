@@ -71,11 +71,10 @@ fraises:
           timeout: 30
           retries: 5
         database:
-          strategy: migrate
-          database_url: ${DATABASE_URL}
-          admin_url: ${DATABASE_ADMIN_URL}
-          confiture_config: confiture.yaml
-          migrations_dir: db/migrations
+          framework: django  # or alembic, peewee, confiture
+          name: myapp_prod
+          django:
+            settings_module: myapp.settings
 
 branch_mapping:
   main:
@@ -238,14 +237,19 @@ fraisier history --fraise my_api --limit 10
 
 ## Database Migration Strategies
 
-| Strategy | What it does | When to use |
-|---|---|---|
-| `migrate` | Runs `confiture migrate up` | Standard schema changes |
-| `apply` | Alias for `migrate` | Same as above |
-| `rebuild` | Stops service, drops schemas, recreates from scratch | Development and staging only |
-| `restore_migrate` | Restores from a production backup, then migrates up | Refreshing staging from prod |
+### Framework support
 
-For production, always use `migrate`. Never use `rebuild` on production — it destroys data.
+Fraisier supports major Python migration frameworks:
+
+| Framework | Command | Use case |
+|---|---|---|
+| **Django** | `python manage.py migrate` | Django projects |
+| **Alembic** | `alembic upgrade head` | SQLAlchemy projects |
+| **Flask-Migrate** | `alembic upgrade head` | Flask + SQLAlchemy |
+| **Peewee** | Custom migration runner | Peewee ORM |
+| **Confiture** | `confiture migrate up` | FraiseQL or custom schemas |
+
+Fraisier handles framework-specific migration commands automatically.
 
 ### Irreversible migrations
 
