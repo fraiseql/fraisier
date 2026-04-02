@@ -450,6 +450,77 @@ fraisier backup my_api -e production --mode slim
 
 ## Infrastructure Commands
 
+### fraisier bootstrap
+
+Provision a virgin server end-to-end via SSH. Connects as root (or `--ssh-user`) and
+runs 10 ordered, idempotent steps to bring a fresh server to a state where
+`fraisier validate-setup` passes and the first `fraisier trigger-deploy` can succeed.
+
+Use this instead of manual server setup. Re-running on a partially-set-up server is safe —
+steps that find the work already done are skipped.
+
+```bash
+fraisier bootstrap --environment <env> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--environment`, `-e` | Environment to bootstrap (required) |
+| `--ssh-user` | Privileged SSH user for the initial connection (default: `root`) |
+| `--ssh-key PATH` | Path to SSH private key |
+| `--server HOST` | Override `environments.<env>.server` from `fraises.yaml` |
+| `--dry-run` | Print all steps without executing anything |
+| `--yes`, `-y` | Skip confirmation prompt |
+| `--verbose`, `-v` | Show already-done steps and verbose install output |
+
+**What it does (10 steps):**
+
+1. Create the `deploy_user` system account
+2. Add `deploy_user` to the `www-data` group
+3. Install `uv` for `deploy_user`
+4. Install `fraisier` for `deploy_user`
+5. Create `/opt/<project>`, `/opt/fraisier`, `/run/fraisier`
+6. Upload `fraises.yaml` to `/opt/fraisier/fraises.yaml`
+7. Upload generated scaffold files to a temp directory
+8. Run `install.sh --standalone` (systemd units, nginx, sudoers)
+9. Enable and start the deploy socket unit
+10. Run `fraisier validate-setup` remotely and report
+
+**Requirements:**
+
+- `environments.<env>.server` must be set in `fraises.yaml`, or pass `--server <host>`
+- SSH access as root (or another privileged user) to the target server
+
+**Examples:**
+
+```bash
+# Bootstrap production (reads server from fraises.yaml)
+fraisier bootstrap --environment production
+
+# Preview all steps without executing
+fraisier bootstrap --environment production --dry-run
+
+# Override the target server
+fraisier bootstrap --environment production --server 203.0.113.42
+
+# Use a specific SSH key and non-root user
+fraisier bootstrap -e production --ssh-user deployer --ssh-key ~/.ssh/id_ed25519
+
+# Skip confirmation
+fraisier bootstrap -e production --yes
+```
+
+**After bootstrap:**
+
+```bash
+# First deployment
+fraisier trigger-deploy <fraise> production
+```
+
+---
+
 ### fraisier setup
 
 Provision the server: create system users, directories, permissions, sudoers rules, and

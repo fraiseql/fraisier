@@ -100,7 +100,16 @@ fraises:
           url: http://localhost:8000/health
 ```
 
-### 3. Deploy
+### 3. Provision the server (first time only)
+
+```bash
+fraisier bootstrap --environment production
+```
+
+Connects as root via SSH and runs all setup steps: creates the deploy user, installs `uv`
+and `fraisier`, uploads config and scaffold files, enables the deploy socket.
+
+### 4. Deploy
 
 ```bash
 fraisier trigger-deploy my_app production
@@ -108,7 +117,7 @@ fraisier trigger-deploy my_app production
 
 Fraisier handles: git pull → migrate → restart → health check → rollback on failure.
 
-### 4. Ship new versions
+### 5. Ship new versions
 
 ```bash
 fraisier ship patch    # Bump version, commit, push, deploy
@@ -242,7 +251,9 @@ fraisier backup <fraise> -e <env>                Create database backup
 ### Infrastructure
 
 ```
+fraisier bootstrap -e <env> [--dry-run]          Provision a fresh server end-to-end via SSH
 fraisier scaffold [--dry-run]                    Generate systemd, nginx, CI files
+fraisier scaffold-install [--dry-run] [--yes]    Install generated files to the system
 fraisier providers                               List supported providers
 fraisier provider-test <type>                    Test provider connectivity
 ```

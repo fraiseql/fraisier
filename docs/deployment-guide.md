@@ -97,11 +97,47 @@ DATABASE_ADMIN_URL=postgresql://postgres@/postgres?host=/var/run/postgresql
 
 ## Server Setup (one-time)
 
-`fraisier setup` provisions the server: creates users, directories, permissions, sudoers
-rules, and installs systemd units. You run this once per environment, or again after
-significant config changes.
+You have two paths depending on whether the server is completely fresh or already partially
+configured.
 
-### 1. Generate scaffold files
+### Option A — Bootstrap (recommended for fresh servers)
+
+`fraisier bootstrap` provisions a virgin server end-to-end from your local machine via SSH.
+It performs all setup steps in one command and leaves the server ready for the first deploy.
+
+First, add the server hostname to `fraises.yaml`:
+
+```yaml
+environments:
+  production:
+    server: prod.myserver.com
+```
+
+Then run:
+
+```bash
+fraisier bootstrap --environment production
+```
+
+Bootstrap runs 10 idempotent steps (create user → install uv → install fraisier → upload
+config → upload scaffold → run install.sh → enable socket → validate). Re-running is safe.
+
+Preview without making changes:
+
+```bash
+fraisier bootstrap --environment production --dry-run
+```
+
+Once bootstrap reports success, skip straight to [First deployment](#first-deployment).
+
+---
+
+### Option B — Manual setup (server already accessible)
+
+Use this path when you are already SSH'd into the server, or when the server has an
+existing partial configuration that bootstrap would overwrite.
+
+#### 1. Generate scaffold files
 
 Scaffold generates all infrastructure files from `fraises.yaml` — systemd units, nginx
 configs, sudoers fragments, wrapper scripts, and more.
@@ -122,7 +158,7 @@ For a multi-server setup where each server only needs its own environments:
 fraisier scaffold --server prod.myserver.com
 ```
 
-### 2. Preview and install scaffold
+#### 2. Preview and install scaffold
 
 ```bash
 # Preview without changes
@@ -132,7 +168,7 @@ fraisier scaffold-install --dry-run
 sudo fraisier scaffold-install --yes
 ```
 
-### 3. Run server setup
+#### 3. Run server setup
 
 ```bash
 sudo fraisier setup
