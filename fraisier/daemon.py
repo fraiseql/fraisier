@@ -7,10 +7,12 @@ adapted to accept JSON deployment requests instead of command-line arguments.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from fraisier.config import get_config
+from fraisier.config import CONFIG_SEARCH_LOCATIONS, get_config
 from fraisier.logging import get_contextual_logger
 
 logger = get_contextual_logger("fraisier.daemon")
@@ -87,7 +89,7 @@ def parse_deployment_request(json_str: str) -> DeploymentRequest:
     )
 
 
-def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
+def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:  # noqa: PLR0911
     """Execute a deployment based on the request.
 
     Args:
@@ -113,7 +115,19 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
         )
 
         if not fraise_config:
-            raise ValueError(f"Project '{request.project}' not found")
+            error_msg = _format_project_not_found_error(config, request.project)
+            logger.error(
+                "Project not found in configuration",
+                event="deployment_failed",
+                project=request.project,
+                config_path=config.config_path,
+            )
+            return DeploymentResult(
+                success=False,
+                status="failed",
+                message="Project not found",
+                error_message=error_msg,
+            )
 
         # Handle dry-run mode
         if request.options.get("dry_run"):
@@ -225,6 +239,20 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
 
         return daemon_result
 
+    except FileNotFoundError:
+        error_msg = _format_config_not_found_error()
+        logger.error(
+            "Configuration file not found",
+            event="deployment_failed",
+            error=error_msg,
+        )
+        return DeploymentResult(
+            success=False,
+            status="failed",
+            message="Configuration file not found",
+            error_message=error_msg,
+        )
+
     except Exception as e:
         logger.error(
             "Deployment failed",
@@ -237,6 +265,51 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
             message="Deployment failed",
             error_message=str(e),
         )
+
+
+def _format_config_not_found_error() -> str:
+    """Format diagnostic message when config file is not found."""
+    lines = ["Configuration file 'fraises.yaml' not found."]
+
+    # Check FRAISIER_CONFIG environment variable
+    fraisier_config = os.environ.get("FRAISIER_CONFIG")
+    if fraisier_config:
+        lines.append(f"FRAISIER_CONFIG is set to: {fraisier_config}")
+        if not Path(fraisier_config).exists():
+            lines.append("  (file does not exist)")
+    else:
+        lines.append("FRAISIER_CONFIG environment variable is not set.")
+
+    # List search locations
+    lines.append("")
+    lines.append("Searched locations:")
+    for loc in CONFIG_SEARCH_LOCATIONS:
+        exists = "✓" if loc.exists() else "✗"
+        lines.append(f"  {exists} {loc}")
+
+    # Systemd hint
+    lines.append("")
+    lines.append("Hint: In systemd units, set the environment variable using:")
+    lines.append("  Environment=FRAISIER_CONFIG=/path/to/fraises.yaml")
+
+    return "\n".join(lines)
+
+
+def _format_project_not_found_error(config, project: str) -> str:
+    """Format diagnostic message when project is not found in config."""
+    lines = [f"Project '{project}' not found in configuration."]
+
+    # Show loaded config file
+    lines.append(f"Configuration loaded from: {config.config_path}")
+
+    # List available projects
+    available = config.list_fraises()
+    if available:
+        lines.append(f"Available projects: {', '.join(available)}")
+    else:
+        lines.append("No projects defined in configuration.")
+
+    return "\n".join(lines)
 
 
 def _get_deployer(fraise_type: str, fraise_config: dict):

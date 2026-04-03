@@ -6,9 +6,9 @@ Deploy Django, FastAPI, Flask, or any Python web app with database migrations th
 
 ```
 webhook → socket → daemon → preflight → migrate up → restart → health check → done
-          │          │          │          │            │          │            │
-          │ failure   │ failure   │ failure   │ failure     │ failure   │ failure
-           ▼          ▼          ▼          ▼            ▼          ▼
+          │          │          │          │            │          │            
+          │ failure  │ failure  │ failure  │ failure    │ failure  │ failure
+          ▼          ▼          ▼          ▼            ▼          ▼
     (no changes)  (no changes)  (no changes)  migrate down → git rollback
 ```
 

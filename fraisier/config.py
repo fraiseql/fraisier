@@ -28,6 +28,14 @@ _GIT_URL_RE = re.compile(
 
 _VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
+
+# Standard locations to search for fraises.yaml configuration file
+CONFIG_SEARCH_LOCATIONS = [
+    Path.cwd() / "fraises.yaml",
+    Path.cwd() / "config" / "fraises.yaml",
+    Path("/opt/fraisier/fraises.yaml"),
+    Path(__file__).parent.parent / "fraises.yaml",
+]
 _UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
 
 # snake_case -> systemd PascalCase mapping for security directives
@@ -466,20 +474,12 @@ class FraisierConfig:
             return Path(env_path)
 
         # Check standard locations (CWD first, then system-wide)
-        locations = [
-            Path.cwd() / "fraises.yaml",
-            Path.cwd() / "config" / "fraises.yaml",
-            Path("/opt/fraisier/fraises.yaml"),
-            Path(__file__).parent.parent / "fraises.yaml",
-        ]
-
-        for loc in locations:
+        for loc in CONFIG_SEARCH_LOCATIONS:
             if loc.exists():
                 return loc
 
-        raise FileNotFoundError(
-            f"fraises.yaml not found in any of: {[str(p) for p in locations]}"
-        )
+        locations_str = [str(p) for p in CONFIG_SEARCH_LOCATIONS]
+        raise FileNotFoundError(f"fraises.yaml not found in any of: {locations_str}")
 
     def _load(self) -> None:
         """Load configuration from YAML file."""

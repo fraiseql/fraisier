@@ -150,9 +150,11 @@ class TestExecuteDeploymentRequest:
 
     @patch("fraisier.daemon.get_config")
     def test_execute_unknown_project(self, mock_get_config):
-        """Execute deployment for unknown project fails."""
+        """Execute deployment for unknown project fails with diagnostic."""
         mock_config = MagicMock()
         mock_config.get_fraise_environment.return_value = None
+        mock_config.config_path = "/opt/fraisier/fraises.yaml"
+        mock_config.list_fraises.return_value = ["api", "web", "worker"]
         mock_get_config.return_value = mock_config
 
         request = DeploymentRequest(
@@ -168,7 +170,38 @@ class TestExecuteDeploymentRequest:
 
         result = execute_deployment_request(request)
         assert result.success is False
-        assert "not found" in result.error_message
+        assert "Project 'unknown' not found" in result.error_message
+        assert "/opt/fraisier/fraises.yaml" in result.error_message
+        assert "Available projects: api, web, worker" in result.error_message
+
+    @patch("fraisier.daemon.get_config")
+    def test_execute_config_not_found(self, mock_get_config):
+        """Execute deployment when config file not found shows diagnostic."""
+        paths = [
+            "/tmp/test/fraises.yaml",
+            "/tmp/test/config/fraises.yaml",
+            "/opt/fraisier/fraises.yaml",
+        ]
+        mock_get_config.side_effect = FileNotFoundError(
+            f"fraises.yaml not found in any of: {paths}"
+        )
+
+        request = DeploymentRequest(
+            version=1,
+            project="api",
+            environment="development",
+            branch="dev",
+            timestamp="2026-04-02T11:15:23Z",
+            triggered_by="webhook",
+            options={},
+            metadata={},
+        )
+
+        result = execute_deployment_request(request)
+        assert result.success is False
+        assert "FRAISIER_CONFIG environment variable is not set" in result.error_message
+        assert "Searched locations:" in result.error_message
+        assert "systemd" in result.error_message
 
     @patch("fraisier.locking.deployment_lock")
     @patch("fraisier.daemon.get_config")
