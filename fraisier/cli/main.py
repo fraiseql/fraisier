@@ -487,7 +487,22 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
         console.print(f"[red]Error executing deployment:[/red] {e}")
         raise SystemExit(1) from None
 
-    # Exit with appropriate code
+    # Write JSON result to stdout (for socket clients)
+    import json
+
+    result_json = json.dumps(
+        {
+            "success": result.success,
+            "status": result.status,
+            "version": result.deployed_version,
+            "duration": result.duration_seconds,
+            "error": result.error_message,
+            "message": result.message,
+        }
+    )
+    print(result_json)  # Use print() not console.print() for machine-readable output
+
+    # Also write human-readable output to stderr for systemd logs
     if result.success:
         console.print(f"[green]Deployment successful[/green] - {result.message}")
         if result.deployed_version:
@@ -510,6 +525,10 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
 @click.option("--no-cache", is_flag=True, help="Skip deployment caches")
 @click.option("--dry-run", is_flag=True, help="Show deployment plan without executing")
 @click.option(
+    "--wait", is_flag=True, help="Wait for deployment completion and show result"
+)
+@click.option("--follow", is_flag=True, help="Wait and follow deployment logs")
+@click.option(
     "--timeout", type=int, default=300, help="Timeout in seconds (default: 300)"
 )
 @click.pass_context
@@ -521,18 +540,22 @@ def trigger_deploy(
     force: bool,
     no_cache: bool,
     dry_run: bool,
+    wait: bool,
+    follow: bool,
     timeout: int,
 ) -> None:
     """Trigger deployment by writing to systemd socket.
 
     Connects to the deployment socket for the specified fraise and environment,
-    sends a JSON deployment request, and waits for completion.
+    sends a JSON deployment request, and optionally waits for completion.
 
     \b
     Examples:
         fraisier trigger-deploy my_api production
         fraisier trigger-deploy my_api development --branch feature-x
         fraisier trigger-deploy my_api staging --force --timeout 600
+        fraisier trigger-deploy my_api production --wait
+        fraisier trigger-deploy my_api production --follow
     """
     import json
     import socket
@@ -547,6 +570,10 @@ def trigger_deploy(
             f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"
         )
         raise SystemExit(1)
+
+    # Validate flags
+    if follow:
+        wait = True  # --follow implies --wait
 
     # Determine branch
     if not branch:
@@ -586,23 +613,68 @@ def trigger_deploy(
         sock.sendall(json_data.encode("utf-8"))
         sock.shutdown(socket.SHUT_WR)
 
-        # Wait for socket to close (indicates service completion)
-        try:
-            while True:
-                data = sock.recv(1024)
-                if not data:
-                    break
-                # Service may send back data, but we ignore it for now
-        except TimeoutError:
-            console.print(
-                f"[red]Error:[/red] Deployment timed out after {timeout} seconds\n"
-                f"[yellow]Hint:[/yellow] The deployment may still be running in the background.\n"  # noqa: E501
-                f"  Check status: fraisier deployment-status {fraise}\n"
-                f"  For long deployments, increase timeout: --timeout {timeout * 2}"
-            )
+        # Read response if waiting
+        response_data = b""
+        if wait or follow:
+            try:
+                while True:
+                    data = sock.recv(4096)
+                    if not data:
+                        break
+                    response_data += data
+            except TimeoutError:
+                console.print(
+                    f"[red]Error:[/red] Deployment timed out after {timeout} seconds\n"
+                    f"[yellow]Hint:[/yellow] The deployment may still be running in the background.\n"  # noqa: E501
+                    f"  Check status: fraisier deployment-status {fraise}\n"
+                    f"  For long deployments, increase timeout: --timeout {timeout * 2}"
+                )
             raise SystemExit(1) from None
 
-        console.print("[green]✓[/green] Deployment triggered successfully")
+        # Debug
+        if wait:
+            console.print(
+                f"DEBUG: wait=True, response_data length: {len(response_data)}"
+            )
+
+        # Handle wait/follow modes
+        if follow:
+            # Exec into journalctl to follow logs
+            from fraisier.cli.logs import _resolve_deploy_unit_pattern
+
+            unit_pattern = _resolve_deploy_unit_pattern(config, fraise, environment)
+            import os
+
+            os.execvp("journalctl", ["journalctl", "-u", unit_pattern, "-f"])
+        elif wait and response_data:
+            # Parse and display result
+            try:
+                result = json.loads(response_data.decode("utf-8"))
+                if result["success"]:
+                    console.print(
+                        f"[green]✓[/green] Deployment successful - "
+                        f"{result.get('message', '')}"
+                    )
+                    if result.get("version"):
+                        console.print(f"Version: {result['version']}")
+                    if result.get("duration"):
+                        console.print(f"Duration: {result['duration']:.1f}s")
+                    sock.close()
+                    raise SystemExit(0)
+                else:
+                    console.print(
+                        f"[red]✗[/red] Deployment failed - {result.get('error', '')}"
+                    )
+                    sock.close()
+                    raise SystemExit(1)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                console.print(
+                    f"[yellow]Warning:[/yellow] Could not parse deployment result: {e}"
+                )
+                console.print("[green]✓[/green] Deployment triggered successfully")
+        else:
+            console.print("[green]✓[/green] Deployment triggered successfully")
+
         sock.close()
 
     except FileNotFoundError:
