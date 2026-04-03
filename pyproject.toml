@@ -31,7 +31,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.4.7"
+version = "1.1.0"
 
 [project.optional-dependencies]
 all-databases = [
@@ -54,9 +54,13 @@ graphql = [
 postgres = [
   "psycopg[binary]>=3.1.0,<4.0"
 ]
+mcp = [
+    "mcp[cli]>=1.9.0",
+]
 
 [project.scripts]
 fraisier = "fraisier.cli:main"
+fraisier-mcp = "fraisier.mcp_server:main"
 fraisier-webhook = "fraisier.webhook:run_server"
 
 [project.urls]

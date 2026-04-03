@@ -388,6 +388,104 @@ class TestSSHRunnerSudo:
         assert "tar xzf" in remote_cmd
 
 
+class TestSSHRunnerSudoPassword:
+    """Tests for SSHRunner with sudo_password (sudo -S via stdin)."""
+
+    def test_run_uses_sudo_s_when_password_set(self):
+        runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["useradd", "--system", "deploy"])
+
+        remote = mock_run.call_args[0][0][-1]
+        assert "sudo -S sh -c" in remote
+
+    def test_run_pipes_password_via_stdin(self):
+        runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["echo", "hi"])
+
+        kwargs = mock_run.call_args[1]
+        assert kwargs["input"] == "secret\n"
+        assert kwargs["capture_output"] is True
+
+    def test_run_without_password_uses_plain_sudo(self):
+        runner = SSHRunner(host="h", user="u", use_sudo=True)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["echo", "hi"])
+
+        remote = mock_run.call_args[0][0][-1]
+        assert "sudo sh -c" in remote
+        assert "sudo -S" not in remote
+        kwargs = mock_run.call_args[1]
+        assert kwargs.get("capture_output") is True
+
+    def test_upload_sudo_password_pipes_to_mv(self, tmp_path):
+        runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
+        local_file = tmp_path / "fraises.yaml"
+        local_file.write_text("name: test\n")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.upload(local_file, "/opt/fraisier/fraises.yaml")
+
+        # The mv call (second call) should use sudo -S and pipe password
+        mv_call = mock_run.call_args_list[1]
+        remote_cmd = mv_call[0][0][-1]
+        assert "sudo -S sh -c" in remote_cmd
+        kwargs = mv_call[1]
+        assert kwargs["input"] == "secret\n"
+
+    def test_upload_tree_sudo_password_uses_two_step(self, tmp_path):
+        runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "file.txt").write_text("hello")
+
+        fake_ssh = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        fake_ssh_text = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+
+        with (
+            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = mock_proc
+            mock_run.side_effect = [fake_ssh, fake_ssh_text]
+
+            runner.upload_tree(src, "/tmp/remote")
+
+        # First call: tar to temp dir (no sudo)
+        first_ssh = mock_run.call_args_list[0][0][0]
+        first_remote = first_ssh[-1]
+        assert "sudo" not in first_remote
+        assert "/tmp/.fraisier-upload-tree" in first_remote
+
+        # Second call: sudo -S mv into place
+        second_ssh = mock_run.call_args_list[1][0][0]
+        second_remote = second_ssh[-1]
+        assert "sudo -S sh -c" in second_remote
+        second_kwargs = mock_run.call_args_list[1][1]
+        assert second_kwargs["input"] == "secret\n"
+
+
 class TestRunnerFromConfig:
     """Tests for runner_from_config factory."""
 
