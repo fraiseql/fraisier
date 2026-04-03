@@ -14,15 +14,20 @@ from .main import main
 @click.option("--environment", "-e", required=True, help="Environment to bootstrap")
 @click.option(
     "--ssh-user",
-    default="root",
-    show_default=True,
-    help="Privileged SSH user for the initial connection",
+    default=None,
+    help="SSH user for initial connection (default: ~/.ssh/config or root)",
+)
+@click.option(
+    "--ssh-port",
+    default=None,
+    type=int,
+    help="SSH port (default: from ~/.ssh/config or 22)",
 )
 @click.option(
     "--ssh-key",
     default=None,
     type=click.Path(),
-    help="Path to SSH private key",
+    help="Path to SSH private key (default: from ~/.ssh/config)",
 )
 @click.option(
     "--server",
@@ -36,7 +41,8 @@ from .main import main
 def bootstrap(
     ctx: click.Context,
     environment: str,
-    ssh_user: str,
+    ssh_user: str | None,
+    ssh_port: int | None,
     ssh_key: str | None,
     server: str | None,
     dry_run: bool,
@@ -58,6 +64,7 @@ def bootstrap(
     """
     from fraisier.bootstrap import ServerBootstrapper
     from fraisier.runners import SSHRunner
+    from fraisier.ssh_config import resolve_ssh_config
 
     config = require_config(ctx)
 
@@ -73,10 +80,17 @@ def bootstrap(
             f"Bootstrap requires a target host. Add it or use --server <host>."
         )
 
+    # Resolve SSH defaults from ~/.ssh/config; CLI flags take precedence.
+    host_config = resolve_ssh_config(server)
+    resolved_user = ssh_user or host_config.user or "root"
+    resolved_port = ssh_port if ssh_port is not None else (host_config.port or 22)
+    resolved_key = str(ssh_key) if ssh_key else host_config.identity_file
+
     runner = SSHRunner(
         host=server,
-        user=ssh_user,
-        key_path=str(ssh_key) if ssh_key else None,
+        user=resolved_user,
+        port=resolved_port,
+        key_path=resolved_key,
     )
 
     console.print(
