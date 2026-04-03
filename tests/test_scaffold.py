@@ -3558,6 +3558,45 @@ scaffold:
         assert "Environment=FRAISIER_CONFIG=/etc/myapp/fraises.yaml" in service
         assert "/opt/fraisier/fraises.yaml" not in service
 
+    def test_deploy_environment_file_omitted_by_default(self, tmp_path):
+        """EnvironmentFile must not appear when deploy_environment_file is unset."""
+        out = self._render(tmp_path)
+        service = (
+            out / "systemd" / "fraisier-myproj-api-production-deploy@.service"
+        ).read_text()
+        assert "EnvironmentFile" not in service
+
+    def test_deploy_environment_file_rendered(self, tmp_path):
+        """scaffold.deploy_environment_file renders EnvironmentFile directive."""
+        from fraisier.config import FraisierConfig
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+scaffold:
+  output_dir: {tmp_path / "output"}
+  deploy_user: myproj_deploy
+  deploy_environment_file: /etc/fraisier/secrets.env
+"""
+        )
+        config = FraisierConfig(p)
+        ScaffoldRenderer(config).render()
+        service = (
+            tmp_path
+            / "output"
+            / "systemd"
+            / "fraisier-myproj-api-production-deploy@.service"
+        ).read_text()
+        assert "EnvironmentFile=-/etc/fraisier/secrets.env" in service
+
 
 class TestServiceNameOverride:
     """service.service_name overrides the generated systemd unit filename."""

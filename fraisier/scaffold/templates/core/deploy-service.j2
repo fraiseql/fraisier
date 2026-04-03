@@ -13,6 +13,9 @@ StandardInput=socket
 StandardOutput=journal
 StandardError=journal
 Environment=FRAISIER_CONFIG={{ scaffold.config_path }}
+{% if scaffold.deploy_environment_file %}
+EnvironmentFile=-{{ scaffold.deploy_environment_file }}
+{% endif %}
 
 # Security hardening
 # ProtectHome intentionally omitted: fraisier is installed as a uv tool and

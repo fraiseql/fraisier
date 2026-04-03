@@ -374,6 +374,7 @@ class ScaffoldConfig:
     output_dir: str = "scripts/generated"
     deploy_user: str = "fraisier"
     config_path: str = "/opt/fraisier/fraises.yaml"
+    deploy_environment_file: str | None = None
     systemd: SystemdScaffoldConfig = field(default_factory=SystemdScaffoldConfig)
     nginx: NginxScaffoldConfig = field(default_factory=NginxScaffoldConfig)
     github_actions: GithubActionsScaffoldConfig = field(
@@ -917,6 +918,7 @@ class FraisierConfig:
             output_dir=raw.get("output_dir", "scripts/generated"),
             deploy_user=deploy_user,
             config_path=raw.get("config_path", "/opt/fraisier/fraises.yaml"),
+            deploy_environment_file=raw.get("deploy_environment_file"),
             systemd=SystemdScaffoldConfig(
                 security_hardening=raw_systemd.get("security_hardening", True),
                 memory_max_default=raw_systemd.get("memory_max_default", "4G"),
