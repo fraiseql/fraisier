@@ -106,6 +106,44 @@ class TestSSHRunner:
         assert "restart" in remote
         assert "api" in remote
 
+    def test_run_prepends_safe_path(self):
+        runner = SSHRunner(host="h", user="u")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="ok", stderr=""
+            )
+            runner.run(["usermod", "-aG", "www-data", "deploy"])
+
+        remote = mock_run.call_args[0][0][-1]
+        assert remote.startswith("PATH=")
+        assert "/usr/local/sbin" in remote
+        assert "/usr/sbin" in remote
+        assert "/sbin" in remote
+        assert "usermod" in remote
+
+    def test_run_with_env_merges_with_safe_path(self):
+        runner = SSHRunner(host="h", user="u")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["echo", "hi"], env={"FOO": "bar"})
+
+        remote = mock_run.call_args[0][0][-1]
+        assert "PATH=" in remote
+        assert "FOO=bar" in remote
+
+    def test_run_with_env_path_overrides_safe_default(self):
+        runner = SSHRunner(host="h", user="u")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["echo"], env={"PATH": "/custom/bin"})
+
+        remote = mock_run.call_args[0][0][-1]
+        assert "PATH=/custom/bin" in remote
+
     def test_run_with_cwd_prepends_cd(self):
         runner = SSHRunner(host="h", user="u")
         with patch("subprocess.run") as mock_run:
