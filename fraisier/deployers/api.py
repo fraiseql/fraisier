@@ -391,6 +391,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         )
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
+        hooks_config = self.database_config.get("hooks")
         old_cwd = Path.cwd()
         app_dir = Path(self.app_path) if self.app_path else None
         if app_dir and app_dir.is_dir():
@@ -402,6 +403,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 allow_irreversible=self.allow_irreversible,
                 pre_migrate_verify=pre_verify,
                 database_url=database_url,
+                hooks_config=hooks_config,
             )
         finally:
             os.chdir(old_cwd)
@@ -579,11 +581,13 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         confiture_config, migrations_dir = self._resolve_paths_against_app(
             confiture_config, migrations_dir
         )
+        hooks_config = self.database_config.get("hooks")
         db_result = strategy.rollback(
             confiture_config,
             migrations_dir=migrations_dir,
             steps=self._migrations_applied,
             database_url=database_url,
+            hooks_config=hooks_config,
         )
         if db_result.success:
             return DeploymentResult(

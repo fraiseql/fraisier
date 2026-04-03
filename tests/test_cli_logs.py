@@ -35,7 +35,7 @@ class TestLogsCommand:
         with patch("fraisier.cli.main.get_config", return_value=config):
             runner.invoke(
                 main,
-                ["logs", "api", "production", "--no-follow", "--lines", "100"],
+                ["logs", "api", "production"],
                 obj={"config": config, "skip_health": False},
             )
 
@@ -59,11 +59,10 @@ class TestLogsCommand:
         with patch("fraisier.cli.main.get_config", return_value=config):
             runner.invoke(
                 main,
-                ["logs", "api", "production"],
+                ["logs", "api", "production", "--no-follow", "--lines", "100"],
                 obj={"config": config, "skip_health": False},
             )
 
-            # Should not exit early (execvp replaces process)
             assert mock_execvp.called
             args, _kwargs = mock_execvp.call_args
             assert args[0] == "journalctl"

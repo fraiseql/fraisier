@@ -91,7 +91,7 @@ def parse_deployment_request(json_str: str) -> DeploymentRequest:
     )
 
 
-def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:  # noqa: PLR0911
+def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
     """Execute a deployment based on the request.
 
     Args:

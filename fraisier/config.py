@@ -29,13 +29,20 @@ _GIT_URL_RE = re.compile(
 _VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
 
+
 # Standard locations to search for fraises.yaml configuration file
-CONFIG_SEARCH_LOCATIONS = [
-    Path.cwd() / "fraises.yaml",
-    Path.cwd() / "config" / "fraises.yaml",
-    Path("/opt/fraisier/fraises.yaml"),
-    Path(__file__).parent.parent / "fraises.yaml",
-]
+def _config_search_locations() -> list[Path]:
+    """Return config search locations, evaluated lazily so CWD is current."""
+    return [
+        Path.cwd() / "fraises.yaml",
+        Path.cwd() / "config" / "fraises.yaml",
+        Path("/opt/fraisier/fraises.yaml"),
+        Path(__file__).parent.parent / "fraises.yaml",
+    ]
+
+
+# Kept for backward compatibility (used by daemon.py for display purposes).
+CONFIG_SEARCH_LOCATIONS = _config_search_locations()
 _UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
 
 # snake_case -> systemd PascalCase mapping for security directives
@@ -433,6 +440,97 @@ class ShipCheckConfig:
 
 
 @dataclass
+class BackupHookConfig:
+    """Configuration for pre-migration backup hook."""
+
+    enabled: bool = False
+    backup_dir: str = "/var/backups/fraisier"
+    retention_days: int = 30
+    compress: bool = True
+
+
+@dataclass
+class AuditHookConfig:
+    """Configuration for post-migration audit hook."""
+
+    enabled: bool = False
+    audit_dir: str = "/var/log/fraisier/audit"
+
+
+@dataclass
+class SlackHookConfig:
+    """Configuration for Slack notification hook."""
+
+    enabled: bool = False
+    webhook_url: str = ""
+    channel: str = "#deployments"
+    mention_on_failure: str = ""  # e.g., "@engineering"
+
+
+@dataclass
+class DiscordHookConfig:
+    """Configuration for Discord notification hook."""
+
+    enabled: bool = False
+    webhook_url: str = ""
+    mention_on_failure: str = ""  # e.g., "@engineering"
+
+
+@dataclass
+class TeamsHookConfig:
+    """Configuration for Microsoft Teams notification hook."""
+
+    enabled: bool = False
+    webhook_url: str = ""
+    mention_on_failure: str = ""  # e.g., "@engineering"
+
+
+@dataclass
+class EmailHookConfig:
+    """Configuration for email notification hook."""
+
+    enabled: bool = False
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    from_email: str = ""
+    to_emails: list[str] = field(default_factory=list)
+    subject_prefix: str = "[Fraisier]"
+
+
+@dataclass
+class GenericNotificationHookConfig:
+    """Configuration for custom notification hooks."""
+
+    type: str = ""  # e.g., "slack", "discord", "teams", "email", "custom"
+    enabled: bool = False
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class NotificationHooksConfig:
+    """Configuration for multiple notification hooks."""
+
+    slack: SlackHookConfig = field(default_factory=SlackHookConfig)
+    discord: DiscordHookConfig = field(default_factory=DiscordHookConfig)
+    teams: TeamsHookConfig = field(default_factory=TeamsHookConfig)
+    email: EmailHookConfig = field(default_factory=EmailHookConfig)
+    custom: list[GenericNotificationHookConfig] = field(default_factory=list)
+
+
+@dataclass
+class MigrationHooksConfig:
+    """Configuration for migration hooks."""
+
+    backup: BackupHookConfig = field(default_factory=BackupHookConfig)
+    audit: AuditHookConfig = field(default_factory=AuditHookConfig)
+    notifications: NotificationHooksConfig = field(
+        default_factory=NotificationHooksConfig
+    )
+
+
+@dataclass
 class ShipConfig:
     """Parsed ship: section from fraises.yaml."""
 
@@ -474,11 +572,12 @@ class FraisierConfig:
             return Path(env_path)
 
         # Check standard locations (CWD first, then system-wide)
-        for loc in CONFIG_SEARCH_LOCATIONS:
+        locations = _config_search_locations()
+        for loc in locations:
             if loc.exists():
                 return loc
 
-        locations_str = [str(p) for p in CONFIG_SEARCH_LOCATIONS]
+        locations_str = [str(p) for p in locations]
         raise FileNotFoundError(f"fraises.yaml not found in any of: {locations_str}")
 
     def _load(self) -> None:
@@ -488,6 +587,7 @@ class FraisierConfig:
         self._validate_fraises()
         self._validate_branch_mapping()
         self._validate_notifications()
+        self._validate_hooks()
 
     def _validate_fraises(self) -> None:
         """Validate all fraise configs at load time."""
@@ -617,6 +717,8 @@ class FraisierConfig:
         {
             "slack",
             "discord",
+            "teams",
+            "email",
             "webhook",
             "github_issue",
             "gitlab_issue",
@@ -628,6 +730,8 @@ class FraisierConfig:
     _REQUIRED_FIELDS: ClassVar[dict[str, list[str]]] = {
         "slack": ["webhook_url"],
         "discord": ["webhook_url"],
+        "teams": ["webhook_url"],
+        "email": ["from_email", "to_emails"],
         "webhook": ["url"],
         "github_issue": ["repo"],
         "gitlab_issue": ["repo"],
@@ -709,6 +813,51 @@ class FraisierConfig:
                 )
         if errors:
             raise ValidationError(f"Invalid notification config: {'; '.join(errors)}")
+
+    _VALID_HOOK_TYPES = frozenset({"backup", "audit"})
+
+    _REQUIRED_HOOK_FIELDS: ClassVar[dict[str, list[str]]] = {
+        "backup": ["backup_dir", "database_url"],
+        "audit": ["database_path", "signing_key"],
+    }
+
+    _VALID_HOOK_PHASES = frozenset(
+        {
+            "before_deploy",
+            "after_deploy",
+            "before_rollback",
+            "after_rollback",
+            "on_failure",
+        }
+    )
+
+    def _validate_hooks(self) -> None:
+        """Validate the hooks: section."""
+        hooks = self._config.get("hooks", {})
+        if not hooks:
+            return
+        errors: list[str] = []
+        for phase_key in hooks:
+            if phase_key not in self._VALID_HOOK_PHASES:
+                valid = ", ".join(sorted(self._VALID_HOOK_PHASES))
+                errors.append(f"Unknown hook phase '{phase_key}'. Valid: {valid}")
+                continue
+            for hook_cfg in hooks.get(phase_key, []):
+                if not isinstance(hook_cfg, dict):
+                    continue
+                htype = hook_cfg.get("type", "")
+                if htype not in self._VALID_HOOK_TYPES:
+                    valid = ", ".join(sorted(self._VALID_HOOK_TYPES))
+                    errors.append(f"Unknown hook type '{htype}'. Valid: {valid}")
+                    continue
+                required = self._REQUIRED_HOOK_FIELDS.get(htype, [])
+                errors.extend(
+                    f"Hook '{htype}' missing required field '{req}'"
+                    for req in required
+                    if not hook_cfg.get(req)
+                )
+        if errors:
+            raise ValidationError(f"Invalid hooks config: {'; '.join(errors)}")
 
     @property
     def notifications(self) -> dict[str, Any]:

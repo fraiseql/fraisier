@@ -320,11 +320,14 @@ class TestDeployDaemonCommand:
         mock_request.project = "api"
         mock_parse.return_value = mock_request
 
-        # Mock execution
+        # Mock execution — all attributes must be JSON-serializable
         mock_result = MagicMock()
         mock_result.success = True
+        mock_result.status = "success"
         mock_result.message = "Deployment completed"
         mock_result.deployed_version = "abc123"
+        mock_result.duration_seconds = 1.5
+        mock_result.error_message = None
         mock_execute.return_value = mock_result
 
         # Test with stdin input
@@ -376,9 +379,14 @@ class TestDeployDaemonCommand:
         mock_request.project = "api"  # Set project to match daemon config
         mock_parse.return_value = mock_request
 
-        # Mock execution failure
+        # Mock execution failure — all attributes must be JSON-serializable
         mock_execute.return_value = MagicMock(
-            success=False, error_message="Deployment failed"
+            success=False,
+            status="failed",
+            message=None,
+            deployed_version=None,
+            duration_seconds=0.0,
+            error_message="Deployment failed",
         )
 
         json_input = '{"version": 1, "project": "api"}'

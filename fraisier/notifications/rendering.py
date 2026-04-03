@@ -39,6 +39,14 @@ def render_issue_body(event: DeployEvent) -> str:
     return template.render(**context)
 
 
+def render_email_html(event: DeployEvent) -> str:
+    """Render an HTML email body from a DeployEvent."""
+    template = _env.get_template("email_body.html.j2")
+    context = event.to_dict()
+    context["duration_human"] = _format_duration(event.duration_seconds)
+    return template.render(**context)
+
+
 def render_slack_text(event: DeployEvent) -> str:
     """Render a plain-text summary for Slack/Discord messages."""
     emoji = {"failure": ":x:", "rollback": ":warning:", "success": ":white_check_mark:"}

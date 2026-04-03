@@ -121,6 +121,7 @@ class Strategy(ABC):
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult: ...
 
     @abstractmethod
@@ -131,6 +132,7 @@ class Strategy(ABC):
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult: ...
 
 
@@ -145,6 +147,7 @@ class MigrateStrategy(Strategy):
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         preflight(
             confiture_config,
@@ -159,6 +162,7 @@ class MigrateStrategy(Strategy):
             pre_migrate_verify=pre_migrate_verify,
             require_reversible=not allow_irreversible,
             database_url=database_url,
+            hooks_config=hooks_config,
         )
         return StrategyResult(success=True, migrations_applied=result.steps_applied)
 
@@ -169,12 +173,14 @@ class MigrateStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         result = migrate_down(
             confiture_config,
             migrations_dir=migrations_dir,
             steps=steps,
             database_url=database_url,
+            hooks_config=hooks_config,
         )
         return StrategyResult(
             success=result.success,
@@ -279,6 +285,7 @@ class RebuildStrategy(Strategy):
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         import tempfile
         from urllib.parse import urlparse
@@ -373,6 +380,7 @@ class RebuildStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         return self.execute(
             confiture_config, migrations_dir=migrations_dir, database_url=database_url
@@ -433,6 +441,7 @@ class RestoreMigrateStrategy(Strategy):
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         from fraisier.dbops.operations import create_db, drop_db, terminate_backends
         from fraisier.dbops.restore import (
@@ -502,7 +511,10 @@ class RestoreMigrateStrategy(Strategy):
 
         # Step 8: Migrate up
         result = migrate_up(
-            confiture_config, migrations_dir=migrations_dir, database_url=database_url
+            confiture_config,
+            migrations_dir=migrations_dir,
+            database_url=database_url,
+            hooks_config=hooks_config,
         )
         log.info("Applied %d migrations", result.steps_applied)
 
@@ -524,6 +536,7 @@ class RestoreMigrateStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
         database_url: str | None = None,
+        hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         if self._config.create_template:
             from fraisier.dbops.templates import reset_from_template
@@ -568,6 +581,7 @@ class RestoreMigrateStrategy(Strategy):
             migrations_dir=migrations_dir,
             steps=steps,
             database_url=database_url,
+            hooks_config=hooks_config,
         )
         return StrategyResult(
             success=result.success,

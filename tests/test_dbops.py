@@ -354,6 +354,138 @@ class TestParseConfitureOutput:
         assert classify_error("something unknown") == "unknown"
 
 
+def _has_confiture_hooks():
+    try:
+        from confiture.core.hooks.builtin import BackupHook  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+class TestHookIntegration:
+    """Test migration hook integration with confiture v0.8.22."""
+
+    def test_register_none_config_is_noop(self):
+        from fraisier.dbops.confiture import _register_migration_hooks
+
+        mock_migrator = MagicMock()
+        _register_migration_hooks(mock_migrator, None)
+        mock_migrator.register_hook.assert_not_called()
+
+    def test_register_disabled_hooks_is_noop(self):
+        from fraisier.dbops.confiture import _register_migration_hooks
+
+        mock_migrator = MagicMock()
+        hooks_config = {
+            "backup": {"enabled": False},
+            "audit": {"enabled": False},
+            "slack": {"enabled": False},
+        }
+        _register_migration_hooks(mock_migrator, hooks_config)
+        mock_migrator.register_hook.assert_not_called()
+
+    def test_graceful_fallback_without_confiture_hooks(self):
+        from fraisier.dbops.confiture import _register_migration_hooks
+
+        mock_migrator = MagicMock()
+        hooks_config = {
+            "backup": {
+                "enabled": True,
+                "backup_dir": "/var/backups",
+                "database_url": "postgresql://localhost/mydb",
+            }
+        }
+        # Should not raise even if confiture.core.hooks is unavailable
+        _register_migration_hooks(mock_migrator, hooks_config)
+
+    @pytest.mark.skipif(
+        not _has_confiture_hooks(),
+        reason="confiture >= 0.8.22 hooks not installed",
+    )
+    def test_register_backup_hook(self):
+        from fraisier.dbops.confiture import _register_migration_hooks
+
+        mock_migrator = MagicMock()
+        hooks_config = {
+            "backup": {
+                "enabled": True,
+                "backup_dir": "/var/backups",
+                "database_url": "postgresql://localhost/mydb",
+                "compress": True,
+                "max_backups": 5,
+            }
+        }
+        _register_migration_hooks(mock_migrator, hooks_config)
+
+        mock_migrator.register_hook.assert_called_once()
+        phase = mock_migrator.register_hook.call_args[0][0]
+        assert phase.value == "before_execute"
+
+    @pytest.mark.skipif(
+        not _has_confiture_hooks(),
+        reason="confiture >= 0.8.22 hooks not installed",
+    )
+    def test_register_audit_hook(self):
+        from fraisier.dbops.confiture import _register_migration_hooks
+
+        mock_migrator = MagicMock()
+        hooks_config = {
+            "audit": {
+                "enabled": True,
+                "database_url": "postgresql://localhost/mydb",
+                "signing_key": "secret",
+                "environment": "production",
+            }
+        }
+        _register_migration_hooks(mock_migrator, hooks_config)
+
+        mock_migrator.register_hook.assert_called_once()
+        phase = mock_migrator.register_hook.call_args[0][0]
+        assert phase.value == "after_execute"
+
+    @pytest.mark.skipif(
+        not _has_confiture_hooks(),
+        reason="confiture >= 0.8.22 hooks not installed",
+    )
+    def test_register_slack_hook(self):
+        from fraisier.dbops.confiture import _register_migration_hooks
+
+        mock_migrator = MagicMock()
+        hooks_config = {
+            "slack": {
+                "enabled": True,
+                "webhook_url": "https://hooks.slack.com/test",
+            }
+        }
+        _register_migration_hooks(mock_migrator, hooks_config)
+
+        mock_migrator.register_hook.assert_called_once()
+
+    @pytest.mark.skipif(
+        not _has_confiture_hooks(),
+        reason="confiture >= 0.8.22 hooks not installed",
+    )
+    def test_register_multiple_hooks(self):
+        from fraisier.dbops.confiture import _register_migration_hooks
+
+        mock_migrator = MagicMock()
+        hooks_config = {
+            "backup": {
+                "enabled": True,
+                "backup_dir": "/var/backups",
+                "database_url": "postgresql://localhost/mydb",
+            },
+            "slack": {
+                "enabled": True,
+                "webhook_url": "https://hooks.slack.com/test",
+            },
+        }
+        _register_migration_hooks(mock_migrator, hooks_config)
+
+        assert mock_migrator.register_hook.call_count == 2
+
+
 class TestSchemaHash:
     """Test schema hash computation."""
 

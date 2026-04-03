@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #333; margin: 0; padding: 0; }
+  .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+  .header { padding: 16px; border-radius: 4px 4px 0 0; color: #fff; }
+  .header-failure { background: #dc3545; }
+  .header-rollback { background: #fd7e14; }
+  .header-success { background: #28a745; }
+  .header-rollback_failed { background: #dc3545; }
+  .body { padding: 16px; border: 1px solid #dee2e6; border-top: none; border-radius: 0 0 4px 4px; }
+  .field { margin-bottom: 12px; }
+  .label { font-weight: 600; color: #555; font-size: 13px; text-transform: uppercase; }
+  .value { margin-top: 2px; }
+  .error-box { background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 12px; margin: 12px 0; }
+  .recovery-box { background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; padding: 12px; margin: 12px 0; }
+  code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  .footer { margin-top: 20px; font-size: 12px; color: #999; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header header-{{ event_type }}">
+    <h2 style="margin:0;">Deployment {{ event_type | title }}</h2>
+  </div>
+  <div class="body">
+    <div class="field">
+      <div class="label">Fraise</div>
+      <div class="value"><code>{{ fraise_name }}</code></div>
+    </div>
+    <div class="field">
+      <div class="label">Environment</div>
+      <div class="value"><code>{{ environment }}</code></div>
+    </div>
+    {% if duration_seconds is not none %}
+    <div class="field">
+      <div class="label">Duration</div>
+      <div class="value">{{ duration_human }}</div>
+    </div>
+    {% endif %}
+    {% if old_version %}
+    <div class="field">
+      <div class="label">Previous version</div>
+      <div class="value"><code>{{ old_version }}</code></div>
+    </div>
+    {% endif %}
+    {% if new_version %}
+    <div class="field">
+      <div class="label">New version</div>
+      <div class="value"><code>{{ new_version }}</code></div>
+    </div>
+    {% endif %}
+    {% if error_message %}
+    <div class="error-box">
+      <div class="label">Error</div>
+      <div class="value">{{ error_message }}</div>
+      {% if error_code %}
+      <div style="margin-top:4px;"><code>{{ error_code }}</code></div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if recovery_hint %}
+    <div class="recovery-box">
+      <div class="label">Recovery</div>
+      <div class="value">{{ recovery_hint }}</div>
+    </div>
+    {% endif %}
+    {% if incident_path %}
+    <div class="field">
+      <div class="label">Incident file</div>
+      <div class="value"><code>{{ incident_path }}</code></div>
+    </div>
+    {% endif %}
+  </div>
+  <div class="footer">
+    Sent by fraisier deployment orchestrator &mdash; {{ timestamp }}
+  </div>
+</div>
+</body>
+</html>

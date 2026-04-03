@@ -29,6 +29,36 @@ fraises:
           name: myapp_production
           strategy: migrate
           backup_before_deploy: true
+          hooks:
+            backup:
+              enabled: true
+              backup_dir: /var/backups/fraisier
+              database_url: "${DATABASE_URL}"
+              compress: true
+              max_backups: 10
+            audit:
+              enabled: true
+              database_url: "${DATABASE_URL}"
+              signing_key: "${AUDIT_SIGNING_KEY}"
+              environment: production
+            slack:
+              enabled: true
+              webhook_url: "${SLACK_WEBHOOK_URL}"
+              channel: "#deployments"
+              mention_on_failure: "@engineering"
+            discord:
+              enabled: false
+              webhook_url: "${DISCORD_WEBHOOK_URL}"
+              mention_on_failure: "@engineering"
+            email:
+              enabled: false
+              smtp_server: "smtp.gmail.com"
+              smtp_port: 587
+              smtp_username: "${SMTP_USER}"
+              smtp_password: "${SMTP_PASSWORD}"
+              from_email: "fraisier@yourdomain.com"
+              to_emails: ["team@yourdomain.com", "devops@yourdomain.com"]
+              subject_prefix: "[Production Deploy]"
         health_check:
           url: http://localhost:8000/health
           timeout: 30

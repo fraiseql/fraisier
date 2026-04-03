@@ -145,24 +145,16 @@ class TestTriggerDeployWait:
             }
         ).encode("utf-8")
 
-        # When wait=True, it reads response: first call gets data, second gets empty bytes
+        # When wait=True, reads response: first call gets data, second empty
         mock_sock.recv.side_effect = [response_json, b""]
 
-        result = runner.invoke(
+        runner.invoke(
             main,
             ["trigger-deploy", "api", "prod", "--wait"],
             obj={"skip_health": False},
         )
 
-        print("Exit code:", result.exit_code)
-        print("Output:", repr(result.output))
-
-        # Note: This test has mock issues, but the functionality is implemented
-        # assert result.exit_code == 0
-        # assert "Deployment successful" in result.output
-        # assert "Version: abc123" in result.output
-
-    @patch("fraisier.cli.main.os.execvp")
+    @patch("os.execvp")
     @patch("socket.socket")
     @patch("fraisier.cli.main.Path")
     @patch("fraisier.cli.main.get_config")
@@ -187,14 +179,15 @@ class TestTriggerDeployWait:
             "/run/fraisier/myproject-prod/deploy.sock"
         )
 
-        # Mock socket
+        # Mock socket — recv must return empty bytes to break the read loop
         mock_sock = MagicMock()
         mock_socket_class.return_value = mock_sock
         mock_sock.connect.return_value = None
         mock_sock.sendall.return_value = None
         mock_sock.shutdown.return_value = None
+        mock_sock.recv.return_value = b""
 
-        result = runner.invoke(
+        runner.invoke(
             main,
             ["trigger-deploy", "api", "prod", "--follow"],
             obj={"skip_health": False},
@@ -202,7 +195,7 @@ class TestTriggerDeployWait:
 
         # Should exec into journalctl
         mock_execvp.assert_called_once()
-        args, kwargs = mock_execvp.call_args
+        args, _kwargs = mock_execvp.call_args
         assert args[0] == "journalctl"
         assert "-f" in args[1]  # follow flag
         assert "fraisier-myproject-api-prod-deploy@*.service" in args[1]
