@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import shlex
 import subprocess
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -72,12 +73,14 @@ class SSHRunner:
         port: int = 22,
         key_path: str | None = None,
         strict_host_key: bool = True,
+        use_sudo: bool = False,
     ) -> None:
         self.host = host
         self.user = user
         self.port = port
         self.key_path = key_path
         self.strict_host_key = strict_host_key
+        self.use_sudo = use_sudo
 
     def _build_ssh_options(self) -> list[str]:
         """Build shared SSH/SCP options (host-key policy, batch mode, identity)."""
@@ -105,22 +108,34 @@ class SSHRunner:
     def upload(
         self, local_path: Path, remote_path: str
     ) -> subprocess.CompletedProcess[str]:
-        """Upload a single file to the remote host using scp."""
+        """Upload a single file to the remote host using scp.
+
+        When *use_sudo* is enabled, uploads to a temporary path first and
+        then moves the file into place with ``sudo mv``, since scp itself
+        cannot write to directories owned by root.
+        """
+        dest = remote_path
+        if self.use_sudo:
+            dest = f"/tmp/.fraisier-upload-{PurePosixPath(remote_path).name}"
+
         scp_cmd = [
             "scp",
             *self._build_ssh_options(),
             "-P",
             str(self.port),
             str(local_path),
-            f"{self.user}@{self.host}:{remote_path}",
+            f"{self.user}@{self.host}:{dest}",
         ]
-        return subprocess.run(
+        result = subprocess.run(
             scp_cmd,
             capture_output=True,
             text=True,
             timeout=300,
             check=True,
         )
+        if self.use_sudo:
+            self.run(["mv", dest, remote_path])
+        return result
 
     def upload_tree(self, local_dir: Path, remote_dir: str) -> None:
         """Upload a directory tree to the remote host via tar piped over SSH."""
@@ -133,6 +148,8 @@ class SSHRunner:
             f"mkdir -p {shlex.quote(remote_dir)}"
             f" && tar xzf - -C {shlex.quote(remote_dir)}"
         )
+        if self.use_sudo:
+            remote_cmd = f"sudo sh -c {shlex.quote(remote_cmd)}"
         ssh_cmd = [*self._build_ssh_prefix(), remote_cmd]
         ssh_result = subprocess.run(
             ssh_cmd,
@@ -173,6 +190,8 @@ class SSHRunner:
         remote_cmd = f"{exports} {remote_cmd}"
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
+        if self.use_sudo:
+            remote_cmd = f"sudo sh -c {shlex.quote(remote_cmd)}"
 
         ssh_cmd = [*self._build_ssh_prefix(), remote_cmd]
         return subprocess.run(

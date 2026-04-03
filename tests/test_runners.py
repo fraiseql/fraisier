@@ -279,6 +279,115 @@ class TestSSHRunner:
                 runner.upload_tree(src, "/tmp/remote")
 
 
+class TestSSHRunnerSudo:
+    """Tests for SSHRunner with use_sudo=True."""
+
+    def test_run_wraps_command_in_sudo(self):
+        runner = SSHRunner(host="h", user="u", use_sudo=True)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["useradd", "--system", "deploy"])
+
+        remote = mock_run.call_args[0][0][-1]
+        assert remote.startswith("sudo sh -c ")
+        assert "useradd" in remote
+        assert "PATH=" in remote
+
+    def test_run_without_sudo_does_not_wrap(self):
+        runner = SSHRunner(host="h", user="u", use_sudo=False)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["useradd", "--system", "deploy"])
+
+        remote = mock_run.call_args[0][0][-1]
+        assert not remote.startswith("sudo ")
+
+    def test_run_sudo_with_cwd(self):
+        runner = SSHRunner(host="h", user="u", use_sudo=True)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["ls"], cwd="/opt/app")
+
+        remote = mock_run.call_args[0][0][-1]
+        assert remote.startswith("sudo sh -c ")
+        assert "cd" in remote
+        assert "/opt/app" in remote
+
+    def test_upload_sudo_uses_temp_path(self, tmp_path):
+        runner = SSHRunner(host="h", user="u", use_sudo=True)
+        local_file = tmp_path / "fraises.yaml"
+        local_file.write_text("name: test\n")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.upload(local_file, "/opt/fraisier/fraises.yaml")
+
+        # First call: scp to temp path
+        scp_call = mock_run.call_args_list[0][0][0]
+        assert scp_call[0] == "scp"
+        assert any("/tmp/.fraisier-upload-fraises.yaml" in str(a) for a in scp_call)
+        # Second call: sudo mv to final path
+        mv_call = mock_run.call_args_list[1][0][0]
+        assert mv_call[0] == "ssh"
+        remote_cmd = mv_call[-1]
+        assert "sudo sh -c" in remote_cmd
+        assert "mv" in remote_cmd
+        assert "/opt/fraisier/fraises.yaml" in remote_cmd
+
+    def test_upload_no_sudo_scps_directly(self, tmp_path):
+        runner = SSHRunner(host="h", user="u", use_sudo=False)
+        local_file = tmp_path / "fraises.yaml"
+        local_file.write_text("name: test\n")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.upload(local_file, "/opt/fraisier/fraises.yaml")
+
+        # Only one call: scp directly to target
+        assert mock_run.call_count == 1
+        scp_call = mock_run.call_args[0][0]
+        assert "u@h:/opt/fraisier/fraises.yaml" in scp_call
+
+    def test_upload_tree_sudo_wraps_remote_cmd(self, tmp_path):
+        runner = SSHRunner(host="h", user="u", use_sudo=True)
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "file.txt").write_text("hello")
+
+        fake_ssh = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+
+        with (
+            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = mock_proc
+            mock_run.return_value = fake_ssh
+
+            runner.upload_tree(src, "/tmp/remote")
+
+        ssh_cmd = mock_run.call_args[0][0]
+        remote_cmd = ssh_cmd[-1]
+        assert remote_cmd.startswith("sudo sh -c ")
+        assert "mkdir -p" in remote_cmd
+        assert "tar xzf" in remote_cmd
+
+
 class TestRunnerFromConfig:
     """Tests for runner_from_config factory."""
 

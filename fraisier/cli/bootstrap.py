@@ -35,6 +35,11 @@ from .main import main
     help="Target server hostname (overrides environments.<env>.server in fraises.yaml)",
 )
 @click.option("--dry-run", is_flag=True, help="Print steps without executing anything")
+@click.option(
+    "--sudo",
+    is_flag=True,
+    help="Prefix remote commands with sudo (for non-root SSH users)",
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.pass_context
@@ -46,6 +51,7 @@ def bootstrap(
     ssh_key: str | None,
     server: str | None,
     dry_run: bool,
+    sudo: bool,
     yes: bool,
     verbose: bool,
 ) -> None:
@@ -61,6 +67,7 @@ def bootstrap(
         fraisier bootstrap --environment staging --dry-run
         fraisier bootstrap --environment production --server myserver.com
         fraisier bootstrap -e production --ssh-user deployer --ssh-key ~/.ssh/id_ed25519
+        fraisier bootstrap -e production --ssh-user lionel --sudo
     """
     from fraisier.bootstrap import ServerBootstrapper
     from fraisier.runners import SSHRunner
@@ -91,6 +98,7 @@ def bootstrap(
         user=resolved_user,
         port=resolved_port,
         key_path=resolved_key,
+        use_sudo=sudo,
     )
 
     console.print(

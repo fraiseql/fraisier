@@ -288,6 +288,75 @@ class TestBootstrapOutput:
         )
 
 
+class TestBootstrapSudoFlag:
+    def test_help_lists_sudo(self, runner):
+        result = runner.invoke(main, ["bootstrap", "--help"])
+        assert "--sudo" in result.output
+
+    def test_sudo_flag_passed_to_runner(self, runner, config_file_with_server):
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg.use_sudo)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--sudo",
+                    "--yes",
+                ],
+            )
+
+        assert captured == [True]
+
+    def test_no_sudo_flag_defaults_false(self, runner, config_file_with_server):
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg.use_sudo)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--yes",
+                ],
+            )
+
+        assert captured == [False]
+
+
 class TestBootstrapSSHConfigResolution:
     """Tests that bootstrap resolves SSH parameters from ~/.ssh/config."""
 
