@@ -793,6 +793,63 @@ scaffold:
         assert "ExecStart=/usr/local/bin/fraiseql-cli serve --port 4000" in content
         assert "uvicorn" not in content
 
+    def test_relative_exec_command_gets_app_path_prepended(self, tmp_path):
+        """Relative exec_command is made absolute with app_path (#90)."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  myapp:
+    type: api
+    exec_command: .venv/bin/uvicorn myapp:app --host 0.0.0.0 --port 8000
+    environments:
+      production:
+        app_path: /var/www/myapp
+        worker_count: 1
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc = tmp_path / "output" / "systemd" / "tp_myapp_production.service"
+        content = svc.read_text()
+        assert (
+            "ExecStart=/var/www/myapp/.venv/bin/uvicorn myapp:app"
+            " --host 0.0.0.0 --port 8000" in content
+        )
+
+    def test_absolute_exec_command_unchanged(self, tmp_path):
+        """Absolute exec_command is not modified."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  myapp:
+    type: api
+    exec_command: /usr/local/bin/custom-server --port 8000
+    environments:
+      production:
+        app_path: /var/www/myapp
+        worker_count: 1
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc = tmp_path / "output" / "systemd" / "tp_myapp_production.service"
+        content = svc.read_text()
+        assert "ExecStart=/usr/local/bin/custom-server --port 8000" in content
+
     def test_defaults_when_no_app_path_or_health_check(self, tmp_path):
         """Falls back to /opt/<name> and port 8000 when not configured."""
         config = self._make_config(
