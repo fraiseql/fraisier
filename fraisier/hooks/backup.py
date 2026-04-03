@@ -41,10 +41,7 @@ class BackupHook:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        filename = (
-            f"{context.fraise_name}_{context.environment}"
-            f"_{timestamp}.sql"
-        )
+        filename = f"{context.fraise_name}_{context.environment}_{timestamp}.sql"
         if self.compress:
             filename += ".gz"
 

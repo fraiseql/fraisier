@@ -135,19 +135,23 @@ class TeamsNotifier:
         ]
 
         if event.error_message:
-            body.append({
-                "type": "TextBlock",
-                "text": event.error_message,
-                "wrap": True,
-                "color": "attention",
-            })
+            body.append(
+                {
+                    "type": "TextBlock",
+                    "text": event.error_message,
+                    "wrap": True,
+                    "color": "attention",
+                }
+            )
 
         is_failure = event.event_type in ("failure", "rollback_failed")
         if self.mention_on_failure and is_failure:
-            body.append({
-                "type": "TextBlock",
-                "text": f"cc {self.mention_on_failure}",
-            })
+            body.append(
+                {
+                    "type": "TextBlock",
+                    "text": f"cc {self.mention_on_failure}",
+                }
+            )
 
         card = {
             "type": "message",

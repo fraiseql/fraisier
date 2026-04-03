@@ -61,9 +61,7 @@ class HookRunner:
     """
 
     def __init__(self) -> None:
-        self._hooks: dict[HookPhase, list[Hook]] = {
-            phase: [] for phase in HookPhase
-        }
+        self._hooks: dict[HookPhase, list[Hook]] = {phase: [] for phase in HookPhase}
 
     def register(self, phase: HookPhase, hook: Hook) -> None:
         """Register a hook for a lifecycle phase."""
@@ -82,8 +80,7 @@ class HookRunner:
                 results.append(result)
                 if not result.success and phase == HookPhase.BEFORE_DEPLOY:
                     raise HookAbortError(
-                        f"Pre-deploy hook '{hook.name}' failed: "
-                        f"{result.error}"
+                        f"Pre-deploy hook '{hook.name}' failed: {result.error}"
                     )
             except HookAbortError:
                 raise

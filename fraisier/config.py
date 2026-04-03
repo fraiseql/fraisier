@@ -29,6 +29,7 @@ _GIT_URL_RE = re.compile(
 _VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
 
+
 # Standard locations to search for fraises.yaml configuration file
 def _config_search_locations() -> list[Path]:
     """Return config search locations, evaluated lazily so CWD is current."""
@@ -839,9 +840,7 @@ class FraisierConfig:
         for phase_key in hooks:
             if phase_key not in self._VALID_HOOK_PHASES:
                 valid = ", ".join(sorted(self._VALID_HOOK_PHASES))
-                errors.append(
-                    f"Unknown hook phase '{phase_key}'. Valid: {valid}"
-                )
+                errors.append(f"Unknown hook phase '{phase_key}'. Valid: {valid}")
                 continue
             for hook_cfg in hooks.get(phase_key, []):
                 if not isinstance(hook_cfg, dict):
@@ -849,9 +848,7 @@ class FraisierConfig:
                 htype = hook_cfg.get("type", "")
                 if htype not in self._VALID_HOOK_TYPES:
                     valid = ", ".join(sorted(self._VALID_HOOK_TYPES))
-                    errors.append(
-                        f"Unknown hook type '{htype}'. Valid: {valid}"
-                    )
+                    errors.append(f"Unknown hook type '{htype}'. Valid: {valid}")
                     continue
                 required = self._REQUIRED_HOOK_FIELDS.get(htype, [])
                 errors.extend(
@@ -860,9 +857,7 @@ class FraisierConfig:
                     if not hook_cfg.get(req)
                 )
         if errors:
-            raise ValidationError(
-                f"Invalid hooks config: {'; '.join(errors)}"
-            )
+            raise ValidationError(f"Invalid hooks config: {'; '.join(errors)}")
 
     @property
     def notifications(self) -> dict[str, Any]:

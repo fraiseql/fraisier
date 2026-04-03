@@ -127,9 +127,7 @@ def _register_migration_hooks(
             WebhookNotificationHook,
         )
     except ImportError:
-        log.warning(
-            "Confiture hooks not available (requires confiture >= 0.8.22)"
-        )
+        log.warning("Confiture hooks not available (requires confiture >= 0.8.22)")
         return
 
     _HOOK_BUILDERS: dict[str, tuple] = {
@@ -189,9 +187,7 @@ def _register_migration_hooks(
             migrator.register_hook(phase, hook)
             log.info("Registered %s hook", hook_key)
         except Exception:
-            log.warning(
-                "Failed to register %s hook", hook_key, exc_info=True
-            )
+            log.warning("Failed to register %s hook", hook_key, exc_info=True)
 
 
 def preflight(

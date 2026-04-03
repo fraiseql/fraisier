@@ -350,9 +350,7 @@ class TestHookDispatcher:
         runner = build_hook_runner(config)
         assert runner.is_configured
         assert len(runner._hooks[HookPhase.BEFORE_DEPLOY]) == 1
-        assert isinstance(
-            runner._hooks[HookPhase.BEFORE_DEPLOY][0], BackupHook
-        )
+        assert isinstance(runner._hooks[HookPhase.BEFORE_DEPLOY][0], BackupHook)
 
     def test_audit_hook_registered(self):
         config = {
@@ -368,9 +366,7 @@ class TestHookDispatcher:
         }
         runner = build_hook_runner(config)
         assert len(runner._hooks[HookPhase.AFTER_DEPLOY]) == 1
-        assert isinstance(
-            runner._hooks[HookPhase.AFTER_DEPLOY][0], AuditHook
-        )
+        assert isinstance(runner._hooks[HookPhase.AFTER_DEPLOY][0], AuditHook)
 
     def test_multiple_phases(self):
         config = {
@@ -404,11 +400,7 @@ class TestHookDispatcher:
         assert len(runner._hooks[HookPhase.ON_FAILURE]) == 1
 
     def test_unknown_hook_type_raises(self):
-        config = {
-            "hooks": {
-                "before_deploy": [{"type": "unknown_hook"}]
-            }
-        }
+        config = {"hooks": {"before_deploy": [{"type": "unknown_hook"}]}}
         with pytest.raises(ValueError, match="unknown_hook"):
             build_hook_runner(config)
 

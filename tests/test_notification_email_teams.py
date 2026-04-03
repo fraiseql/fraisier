@@ -201,7 +201,8 @@ class TestTeamsNotifier:
         content = mock_post.call_args[0][1]["attachments"][0]["content"]
         body = content["body"]
         error_blocks = [
-            b for b in body
+            b
+            for b in body
             if b.get("color") == "attention" and b["type"] == "TextBlock"
         ]
         assert any("Health check failed" in b["text"] for b in error_blocks)
