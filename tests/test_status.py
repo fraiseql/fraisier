@@ -2,6 +2,7 @@
 
 import json
 import threading
+from unittest.mock import patch
 
 from fraisier.status import DeploymentStatusFile, read_status, write_status
 
@@ -255,3 +256,62 @@ class TestFailedStatusDetails:
         assert loaded is not None
         assert loaded.last_error == last_error
         assert loaded.last_error["timestamp"] == "2026-03-22T10:05:00+00:00"
+
+
+class TestComputeDeploymentState:
+    """Test _compute_deployment_state function from CLI."""
+
+    @patch("fraisier.cli.main.elapsed_seconds")
+    @patch("fraisier.cli.main.read_status")
+    def test_deploying_state_with_elapsed_time(self, mock_read_status, mock_elapsed):
+        """Show deploying state with elapsed time."""
+        # Mock status file with deploying state
+        mock_status = DeploymentStatusFile(
+            fraise_name="myfraise",
+            environment="production",
+            state="deploying",
+            started_at="2026-04-03T10:00:00+00:00",
+        )
+        mock_read_status.return_value = mock_status
+        mock_elapsed.return_value = 23.0
+
+        from fraisier.cli.main import _compute_deployment_state
+
+        result = _compute_deployment_state("myfraise", "current_ver", "latest_ver")
+        assert result == "[blue]deploying (23s)[/blue]"
+
+    @patch("fraisier.cli.main.read_status")
+    def test_pending_state_display(self, mock_read_status):
+        """Show pending state."""
+        # Mock status file with pending state
+        mock_status = DeploymentStatusFile(
+            fraise_name="myfraise",
+            environment="production",
+            state="pending",
+        )
+        mock_read_status.return_value = mock_status
+
+        from fraisier.cli.main import _compute_deployment_state
+
+        result = _compute_deployment_state("myfraise", "current_ver", "latest_ver")
+        assert result == "[yellow]pending[/yellow]"
+
+    @patch("fraisier.cli.main.read_status")
+    def test_failed_state_display(self, mock_read_status):
+        """Show failed state."""
+        # Mock status file with failed state
+        mock_status = DeploymentStatusFile(
+            fraise_name="myfraise",
+            environment="production",
+            state="failed",
+            last_error={
+                "message": "Connection timeout",
+                "timestamp": "2026-04-03T10:05:00+00:00",
+            },
+        )
+        mock_read_status.return_value = mock_status
+
+        from fraisier.cli.main import _compute_deployment_state
+
+        result = _compute_deployment_state("myfraise", "current_ver", "latest_ver")
+        assert result == "[red]failed[/red]"

@@ -83,7 +83,7 @@ def _print_dry_run(
     console.print(Panel(table, title="[cyan]DRY RUN[/cyan]", expand=False))
 
 
-def _get_deployer(fraise_type: str, fraise_config: dict, job: str | None = None):
+def _get_deployer(fraise_type: str | None, fraise_config: dict, job: str | None = None):
     """Get appropriate deployer for fraise type.
 
     When the fraise_config contains an ``ssh`` key, the deployer is

@@ -110,6 +110,7 @@ ignore = [
     "PLC0415",  # Lazy imports are intentional for optional deps
     "PLR0912",  # Many branches in scaffold.renderer.render() is necessary
     "PLR0913",  # Many args needed for DB/provider methods
+    "PLR0915",  # Many statements in execute_deployment_request is necessary
     "PLW0603",  # Global singletons are intentional
     "ARG002",   # Abstract/override method args unused by design
     "PLR2004",  # Magic values are acceptable in this codebase

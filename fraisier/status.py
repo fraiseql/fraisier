@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,7 @@ def _validate_fraise_name(name: str) -> None:
 class DeploymentStatusFile:
     """Deployment status as a state machine.
 
-    States: idle -> deploying -> success | failed
+    States: idle -> pending -> deploying -> success | failed
     """
 
     fraise_name: str
@@ -101,3 +102,51 @@ def read_status(
 
     data = json.loads(path.read_text())
     return DeploymentStatusFile(**data)
+
+
+def elapsed_seconds(status: DeploymentStatusFile) -> float | None:
+    """Compute elapsed seconds since deployment started.
+
+    Args:
+        status: The deployment status file.
+
+    Returns:
+        Seconds elapsed since started_at, or None if not started or invalid.
+    """
+    if not status.started_at:
+        return None
+
+    try:
+        # Parse ISO 8601 timestamp (assume UTC)
+        import datetime
+
+        if status.started_at.endswith("Z"):
+            started_dt = datetime.datetime.fromisoformat(
+                status.started_at[:-1]
+            ).replace(tzinfo=datetime.UTC)
+        else:
+            started_dt = datetime.datetime.fromisoformat(status.started_at)
+        started_ts = started_dt.timestamp()
+        return time.time() - started_ts
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+    try:
+        # Parse ISO 8601 timestamp (assume UTC)
+        # Format: 2026-04-03T10:00:00+00:00 or 2026-04-03T10:00:00Z
+        if status.started_at.endswith("Z"):
+            started_ts = time.mktime(
+                time.strptime(status.started_at[:-1], "%Y-%m-%dT%H:%M:%S")
+            )
+        else:
+            # Remove timezone offset for simplicity (assume UTC)
+            started_str = (
+                status.started_at.split("+")[0].split("-")[-1]
+                if "+" in status.started_at
+                else status.started_at
+            )
+            started_ts = time.mktime(time.strptime(started_str, "%Y-%m-%dT%H:%M:%S"))
+
+        return time.time() - started_ts
+    except (ValueError, TypeError):
+        return None

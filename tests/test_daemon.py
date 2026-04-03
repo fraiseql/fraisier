@@ -105,11 +105,12 @@ class TestDeploymentRequest:
 class TestExecuteDeploymentRequest:
     """Tests for execute_deployment_request function."""
 
+    @patch("fraisier.daemon.write_status")
     @patch("fraisier.locking.deployment_lock")
     @patch("fraisier.daemon.get_config")
     @patch("fraisier.daemon._get_deployer")
     def test_execute_successful_deployment(
-        self, mock_get_deployer, mock_get_config, mock_lock
+        self, mock_get_deployer, mock_get_config, mock_lock, mock_write_status
     ):
         """Execute deployment request successfully."""
         # Mock config
@@ -148,8 +149,9 @@ class TestExecuteDeploymentRequest:
         assert result.status == "success"
         mock_deployer.execute.assert_called_once()
 
+    @patch("fraisier.daemon.write_status")
     @patch("fraisier.daemon.get_config")
-    def test_execute_unknown_project(self, mock_get_config):
+    def test_execute_unknown_project(self, mock_get_config, mock_write_status):
         """Execute deployment for unknown project fails with diagnostic."""
         mock_config = MagicMock()
         mock_config.get_fraise_environment.return_value = None
@@ -174,8 +176,9 @@ class TestExecuteDeploymentRequest:
         assert "/opt/fraisier/fraises.yaml" in result.error_message
         assert "Available projects: api, web, worker" in result.error_message
 
+    @patch("fraisier.daemon.write_status")
     @patch("fraisier.daemon.get_config")
-    def test_execute_config_not_found(self, mock_get_config):
+    def test_execute_config_not_found(self, mock_get_config, mock_write_status):
         """Execute deployment when config file not found shows diagnostic."""
         paths = [
             "/tmp/test/fraises.yaml",
@@ -203,11 +206,12 @@ class TestExecuteDeploymentRequest:
         assert "Searched locations:" in result.error_message
         assert "systemd" in result.error_message
 
+    @patch("fraisier.daemon.write_status")
     @patch("fraisier.locking.deployment_lock")
     @patch("fraisier.daemon.get_config")
     @patch("fraisier.daemon._get_deployer")
     def test_execute_force_deployment(
-        self, mock_get_deployer, mock_get_config, mock_lock
+        self, mock_get_deployer, mock_get_config, mock_lock, mock_write_status
     ):
         """Execute deployment when forced even if not needed."""
         # Mock config
@@ -244,6 +248,64 @@ class TestExecuteDeploymentRequest:
 
         assert result.success is True
         mock_deployer.execute.assert_called_once()
+
+    @patch("fraisier.daemon.write_status")
+    @patch("fraisier.locking.deployment_lock")
+    @patch("fraisier.daemon.get_config")
+    @patch("fraisier.daemon._get_deployer")
+    def test_execute_writes_status_files(
+        self, mock_get_deployer, mock_get_config, mock_lock, mock_write_status
+    ):
+        """Execute deployment writes status files for deploying/success states."""
+        # Mock config
+        mock_config = MagicMock()
+        mock_config.get_fraise_environment.return_value = {
+            "type": "api",
+            "app_path": "/var/www/api",
+        }
+        mock_get_config.return_value = mock_config
+
+        # Mock deployer
+        mock_deployer = MagicMock()
+        mock_deployer.is_deployment_needed.return_value = True
+        mock_deployer.execute.return_value = MagicMock(
+            success=True,
+            status=MagicMock(value="success"),
+            new_version="abc123",
+            duration_seconds=30.0,
+        )
+        mock_get_deployer.return_value = mock_deployer
+
+        request = DeploymentRequest(
+            version=1,
+            project="api",
+            environment="development",
+            branch="dev",
+            timestamp="2026-04-02T11:15:23Z",
+            triggered_by="webhook",
+            options={},
+            metadata={},
+        )
+
+        execute_deployment_request(request)
+
+        # Check that write_status was called twice: deploying then success
+        assert mock_write_status.call_count == 2
+
+        # Check first call: deploying state
+        deploying_call = mock_write_status.call_args_list[0]
+        status_arg = deploying_call[0][0]  # First positional arg
+        assert status_arg.fraise_name == "api"
+        assert status_arg.state == "deploying"
+        assert status_arg.started_at is not None
+
+        # Check second call: success state
+        success_call = mock_write_status.call_args_list[1]
+        status_arg = success_call[0][0]
+        assert status_arg.fraise_name == "api"
+        assert status_arg.state == "success"
+        assert status_arg.finished_at is not None
+        assert status_arg.version == "abc123"
 
 
 class TestDeployDaemonCommand:

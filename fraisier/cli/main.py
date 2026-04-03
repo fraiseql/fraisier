@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import socket
+import time
 from pathlib import Path
 
 import click
@@ -10,6 +12,7 @@ from rich.table import Table
 from rich.tree import Tree
 
 from fraisier.config import get_config
+from fraisier.status import elapsed_seconds, read_status
 
 from ._helpers import _get_deployer, console
 
@@ -152,15 +155,38 @@ def list(ctx: click.Context, flat: bool) -> None:
 @main.command()
 @click.argument("fraise", required=False, default=None)
 @click.argument("environment", required=False, default=None)
+@click.option(
+    "--server",
+    default=None,
+    help="Filter by server hostname (default: current hostname)",
+)
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    default=False,
+    help="Show fraises for all servers, not just the current one",
+)
 @click.pass_context
-def status(ctx: click.Context, fraise: str | None, environment: str | None) -> None:
+def status(
+    ctx: click.Context,
+    fraise: str | None,
+    environment: str | None,
+    server: str | None,
+    show_all: bool,
+) -> None:
     """Check status of fraise(s).
 
     Shows deployment status and health.
 
+    In global view, output is filtered to environments whose server field
+    matches the current hostname. Use --all to show all servers.
+
     \b
     Examples:
-        fraisier status                        # Global view of all fraises
+        fraisier status                        # Global view filtered to current server
+        fraisier status --all                  # Show fraises for all servers
+        fraisier status --server printoptim.io # Show fraises for a specific server
         fraisier status my_api production      # Single fraise view
     """
     config = ctx.obj["config"]
@@ -175,15 +201,43 @@ def status(ctx: click.Context, fraise: str | None, environment: str | None) -> N
 
     # Global view: show all fraises/environments in a table
     if fraise is None:
-        _show_global_status(config)
+        if show_all:
+            server_filter = None
+        elif server is not None:
+            server_filter = server
+        else:
+            server_filter = socket.gethostname()
+        _show_global_status(config, server_filter=server_filter)
         return
 
     # Single fraise view: existing behavior
     _show_single_status(config, fraise, environment)
 
 
-def _compute_status_string(current: str | None, latest: str | None) -> str:
-    """Compute deployment status string based on versions."""
+def _compute_deployment_state(
+    fraise_name: str, current: str | None, latest: str | None
+) -> str:
+    """Compute deployment state string, checking status file first."""
+    # Check status file for active deployment states
+    status = read_status(fraise_name)
+    if status:
+        if status.state == "deploying":
+            elapsed = elapsed_seconds(status)
+            if elapsed is not None:
+                return f"[blue]deploying ({int(elapsed)}s)[/blue]"
+            return "[blue]deploying[/blue]"
+        elif status.state == "pending":
+            return "[yellow]pending[/yellow]"
+        elif status.state == "failed":
+            return "[red]failed[/red]"
+        elif status.state in ("idle", "success"):
+            # If status file shows idle/success, check if versions match
+            if current == latest and current is not None:
+                return "[green]idle ✓[/green]"
+            elif current is not None and latest is not None:
+                return "[yellow]out-of-date[/yellow]"
+
+    # Fall back to version comparison when no status file or unknown state
     if current == latest and current is not None:
         return "[green]deployed ✓[/green]"
     if current is None or latest is None:
@@ -204,15 +258,23 @@ def _compute_health_string(fraise_config: dict, deployer) -> str:
     return "[green]healthy ✓[/green]" if health_ok else "[red]unhealthy[/red]"
 
 
-def _show_global_status(config) -> None:
-    """Display deployment status table for all fraises/environments."""
+def _show_global_status(config, server_filter: str | None = None) -> None:
+    """Display deployment status table for all fraises/environments.
+
+    When *server_filter* is set, only environments whose ``server`` field
+    matches that hostname are shown.
+    """
     from fraisier.database import get_db
 
     if config is None:
         console.print("[yellow]No configuration loaded[/yellow]")
         return
 
-    table = Table(title="[bold]Deployment Status[/bold]", expand=True)
+    title = "[bold]Deployment Status[/bold]"
+    if server_filter is not None:
+        title = f"[bold]Deployment Status[/bold] — {server_filter}"
+
+    table = Table(title=title, expand=True)
     table.add_column("Fraise", style="cyan", min_width=15)
     table.add_column("Environment", style="magenta", min_width=15)
     table.add_column("Deployed", style="dim", min_width=10)
@@ -228,6 +290,12 @@ def _show_global_status(config) -> None:
     }
 
     deployments = config.list_all_deployments()
+
+    # Filter by server when requested
+    if server_filter is not None:
+        allowed_envs = set(config.get_environments_for_server(server_filter))
+        deployments = [d for d in deployments if d["environment"] in allowed_envs]
+
     if not deployments:
         console.print("[yellow]No fraises configured[/yellow]")
         return
@@ -268,7 +336,7 @@ def _show_global_status(config) -> None:
 
             current = deployer.get_current_version()
             latest = deployer.get_latest_version()
-            status_str = _compute_status_string(current, latest)
+            status_str = _compute_deployment_state(fraise_name, current, latest)
             health_str = _compute_health_string(fraise_config, deployer)
 
             # Get deployed timestamp from DB
@@ -341,12 +409,9 @@ def _show_single_status(config, fraise: str, environment: str) -> None:
             )
             console.print(f"[bold]Health Check:[/bold] {health_status}")
 
-            # Check if deployment is needed
-            needs_deployment = deployer.is_deployment_needed()
-            deployment_status = (
-                "[yellow]needs update[/yellow]"
-                if needs_deployment
-                else "[green]up to date[/green]"
+            # Show deployment state
+            deployment_status = _compute_deployment_state(
+                fraise, current_version, latest_version
             )
             console.print(f"[bold]Status:[/bold] {deployment_status}")
 

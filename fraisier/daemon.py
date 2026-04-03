@@ -9,11 +9,13 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fraisier.config import CONFIG_SEARCH_LOCATIONS, get_config
 from fraisier.logging import get_contextual_logger
+from fraisier.status import DeploymentStatusFile, write_status
 
 logger = get_contextual_logger("fraisier.daemon")
 
@@ -205,12 +207,16 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult: 
                 message="Already up to date",
                 deployed_version=current_version,
             )
-            return DeploymentResult(
-                success=True,
-                status="skipped",
-                message="Already up to date",
-                deployed_version=deployer.get_current_version(),
-            )
+
+        # Write deploying status before starting
+        started_at = datetime.now().isoformat()
+        deploying_status = DeploymentStatusFile(
+            fraise_name=request.project,
+            environment=request.environment,
+            state="deploying",
+            started_at=started_at,
+        )
+        write_status(deploying_status)
 
         # Execute deployment with lock
         from fraisier.locking import deployment_lock
@@ -227,6 +233,19 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult: 
             duration_seconds=result.duration_seconds,
             error_message=result.error_message if not result.success else None,
         )
+
+        # Write success status
+        finished_at = datetime.now().isoformat()
+        success_status = DeploymentStatusFile(
+            fraise_name=request.project,
+            environment=request.environment,
+            state="success",
+            version=result.new_version,
+            commit_sha=getattr(result, "commit_sha", None),
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        write_status(success_status)
 
         logger.info(
             "Deployment completed",
@@ -254,6 +273,23 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult: 
         )
 
     except Exception as e:
+        # Write failed status if deployment was started
+        if "started_at" in locals():
+            finished_at = datetime.now().isoformat()
+            failed_status = DeploymentStatusFile(
+                fraise_name=request.project,
+                environment=request.environment,
+                state="failed",
+                started_at=started_at,
+                finished_at=finished_at,
+                error_message=str(e),
+                last_error={
+                    "message": str(e),
+                    "timestamp": finished_at,
+                },
+            )
+            write_status(failed_status)
+
         logger.error(
             "Deployment failed",
             event="deployment_failed",
