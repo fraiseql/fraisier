@@ -76,6 +76,10 @@ class TestBootstrapHelp:
         result = runner.invoke(main, ["bootstrap", "--help"])
         assert "--ssh-user" in result.output
 
+    def test_help_lists_ssh_port(self, runner):
+        result = runner.invoke(main, ["bootstrap", "--help"])
+        assert "--ssh-port" in result.output
+
 
 class TestBootstrapMissingServer:
     def test_error_when_server_not_configured(self, runner, config_file_no_server):
@@ -282,3 +286,119 @@ class TestBootstrapOutput:
         assert (
             "--environment" in result.output or "environment" in result.output.lower()
         )
+
+
+class TestBootstrapSSHConfigResolution:
+    """Tests that bootstrap resolves SSH parameters from ~/.ssh/config."""
+
+    def _capture_runner(self, config_file, cli_args, ssh_host_config=None):
+        """Invoke bootstrap and capture the SSHRunner passed to ServerBootstrapper."""
+        from fraisier.ssh_config import SSHHostConfig
+
+        if ssh_host_config is None:
+            ssh_host_config = SSHHostConfig()
+
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        _ssh_path = "fraisier.ssh_config.resolve_ssh_config"
+        with (
+            patch(_bs_path, side_effect=fake_bootstrapper),
+            patch(_ssh_path, return_value=ssh_host_config),
+        ):
+            cli_runner = CliRunner()
+            result = cli_runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--yes",
+                    *cli_args,
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert len(captured) == 1
+        return captured[0]
+
+    def test_defaults_without_ssh_config(self, config_file_with_server):
+        runner = self._capture_runner(config_file_with_server, [])
+        assert runner.user == "root"
+        assert runner.port == 22
+        assert runner.key_path is None
+
+    def test_ssh_config_provides_port(self, config_file_with_server):
+        from fraisier.ssh_config import SSHHostConfig
+
+        cfg = SSHHostConfig(port=2222)
+        runner = self._capture_runner(config_file_with_server, [], ssh_host_config=cfg)
+        assert runner.port == 2222
+
+    def test_ssh_config_provides_user(self, config_file_with_server):
+        from fraisier.ssh_config import SSHHostConfig
+
+        cfg = SSHHostConfig(user="deployer")
+        runner = self._capture_runner(config_file_with_server, [], ssh_host_config=cfg)
+        assert runner.user == "deployer"
+
+    def test_ssh_config_provides_identity_file(self, config_file_with_server):
+        from fraisier.ssh_config import SSHHostConfig
+
+        cfg = SSHHostConfig(identity_file="/home/user/.ssh/deploy_key")
+        runner = self._capture_runner(config_file_with_server, [], ssh_host_config=cfg)
+        assert runner.key_path == "/home/user/.ssh/deploy_key"
+
+    def test_cli_port_overrides_ssh_config(self, config_file_with_server):
+        from fraisier.ssh_config import SSHHostConfig
+
+        cfg = SSHHostConfig(port=2222)
+        runner = self._capture_runner(
+            config_file_with_server, ["--ssh-port", "3333"], ssh_host_config=cfg
+        )
+        assert runner.port == 3333
+
+    def test_cli_user_overrides_ssh_config(self, config_file_with_server):
+        from fraisier.ssh_config import SSHHostConfig
+
+        cfg = SSHHostConfig(user="deployer")
+        runner = self._capture_runner(
+            config_file_with_server, ["--ssh-user", "admin"], ssh_host_config=cfg
+        )
+        assert runner.user == "admin"
+
+    def test_cli_key_overrides_ssh_config(self, config_file_with_server):
+        from fraisier.ssh_config import SSHHostConfig
+
+        cfg = SSHHostConfig(identity_file="/home/user/.ssh/deploy_key")
+        runner = self._capture_runner(
+            config_file_with_server,
+            ["--ssh-key", "/other/key"],
+            ssh_host_config=cfg,
+        )
+        assert runner.key_path == "/other/key"
+
+    def test_all_ssh_config_values_applied(self, config_file_with_server):
+        from fraisier.ssh_config import SSHHostConfig
+
+        cfg = SSHHostConfig(
+            user="deployer", port=2222, identity_file="/home/user/.ssh/deploy_key"
+        )
+        runner = self._capture_runner(config_file_with_server, [], ssh_host_config=cfg)
+        assert runner.user == "deployer"
+        assert runner.port == 2222
+        assert runner.key_path == "/home/user/.ssh/deploy_key"
