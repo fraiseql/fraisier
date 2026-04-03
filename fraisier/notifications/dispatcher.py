@@ -57,6 +57,28 @@ def _build_notifier(cfg: dict[str, Any]) -> Notifier:
             method=cfg.get("method", "POST"),
         )
 
+    if ntype == "teams":
+        from fraisier.notifications.messaging import TeamsNotifier
+
+        return TeamsNotifier(
+            webhook_url=_expand_env(cfg["webhook_url"]),
+            mention_on_failure=cfg.get("mention_on_failure"),
+        )
+
+    if ntype == "email":
+        from fraisier.notifications.messaging import EmailNotifier
+
+        return EmailNotifier(
+            smtp_host=_expand_env(cfg.get("smtp_host", "localhost")),
+            smtp_port=int(cfg.get("smtp_port", 587)),
+            from_email=_expand_env(cfg["from_email"]),
+            to_emails=[_expand_env(e) for e in cfg["to_emails"]],
+            smtp_user=_expand_env(cfg.get("smtp_user", "")),
+            smtp_password=_expand_env(cfg.get("smtp_password", "")),
+            subject_prefix=cfg.get("subject_prefix", "[Fraisier]"),
+            use_tls=cfg.get("use_tls", True),
+        )
+
     msg = f"Unknown notifier type: {ntype!r}"
     raise ValueError(msg)
 

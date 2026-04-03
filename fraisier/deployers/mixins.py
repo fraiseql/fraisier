@@ -174,7 +174,8 @@ class GitDeployMixin:
         return DeploymentError(str(exc), context=ctx, cause=exc)
 
     def _init_notifications(self, config: dict[str, Any]) -> None:
-        """Initialize notification dispatcher from config."""
+        """Initialize notification dispatcher and lifecycle hooks."""
+        from fraisier.hooks.dispatcher import build_hook_runner
         from fraisier.notifications.dispatcher import NotificationDispatcher
 
         notifications_config = config.get("notifications", {})
@@ -182,6 +183,8 @@ class GitDeployMixin:
             self._dispatcher = NotificationDispatcher.from_config(notifications_config)
         else:
             self._dispatcher = NotificationDispatcher()
+
+        self._hook_runner = build_hook_runner(config)
 
     def _notify(self, result: DeploymentResult) -> None:
         """Send deployment notifications (fire-and-forget)."""
@@ -313,6 +316,20 @@ class GitDeployMixin:
         except OSError:
             logger.warning("Failed to write incident file")
 
+    def _run_hooks(self, phase: str, **kwargs: Any) -> None:
+        """Run lifecycle hooks for a phase. Swallows import errors."""
+        from fraisier.hooks.base import HookContext, HookPhase
+
+        phase_enum = HookPhase(phase)
+        context = HookContext(
+            fraise_name=self.fraise_name,
+            environment=self.environment,
+            phase=phase_enum,
+            config=self.config,
+            **kwargs,
+        )
+        self._hook_runner.run(phase_enum, context)
+
     def _execute_with_lifecycle(
         self,
         steps_fn: Callable[[], tuple[str | None, str | None]],
@@ -327,10 +344,29 @@ class GitDeployMixin:
             DeploymentResult with success/failure status and timing.
         """
         from fraisier.deployers.base import DeploymentResult, DeploymentStatus
+        from fraisier.hooks.base import HookAbortError
 
         start_time = time.time()
         self._write_status("deploying")
         db_pk = self._start_db_record()
+
+        # Pre-deploy hooks (backup, etc.) — failure aborts deployment
+        try:
+            self._run_hooks("before_deploy")
+        except HookAbortError as e:
+            duration = time.time() - start_time
+            logger.error("Pre-deploy hook aborted deployment: %s", e)
+            self._write_status("failed", error_message=str(e))
+            result = DeploymentResult(
+                success=False,
+                status=DeploymentStatus.FAILED,
+                duration_seconds=duration,
+                error_message=str(e),
+                error=self._wrap_error(e),
+            )
+            self._complete_db_record(db_pk, result)
+            self._notify(result)
+            return result
 
         try:
             old_version, new_version = steps_fn()
@@ -345,6 +381,11 @@ class GitDeployMixin:
                 duration_seconds=duration,
             )
             self._complete_db_record(db_pk, result)
+            self._run_hooks(
+                "after_deploy",
+                old_version=old_version,
+                new_version=new_version,
+            )
             self._notify(result)
             return result
 
@@ -363,5 +404,6 @@ class GitDeployMixin:
                 error=wrapped,
             )
             self._complete_db_record(db_pk, result)
+            self._run_hooks("on_failure", error_message=str(e))
             self._notify(result)
             return result
