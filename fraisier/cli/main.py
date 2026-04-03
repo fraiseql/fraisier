@@ -1518,6 +1518,7 @@ def rollback(
 from . import bootstrap as _bootstrap_mod  # noqa: E402, F401
 from . import db as _db_mod  # noqa: E402, F401
 from . import health as _health_mod  # noqa: E402, F401
+from . import logs as _logs_mod  # noqa: E402, F401
 from . import ops as _ops_mod  # noqa: E402, F401
 from . import providers as _providers_mod  # noqa: E402, F401
 from . import scaffold as _scaffold_mod  # noqa: E402, F401
