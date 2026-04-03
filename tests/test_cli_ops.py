@@ -194,6 +194,184 @@ class TestHistoryCommand:
             assert "abc12" in result.output
 
 
+class TestRollbackCommand:
+    """Test rollback command enhancements."""
+
+    def test_rollback_dry_run(self):
+        """Rollback --dry-run shows plan without executing."""
+        runner = CliRunner()
+
+        # Mock config
+        config = MagicMock()
+        config.get_fraise_environment.return_value = {"type": "api", "name": "api"}
+
+        # Mock database with deployment history
+        mock_deployments = [
+            {
+                "id": 1,
+                "fraise": "api",
+                "environment": "prod",
+                "status": "success",
+                "new_version": "current_sha",
+                "started_at": "2026-04-03T12:00:00",
+                "git_commit": "current_sha",
+            },
+            {
+                "id": 2,
+                "fraise": "api",
+                "environment": "prod",
+                "status": "success",
+                "new_version": "rollback_sha",
+                "started_at": "2026-04-03T11:00:00",
+                "git_commit": "rollback_sha",
+            },
+        ]
+
+        with (
+            patch("fraisier.cli.main.get_config", return_value=config),
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch("fraisier.cli.main._get_deployer") as mock_get_deployer,
+        ):
+            mock_db = MagicMock()
+            mock_db.get_recent_deployments.return_value = mock_deployments
+            mock_get_db.return_value = mock_db
+
+            mock_deployer = MagicMock()
+            mock_deployer.get_current_version.return_value = "current_sha"
+            mock_get_deployer.return_value = mock_deployer
+
+            result = runner.invoke(
+                main,
+                ["rollback", "api", "prod", "--dry-run"],
+                obj={"config": config, "skip_health": False},
+            )
+
+            assert result.exit_code == 0
+            assert "DRY RUN" in result.output
+            assert "current_sha" in result.output
+            assert "rollback" in result.output  # Truncated SHA
+            # Should not call deployer.rollback
+            mock_deployer.rollback.assert_not_called()
+
+    def test_rollback_improved_target_resolution(self):
+        """Rollback finds correct target when current deployment is latest."""
+        runner = CliRunner()
+
+        # Mock config
+        config = MagicMock()
+        config.get_fraise_environment.return_value = {"type": "api", "name": "api"}
+
+        # Mock database with deployment history where current is the latest
+        mock_deployments = [
+            {
+                "id": 1,
+                "fraise": "api",
+                "environment": "prod",
+                "status": "success",
+                "new_version": "current_sha",
+                "started_at": "2026-04-03T12:00:00",
+            },
+            {
+                "id": 2,
+                "fraise": "api",
+                "environment": "prod",
+                "status": "success",
+                "new_version": "previous_sha",
+                "started_at": "2026-04-03T11:00:00",
+            },
+            {
+                "id": 3,
+                "fraise": "api",
+                "environment": "prod",
+                "status": "failed",
+                "new_version": "failed_sha",
+                "started_at": "2026-04-03T10:00:00",
+            },
+        ]
+
+        with (
+            patch("fraisier.cli.main.get_config", return_value=config),
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch("fraisier.cli.main._get_deployer") as mock_get_deployer,
+        ):
+            mock_db = MagicMock()
+            mock_db.get_recent_deployments.return_value = mock_deployments
+            mock_get_db.return_value = mock_db
+
+            mock_deployer = MagicMock()
+            mock_deployer.get_current_version.return_value = "current_sha"
+            mock_get_deployer.return_value = mock_deployer
+
+            result = runner.invoke(
+                main,
+                ["rollback", "api", "prod", "--dry-run"],
+                obj={"config": config, "skip_health": False},
+                input="y\n",  # Confirm
+            )
+
+            assert result.exit_code == 0
+            assert (
+                "previous" in result.output
+            )  # Should find previous successful (truncated)
+            # Should call get_recent_deployments with higher limit
+            mock_db.get_recent_deployments.assert_called_with(
+                limit=20, fraise="api", environment="prod"
+            )
+
+    def test_rollback_safety_limit_without_force(self):
+        """Rollback refuses target older than 10 deployments without --force."""
+        runner = CliRunner()
+
+        # Mock config
+        config = MagicMock()
+        config.get_fraise_environment.return_value = {"type": "api", "name": "api"}
+
+        # Mock database with deployments, target is far back
+        mock_deployments = []
+        for i in range(20, 0, -1):  # IDs 20 down to 1, newest first
+            status = "success"  # All successful except current
+            version = f"sha_{i}"
+            mock_deployments.append(
+                {
+                    "id": i,
+                    "fraise": "api",
+                    "environment": "prod",
+                    "status": status,
+                    "new_version": version,
+                    "started_at": f"2026-04-03T{i:02d}:00:00",
+                }
+            )
+
+        with (
+            patch("fraisier.cli.main.get_config", return_value=config),
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch("fraisier.cli.main._get_deployer") as mock_get_deployer,
+        ):
+            mock_db = MagicMock()
+            mock_db.get_recent_deployments.return_value = mock_deployments
+            mock_get_db.return_value = mock_db
+
+            mock_deployer = MagicMock()
+            mock_deployer.get_current_version.return_value = "sha_20"  # Latest
+            # But let's make the first few not successful to force target further back
+            for i in range(19, 10, -1):  # Make sha_19 through sha_11 not successful
+                mock_deployments[20 - i]["status"] = "failed"
+            mock_get_deployer.return_value = mock_deployer
+
+            result = runner.invoke(
+                main,
+                ["rollback", "api", "prod", "--dry-run"],
+                obj={"config": config, "skip_health": False},
+            )
+
+            # Should refuse because target (sha_14) is more than 10 deployments back
+            assert result.exit_code == 1
+            assert (
+                "too far back" in result.output.lower()
+                or "safety limit" in result.output.lower()
+            )
+
+
 def _make_config_mock(
     deployments: list[dict],
     server_env_map: dict[str, list[str]],

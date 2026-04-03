@@ -536,7 +536,6 @@ def trigger_deploy(
     """
     import json
     import socket
-    import time
     from pathlib import Path
 
     config = ctx.obj["config"]
@@ -1410,6 +1409,7 @@ def _diagnose_systemd_socket_unit(unit_name: str) -> dict:
 @click.argument("fraise")
 @click.argument("environment")
 @click.option("--to-version", default=None, help="Target SHA to roll back to")
+@click.option("--dry-run", is_flag=True, help="Show rollback plan without executing")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt")
 @click.pass_context
 def rollback(
@@ -1417,6 +1417,7 @@ def rollback(
     fraise: str,
     environment: str,
     to_version: str | None,
+    dry_run: bool,
     force: bool,
 ) -> None:
     """Roll back a fraise to its previous version.
@@ -1448,29 +1449,58 @@ def rollback(
         raise SystemExit(1)
 
     target = to_version
+    current = deployer.get_current_version()
 
     if not target:
         from fraisier.database import get_db
 
         db = get_db()
         history = db.get_recent_deployments(
-            limit=2, fraise=fraise, environment=environment
+            limit=20, fraise=fraise, environment=environment
         )
         successful = [d for d in history if d["status"] == "success"]
-        if len(successful) >= 2:
-            target = successful[1].get("new_version")
+
+        # Find the most recent successful deployment that is not the current version
+        target_deployment = None
+        for deployment in successful:
+            if deployment.get("new_version") != current:
+                target = deployment.get("new_version")
+                target_deployment = deployment
+                break
 
     if not target:
         console.print("[red]No previous version found to roll back to[/red]")
         console.print("Use --to-version <sha> to specify a target explicitly.")
         raise SystemExit(1)
 
-    current = deployer.get_current_version()
+    # Safety check: ensure target is not too far back in history
+    if target_deployment and not force:
+        target_index = None
+        for i, deployment in enumerate(history):
+            if deployment["id"] == target_deployment["id"]:
+                target_index = i
+                break
+
+        if (
+            target_index is not None and target_index >= 10
+        ):  # 0-indexed, so >= 10 means 11th or later
+            console.print(
+                f"[red]Safety limit exceeded:[/red] Target deployment is "
+                f"{target_index + 1} deployments back."
+            )
+            console.print("Use --force to override this safety check.")
+            raise SystemExit(1)
+
+    # Show rollback plan
+    console.print(f"Will roll back [bold]{fraise}[/bold] ({environment})")
+    console.print(f"  From: {current or 'unknown'}")
+    console.print(f"  To:   {target[:8]}")
+
+    if dry_run:
+        console.print("[yellow]DRY RUN[/yellow] - No changes will be made")
+        return
 
     if not force:
-        console.print(f"Will roll back [bold]{fraise}[/bold] ({environment})")
-        console.print(f"  From: {current or 'unknown'}")
-        console.print(f"  To:   {target[:8]}")
         if not click.confirm("Proceed?"):
             console.print("Aborted.")
             return
