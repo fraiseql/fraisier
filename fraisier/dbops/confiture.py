@@ -19,7 +19,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
@@ -94,6 +94,104 @@ def _resolve_config(
     if database_url:
         return _load_env(config_path, database_url=database_url)
     return config_path
+
+
+def _register_migration_hooks(
+    migrator: Any, hooks_config: dict[str, Any] | None
+) -> None:
+    """Register confiture v0.8.22 hooks with the migrator.
+
+    Reads the ``hooks:`` sub-section of a fraise's database config and
+    registers the corresponding confiture built-in hooks.  Gracefully
+    skips if confiture hooks are not available.
+    """
+    if not hooks_config:
+        return
+
+    try:
+        from confiture.core.hooks import HookPhase
+        from confiture.core.hooks.builtin import (
+            AuditConfig,
+            AuditHook,
+            BackupConfig,
+            BackupHook,
+            DiscordConfig,
+            DiscordNotificationHook,
+            EmailConfig,
+            EmailNotificationHook,
+            SlackConfig,
+            SlackNotificationHook,
+            TeamsConfig,
+            TeamsNotificationHook,
+            WebhookConfig,
+            WebhookNotificationHook,
+        )
+    except ImportError:
+        log.warning(
+            "Confiture hooks not available (requires confiture >= 0.8.22)"
+        )
+        return
+
+    _HOOK_BUILDERS: dict[str, tuple] = {
+        "backup": (
+            HookPhase.BEFORE_EXECUTE,
+            BackupConfig,
+            BackupHook,
+            {"backup_dir": Path, "database_url": str},
+        ),
+        "audit": (
+            HookPhase.AFTER_EXECUTE,
+            AuditConfig,
+            AuditHook,
+            {"database_url": str, "signing_key": str},
+        ),
+        "slack": (
+            HookPhase.AFTER_EXECUTE,
+            SlackConfig,
+            SlackNotificationHook,
+            {"webhook_url": str},
+        ),
+        "teams": (
+            HookPhase.AFTER_EXECUTE,
+            TeamsConfig,
+            TeamsNotificationHook,
+            {"webhook_url": str},
+        ),
+        "discord": (
+            HookPhase.AFTER_EXECUTE,
+            DiscordConfig,
+            DiscordNotificationHook,
+            {"webhook_url": str},
+        ),
+        "email": (
+            HookPhase.AFTER_EXECUTE,
+            EmailConfig,
+            EmailNotificationHook,
+            {"smtp_server": str},
+        ),
+        "webhook": (
+            HookPhase.AFTER_EXECUTE,
+            WebhookConfig,
+            WebhookNotificationHook,
+            {"url": str},
+        ),
+    }
+
+    for hook_key, (phase, config_cls, hook_cls, _) in _HOOK_BUILDERS.items():
+        cfg = hooks_config.get(hook_key, {})
+        if not cfg.get("enabled", False):
+            continue
+        try:
+            # Strip 'enabled' before passing to config dataclass
+            params = {k: v for k, v in cfg.items() if k != "enabled"}
+            config = config_cls(**params)
+            hook = hook_cls(config)
+            migrator.register_hook(phase, hook)
+            log.info("Registered %s hook", hook_key)
+        except Exception:
+            log.warning(
+                "Failed to register %s hook", hook_key, exc_info=True
+            )
 
 
 def preflight(
@@ -193,6 +291,7 @@ def migrate_up(
     pre_migrate_verify: bool = False,
     require_reversible: bool = False,
     database_url: str | None = None,
+    hooks_config: dict[str, Any] | None = None,
 ) -> MigrationResult:
     """Apply pending migrations with lock retry.
 
@@ -231,6 +330,9 @@ def migrate_up(
             if not vm.helpers_installed():
                 vm.install_helpers()
                 log.info("Auto-installed confiture view helper functions")
+
+        # Register migration hooks if configured
+        _register_migration_hooks(m, hooks_config)
 
         for attempt in range(MAX_LOCK_RETRIES):
             try:
@@ -276,12 +378,15 @@ def migrate_down(
     migrations_dir: Path | str = "db/migrations",
     steps: int,
     database_url: str | None = None,
+    hooks_config: dict[str, Any] | None = None,
 ) -> MigrationResult:
     """Reverse exactly *steps* migrations.  Best-effort — logs errors."""
     start = time.monotonic()
     config = _resolve_config(config_path, database_url)
 
     with Migrator.from_config(config, migrations_dir=Path(migrations_dir)) as m:
+        # Register migration hooks if configured (for rollback operations)
+        _register_migration_hooks(m, hooks_config)
         result: MigrateDownResult = m.down(steps=steps)
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
