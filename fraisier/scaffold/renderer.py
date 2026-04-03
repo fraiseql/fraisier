@@ -688,7 +688,11 @@ class ScaffoldRenderer:
         app_path = env_config.get("app_path", f"/opt/{fraise['name']}")
 
         # Resolve exec_command: service.exec > fraise-level > None (template default)
+        # Prepend app_path when the executable is a relative path so systemd
+        # gets the absolute path it requires (see #90).
         exec_command = service.exec or fraise.get("exec_command")
+        if exec_command and not exec_command.startswith("/"):
+            exec_command = f"{app_path}/{exec_command}"
 
         # Resolve memory_max: service > scaffold default
         memory_max = (
