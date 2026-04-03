@@ -84,29 +84,63 @@ def status_all(
 
 
 @main.command()
-@click.option("--fraise", "-f", help="Filter by fraise")
-@click.option("--environment", "-e", help="Filter by environment")
+@click.argument("fraise", required=False, default=None)
+@click.argument("environment", required=False, default=None)
+@click.option("--fraise", "-f", "fraise_option", help="Filter by fraise")
+@click.option("--environment", "-e", "environment_option", help="Filter by environment")
 @click.option("--limit", "-n", default=20, help="Number of records to show")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--since", default=None, help="Filter: '7d', '24h', '2026-04-01'")
 @click.pass_context
 def history(
-    _ctx: click.Context, fraise: str | None, environment: str | None, limit: int
+    _ctx: click.Context,
+    fraise: str | None,
+    environment: str | None,
+    fraise_option: str | None,
+    environment_option: str | None,
+    limit: int,
+    as_json: bool,
+    since: str | None,
 ) -> None:
     """Show deployment history."""
+    from fraisier.cli._helpers import parse_since
     from fraisier.database import get_db
+
+    # Merge positional args with options for backward compatibility
+    final_fraise = fraise or fraise_option
+    final_environment = environment or environment_option
+
+    # Parse since parameter
+    since_iso = parse_since(since) if since else None
 
     db = get_db()
     deployments = db.get_recent_deployments(
-        limit=limit, fraise=fraise, environment=environment
+        limit=limit,
+        fraise=final_fraise,
+        environment=final_environment,
+        since=since_iso,
     )
 
     if not deployments:
-        console.print("[yellow]No deployment history found[/yellow]")
+        if as_json:
+            console.print("[]")
+        else:
+            console.print("[yellow]No deployment history found[/yellow]")
+        return
+
+    if as_json:
+        # Output as JSON
+        import json
+
+        console.print(json.dumps(deployments, indent=2, default=str))
         return
 
     table = Table(title="Deployment History")
     table.add_column("ID", style="dim")
     table.add_column("Fraise", style="cyan")
     table.add_column("Env", style="magenta")
+    table.add_column("SHA", style="dim")
+    table.add_column("Triggered By", style="magenta")
     table.add_column("Version", style="green")
     table.add_column("Status")
     table.add_column("Duration", style="yellow")
@@ -126,14 +160,33 @@ def history(
         else:
             status_str = status
 
-        # Format duration
+        # Format duration with better units
         duration = d.get("duration_seconds")
-        duration_str = f"{duration:.1f}s" if duration else "-"
+        if duration:
+            if duration < 60:
+                duration_str = f"{duration:.1f}s"
+            elif duration < 3600:
+                minutes = int(duration // 60)
+                seconds = duration % 60
+                duration_str = f"{minutes}m {seconds:.1f}s"
+            else:
+                hours = int(duration // 3600)
+                minutes = int((duration % 3600) // 60)
+                duration_str = f"{hours}h {minutes}m"
+        else:
+            duration_str = "-"
 
         # Format version change
         old_v = d.get("old_version") or "?"
         new_v = d.get("new_version") or "?"
         version_str = f"{old_v} -> {new_v}"
+
+        # Format SHA (truncated)
+        git_commit = d.get("git_commit", "")
+        sha_str = git_commit[:8] if git_commit else "-"
+
+        # Triggered by
+        triggered_by = d.get("triggered_by", "-")
 
         # Format timestamp (just time if today)
         started = d.get("started_at", "")[:16].replace("T", " ")
@@ -142,6 +195,8 @@ def history(
             str(d["id"]),
             d["fraise"],
             d["environment"],
+            sha_str,
+            triggered_by,
             version_str,
             status_str,
             duration_str,

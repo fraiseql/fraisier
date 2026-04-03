@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import click
@@ -11,6 +13,49 @@ if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
 
 console = Console()
+
+
+def parse_since(value: str) -> str:
+    """Parse relative time or date string into ISO datetime.
+
+    Args:
+        value: Time string like "7d", "24h", "1h", or ISO date "2026-04-01"
+
+    Returns:
+        ISO datetime string
+
+    Raises:
+        ValueError: If the format is invalid
+    """
+    if not value:
+        return ""
+
+    # Check for relative time patterns
+    relative_pattern = re.match(r"^(\d+)([dh])$", value)
+    if relative_pattern:
+        amount, unit = relative_pattern.groups()
+        amount = int(amount)
+        if unit == "d":
+            delta = timedelta(days=amount)
+        elif unit == "h":
+            delta = timedelta(hours=amount)
+        else:
+            raise ValueError(f"Invalid time unit: {unit}")
+
+        target_time = datetime.now() - delta
+        return target_time.isoformat()
+
+    # Check if it's already an ISO date (YYYY-MM-DD)
+    try:
+        parsed = datetime.fromisoformat(value)
+        # If it's just a date, convert to start of that day
+        if "T" not in value:
+            parsed = datetime.combine(parsed.date(), datetime.min.time())
+        return parsed.isoformat()
+    except ValueError as err:
+        raise ValueError(
+            f"Invalid date/time format: {value}. Use '7d', '24h', or 'YYYY-MM-DD'"
+        ) from err
 
 
 def require_config(ctx: click.Context) -> FraisierConfig:

@@ -1,10 +1,197 @@
 """Tests for CLI operational commands (status-all, etc.)."""
 
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner, Result
 
+from fraisier.cli._helpers import parse_since
 from fraisier.cli.main import main
+
+
+class TestParseSince:
+    """Test parse_since helper function."""
+
+    def test_parse_days(self):
+        """Parse '7d' returns a datetime in the past."""
+        result = parse_since("7d")
+        parsed = datetime.fromisoformat(result)
+        now = datetime.now()
+        # Should be approximately 7 days ago (allowing some tolerance)
+        assert abs((now - parsed).total_seconds() - 7 * 24 * 3600) < 60
+
+    def test_parse_hours(self):
+        """Parse '24h' returns a datetime in the past."""
+        result = parse_since("24h")
+        parsed = datetime.fromisoformat(result)
+        now = datetime.now()
+        # Should be approximately 24 hours ago
+        assert abs((now - parsed).total_seconds() - 24 * 3600) < 60
+
+    def test_parse_iso_date(self):
+        """Parse ISO date string."""
+        result = parse_since("2026-04-01")
+        expected = "2026-04-01T00:00:00"
+        assert result == expected
+
+    def test_parse_invalid_format(self):
+        """Invalid format raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid date/time format"):
+            parse_since("invalid")
+
+    def test_parse_empty_string(self):
+        """Empty string returns empty string."""
+        assert parse_since("") == ""
+
+
+class TestHistoryCommand:
+    """Test history command with new features."""
+
+    def test_history_json_output(self):
+        """History command with --json outputs valid JSON."""
+        runner = CliRunner()
+
+        # Mock the database
+        mock_deployments = [
+            {
+                "id": 1,
+                "fraise": "api",
+                "environment": "production",
+                "git_commit": "abc123456789",
+                "triggered_by": "webhook",
+                "old_version": "1.0.0",
+                "new_version": "1.1.0",
+                "status": "success",
+                "duration_seconds": 45.5,
+                "started_at": "2026-04-03T10:00:00",
+            }
+        ]
+
+        with patch("fraisier.database.get_db") as mock_get_db:
+            mock_db = MagicMock()
+            mock_db.get_recent_deployments.return_value = mock_deployments
+            mock_get_db.return_value = mock_db
+
+            result = runner.invoke(main, ["history", "--json"])
+
+            assert result.exit_code == 0
+            # Should output JSON array
+            import json
+
+            data = json.loads(result.output.strip())
+            assert isinstance(data, list)
+            assert len(data) == 1
+            assert data[0]["fraise"] == "api"
+
+    def test_history_positional_args(self):
+        """History command with positional args works."""
+        runner = CliRunner()
+
+        mock_deployments = [
+            {
+                "id": 1,
+                "fraise": "api",
+                "environment": "production",
+                "git_commit": "abc12345",
+                "triggered_by": "webhook",
+                "old_version": "1.0.0",
+                "new_version": "1.1.0",
+                "status": "success",
+                "duration_seconds": 45.5,
+                "started_at": "2026-04-03T10:00:00",
+            }
+        ]
+
+        with patch("fraisier.database.get_db") as mock_get_db:
+            mock_db = MagicMock()
+            mock_db.get_recent_deployments.return_value = mock_deployments
+            mock_get_db.return_value = mock_db
+
+            result = runner.invoke(main, ["history", "api", "production"])
+
+            assert result.exit_code == 0
+            assert "api" in result.output
+            assert "Deployment History" in result.output  # Check that table is rendered
+            # Should call with fraise and environment filters
+            mock_db.get_recent_deployments.assert_called_with(
+                limit=20,
+                fraise="api",
+                environment="production",
+                since=None,
+            )
+
+    def test_history_backward_compatibility_options(self):
+        """History command with --fraise/--environment options still works."""
+        runner = CliRunner()
+
+        mock_deployments = [
+            {
+                "id": 1,
+                "fraise": "api",
+                "environment": "production",
+                "git_commit": "abc12345",
+                "triggered_by": "webhook",
+                "old_version": "1.0.0",
+                "new_version": "1.1.0",
+                "status": "success",
+                "duration_seconds": 45.5,
+                "started_at": "2026-04-03T10:00:00",
+            }
+        ]
+
+        with patch("fraisier.database.get_db") as mock_get_db:
+            mock_db = MagicMock()
+            mock_db.get_recent_deployments.return_value = mock_deployments
+            mock_get_db.return_value = mock_db
+
+            result = runner.invoke(
+                main, ["history", "--fraise", "api", "--environment", "production"]
+            )
+
+            assert result.exit_code == 0
+            assert "api" in result.output
+            assert "Deployment History" in result.output  # Check that table is rendered
+            # Should call with fraise and environment filters
+            mock_db.get_recent_deployments.assert_called_with(
+                limit=20,
+                fraise="api",
+                environment="production",
+                since=None,
+            )
+
+    def test_history_table_columns(self):
+        """History table includes SHA and Triggered By columns."""
+        runner = CliRunner()
+
+        mock_deployments = [
+            {
+                "id": 1,
+                "fraise": "api",
+                "environment": "production",
+                "git_commit": "abc123456789",
+                "triggered_by": "webhook",
+                "old_version": "1.0.0",
+                "new_version": "1.1.0",
+                "status": "success",
+                "duration_seconds": 45.5,
+                "started_at": "2026-04-03T10:00:00",
+            }
+        ]
+
+        with patch("fraisier.database.get_db") as mock_get_db:
+            mock_db = MagicMock()
+            mock_db.get_recent_deployments.return_value = mock_deployments
+            mock_get_db.return_value = mock_db
+
+            result = runner.invoke(main, ["history"])
+
+            assert result.exit_code == 0
+            # Check that column headers are present (may be truncated)
+            assert "SHA" in result.output
+            assert "Trigg" in result.output  # Truncated "Triggered"
+            # Check that SHA is truncated
+            assert "abc12" in result.output
 
 
 def _make_config_mock(

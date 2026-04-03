@@ -215,6 +215,7 @@ class DeploymentHistoryManager:
         limit: int = 20,
         fraise: str | None = None,
         environment: str | None = None,
+        since: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get recent deployment history with trinity identifiers.
 
@@ -222,6 +223,7 @@ class DeploymentHistoryManager:
             limit: Number of deployments to return
             fraise: Filter by fraise name
             environment: Filter by environment name
+            since: Filter deployments since this ISO datetime
 
         Returns:
             List of deployment records from v_deployment_history
@@ -235,6 +237,10 @@ class DeploymentHistoryManager:
         if environment:
             query += " AND environment_name=?"
             params.append(environment)
+
+        if since:
+            query += " AND started_at >= ?"
+            params.append(since)
 
         query += " ORDER BY started_at DESC LIMIT ?"
         params.append(limit)

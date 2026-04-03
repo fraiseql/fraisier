@@ -337,9 +337,10 @@ class FraisierDB:
         limit: int = 20,
         fraise: str | None = None,
         environment: str | None = None,
+        since: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get recent deployment history."""
-        return self._history.get_recent_deployments(limit, fraise, environment)
+        return self._history.get_recent_deployments(limit, fraise, environment, since)
 
     def get_deployment_stats(
         self, fraise: str | None = None, days: int = 30
