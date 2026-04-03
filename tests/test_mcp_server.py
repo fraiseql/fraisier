@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fraisier.mcp_server import (
+mcp_available = pytest.importorskip("mcp", reason="mcp package not installed")
+
+from fraisier.mcp_server import (  # noqa: E402
     _load_config,
     _resolve_runner,
     bootstrap_preflight,
