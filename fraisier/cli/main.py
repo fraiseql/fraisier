@@ -629,7 +629,7 @@ def trigger_deploy(
                     f"  Check status: fraisier deployment-status {fraise}\n"
                     f"  For long deployments, increase timeout: --timeout {timeout * 2}"
                 )
-            raise SystemExit(1) from None
+                raise SystemExit(1) from None
 
         # Debug
         if wait:

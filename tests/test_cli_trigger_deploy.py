@@ -154,7 +154,7 @@ class TestTriggerDeployWait:
             obj={"skip_health": False},
         )
 
-    @patch("fraisier.cli.main.os.execvp")
+    @patch("os.execvp")
     @patch("socket.socket")
     @patch("fraisier.cli.main.Path")
     @patch("fraisier.cli.main.get_config")
@@ -179,12 +179,13 @@ class TestTriggerDeployWait:
             "/run/fraisier/myproject-prod/deploy.sock"
         )
 
-        # Mock socket
+        # Mock socket — recv must return empty bytes to break the read loop
         mock_sock = MagicMock()
         mock_socket_class.return_value = mock_sock
         mock_sock.connect.return_value = None
         mock_sock.sendall.return_value = None
         mock_sock.shutdown.return_value = None
+        mock_sock.recv.return_value = b""
 
         runner.invoke(
             main,

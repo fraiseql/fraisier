@@ -1,5 +1,6 @@
 """Tests for fraisier ship command."""
 
+import contextlib
 import json
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -944,9 +945,16 @@ class TestShipDeploy:
         assert result.exit_code == 0
         assert "Deploy" in result.output
 
-    @patch("httpx.get")
+    @patch(
+        "fraisier.locking.deployment_lock",
+        return_value=contextlib.nullcontext(),
+    )
+    @patch("fraisier.ship.health_poll.poll_health_for_version")
+    @patch("fraisier.cli._helpers._get_deployer")
     @patch("subprocess.run")
-    def test_ship_wait_deploy_verifies_health(self, mock_run, mock_httpx_get, tmp_path):
+    def test_ship_wait_deploy_verifies_health(
+        self, mock_run, mock_get_deployer, mock_poll, _mock_lock, tmp_path
+    ):
         """Ship --wait-deploy polls health endpoint after successful deploy."""
         mock_run.return_value = MagicMock(returncode=0, stdout="main")
         cfg = _setup_project(tmp_path, "1.0.0")
@@ -963,10 +971,17 @@ class TestShipDeploy:
         }
         fraises_file.write_text(yaml.dump(config_data))
 
-        # Mock successful health check response
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"version": "1.0.1", "status": "healthy"}
-        mock_httpx_get.return_value = mock_response
+        # Mock deployer with successful result
+        mock_deployer = MagicMock()
+        mock_deployer.execute.return_value = MagicMock(
+            success=True, old_version="1.0.0", new_version="1.0.1"
+        )
+        mock_get_deployer.return_value = mock_deployer
+
+        # Mock health poll result
+        mock_poll.return_value = MagicMock(
+            success=True, final_version="1.0.1", elapsed_seconds=2.0
+        )
 
         runner = CliRunner()
         result = runner.invoke(

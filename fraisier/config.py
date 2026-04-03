@@ -30,12 +30,18 @@ _VALID_STRATEGIES = {"rebuild", "restore_migrate", "migrate", "apply"}
 _DEFAULT_TIMEOUT = 600  # 10 minutes
 
 # Standard locations to search for fraises.yaml configuration file
-CONFIG_SEARCH_LOCATIONS = [
-    Path.cwd() / "fraises.yaml",
-    Path.cwd() / "config" / "fraises.yaml",
-    Path("/opt/fraisier/fraises.yaml"),
-    Path(__file__).parent.parent / "fraises.yaml",
-]
+def _config_search_locations() -> list[Path]:
+    """Return config search locations, evaluated lazily so CWD is current."""
+    return [
+        Path.cwd() / "fraises.yaml",
+        Path.cwd() / "config" / "fraises.yaml",
+        Path("/opt/fraisier/fraises.yaml"),
+        Path(__file__).parent.parent / "fraises.yaml",
+    ]
+
+
+# Kept for backward compatibility (used by daemon.py for display purposes).
+CONFIG_SEARCH_LOCATIONS = _config_search_locations()
 _UNIT_NAME_RE = re.compile(r"^[a-zA-Z0-9._\-@\\]+$")
 
 # snake_case -> systemd PascalCase mapping for security directives
@@ -565,11 +571,12 @@ class FraisierConfig:
             return Path(env_path)
 
         # Check standard locations (CWD first, then system-wide)
-        for loc in CONFIG_SEARCH_LOCATIONS:
+        locations = _config_search_locations()
+        for loc in locations:
             if loc.exists():
                 return loc
 
-        locations_str = [str(p) for p in CONFIG_SEARCH_LOCATIONS]
+        locations_str = [str(p) for p in locations]
         raise FileNotFoundError(f"fraises.yaml not found in any of: {locations_str}")
 
     def _load(self) -> None:
