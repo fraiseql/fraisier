@@ -63,6 +63,8 @@ class SSHRunner:
     connection details.
     """
 
+    _SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
     def __init__(
         self,
         host: str,
@@ -160,11 +162,15 @@ class SSHRunner:
         check: bool = True,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        # Build the remote command string; prepend env exports for SSH
+        # Build the remote command string; prepend env exports for SSH.
+        # Always inject a safe PATH so sbin directories are available in
+        # non-interactive SSH sessions (see #87).
         remote_cmd = shlex.join(cmd)
+        merged_env = {"PATH": self._SAFE_PATH}
         if env:
-            exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
-            remote_cmd = f"{exports} {remote_cmd}"
+            merged_env.update(env)
+        exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in merged_env.items())
+        remote_cmd = f"{exports} {remote_cmd}"
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
 
