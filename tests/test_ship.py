@@ -943,3 +943,45 @@ class TestShipDeploy:
         )
         assert result.exit_code == 0
         assert "Deploy" in result.output
+
+    @patch("httpx.get")
+    @patch("subprocess.run")
+    def test_ship_wait_deploy_verifies_health(self, mock_run, mock_httpx_get, tmp_path):
+        """Ship --wait-deploy polls health endpoint after successful deploy."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="main")
+        cfg = _setup_project(tmp_path, "1.0.0")
+
+        # Add health check to fraises.yaml
+        fraises_file = tmp_path / "fraises.yaml"
+        config_data = yaml.safe_load(fraises_file.read_text())
+        config_data["fraises"]["my_api"]["environments"]["production"][
+            "health_check"
+        ] = {"url": "http://example.com/health"}
+        # Add branch mapping for deploy
+        config_data["branch_mapping"] = {
+            "main": {"fraise": "my_api", "environment": "production"}
+        }
+        fraises_file.write_text(yaml.dump(config_data))
+
+        # Mock successful health check response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"version": "1.0.1", "status": "healthy"}
+        mock_httpx_get.return_value = mock_response
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--wait-deploy",
+                "--version-file",
+                str(tmp_path / "version.json"),
+            ],
+        )
+
+        assert result.exit_code == 0
+        # Should show health verification
+        assert "Verifying deployment" in result.output

@@ -181,6 +181,17 @@ def version_bump(
     default="pyproject.toml",
     help="Path to pyproject.toml",
 )
+@click.option(
+    "--wait-deploy",
+    is_flag=True,
+    help="Wait for deployment to complete and verify via health check",
+)
+@click.option(
+    "--deploy-timeout",
+    type=int,
+    default=300,
+    help="Timeout in seconds for deployment verification",
+)
 @click.pass_context
 def ship(
     ctx: click.Context,
@@ -193,6 +204,8 @@ def ship(
     skip_checks: bool,
     version_file: str,
     pyproject: str,
+    wait_deploy: bool,
+    deploy_timeout: int,
 ) -> None:
     """Bump version, commit, push, and deploy in one step.
 
@@ -248,6 +261,8 @@ def ship(
             create_pr,
             pr_base,
             no_deploy,
+            wait_deploy,
+            deploy_timeout,
             label=f"v{current.version} (no bump)",
         )
         return
@@ -280,6 +295,8 @@ def ship(
         create_pr,
         pr_base,
         no_deploy,
+        wait_deploy,
+        deploy_timeout,
         label=f"v{info.version}",
     )
 
@@ -291,6 +308,8 @@ def _ship_commit_push_deploy(
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
+    wait_deploy: bool,
+    deploy_timeout: int,
     *,
     label: str,
 ) -> None:
@@ -306,7 +325,7 @@ def _ship_commit_push_deploy(
     console.print(f"[green]Shipped {label}[/green]")
 
     if not no_deploy:
-        _trigger_deploy_for_current_branch()
+        _trigger_deploy_for_current_branch(wait_deploy, deploy_timeout)
 
 
 def _read_current_version(version_path: Path) -> object:
@@ -491,7 +510,9 @@ def _ship_legacy(info: object) -> None:
     _git_push()
 
 
-def _trigger_deploy_for_current_branch() -> None:
+def _trigger_deploy_for_current_branch(
+    wait_deploy: bool = False, deploy_timeout: int = 300
+) -> None:
     """Deploy all fraises mapped to the current git branch."""
     import subprocess as sp
 
@@ -548,6 +569,44 @@ def _trigger_deploy_for_current_branch() -> None:
             f"[green]Deploy successful![/green] "
             f"{result.old_version} -> {result.new_version}"
         )
+
+        # Poll health endpoint if requested
+        if wait_deploy:
+            health_config = fraise_config.get("health_check")
+            if health_config and "url" in health_config:
+                health_url = health_config["url"]
+                console.print(f"[cyan]Verifying deployment at {health_url}...[/cyan]")
+
+                from fraisier.ship.health_poll import poll_health_for_version
+
+                poll_result = poll_health_for_version(
+                    health_url=health_url,
+                    expected_version=result.new_version,
+                    timeout=deploy_timeout,
+                    interval=10,
+                    console_output=True,
+                )
+
+                if poll_result.success:
+                    console.print(
+                        f"[green]✓[/green] Deployment verified! "
+                        f"Version {poll_result.final_version} is live "
+                        f"({poll_result.elapsed_seconds:.1f}s)"
+                    )
+                else:
+                    final_version = poll_result.final_version or "unknown"
+                    console.print(
+                        f"[red]✗[/red] Deployment verification failed. "
+                        f"Expected {result.new_version}, got {final_version} "
+                        f"(timeout after {poll_result.elapsed_seconds:.1f}s)"
+                    )
+                    raise SystemExit(1)
+            else:
+                console.print(
+                    "[yellow]Warning:[/yellow] No health check URL configured, "
+                    "skipping deployment verification"
+                )
+
     else:
         console.print(f"[red]Deploy failed:[/red] {result.error_message}")
         raise SystemExit(1)
