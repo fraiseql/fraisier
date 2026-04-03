@@ -11,6 +11,86 @@ from ._helpers import console, require_config
 from .main import main
 
 
+@main.command(name="scaffold-diff")
+@click.argument("fraise", required=False)
+@click.argument("environment", required=False)
+@click.option("--apply", is_flag=True, help="Apply diffs (re-install changed files)")
+@click.option("--server", "-s", default=None, help="Only include paths for this server")
+@click.pass_context
+def scaffold_diff(
+    ctx: click.Context,
+    fraise: str | None,
+    environment: str | None,
+    apply: bool,
+    server: str | None,
+) -> None:
+    """Compare scaffold files against installed system files.
+
+    Shows unified diffs for files that differ between the generated scaffold
+    and what's currently installed on the system. Use --apply to automatically
+    re-install changed files.
+
+    \b
+    Exit codes:
+        0 - No differences found
+        1 - Differences found
+
+    \b
+    Examples:
+        fraisier scaffold-diff                    # all fraises/environments
+        fraisier scaffold-diff api production    # specific fraise/env
+        fraisier scaffold-diff --apply           # apply all differences
+    """
+    from fraisier.scaffold.diff import compute_scaffold_diff
+
+    config = require_config(ctx)
+
+    # Compute differences
+    diffs = compute_scaffold_diff(
+        config=config,
+        server=server,
+        fraise_filter=fraise,
+        env_filter=environment,
+    )
+
+    if not diffs:
+        console.print("[green]✓[/green] No scaffold differences found")
+        raise SystemExit(0)
+
+    # Display results
+    changed_count = 0
+    for diff in diffs:
+        if diff.status == "match":
+            console.print(f"[green]✓[/green] {diff.generated_path}")
+        elif diff.status == "missing_installed":
+            console.print(f"[red]✗[/red] {diff.generated_path} - missing from system")
+            changed_count += 1
+        elif diff.status == "missing_generated":
+            console.print(f"[yellow]?[/yellow] {diff.generated_path} - not in scaffold")
+        elif diff.status == "differs":
+            console.print(f"[red]✗[/red] {diff.generated_path}")
+            if diff.diff_lines:
+                # Show first few lines of diff
+                for line in diff.diff_lines[:10]:  # Limit output
+                    console.print(f"  {line.rstrip()}")
+                if len(diff.diff_lines) > 10:
+                    console.print(f"  ... ({len(diff.diff_lines) - 10} more lines)")
+            changed_count += 1
+
+    # Summary
+    total_files = len(diffs)
+    console.print(f"\nSummary: {changed_count}/{total_files} files differ")
+
+    if apply and changed_count > 0:
+        console.print("\n[cyan]Applying changes...[/cyan]")
+        # TODO: Implement selective scaffold-install
+        console.print("[yellow]--apply not yet implemented[/yellow]")
+        raise SystemExit(1)
+
+    # Exit with appropriate code
+    raise SystemExit(1 if changed_count > 0 else 0)
+
+
 @main.command(name="scaffold")
 @click.option("--dry-run", is_flag=True, help="Show what would be generated")
 @click.option(

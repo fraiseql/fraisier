@@ -366,6 +366,60 @@ class ScaffoldRenderer:
             t.replace(".j2", "").replace("provider/", "") for t in _PROVIDER_TEMPLATES
         ]
 
+    def get_install_mapping(self) -> dict[str, Path]:
+        """Map scaffold output paths to system install paths.
+
+        Returns:
+            Dict mapping relative scaffold paths to absolute system paths.
+        """
+        mapping: dict[str, Path] = {}
+
+        project_name = self.context["project_name"]
+
+        # Systemd units
+        for fraise in self.context["fraises"]:
+            fraise_name = fraise["name"]
+            for env_name in fraise.get("environments", {}):
+                # Deploy socket and service
+                socket_name = (
+                    f"fraisier-{project_name}-{fraise_name}-{env_name}-deploy.socket"
+                )
+                service_name = (
+                    f"fraisier-{project_name}-{fraise_name}-{env_name}-deploy@.service"
+                )
+
+                mapping[f"systemd/{socket_name}"] = Path(
+                    f"/etc/systemd/system/{socket_name}"
+                )
+                mapping[f"systemd/{service_name}"] = Path(
+                    f"/etc/systemd/system/{service_name}"
+                )
+
+                # Service unit (if exists)
+                env_config = fraise["environments"][env_name]
+                if "service_base" in env_config:
+                    svc = env_config["service_base"]
+                    mapping[f"systemd/{svc}.service"] = Path(
+                        f"/etc/systemd/system/{svc}.service"
+                    )
+
+        # Standard systemd units
+        for unit in ["deploy-checker.timer", "backup.timer", "poll-deploy.service"]:
+            if unit in ["deploy-checker.timer", "backup.timer"]:
+                mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
+            else:
+                mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
+
+        # Nginx config
+        mapping["nginx/gateway.conf"] = Path(
+            f"/etc/nginx/sites-available/{project_name}"
+        )
+
+        # Sudoers
+        mapping["sudoers"] = Path(f"/etc/sudoers.d/{project_name}")
+
+        return mapping
+
     def _validate_names(self) -> None:
         """Validate fraise and environment names before rendering.
 
