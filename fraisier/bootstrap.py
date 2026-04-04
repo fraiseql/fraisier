@@ -193,6 +193,8 @@ class ServerBootstrapper:
         )
 
     def _install_fraisier(self) -> StepResult:
+        from fraisier import __version__
+
         uv_path = f"/home/{self.deploy_user}/.local/bin/uv"
         return self._run_remote(
             "Install fraisier for deploy user",
@@ -203,16 +205,7 @@ class ServerBootstrapper:
                 "-H",
                 "bash",
                 "-c",
-                f"{uv_path} tool install fraisier",
-            ],
-            already_done_cmd=[
-                "sudo",
-                "-u",
-                self.deploy_user,
-                "-H",
-                "bash",
-                "-c",
-                f"{uv_path} tool list 2>/dev/null | grep -q fraisier",
+                f"{uv_path} tool install --force fraisier=={__version__}",
             ],
         )
 
