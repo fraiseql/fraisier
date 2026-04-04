@@ -400,6 +400,7 @@ class TestValidate:
         assert "validate-setup" in cmd_str
         assert "/opt/fraisier/fraises.yaml" in cmd_str
         assert "api" in cmd_str
+        assert "production" in cmd_str
 
     def test_uses_deploy_user(self, bootstrapper, mock_runner):
         bootstrapper._validate()
@@ -421,6 +422,7 @@ class TestValidate:
         calls = [" ".join(c[0][0]) for c in mock_runner.run.call_args_list]
         assert any("api" in s for s in calls)
         assert any("worker" in s for s in calls)
+        assert all("production" in s for s in calls)
 
     def test_returns_error_if_no_fraises_for_environment(self, mock_runner, tmp_path):
         p = tmp_path / "fraises.yaml"

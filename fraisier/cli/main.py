@@ -835,9 +835,12 @@ def _display_deployment_status(data: dict, environment: str) -> None:
 
 @main.command()
 @click.argument("fraise")
+@click.argument("environment")
 @click.option("--json", is_flag=True, help="Output validation results in JSON format")
 @click.pass_context
-def validate_setup(ctx: click.Context, fraise: str, json: bool) -> None:
+def validate_setup(
+    ctx: click.Context, fraise: str, environment: str, json: bool
+) -> None:
     """Validate socket activation setup for a fraise.
 
     Checks systemd version, socket paths, permissions, and unit files
@@ -845,8 +848,8 @@ def validate_setup(ctx: click.Context, fraise: str, json: bool) -> None:
 
     \b
     Examples:
-        fraisier validate-setup my_api
-        fraisier validate-setup my_api --json
+        fraisier validate-setup my_api development
+        fraisier validate-setup my_api production --json
     """
     import json as json_module
     from pathlib import Path
@@ -859,11 +862,11 @@ def validate_setup(ctx: click.Context, fraise: str, json: bool) -> None:
         console.print(f"[red]Error:[/red] Fraise '{fraise}' not found")
         raise SystemExit(1)
 
-    # Get all environments for this fraise
-    environments = list(fraise_config.get("environments", {}).keys())
-    if not environments:
+    all_environments = fraise_config.get("environments", {})
+    if environment not in all_environments:
         console.print(
-            f"[red]Error:[/red] No environments configured for fraise '{fraise}'"
+            f"[red]Error:[/red] Environment '{environment}' not found"
+            f" for fraise '{fraise}'"
         )
         raise SystemExit(1)
 
@@ -878,20 +881,17 @@ def validate_setup(ctx: click.Context, fraise: str, json: bool) -> None:
         "message": systemd_msg,
     }
 
-    # Check each environment
-    env_results = {}
-    for env in environments:
-        socket_dir = Path("/run/fraisier") / f"{project_name}-{env}"
-        socket_path = socket_dir / "deploy.sock"
-
-        env_checks = {
+    socket_dir = Path("/run/fraisier") / f"{project_name}-{environment}"
+    socket_path = socket_dir / "deploy.sock"
+    env_results = {
+        environment: {
             "socket_directory": _check_socket_directory(socket_dir),
             "socket_file": _check_socket_file(socket_path),
             "socket_permissions": _check_socket_permissions(socket_path),
-            "systemd_units": _check_systemd_units(project_name, env),
+            "systemd_units": _check_systemd_units(project_name, environment),
             "user_permissions": _check_user_permissions(socket_path),
         }
-        env_results[env] = env_checks
+    }
 
     validation_results["environments"] = env_results
 

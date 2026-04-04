@@ -46,25 +46,56 @@ fraises:
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("fraises: {}")
 
-        result = runner.invoke(main, ["-c", str(cfg), "validate-setup", "unknown"])
+        result = runner.invoke(
+            main, ["-c", str(cfg), "validate-setup", "unknown", "development"]
+        )
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
-    def test_validate_setup_no_environments_fails(self, runner, tmp_path):
-        """validate-setup with fraise having no environments fails."""
+    def test_validate_setup_unknown_environment_fails(self, runner, mock_config):
+        """validate-setup with unknown environment fails."""
+        result = runner.invoke(
+            main, ["-c", mock_config, "validate-setup", "my_api", "nonexistent"]
+        )
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_validate_setup_scopes_to_requested_environment(self, runner, tmp_path):
+        """validate-setup only validates the requested environment, not all envs."""
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
 fraises:
   my_api:
-    type: api
-    environments: {}
+    environments:
+      development:
+        name: dev_api
+        app_path: /opt/my_api
+        systemd_service: my_api.service
+      production:
+        name: prod_api
+        app_path: /opt/my_api
+        systemd_service: my_api.service
 """)
+        passing = {"ok": True, "message": "ok"}
+        with (
+            patch(
+                "fraisier.cli.main._check_systemd_version",
+                return_value=(True, "248", "ok"),
+            ),
+            patch("fraisier.cli.main._check_socket_directory", return_value=passing),
+            patch("fraisier.cli.main._check_socket_file", return_value=passing),
+            patch("fraisier.cli.main._check_socket_permissions", return_value=passing),
+            patch("fraisier.cli.main._check_systemd_units", return_value=passing),
+            patch("fraisier.cli.main._check_user_permissions", return_value=passing),
+        ):
+            result = runner.invoke(
+                main,
+                ["-c", str(cfg), "validate-setup", "my_api", "development", "--json"],
+            )
+        import json
 
-        result = runner.invoke(main, ["-c", str(cfg), "validate-setup", "my_api"])
-        assert result.exit_code == 1
-        # The command should fail with the no environments message
-        # Note: Click testing may not capture output correctly for all cases
-        assert result.exception is not None
+        data = json.loads(result.output)
+        assert list(data["environments"].keys()) == ["development"]
 
     def test_validate_setup_command_exists(self, runner):
         """validate-setup command is registered and shows help."""

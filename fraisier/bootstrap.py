@@ -340,7 +340,8 @@ class ServerBootstrapper:
                     "bash",
                     "-c",
                     f"{fraisier_bin} --config {self._FRAISIER_CONFIG_PATH}"
-                    f" validate-setup {shlex.quote(fraise)}",
+                    f" validate-setup {shlex.quote(fraise)}"
+                    f" {shlex.quote(self.environment)}",
                 ],
             )
             if not result.success:
