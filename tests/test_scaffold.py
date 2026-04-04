@@ -1531,7 +1531,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert "listen 80;" in content
         assert "server_name api.myapp.io" in content
         assert "/.well-known/acme-challenge/" in content
@@ -1564,16 +1564,16 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         files = renderer.render()
 
-        assert "nginx/tp_api_development.conf" in files
-        assert "nginx/tp_api_production.conf" in files
+        assert "nginx/api.myapp.dev.conf" in files
+        assert "nginx/api.myapp.io.conf" in files
 
         dev_conf = (
-            tmp_path / "output" / "nginx" / "tp_api_development.conf"
+            tmp_path / "output" / "nginx" / "api.myapp.dev.conf"
         ).read_text()
         assert "server_name api.myapp.dev" in dev_conf
 
         prod_conf = (
-            tmp_path / "output" / "nginx" / "tp_api_production.conf"
+            tmp_path / "output" / "nginx" / "api.myapp.io.conf"
         ).read_text()
         assert "server_name api.myapp.io" in prod_conf
 
@@ -1602,7 +1602,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert "ssl_certificate /etc/ssl/custom/cert.pem" in content
         assert "ssl_certificate_key /etc/ssl/custom/key.pem" in content
         assert "letsencrypt" not in content
@@ -1630,7 +1630,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert "/etc/letsencrypt/live/api.myapp.io/fullchain.pem" in content
         assert "/etc/letsencrypt/live/api.myapp.io/privkey.pem" in content
 
@@ -1659,7 +1659,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert "map $http_origin $cors_origin" in content
         assert "if ($http_origin" not in content
         assert "Access-Control-Allow-Origin $cors_origin" in content
@@ -1691,7 +1691,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert r"https://app\.myapp\.io" in content
         assert "global" not in content
 
@@ -1720,7 +1720,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert r"https://global\.example\.com" in content
 
     def test_per_env_structured_restricted_paths(self, tmp_path):
@@ -1750,7 +1750,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert "location /admin/" in content
         assert "allow 10.0.0.0/8;" in content
         assert "allow 127.0.0.1;" in content
@@ -1810,7 +1810,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        content = (tmp_path / "output" / "nginx" / "tp_api_production.conf").read_text()
+        content = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert "127.0.0.1:9000" in content
 
     def test_dry_run_includes_per_env_nginx(self, tmp_path):
@@ -1836,7 +1836,7 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         files = renderer.render(dry_run=True)
 
-        assert "nginx/tp_api_production.conf" in files
+        assert "nginx/api.myapp.io.conf" in files
         assert not (tmp_path / "output").exists()
 
 
@@ -3212,8 +3212,8 @@ scaffold:
         assert "systemd/tp_worker_production.service" in files
 
         # Per-env nginx for api (has nginx: blocks)
-        assert "nginx/tp_api_development.conf" in files
-        assert "nginx/tp_api_production.conf" in files
+        assert "nginx/api.dev.example.com.conf" in files
+        assert "nginx/api.example.com.conf" in files
 
         # No per-env nginx for worker (no nginx: block)
         worker_nginx = [f for f in files if f.startswith("nginx/tp_worker_")]
@@ -3249,7 +3249,7 @@ scaffold:
 
         # Verify prod nginx content
         prod_nginx = (
-            tmp_path / "output" / "nginx" / "tp_api_production.conf"
+            tmp_path / "output" / "nginx" / "api.example.com.conf"
         ).read_text()
         assert "server_name api.example.com" in prod_nginx
         assert "ssl_certificate /etc/ssl/api/cert.pem" in prod_nginx
