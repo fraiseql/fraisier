@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from fraisier.scaffold.diff import FileDiff
 
@@ -45,3 +46,20 @@ def test_file_diff_dataclass():
     assert diff.installed_path == Path("/etc/systemd/system/test.service")
     assert diff.status == "differs"
     assert diff.diff_lines == ["--- old", "+++ new", "@@ -1 +1 @@", "-old", "+new"]
+
+
+def test_compare_files_permission_denied_on_exists():
+    """_compare_files returns permission_denied when exists() raises PermissionError."""
+    from fraisier.scaffold.diff import _compare_files
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        scaffold_file = Path(temp_dir) / "test.txt"
+        scaffold_file.write_text("content\n")
+        installed_path = Path("/etc/sudoers.d/myapp")
+
+        perm_err = PermissionError("Permission denied")
+        with patch.object(Path, "exists", side_effect=perm_err):
+            result = _compare_files(scaffold_file, installed_path)
+
+    assert result.status == "permission_denied"
+    assert result.diff_lines is None

@@ -67,6 +67,11 @@ def scaffold_diff(
             changed_count += 1
         elif diff.status == "missing_generated":
             console.print(f"[yellow]?[/yellow] {diff.generated_path} - not in scaffold")
+        elif diff.status == "permission_denied":
+            console.print(
+                f"[yellow]![/yellow] {diff.generated_path}"
+                " - permission denied (cannot compare)"
+            )
         elif diff.status == "differs":
             console.print(f"[red]✗[/red] {diff.generated_path}")
             if diff.diff_lines:

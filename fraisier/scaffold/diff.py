@@ -20,7 +20,13 @@ class FileDiff:
     installed_path: (
         Path  # Absolute system path (e.g., /etc/systemd/system/myapp.service)
     )
-    status: Literal["match", "differs", "missing_installed", "missing_generated"]
+    status: Literal[
+        "match",
+        "differs",
+        "missing_installed",
+        "missing_generated",
+        "permission_denied",
+    ]
     diff_lines: list[str] | None = None  # Unified diff lines, None if match
 
 
@@ -123,7 +129,15 @@ def _compare_files(generated_file: Path, installed_path: Path) -> FileDiff:
     rel_path = str(generated_file.relative_to(generated_file.parent.parent))
 
     # Check if installed file exists
-    if not installed_path.exists():
+    try:
+        exists = installed_path.exists()
+    except PermissionError:
+        return FileDiff(
+            generated_path=rel_path,
+            installed_path=installed_path,
+            status="permission_denied",
+        )
+    if not exists:
         return FileDiff(
             generated_path=rel_path,
             installed_path=installed_path,
