@@ -791,7 +791,8 @@ class ScaffoldRenderer:
                 nginx_config = NginxEnvConfig.from_env_dict(env_config)
                 if nginx_config is None:
                     continue
-                out_name = f"nginx/{project}_{name}_{env_name}.conf"
+                nginx_stem = nginx_config.server_name or f"{project}_{name}_{env_name}"
+                out_name = f"nginx/{nginx_stem}.conf"
                 files.append(out_name)
                 if not dry_run:
                     self._render_nginx_env(
