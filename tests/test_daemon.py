@@ -1,6 +1,8 @@
 """Tests for daemon JSON parsing and deployment execution."""
 
 import json
+import os
+import pwd
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -119,6 +121,7 @@ class TestExecuteDeploymentRequest:
             "type": "api",
             "app_path": "/var/www/api",
         }
+        mock_config.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
         mock_get_config.return_value = mock_config
 
         # Mock deployer
@@ -220,6 +223,7 @@ class TestExecuteDeploymentRequest:
             "type": "api",
             "app_path": "/var/www/api",
         }
+        mock_config.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
         mock_get_config.return_value = mock_config
 
         # Mock deployer
@@ -263,6 +267,7 @@ class TestExecuteDeploymentRequest:
             "type": "api",
             "app_path": "/var/www/api",
         }
+        mock_config.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
         mock_get_config.return_value = mock_config
 
         # Mock deployer
@@ -306,6 +311,36 @@ class TestExecuteDeploymentRequest:
         assert status_arg.state == "success"
         assert status_arg.finished_at is not None
         assert status_arg.version == "abc123"
+
+    @patch("fraisier.daemon.get_config")
+    def test_execute_wrong_user_fails_with_clear_message(self, mock_get_config):
+        """Running as wrong user fails before touching the lock, with a clear message."""
+        mock_config = MagicMock()
+        mock_config.get_fraise_environment.return_value = {
+            "type": "api",
+            "app_path": "/var/www/api",
+        }
+        mock_config.get_deploy_user.return_value = "expected_deploy_user"
+        mock_get_config.return_value = mock_config
+
+        request = DeploymentRequest(
+            version=1,
+            project="api",
+            environment="development",
+            branch="dev",
+            timestamp="2026-04-02T11:15:23Z",
+            triggered_by="webhook",
+            options={},
+            metadata={},
+        )
+
+        result = execute_deployment_request(request)
+
+        assert result.success is False
+        assert result.status == "failed"
+        assert result.message == "Wrong user"
+        assert "expected_deploy_user" in result.error_message
+        assert "sudo -u expected_deploy_user" in result.error_message
 
 
 class TestDeployDaemonCommand:
@@ -424,6 +459,7 @@ class TestDeployDaemonCommand:
                 "type": "api",
                 "app_path": "/opt/test",
             }
+            mock_config_instance.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
             mock_config.return_value = mock_config_instance
 
             mock_deployer = MagicMock()
@@ -466,6 +502,7 @@ class TestDeployDaemonCommand:
                 "type": "api",
                 "app_path": "/opt/test",
             }
+            mock_config_instance.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
             mock_config.return_value = mock_config_instance
 
             mock_deployer = MagicMock()

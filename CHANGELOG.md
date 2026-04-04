@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-04-05
+
+### Fixed
+- **Cryptic permission error when `deploy-daemon` runs as wrong user** (#67) — instead of a
+  bare `PermissionError` on the lock file, fraisier now checks the current user against the
+  configured `deploy_user` before acquiring the lock and emits a clear error with a suggested
+  `sudo -u <deploy_user>` command.
+
+---
+
 ## [0.4.17] - 2026-04-05
 
 ### Fixed

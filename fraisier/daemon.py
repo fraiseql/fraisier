@@ -131,6 +131,29 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
                 error_message=error_msg,
             )
 
+        # Check that we're running as the correct deploy user
+        import pwd
+
+        current_user = pwd.getpwuid(os.getuid()).pw_name
+        expected_user = config.get_deploy_user(request.project, request.environment)
+        if current_user != expected_user:
+            error_msg = (
+                f"Deployment must run as '{expected_user}' but running as '{current_user}'.\n"
+                f"Run with: sudo -u {expected_user} fraisier deploy-daemon ..."
+            )
+            logger.error(
+                "Wrong user for deployment",
+                event="deployment_failed",
+                current_user=current_user,
+                expected_user=expected_user,
+            )
+            return DeploymentResult(
+                success=False,
+                status="failed",
+                message="Wrong user",
+                error_message=error_msg,
+            )
+
         # Handle dry-run mode
         if request.options.get("dry_run"):
             logger.info(
