@@ -35,6 +35,50 @@ scaffold:
   deploy_user: myapp_deploy
 """
 
+_YAML_WITH_ENV_BOOTSTRAP = """\
+name: myapp
+fraises:
+  api:
+    type: api
+    environments:
+      production: {}
+      staging: {}
+environments:
+  production:
+    server: prod.example.com
+  staging:
+    server: staging.example.com
+bootstrap:
+  become_password_command: "echo global_pass"
+  environments:
+    production:
+      become_password_command: "echo env_pass"
+scaffold:
+  deploy_user: myapp_deploy
+"""
+
+_YAML_WITH_SERVER_BOOTSTRAP = """\
+name: myapp
+fraises:
+  api:
+    type: api
+    environments:
+      production: {}
+      staging: {}
+environments:
+  production:
+    server: prod.example.com
+  staging:
+    server: staging.example.com
+bootstrap:
+  become_password_command: "echo global_pass"
+  servers:
+    prod.example.com:
+      become_password_command: "echo server_pass"
+scaffold:
+  deploy_user: myapp_deploy
+"""
+
 
 @pytest.fixture
 def runner():
@@ -52,6 +96,20 @@ def config_file_with_server(tmp_path):
 def config_file_no_server(tmp_path):
     p = tmp_path / "fraises.yaml"
     p.write_text(_YAML_NO_SERVER)
+    return p
+
+
+@pytest.fixture
+def config_file_with_env_bootstrap(tmp_path):
+    p = tmp_path / "fraises.yaml"
+    p.write_text(_YAML_WITH_ENV_BOOTSTRAP)
+    return p
+
+
+@pytest.fixture
+def config_file_with_server_bootstrap(tmp_path):
+    p = tmp_path / "fraises.yaml"
+    p.write_text(_YAML_WITH_SERVER_BOOTSTRAP)
     return p
 
 
@@ -671,3 +729,145 @@ class TestBootstrapBecomePasswordCommand:
             ],
         )
         assert result.exit_code != 0
+
+    def test_env_become_password_command_used(
+        self, runner, config_file_with_env_bootstrap
+    ):
+        """bootstrap.environments.<env>.become_password_command overrides global."""
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_env_bootstrap),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--yes",
+                ],
+            )
+
+        assert len(captured) == 1
+        assert captured[0].sudo_password == "env_pass"
+
+    def test_global_become_password_command_fallback(
+        self, runner, config_file_with_env_bootstrap
+    ):
+        """Env without override falls back to bootstrap.become_password_command."""
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_env_bootstrap),
+                    "bootstrap",
+                    "-e",
+                    "staging",
+                    "--yes",
+                ],
+            )
+
+        assert len(captured) == 1
+        assert captured[0].sudo_password == "global_pass"
+
+    def test_server_become_password_command_used(
+        self, runner, config_file_with_server_bootstrap
+    ):
+        """bootstrap.servers.<host>.become_password_command overrides global."""
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server_bootstrap),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--yes",
+                ],
+            )
+
+        assert len(captured) == 1
+        assert captured[0].sudo_password == "server_pass"
+
+    def test_cli_overrides_env_become_password_command(
+        self, runner, config_file_with_env_bootstrap
+    ):
+        """CLI --become-password-command overrides bootstrap.environments config."""
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_env_bootstrap),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--become-password-command",
+                    "echo cli_pass",
+                    "--yes",
+                ],
+            )
+
+        assert len(captured) == 1
+        assert captured[0].sudo_password == "cli_pass"

@@ -145,11 +145,28 @@ def bootstrap(
 
     config = require_config(ctx)
 
-    # Resolution order: CLI command > config command > interactive prompt
+    # Resolution order:
+    # 1. CLI --become-password-command
+    # 2. bootstrap.environments.<env>.become_password_command
+    # 3. bootstrap.servers.<server>.become_password_command
+    # 4. bootstrap.become_password_command (global)
     sudo_password = None
     if become_password_command is None:
         raw_bootstrap = config._config.get("bootstrap", {}) or {}
-        become_password_command = raw_bootstrap.get("become_password_command")
+
+        env_override = (raw_bootstrap.get("environments") or {}).get(environment) or {}
+        become_password_command = env_override.get("become_password_command")
+
+        if become_password_command is None:
+            env_cfg = config.environments.get(environment)
+            server_name = env_cfg.get("server") if isinstance(env_cfg, dict) else None
+            if server_name:
+                servers = raw_bootstrap.get("servers") or {}
+                srv_override = servers.get(server_name) or {}
+                become_password_command = srv_override.get("become_password_command")
+
+        if become_password_command is None:
+            become_password_command = raw_bootstrap.get("become_password_command")
 
     if become_password_command:
         sudo = True

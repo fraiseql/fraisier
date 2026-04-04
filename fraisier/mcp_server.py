@@ -109,9 +109,23 @@ async def bootstrap_server(
     sudo_password = None
 
     if sudo:
-        # Resolution: config command > MCP elicitation
+        # Resolution: env-specific > server-specific > global > MCP elicitation
         raw_bootstrap = config._config.get("bootstrap", {}) or {}
-        cmd = raw_bootstrap.get("become_password_command")
+
+        env_override = (raw_bootstrap.get("environments") or {}).get(environment) or {}
+        cmd = env_override.get("become_password_command")
+
+        if cmd is None:
+            env_cfg = config.environments.get(environment)
+            server_name = env_cfg.get("server") if isinstance(env_cfg, dict) else None
+            if server_name:
+                servers = raw_bootstrap.get("servers") or {}
+                srv_override = servers.get(server_name) or {}
+                cmd = srv_override.get("become_password_command")
+
+        if cmd is None:
+            cmd = raw_bootstrap.get("become_password_command")
+
         if cmd:
             sudo_password = resolve_become_password(cmd)
         elif ctx is not None:
