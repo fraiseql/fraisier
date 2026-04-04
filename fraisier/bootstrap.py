@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import shlex
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -314,18 +315,38 @@ class ServerBootstrapper:
 
     def _validate(self) -> StepResult:
         fraisier_bin = f"/home/{self.deploy_user}/.local/bin/fraisier"
-        return self._run_remote(
-            "Validate setup",
-            [
-                "sudo",
-                "-u",
-                self.deploy_user,
-                "-H",
-                "bash",
-                "-c",
-                f"{fraisier_bin} --config {self._FRAISIER_CONFIG_PATH} validate-setup",
-            ],
-        )
+
+        fraises = [
+            name
+            for name, fraise_config in self.config.fraises.items()
+            if self.environment in fraise_config.get("environments", {})
+        ]
+
+        if not fraises:
+            return StepResult(
+                name="Validate setup",
+                success=False,
+                error=f"No fraises found for environment '{self.environment}'",
+            )
+
+        for fraise in fraises:
+            result = self._run_remote(
+                f"Validate setup ({fraise})",
+                [
+                    "sudo",
+                    "-u",
+                    self.deploy_user,
+                    "-H",
+                    "bash",
+                    "-c",
+                    f"{fraisier_bin} --config {self._FRAISIER_CONFIG_PATH}"
+                    f" validate-setup {shlex.quote(fraise)}",
+                ],
+            )
+            if not result.success:
+                return result
+
+        return StepResult(name="Validate setup", success=True)
 
     # ------------------------------------------------------------------
     # Helpers

@@ -17,5 +17,5 @@ Usage:
     fraisier status <fraise> <environment>  # Check fraise status
 """
 
-__version__ = "0.4.8"
+__version__ = "0.4.10"
 __all__ = ["__version__"]

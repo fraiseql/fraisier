@@ -370,6 +370,26 @@ class TestEnableSockets:
         assert "nonexistent" in step.error
 
 
+_TWO_FRAISE_YAML = """\
+name: myapp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        name: myapp-api-prod
+        server: prod.example.com
+  worker:
+    type: worker
+    environments:
+      production:
+        name: myapp-worker-prod
+        server: prod.example.com
+scaffold:
+  deploy_user: myapp_deploy
+"""
+
+
 class TestValidate:
     def test_calls_fraisier_validate_setup(self, bootstrapper, mock_runner):
         step = bootstrapper._validate()
@@ -379,11 +399,56 @@ class TestValidate:
         assert "fraisier" in cmd_str
         assert "validate-setup" in cmd_str
         assert "/opt/fraisier/fraises.yaml" in cmd_str
+        assert "api" in cmd_str
 
     def test_uses_deploy_user(self, bootstrapper, mock_runner):
         bootstrapper._validate()
         cmd = mock_runner.run.call_args[0][0]
         assert "myapp_deploy" in cmd
+
+    def test_iterates_all_fraises_for_environment(self, mock_runner, tmp_path):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(_TWO_FRAISE_YAML)
+        bootstrapper = ServerBootstrapper(
+            config=FraisierConfig(p),
+            environment="production",
+            runner=mock_runner,
+            fraises_yaml_path=p,
+        )
+        step = bootstrapper._validate()
+        assert step.success is True
+        assert mock_runner.run.call_count == 2
+        calls = [" ".join(c[0][0]) for c in mock_runner.run.call_args_list]
+        assert any("api" in s for s in calls)
+        assert any("worker" in s for s in calls)
+
+    def test_returns_error_if_no_fraises_for_environment(self, mock_runner, tmp_path):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(_MINIMAL_YAML)
+        bootstrapper = ServerBootstrapper(
+            config=FraisierConfig(p),
+            environment="nonexistent",
+            runner=mock_runner,
+            fraises_yaml_path=p,
+        )
+        step = bootstrapper._validate()
+        assert step.success is False
+        assert "nonexistent" in step.error
+        mock_runner.run.assert_not_called()
+
+    def test_stops_at_first_failing_fraise(self, mock_runner, tmp_path):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(_TWO_FRAISE_YAML)
+        bootstrapper = ServerBootstrapper(
+            config=FraisierConfig(p),
+            environment="production",
+            runner=mock_runner,
+            fraises_yaml_path=p,
+        )
+        mock_runner.run.side_effect = [_err("validate failed"), _OK]
+        step = bootstrapper._validate()
+        assert step.success is False
+        assert mock_runner.run.call_count == 1
 
 
 # ---------------------------------------------------------------------------
