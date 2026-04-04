@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.17] - 2026-04-05
+
+### Fixed
+- **Per-env nginx configs had wrong filename and were not installed** (#110) — files were named
+  `{project}_{fraise}_{env}.conf` instead of `{server_name}.conf`, mismatching nginx conventions.
+  The renderer now uses `nginx_config.server_name` as the filename stem. The generated `install.sh`
+  now also copies and symlinks each per-env config into `/etc/nginx/sites-available/` and
+  `/etc/nginx/sites-enabled/`, then reloads nginx — previously only `gateway.conf` was installed.
+
+---
+
 ## [0.4.14] - 2026-04-04
 
 ### Fixed
