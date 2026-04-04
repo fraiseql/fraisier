@@ -642,6 +642,17 @@ class FraisierConfig:
                     f"{systemd_service!r}"
                 )
 
+        # systemd_deploy_socket name validation
+        systemd_deploy_socket = env.get("systemd_deploy_socket")
+        if systemd_deploy_socket is not None:
+            base = str(systemd_deploy_socket)
+            base = base.removesuffix(".socket")
+            if not base or not _UNIT_NAME_RE.match(base):
+                errors.append(
+                    f"{fraise_name}: systemd_deploy_socket contains invalid "
+                    f"characters: {systemd_deploy_socket!r}"
+                )
+
         # clone_url format validation
         clone_url = env.get("clone_url")
         if clone_url and not _GIT_URL_RE.match(str(clone_url)):

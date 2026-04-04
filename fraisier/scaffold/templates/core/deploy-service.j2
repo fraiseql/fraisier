@@ -1,7 +1,7 @@
 [Unit]
-Description=Fraisier Deploy Service - {{ project_name }}-{{ fraise_name }}-{{ environment }}
-Requires=fraisier-{{ project_name }}-{{ fraise_name }}-{{ environment }}-deploy.socket
-After=fraisier-{{ project_name }}-{{ fraise_name }}-{{ environment }}-deploy.socket
+Description=Fraisier Deploy Service - {{ socket_stem }}
+Requires={{ socket_unit_name }}
+After={{ socket_unit_name }}
 Documentation=https://fraisier.readthedocs.io/en/latest/socket-deployment.html
 
 [Service]
@@ -25,7 +25,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 
 # Logging
-SyslogIdentifier=fraisier-{{ project_name }}-{{ environment }}
+SyslogIdentifier={{ socket_stem }}
 
 [Install]
 WantedBy=multi-user.target
