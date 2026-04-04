@@ -17,5 +17,7 @@ Usage:
     fraisier status <fraise> <environment>  # Check fraise status
 """
 
-__version__ = "0.4.15"
+from importlib.metadata import version
+
+__version__ = version("fraisier")
 __all__ = ["__version__"]
