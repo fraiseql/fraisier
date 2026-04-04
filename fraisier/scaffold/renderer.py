@@ -816,12 +816,16 @@ class ScaffoldRenderer:
         hc_port = _extract_port(hc_url) if hc_url else None
         port = service.port or hc_port or 8000
 
+        socket_unit = deploy_socket_name(env_config, env_name)
+        socket_stem = socket_unit.removesuffix(".socket")
+
         ctx = {
             **self.context,
             "fraise": fraise,
             "env_name": env_name,
             "nginx_config": nginx_config,
             "port": port,
+            "socket_stem": socket_stem,
         }
         try:
             template = self.env.get_template("core/gateway_env.conf.j2")
