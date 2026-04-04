@@ -876,7 +876,6 @@ def validate_setup(
 
     from fraisier.naming import deploy_socket_name
 
-    project_name = config.project_name
     validation_results = {}
 
     # Check systemd version
