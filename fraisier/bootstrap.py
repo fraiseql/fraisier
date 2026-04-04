@@ -289,10 +289,27 @@ class ServerBootstrapper:
         return self._run_remote("Run install.sh --standalone", cmd)
 
     def _enable_sockets(self) -> StepResult:
-        socket_name = f"fraisier-{self.project_name}-{self.environment}-deploy.socket"
+        from fraisier.naming import deploy_socket_name
+
+        sockets = [
+            deploy_socket_name(env_config, self.environment)
+            for fraise_config in self.config.fraises.values()
+            for env_config in [
+                fraise_config.get("environments", {}).get(self.environment)
+            ]
+            if env_config is not None
+        ]
+
+        if not sockets:
+            return StepResult(
+                name="Enable and start deploy socket",
+                success=False,
+                error=f"No fraises found for environment '{self.environment}'",
+            )
+
         return self._run_remote(
             "Enable and start deploy socket",
-            ["systemctl", "enable", "--now", socket_name],
+            ["systemctl", "enable", "--now", *sockets],
         )
 
     def _validate(self) -> StepResult:

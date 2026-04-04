@@ -20,6 +20,7 @@ from fraisier.config import (
     NginxEnvConfig,
     ServiceConfig,
 )
+from fraisier.naming import deploy_socket_name
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -354,6 +355,7 @@ class ScaffoldRenderer:
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        self.env.globals["deploy_socket_name"] = deploy_socket_name
         self.context = _build_context(config, server)
 
     def get_core_template_paths(self) -> list[str]:
@@ -378,25 +380,20 @@ class ScaffoldRenderer:
 
         # Systemd units
         for fraise in self.context["fraises"]:
-            fraise_name = fraise["name"]
-            for env_name in fraise.get("environments", {}):
+            for env_name, env_config in fraise.get("environments", {}).items():
                 # Deploy socket and service
-                socket_name = (
-                    f"fraisier-{project_name}-{fraise_name}-{env_name}-deploy.socket"
-                )
-                service_name = (
-                    f"fraisier-{project_name}-{fraise_name}-{env_name}-deploy@.service"
-                )
+                socket_unit = deploy_socket_name(env_config, env_name)
+                socket_stem = socket_unit.removesuffix(".socket")
+                service_unit = f"{socket_stem}@.service"
 
-                mapping[f"systemd/{socket_name}"] = Path(
-                    f"/etc/systemd/system/{socket_name}"
+                mapping[f"systemd/{socket_unit}"] = Path(
+                    f"/etc/systemd/system/{socket_unit}"
                 )
-                mapping[f"systemd/{service_name}"] = Path(
-                    f"/etc/systemd/system/{service_name}"
+                mapping[f"systemd/{service_unit}"] = Path(
+                    f"/etc/systemd/system/{service_unit}"
                 )
 
                 # Service unit (if exists)
-                env_config = fraise["environments"][env_name]
                 if "service_base" in env_config:
                     svc = env_config["service_base"]
                     mapping[f"systemd/{svc}.service"] = Path(
@@ -572,23 +569,23 @@ class ScaffoldRenderer:
     def _render_deploy_socket_services(self, dry_run: bool) -> list[str]:
         """Render socket-activated deploy units for each fraise-environment combo."""
         rendered: list[str] = []
-        project = self.context["project_name"]
 
         for fraise in self.context["fraises"]:
             fraise_name = fraise["name"]
-            for env_name in fraise.get("environments", {}):
-                # Socket unit — one per fraise+env to avoid filename collisions
-                prefix = f"fraisier-{project}-{fraise_name}-{env_name}-deploy"
-                socket_name = f"systemd/{prefix}.socket"
-                rendered.append(socket_name)
+            for env_name, env_config in fraise.get("environments", {}).items():
+                socket_unit = deploy_socket_name(env_config, env_name)
+                socket_stem = socket_unit.removesuffix(".socket")
+
+                socket_rel = f"systemd/{socket_unit}"
+                rendered.append(socket_rel)
                 if not dry_run:
-                    self._render_deploy_socket(fraise_name, env_name, socket_name)
+                    self._render_deploy_socket(fraise_name, env_name, socket_rel)
 
                 # Service unit (template unit: @.service required by Accept=yes)
-                service_name = f"systemd/{prefix}@.service"
-                rendered.append(service_name)
+                service_rel = f"systemd/{socket_stem}@.service"
+                rendered.append(service_rel)
                 if not dry_run:
-                    self._render_deploy_service(fraise_name, env_name, service_name)
+                    self._render_deploy_service(fraise_name, env_name, service_rel)
 
         return rendered
 
@@ -606,12 +603,18 @@ class ScaffoldRenderer:
         if not fraise_config:
             return
 
+        env_config = fraise_config.get("environments", {}).get(env_name, {})
+        socket_unit = deploy_socket_name(env_config, env_name)
+        socket_stem = socket_unit.removesuffix(".socket")
+
         # Update context with environment-specific values
         socket_context = dict(self.context)
         socket_context.update(
             {
                 "fraise_name": fraise_name,
                 "environment": env_name,
+                "socket_unit_name": socket_unit,
+                "socket_stem": socket_stem,
             }
         )
 
@@ -637,12 +640,18 @@ class ScaffoldRenderer:
         if not fraise_config:
             return
 
+        env_config = fraise_config.get("environments", {}).get(env_name, {})
+        socket_unit = deploy_socket_name(env_config, env_name)
+        socket_stem = socket_unit.removesuffix(".socket")
+
         # Update context with environment-specific values
         service_context = dict(self.context)
         service_context.update(
             {
                 "fraise_name": fraise_name,
                 "environment": env_name,
+                "socket_unit_name": socket_unit,
+                "socket_stem": socket_stem,
             }
         )
 

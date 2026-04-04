@@ -23,7 +23,11 @@ fraises:
     type: api
     environments:
       production:
+        name: myapp-api-prod
         server: prod.example.com
+      staging:
+        name: myapp-api-staging
+        server: staging.example.com
 scaffold:
   deploy_user: myapp_deploy
 """
@@ -339,9 +343,11 @@ class TestEnableSockets:
         cmd = mock_runner.run.call_args[0][0]
         assert "systemctl" in cmd
         assert "enable" in cmd
-        assert "fraisier-myapp-production-deploy.socket" in cmd
+        assert "fraisier-myapp-api-prod.socket" in cmd
 
-    def test_uses_environment_in_socket_name(self, config, mock_runner, tmp_path):
+    def test_uses_environment_name_field_in_socket_name(
+        self, config, mock_runner, tmp_path
+    ):
         b = ServerBootstrapper(
             config=config,
             environment="staging",
@@ -350,7 +356,18 @@ class TestEnableSockets:
         )
         b._enable_sockets()
         cmd = mock_runner.run.call_args[0][0]
-        assert "fraisier-myapp-staging-deploy.socket" in cmd
+        assert "fraisier-myapp-api-staging.socket" in cmd
+
+    def test_fails_when_environment_has_no_fraises(self, config, mock_runner, tmp_path):
+        b = ServerBootstrapper(
+            config=config,
+            environment="nonexistent",
+            runner=mock_runner,
+            fraises_yaml_path=tmp_path / "fraises.yaml",
+        )
+        step = b._enable_sockets()
+        assert step.success is False
+        assert "nonexistent" in step.error
 
 
 class TestValidate:

@@ -41,7 +41,23 @@ def compute_scaffold_diff(
     Returns:
         List of FileDiff objects representing differences
     """
+    from fraisier.naming import deploy_socket_name
     from fraisier.scaffold.renderer import ScaffoldRenderer
+
+    # Pre-compute the set of deploy unit paths that match the filters.
+    # This replaces filename-parsing since new names don't encode fraise/env.
+    matching_deploy_paths: set[str] = set()
+    if fraise_filter or env_filter:
+        for fraise_name, fraise_cfg in config.fraises.items():
+            if fraise_filter and fraise_name != fraise_filter:
+                continue
+            for env_key, env_cfg in fraise_cfg.get("environments", {}).items():
+                if env_filter and env_key != env_filter:
+                    continue
+                socket_unit = deploy_socket_name(env_cfg, env_key)
+                socket_stem = socket_unit.removesuffix(".socket")
+                matching_deploy_paths.add(f"systemd/{socket_unit}")
+                matching_deploy_paths.add(f"systemd/{socket_stem}@.service")
 
     # Create renderer and temporarily change output dir to temp directory
     renderer = ScaffoldRenderer(config, server=server)
@@ -76,7 +92,7 @@ def compute_scaffold_diff(
 
             # Apply filters if specified
             if fraise_filter or env_filter:
-                if not _file_matches_filters(rel_path, fraise_filter, env_filter):
+                if not _file_matches_filters(rel_path, matching_deploy_paths):
                     continue
 
             # Compare files
@@ -88,7 +104,7 @@ def compute_scaffold_diff(
             if installed_path.exists() and not (temp_path / rel_path).exists():
                 # Apply filters
                 if fraise_filter or env_filter:
-                    if not _file_matches_filters(rel_path, fraise_filter, env_filter):
+                    if not _file_matches_filters(rel_path, matching_deploy_paths):
                         continue
 
                 results.append(
@@ -158,25 +174,14 @@ def _compare_files(generated_file: Path, installed_path: Path) -> FileDiff:
         )
 
 
-def _file_matches_filters(
-    rel_path: str, fraise_filter: str | None, env_filter: str | None
-) -> bool:
-    """Check if a file path matches the given filters."""
-    if not fraise_filter and not env_filter:
+def _file_matches_filters(rel_path: str, matching_deploy_paths: set[str]) -> bool:
+    """Check if a path matches the pre-computed set of allowed deploy unit paths."""
+    if not matching_deploy_paths:
         return True
 
-    # Extract fraise and env from path patterns
-    # Examples: systemd/fraisier-myproj-api-prod-deploy.socket -> fraise=api, env=prod
-    if "systemd/" in rel_path and ("-deploy" in rel_path or "-service" in rel_path):
-        # Parse systemd unit names: fraisier-{project}-{fraise}-{env}-deploy.*
-        parts = rel_path.split("-")
-        if len(parts) >= 4 and parts[0] == "systemd/fraisier":
-            fraise = parts[2]
-            env = parts[3]
+    # Deploy socket/service units are checked against the pre-computed set.
+    # Other files (nginx, sudoers, timers, ...) are always included.
+    if "systemd/" in rel_path and "deploy" in rel_path:
+        return rel_path in matching_deploy_paths
 
-            if fraise_filter and fraise != fraise_filter:
-                return False
-            return not (env_filter and env != env_filter)
-
-    # For other files, we can't easily filter, so include them
     return True

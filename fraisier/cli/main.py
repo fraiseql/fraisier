@@ -1137,12 +1137,15 @@ def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> 
         )
         raise SystemExit(1)
 
+    from fraisier.naming import deploy_socket_name
+
     project_name = config.project_name
     run_dir = Path("/run/fraisier")
-    socket_path = run_dir / f"{project_name}-{environment}" / "deploy.sock"
+    socket_unit = deploy_socket_name(fraise_config, environment)
+    socket_stem = socket_unit.removesuffix(".socket")
+    socket_path = run_dir / socket_stem / "deploy.sock"
     status_path = run_dir / f"{project_name}-{environment}.last_deployment"
     service_name = fraise_config.get("systemd_service")
-    socket_unit = f"fraisier-{project_name}-{environment}-deploy.socket"
 
     socket_check = _diagnose_socket_connectivity(socket_path)
     status_check = _diagnose_deployment_status(status_path)

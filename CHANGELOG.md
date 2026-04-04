@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-04-04
+
+### Added
+- **`fraisier/naming.py`** — new `deploy_socket_name(env_config, env_key)` helper as the
+  single source of truth for deploy socket unit names. Resolves in order:
+  1. explicit `systemd_deploy_socket` field in environment config
+  2. `fraisier-{env.name}.socket` derived from the environment's `name` field
+  3. `fraisier-{env_key}.socket` derived from the environment dict key
+- **`systemd_deploy_socket` config field** — optional per-environment override for the
+  deploy socket unit name (validated against the same regex as `systemd_service`)
+
+### Changed
+- **Deploy socket unit names** now derived from the environment `name` field (e.g.
+  `fraisier-api.myapp.io.socket`) instead of the verbose
+  `fraisier-{project}-{fraise}-{env}-deploy.socket` pattern
+- **`ListenStream` socket path** in generated units updated to match the new naming
+  (`/run/fraisier/{socket_stem}/deploy.sock`)
+- **`fraisier/scaffold/renderer.py`** — all consumers call `deploy_socket_name()`;
+  `socket_unit_name` and `socket_stem` added to socket/service template contexts;
+  `deploy_socket_name` registered as a Jinja2 global for use in templates
+- **`fraisier/scaffold/diff.py`** — filter logic replaced: pre-computes the set of
+  matching deploy unit paths from config instead of parsing filenames with a regex
+- **`fraisier/bootstrap.py`** — `_enable_sockets()` now iterates all fraises for the
+  target environment and enables each socket; returns a clear error if no fraises match
+- **`fraisier/cli/main.py`** — `diagnose` command derives `socket_unit` and `socket_path`
+  via `deploy_socket_name()`
+
+### Fixed
+- **Bootstrap enabled the wrong socket unit** (#95) — bootstrap was building
+  `fraisier-{project}-{env}-deploy.socket`, missing the fraise name, causing
+  `systemctl enable` to fail. Fixed as a side effect of centralising naming in #96.
+
+---
+
 ## [0.4.3] - 2026-04-03
 
 ### Added
