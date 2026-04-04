@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.14] - 2026-04-04
+
+### Fixed
+- **Bootstrap double-sudo fails silently for steps 4 and 10** (#104) — when using `--sudo`
+  with a non-root SSH user, the outer `sudo -S` consumed the password from stdin, leaving the
+  inner `sudo -u <deploy_user>` with no stdin to read from. Steps 3, 4, and 10 now use
+  `sudo -n -u` (non-interactive), which prevents any stdin read since root needs no password
+  to switch users.
+- **Bootstrap step 4 installs wrong fraisier version on server** (#103) — `_install_fraisier`
+  read the version from the hardcoded `__init__.__version__` string, which could be stale
+  relative to `pyproject.toml`. It now uses `importlib.metadata.version("fraisier")`, which
+  always reflects the actually-installed package version.
+
+---
+
 ## [0.4.13] - 2026-04-04
 
 ### Fixed

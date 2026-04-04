@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+from importlib.metadata import version as importlib_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -182,6 +183,7 @@ class ServerBootstrapper:
             "Install uv for deploy user",
             [
                 "sudo",
+                "-n",
                 "-u",
                 self.deploy_user,
                 "-H",
@@ -193,19 +195,19 @@ class ServerBootstrapper:
         )
 
     def _install_fraisier(self) -> StepResult:
-        from fraisier import __version__
-
+        client_version = importlib_version("fraisier")
         uv_path = f"/home/{self.deploy_user}/.local/bin/uv"
         return self._run_remote(
             "Install fraisier for deploy user",
             [
                 "sudo",
+                "-n",
                 "-u",
                 self.deploy_user,
                 "-H",
                 "bash",
                 "-c",
-                f"{uv_path} tool install --force fraisier=={__version__}",
+                f"{uv_path} tool install --force fraisier=={client_version}",
             ],
         )
 
@@ -327,6 +329,7 @@ class ServerBootstrapper:
                 f"Validate setup ({fraise})",
                 [
                     "sudo",
+                    "-n",
                     "-u",
                     self.deploy_user,
                     "-H",

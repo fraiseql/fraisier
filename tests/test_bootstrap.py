@@ -233,21 +233,35 @@ class TestInstallUv:
         check_cmd = mock_runner.run.call_args[0][0]
         assert any("myapp_deploy" in part for part in check_cmd)
 
+    def test_uses_noninteractive_sudo(self, bootstrapper, mock_runner):
+        """Inner sudo must use -n to avoid consuming stdin when outer sudo is active."""
+        mock_runner.run.side_effect = [_err(), _OK]
+        bootstrapper._install_uv()
+        install_cmd = mock_runner.run.call_args[0][0]
+        assert install_cmd[:3] == ["sudo", "-n", "-u"]
+
 
 class TestInstallFraisier:
     def test_always_installs_pinned_version(self, bootstrapper, mock_runner):
-        from fraisier import __version__
-
-        step = bootstrapper._install_fraisier()
+        with patch("fraisier.bootstrap.importlib_version", return_value="1.2.3"):
+            step = bootstrapper._install_fraisier()
         assert step.success is True
         install_cmd = mock_runner.run.call_args[0][0]
         cmd_str = " ".join(install_cmd)
         assert "--force" in cmd_str
-        assert f"fraisier=={__version__}" in cmd_str
+        assert "fraisier==1.2.3" in cmd_str
+
+    def test_uses_noninteractive_sudo(self, bootstrapper, mock_runner):
+        """Inner sudo must use -n to avoid consuming stdin when outer sudo is active."""
+        with patch("fraisier.bootstrap.importlib_version", return_value="0.4.14"):
+            bootstrapper._install_fraisier()
+        install_cmd = mock_runner.run.call_args[0][0]
+        assert install_cmd[:3] == ["sudo", "-n", "-u"]
 
     def test_failure_returns_failed_step(self, bootstrapper, mock_runner):
-        mock_runner.run.side_effect = _err("permission denied")
-        step = bootstrapper._install_fraisier()
+        with patch("fraisier.bootstrap.importlib_version", return_value="0.4.14"):
+            mock_runner.run.side_effect = _err("permission denied")
+            step = bootstrapper._install_fraisier()
         assert step.success is False
 
 
@@ -441,6 +455,12 @@ class TestValidate:
         assert "nonexistent" in step.error
         mock_runner.run.assert_not_called()
 
+    def test_uses_noninteractive_sudo(self, bootstrapper, mock_runner):
+        """Inner sudo must use -n to avoid consuming stdin when outer sudo is active."""
+        bootstrapper._validate()
+        cmd = mock_runner.run.call_args[0][0]
+        assert cmd[:3] == ["sudo", "-n", "-u"]
+
     def test_stops_at_first_failing_fraise(self, mock_runner, tmp_path):
         p = tmp_path / "fraises.yaml"
         p.write_text(_TWO_FRAISE_YAML)
@@ -465,14 +485,16 @@ class TestBootstrapFlow:
     def test_dry_run_succeeds_without_any_runner_calls(
         self, dry_bootstrapper, mock_runner
     ):
-        result = dry_bootstrapper.bootstrap()
+        with patch("fraisier.bootstrap.importlib_version", return_value="0.4.14"):
+            result = dry_bootstrapper.bootstrap()
         assert result.success is True
         mock_runner.run.assert_not_called()
         mock_runner.upload.assert_not_called()
         mock_runner.upload_tree.assert_not_called()
 
     def test_dry_run_produces_ten_steps(self, dry_bootstrapper):
-        result = dry_bootstrapper.bootstrap()
+        with patch("fraisier.bootstrap.importlib_version", return_value="0.4.14"):
+            result = dry_bootstrapper.bootstrap()
         assert len(result.steps) == 10
 
     def test_aborts_after_first_failure(self, bootstrapper, mock_runner):
