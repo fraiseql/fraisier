@@ -1567,14 +1567,10 @@ scaffold:
         assert "nginx/api.myapp.dev.conf" in files
         assert "nginx/api.myapp.io.conf" in files
 
-        dev_conf = (
-            tmp_path / "output" / "nginx" / "api.myapp.dev.conf"
-        ).read_text()
+        dev_conf = (tmp_path / "output" / "nginx" / "api.myapp.dev.conf").read_text()
         assert "server_name api.myapp.dev" in dev_conf
 
-        prod_conf = (
-            tmp_path / "output" / "nginx" / "api.myapp.io.conf"
-        ).read_text()
+        prod_conf = (tmp_path / "output" / "nginx" / "api.myapp.io.conf").read_text()
         assert "server_name api.myapp.io" in prod_conf
 
     def test_per_env_custom_ssl_paths(self, tmp_path):
