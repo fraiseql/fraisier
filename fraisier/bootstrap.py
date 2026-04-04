@@ -14,6 +14,28 @@ if TYPE_CHECKING:
     from fraisier.runners import SSHRunner
 
 
+def resolve_become_password(command: str) -> str:
+    """Run a shell command and capture its stdout as the sudo password.
+
+    The command output is stripped of trailing whitespace.  If the command
+    exits with a non-zero status, a ``RuntimeError`` is raised containing
+    the stderr output.
+
+    **Security**: the returned value must never be logged.
+    """
+    result = subprocess.run(
+        command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = f"become_password_command failed: {result.stderr.strip()}"
+        raise RuntimeError(msg)
+    return result.stdout.strip()
+
+
 @dataclass
 class StepResult:
     """Outcome of a single bootstrap step."""

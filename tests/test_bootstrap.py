@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fraisier.bootstrap import BootstrapResult, ServerBootstrapper, StepResult
+from fraisier.bootstrap import (
+    BootstrapResult,
+    ServerBootstrapper,
+    StepResult,
+    resolve_become_password,
+)
 from fraisier.config import FraisierConfig
 from fraisier.runners import SSHRunner
 
@@ -423,3 +428,38 @@ class TestBootstrapFlow:
 
         assert result.success is False
         mock_cleanup.assert_called_once_with("/tmp/x")
+
+
+# ---------------------------------------------------------------------------
+# resolve_become_password
+# ---------------------------------------------------------------------------
+
+
+class TestResolveBecomePassword:
+    def test_captures_stdout(self):
+        password = resolve_become_password("echo hunter2")
+        assert password == "hunter2"
+
+    def test_strips_trailing_newline(self):
+        password = resolve_become_password("printf 'secret\\n'")
+        assert password == "secret"
+
+    def test_strips_trailing_whitespace(self):
+        password = resolve_become_password("printf 'secret  \\n'")
+        assert password == "secret"
+
+    def test_raises_on_nonzero_exit(self):
+        with pytest.raises(RuntimeError, match="become_password_command failed"):
+            resolve_become_password("false")
+
+    def test_raises_includes_stderr(self):
+        with pytest.raises(RuntimeError, match="not found"):
+            resolve_become_password("echo 'not found' >&2 && exit 1")
+
+    def test_supports_pipe_commands(self):
+        password = resolve_become_password("echo 'hello world' | cut -d' ' -f2")
+        assert password == "world"
+
+    def test_empty_output_returns_empty_string(self):
+        password = resolve_become_password("printf ''")
+        assert password == ""

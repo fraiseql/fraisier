@@ -471,3 +471,203 @@ class TestBootstrapSSHConfigResolution:
         assert runner.user == "deployer"
         assert runner.port == 2222
         assert runner.key_path == "/home/user/.ssh/deploy_key"
+
+
+class TestBootstrapAskBecomePass:
+    """Tests for --ask-become-pass / -K flag."""
+
+    def test_help_lists_ask_become_pass(self, runner):
+        result = runner.invoke(main, ["bootstrap", "--help"])
+        assert "--ask-become-pass" in result.output
+
+    def test_short_flag_k(self, runner):
+        result = runner.invoke(main, ["bootstrap", "--help"])
+        assert "-K" in result.output
+
+    def test_ask_become_pass_implies_sudo(self, runner, config_file_with_server):
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--ask-become-pass",
+                    "--yes",
+                ],
+                input="secret\n",
+            )
+
+        assert len(captured) == 1
+        assert captured[0].use_sudo is True
+        assert captured[0].sudo_password == "secret"
+
+    def test_ask_become_pass_prompts_for_password(
+        self, runner, config_file_with_server
+    ):
+        with patch("fraisier.bootstrap.ServerBootstrapper") as mock_bs_cls:
+            mock_bs_cls.return_value.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "-K",
+                    "--yes",
+                ],
+                input="mypassword\n",
+            )
+        assert result.exit_code == 0
+        assert "SUDO password" in result.output
+
+
+class TestBootstrapBecomePasswordCommand:
+    """Tests for --become-password-command flag."""
+
+    def test_help_lists_become_password_command(self, runner):
+        result = runner.invoke(main, ["bootstrap", "--help"])
+        assert "--become-password-command" in result.output
+
+    def test_command_provides_password(self, runner, config_file_with_server):
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--become-password-command",
+                    "echo hunter2",
+                    "--yes",
+                ],
+            )
+
+        assert len(captured) == 1
+        assert captured[0].use_sudo is True
+        assert captured[0].sudo_password == "hunter2"
+
+    def test_command_implies_sudo(self, runner, config_file_with_server):
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--become-password-command",
+                    "echo secret",
+                    "--yes",
+                ],
+            )
+
+        assert len(captured) == 1
+        assert captured[0].use_sudo is True
+
+    def test_command_takes_precedence_over_ask(self, runner, config_file_with_server):
+        """--become-password-command wins over --ask-become-pass."""
+        captured: list = []
+
+        def fake_bootstrapper(**kwargs):
+            from fraisier.runners import SSHRunner
+
+            runner_arg = kwargs.get("runner")
+            if isinstance(runner_arg, SSHRunner):
+                captured.append(runner_arg)
+            m = MagicMock()
+            m.bootstrap.return_value = BootstrapResult(
+                steps=[StepResult(name="s", success=True)]
+            )
+            return m
+
+        _bs_path = "fraisier.bootstrap.ServerBootstrapper"
+        with patch(_bs_path, side_effect=fake_bootstrapper):
+            runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(config_file_with_server),
+                    "bootstrap",
+                    "-e",
+                    "production",
+                    "--become-password-command",
+                    "echo fromcmd",
+                    "--ask-become-pass",
+                    "--yes",
+                ],
+                input="fromprompt\n",
+            )
+
+        assert len(captured) == 1
+        assert captured[0].sudo_password == "fromcmd"
+
+    def test_failed_command_exits_nonzero(self, runner, config_file_with_server):
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                str(config_file_with_server),
+                "bootstrap",
+                "-e",
+                "production",
+                "--become-password-command",
+                "false",
+                "--yes",
+            ],
+        )
+        assert result.exit_code != 0
