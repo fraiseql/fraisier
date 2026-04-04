@@ -286,16 +286,32 @@ _run sudo systemctl daemon-reload
 
 # Install nginx config
 if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ]; then
-    echo "  Installing nginx config"
+    echo "  Installing nginx gateway config"
     _run sudo cp "${SCAFFOLD_DIR}/nginx/gateway.conf" \
        /etc/nginx/sites-available/{{ project_name }}
     _run sudo ln -sf /etc/nginx/sites-available/{{ project_name }} \
            /etc/nginx/sites-enabled/{{ project_name }}
-    if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
-        sudo nginx -t && sudo systemctl reload nginx
-    elif [[ "$DRY_RUN" == "true" ]]; then
-        echo "    [would run] sudo nginx -t && sudo systemctl reload nginx"
-    fi
+fi
+
+{% for fraise in fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% set nginx_stem = env_config.get('nginx', {}).get('server_name') or (fraise.get('name', '') + '_' + env_name) if env_config.get('nginx') else None %}
+{% if nginx_stem %}
+if [ -f "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" ]; then
+    echo "  Installing nginx config for {{ nginx_stem }}"
+    _run sudo cp "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" \
+       /etc/nginx/sites-available/{{ nginx_stem }}
+    _run sudo ln -sf /etc/nginx/sites-available/{{ nginx_stem }} \
+           /etc/nginx/sites-enabled/{{ nginx_stem }}
+fi
+{% endif %}
+{% endfor %}
+{% endfor %}
+
+if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
+    sudo nginx -t && sudo systemctl reload nginx
+elif [[ "$DRY_RUN" == "true" ]]; then
+    echo "    [would run] sudo nginx -t && sudo systemctl reload nginx"
 fi
 
 {% if has_database %}
