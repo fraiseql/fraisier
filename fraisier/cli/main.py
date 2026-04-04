@@ -579,9 +579,13 @@ def trigger_deploy(
     if not branch:
         branch = fraise_config.get("branch", "main")
 
-    # Build socket path: /run/fraisier/{project}-{environment}/deploy.sock
+    # Build socket path using deploy_socket_name() as the single source of truth
+    from fraisier.naming import deploy_socket_name
+
     project_name = config.project_name
-    socket_dir = Path("/run/fraisier") / f"{project_name}-{environment}"
+    socket_unit = deploy_socket_name(fraise_config, environment)
+    socket_stem = socket_unit.removesuffix(".socket")
+    socket_dir = Path("/run/fraisier") / socket_stem
     socket_path = socket_dir / "deploy.sock"
 
     # Build deployment request
@@ -870,6 +874,8 @@ def validate_setup(
         )
         raise SystemExit(1)
 
+    from fraisier.naming import deploy_socket_name
+
     project_name = config.project_name
     validation_results = {}
 
@@ -881,14 +887,17 @@ def validate_setup(
         "message": systemd_msg,
     }
 
-    socket_dir = Path("/run/fraisier") / f"{project_name}-{environment}"
+    env_config = all_environments[environment]
+    socket_unit = deploy_socket_name(env_config, environment)
+    socket_stem = socket_unit.removesuffix(".socket")
+    socket_dir = Path("/run/fraisier") / socket_stem
     socket_path = socket_dir / "deploy.sock"
     env_results = {
         environment: {
             "socket_directory": _check_socket_directory(socket_dir),
             "socket_file": _check_socket_file(socket_path),
             "socket_permissions": _check_socket_permissions(socket_path),
-            "systemd_units": _check_systemd_units(project_name, environment),
+            "systemd_units": _check_systemd_units(socket_unit),
             "user_permissions": _check_user_permissions(socket_path),
         }
     }
@@ -1034,9 +1043,8 @@ def _check_socket_permissions(socket_path: Path) -> dict:
         return {"ok": False, "message": f"Cannot check socket permissions: {e}"}
 
 
-def _check_systemd_units(project_name: str, environment: str) -> dict:
+def _check_systemd_units(unit_name: str) -> dict:
     """Check if systemd units are installed and enabled."""
-    unit_name = f"fraisier-{project_name}-{environment}-deploy.socket"
 
     try:
         import subprocess

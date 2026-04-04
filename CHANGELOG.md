@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.13] - 2026-04-04
+
+### Fixed
+- **`validate-setup` and `deploy` used old socket path pattern** — both commands were
+  building the socket directory as `/run/fraisier/{project_name}-{environment}` instead of
+  using `deploy_socket_name()`, causing them to look in the wrong place after the naming
+  overhaul in v0.4.9.
+- **`_check_systemd_units` used a completely wrong unit name** — it was constructing
+  `fraisier-{project}-{environment}-deploy.socket`, a pattern that never existed. It now
+  receives the unit name directly from the caller via `deploy_socket_name()`.
+
+---
+
 ## [0.4.12] - 2026-04-04
 
 ### Fixed
