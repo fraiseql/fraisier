@@ -235,17 +235,20 @@ class TestInstallUv:
 
 
 class TestInstallFraisier:
-    def test_skips_when_fraisier_installed(self, bootstrapper, mock_runner):
-        step = bootstrapper._install_fraisier()
-        assert step.success is True
-        assert step.already_done is True
+    def test_always_installs_pinned_version(self, bootstrapper, mock_runner):
+        from fraisier import __version__
 
-    def test_installs_when_missing(self, bootstrapper, mock_runner):
-        mock_runner.run.side_effect = [_err(), _OK]
         step = bootstrapper._install_fraisier()
         assert step.success is True
         install_cmd = mock_runner.run.call_args[0][0]
-        assert any("fraisier" in part for part in install_cmd)
+        cmd_str = " ".join(install_cmd)
+        assert "--force" in cmd_str
+        assert f"fraisier=={__version__}" in cmd_str
+
+    def test_failure_returns_failed_step(self, bootstrapper, mock_runner):
+        mock_runner.run.side_effect = _err("permission denied")
+        step = bootstrapper._install_fraisier()
+        assert step.success is False
 
 
 class TestCreateDirectories:

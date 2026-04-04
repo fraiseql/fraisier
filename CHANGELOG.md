@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.12] - 2026-04-04
+
+### Fixed
+- **Bootstrap step 4 always pins server-side fraisier to the client version** (#101) — `uv tool install`
+  was skipping the install if fraisier was already present on the server, leaving a stale version.
+  It now runs `uv tool install --force fraisier==<client_version>` unconditionally, ensuring the
+  server and client are always in sync.
+
+---
+
 ## [0.4.10] - 2026-04-04
 
 ### Fixed
