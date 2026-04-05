@@ -255,8 +255,7 @@ def _print_plan(initial_results, fixable, manual) -> None:
             table.add_row(
                 "~",
                 r.name,
-                f"[yellow]{r.message}[/yellow]\n"
-                f"[dim]Will run: {r.fix_command}[/dim]",
+                f"[yellow]{r.message}[/yellow]\n[dim]Will run: {r.fix_command}[/dim]",
             )
         elif r.name == "ssh_connectivity":
             table.add_row("✗", r.name, f"[red]{r.message or 'failed'}[/red]")
