@@ -197,6 +197,20 @@ for fraisier_dir in /opt/fraisier /var/lib/fraisier /etc/fraisier; do
     _run sudo chmod 750 "${fraisier_dir}"
 done
 
+# Ensure bare git repo directories exist and are owned by the deploy user
+{% for fraise in local_fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% if env_config.get('git_repo') %}
+GIT_REPO="{{ env_config['git_repo'] }}"
+if [ ! -d "${GIT_REPO}" ]; then
+    echo "  Creating bare git repo dir ${GIT_REPO}"
+    _run sudo mkdir -p "${GIT_REPO}"
+fi
+_run sudo chown "${DEPLOY_USER}:${DEPLOY_USER}" "${GIT_REPO}"
+{% endif %}
+{% endfor %}
+{% endfor %}
+
 # Install uv (Astral Python toolchain)
 if ! command -v uv &>/dev/null; then
     echo "  Installing uv"

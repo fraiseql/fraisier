@@ -20,6 +20,18 @@ scaffold:
   deploy_user: testapp_deploy
 """
 
+_GIT_REPO_YAML = """\
+name: testapp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        git_repo: /var/git/api.testapp.dev.git
+scaffold:
+  deploy_user: testapp_deploy
+"""
+
 
 @pytest.fixture(scope="module")
 def rendered_install_sh(tmp_path_factory):
@@ -154,3 +166,47 @@ class TestInstallShStandaloneMode:
             text=True,
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
+
+
+class TestInstallShGitRepoOwnership:
+    """install.sh must chown existing bare git repos to the deploy user."""
+
+    def test_git_repo_chown_emitted_in_dry_run(self, tmp_path):
+        """When git_repo is set, --dry-run output must include chown of that path."""
+        cfg_path = tmp_path / "fraises.yaml"
+        cfg_path.write_text(_GIT_REPO_YAML)
+        config = FraisierConfig(cfg_path)
+        renderer = ScaffoldRenderer(config)
+        renderer.output_dir = tmp_path / "generated"
+        renderer.render()
+        install_sh = tmp_path / "generated" / "install.sh"
+        install_sh.chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", str(install_sh), "--standalone", "--dry-run"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "/var/git/api.testapp.dev.git" in result.stdout
+
+    def test_no_git_repo_no_chown_emitted(self, tmp_path):
+        """When git_repo is absent, no bare-repo chown block must appear."""
+        cfg_path = tmp_path / "fraises.yaml"
+        cfg_path.write_text(_MINIMAL_YAML)
+        config = FraisierConfig(cfg_path)
+        renderer = ScaffoldRenderer(config)
+        renderer.output_dir = tmp_path / "generated"
+        renderer.render()
+        install_sh = tmp_path / "generated" / "install.sh"
+        install_sh.chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", str(install_sh), "--standalone", "--dry-run"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "bare git repo" not in result.stdout
