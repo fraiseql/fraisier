@@ -3534,18 +3534,19 @@ scaffold:
         assert "Requires=fraisier-production.socket" in service
         assert "After=fraisier-production.socket" in service
 
-    def test_service_exec_uses_project_name(self, tmp_path):
-        """deploy-daemon --project must receive the top-level project name.
+    def test_service_exec_uses_fraise_name(self, tmp_path):
+        """deploy-daemon --project must receive the fraise name, not the project name.
 
-        trigger-deploy sends {"project": "<project_name>", ...} in the JSON payload;
-        the daemon validates incoming requests against its --project flag.
-        Using the fraise name here would cause validation failures (issue #72, Bug 4
-        correction).
+        The socket is per-fraise (fraisier-production.socket is for fraise 'api'),
+        so the daemon security gate must match the fraise name. trigger-deploy also
+        sends {"project": "<fraise_name>", ...} so the mismatch check passes.
+        Using the top-level project name would cause the daemon's fraise lookup to
+        fail since config.get_fraise_environment() expects a fraise name.
         """
         out = self._render(tmp_path)
         service = (out / "systemd" / "fraisier-production@.service").read_text()
-        assert "--project=myproj" in service
-        assert "--project=api" not in service
+        assert "--project=api" in service
+        assert "--project=myproj" not in service
 
     def test_socket_filenames_use_env_name(self, tmp_path):
         """Unit filenames are derived from the environment name field (or env key)."""

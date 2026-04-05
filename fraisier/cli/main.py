@@ -582,7 +582,6 @@ def trigger_deploy(
     # Build socket path using deploy_socket_name() as the single source of truth
     from fraisier.naming import deploy_socket_name
 
-    project_name = config.project_name
     socket_unit = deploy_socket_name(fraise_config, environment)
     socket_stem = socket_unit.removesuffix(".socket")
     socket_dir = Path("/run/fraisier") / socket_stem
@@ -591,7 +590,7 @@ def trigger_deploy(
     # Build deployment request
     request = {
         "version": 1,
-        "project": project_name,
+        "project": fraise,
         "environment": environment,
         "branch": branch,
         "timestamp": time.time(),
@@ -685,15 +684,15 @@ def trigger_deploy(
         console.print(
             f"[red]Error:[/red] Deployment socket not found: {socket_path}\n"
             f"[yellow]Hint:[/yellow] Ensure systemd socket is enabled and running:\n"
-            f"  systemctl enable fraisier-{project_name}-{environment}-deploy.socket\n"
-            f"  systemctl start fraisier-{project_name}-{environment}-deploy.socket"
+            f"  systemctl enable fraisier-{fraise}-{environment}-deploy.socket\n"
+            f"  systemctl start fraisier-{fraise}-{environment}-deploy.socket"
         )
         raise SystemExit(1) from None
     except ConnectionRefusedError:
         console.print(
             f"[red]Error:[/red] Cannot connect to deployment socket: {socket_path}\n"
             f"[yellow]Hint:[/yellow] Socket service may not be running. Check status:\n"
-            f"  systemctl status fraisier-{project_name}-{environment}-deploy.socket"
+            f"  systemctl status fraisier-{fraise}-{environment}.socket"
         )
         raise SystemExit(1) from None
     except PermissionError:

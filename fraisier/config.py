@@ -311,6 +311,7 @@ class NginxScaffoldConfig:
     cors_origins: list[str] = field(default_factory=list)
     rate_limit: str = "10r/s"
     restricted_paths: list[str] = field(default_factory=list)
+    webhook_port: int = 8080
 
     def __post_init__(self) -> None:
         # Auto-escape CORS origins for nginx regex
@@ -939,6 +940,7 @@ class FraisierConfig:
                 cors_origins=raw_nginx.get("cors_origins", []),
                 rate_limit=raw_nginx.get("rate_limit", "10r/s"),
                 restricted_paths=raw_nginx.get("restricted_paths", []),
+                webhook_port=raw_nginx.get("webhook_port", 8080),
             ),
             github_actions=GithubActionsScaffoldConfig(
                 python_versions=raw_gh.get("python_versions", ["3.12"]),
