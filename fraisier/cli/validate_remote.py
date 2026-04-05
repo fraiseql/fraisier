@@ -131,8 +131,14 @@ def validate_remote(
         sudo_password = click.prompt("SUDO password", hide_input=True, err=True)
 
     target_server, runner = _resolve_server_and_runner(
-        ctx, environment, ssh_user, ssh_port, ssh_key, server,
-        sudo=sudo, sudo_password=sudo_password,
+        ctx,
+        environment,
+        ssh_user,
+        ssh_port,
+        ssh_key,
+        server,
+        sudo=sudo,
+        sudo_password=sudo_password,
     )
 
     if not as_json:
