@@ -13,6 +13,8 @@ StandardInput=socket
 StandardOutput=journal
 StandardError=journal
 Environment=FRAISIER_CONFIG={{ scaffold.config_path }}
+# Allow git fetch to succeed on first run without known_hosts pre-seeded.
+Environment=GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new
 {% if scaffold.deploy_environment_file %}
 EnvironmentFile=-{{ scaffold.deploy_environment_file }}
 {% endif %}
@@ -23,7 +25,8 @@ EnvironmentFile=-{{ scaffold.deploy_environment_file }}
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
-# Deploy daemon must write to the bare git repo (fetch) and the app worktree (checkout).
+# Deploy daemon must write to the bare git repo (fetch), the app worktree (checkout),
+# the config file directory (fraises.yaml sync), and the lock/socket directory.
 {% if env_config.get('git_repo') %}
 ReadWritePaths={{ env_config['git_repo'] }}
 {% endif %}
@@ -31,6 +34,7 @@ ReadWritePaths={{ env_config['git_repo'] }}
 ReadWritePaths={{ env_config['app_path'] }}
 {% endif %}
 ReadWritePaths=/run/fraisier
+ReadWritePaths={{ scaffold.config_dir }}
 
 # Logging
 SyslogIdentifier={{ socket_stem }}

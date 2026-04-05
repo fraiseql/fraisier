@@ -115,6 +115,9 @@ class GitDeployMixin:
         # Only use sudo if install_user differs from deploy_user
         deploy_user = self.config.get("deploy_user")
         if self.install_user and self.install_user != deploy_user:
+            venv_path = Path(self.app_path) / ".venv"
+            if venv_path.exists():
+                self.runner.run(["chown", "-R", self.install_user, str(venv_path)])
             cmd = ["sudo", "-u", self.install_user, *cmd]
         logger.info("Installing dependencies: %s", cmd)
         try:

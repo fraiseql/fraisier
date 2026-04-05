@@ -571,6 +571,90 @@ class TestAPIDeployer:
         assert args[0][:3] == ["sudo", "-u", "appuser"]
         assert kwargs["cwd"] == "/var/www/api"
 
+    def test_sync_config_uses_fraisier_config_env_var(self, tmp_path, monkeypatch):
+        """_sync_config_if_needed uses FRAISIER_CONFIG env var as destination."""
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        (app_dir / "fraises.yaml").write_text("name: test")
+        expected_dest = tmp_path / "custom" / "fraises.yaml"
+
+        monkeypatch.setenv("FRAISIER_CONFIG", str(expected_dest))
+
+        deployer = APIDeployer({"fraise_name": "api", "app_path": str(app_dir)})
+        with (
+            patch.object(deployer, "_sync_fraises_yaml") as mock_sync,
+            patch.object(deployer, "_detect_config_changes", return_value=False),
+        ):
+            deployer._sync_config_if_needed()
+
+        mock_sync.assert_called_once()
+        assert mock_sync.call_args.kwargs["dest_path"] == expected_dest
+
+    def test_sync_config_falls_back_to_default_path(self, tmp_path, monkeypatch):
+        """_sync_config_if_needed falls back to default path when env var absent."""
+        monkeypatch.delenv("FRAISIER_CONFIG", raising=False)
+
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        (app_dir / "fraises.yaml").write_text("name: test")
+
+        deployer = APIDeployer({"fraise_name": "api", "app_path": str(app_dir)})
+        with (
+            patch.object(deployer, "_sync_fraises_yaml") as mock_sync,
+            patch.object(deployer, "_detect_config_changes", return_value=False),
+        ):
+            deployer._sync_config_if_needed()
+
+        mock_sync.assert_called_once()
+        default = Path("/opt/fraisier/fraises.yaml")
+        assert mock_sync.call_args.kwargs["dest_path"] == default
+
+    def test_install_dependencies_chowns_venv_when_exists(
+        self, tmp_path, mock_subprocess
+    ):
+        """`_install_dependencies` chowns .venv to install_user when users differ."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+
+        config = {
+            "app_path": str(tmp_path),
+            "deploy_user": "deployuser",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer._install_dependencies()
+
+        assert mock_subprocess.call_count == 2
+        chown_call = mock_subprocess.call_args_list[0][0][0]
+        assert chown_call[:3] == ["chown", "-R", "appuser"]
+        assert chown_call[3] == str(venv)
+
+    def test_install_dependencies_skips_chown_when_no_venv(
+        self, tmp_path, mock_subprocess
+    ):
+        """`_install_dependencies` skips chown when .venv doesn't exist."""
+        config = {
+            "app_path": str(tmp_path),
+            "deploy_user": "deployuser",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer._install_dependencies()
+
+        assert mock_subprocess.call_count == 1
+        install_call = mock_subprocess.call_args_list[0][0][0]
+        assert install_call[:3] == ["sudo", "-u", "appuser"]
+
 
 class TestETLDeployer:
     """Tests for ETL deployer."""

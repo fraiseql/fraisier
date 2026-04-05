@@ -383,6 +383,11 @@ class ScaffoldConfig:
     )
     postgresql: PostgresLoggingConfig = field(default_factory=PostgresLoggingConfig)
 
+    @property
+    def config_dir(self) -> str:
+        """Parent directory of config_path."""
+        return str(Path(self.config_path).parent)
+
 
 _VALID_LOCK_BACKENDS = {"file", "database"}
 

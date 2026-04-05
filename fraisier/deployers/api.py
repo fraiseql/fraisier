@@ -127,8 +127,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
     def _sync_config_if_needed(self) -> None:
         """Sync fraises.yaml from git checkout and regenerate scaffold if changed."""
-        project_name = self.config.get("project_name", self.fraise_name)
-        opt_config = Path("/opt") / project_name / "fraises.yaml"
+        fraisier_config_env = os.environ.get("FRAISIER_CONFIG")
+        opt_config = Path(fraisier_config_env or "/opt/fraisier/fraises.yaml")
         app_config = Path(self.app_path) / "fraises.yaml"
 
         if app_config.exists():

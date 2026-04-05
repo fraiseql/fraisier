@@ -3677,6 +3677,30 @@ scaffold:
         # git_repo not set, so no ReadWritePaths for it
         assert "git_repo" not in service
 
+    def test_deploy_service_has_readwrite_paths_for_config_dir(self, tmp_path):
+        """deploy service includes ReadWritePaths for the config file directory.
+
+        ProtectSystem=strict makes /opt read-only. The deploy daemon's config
+        sync step must be able to write the updated fraises.yaml to that directory
+        (issue #115).
+        """
+        out = self._render(tmp_path)
+        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        # Default config_path is /opt/fraisier/fraises.yaml → dir is /opt/fraisier
+        assert "ReadWritePaths=/opt/fraisier" in service
+
+    def test_deploy_service_has_git_ssh_command(self, tmp_path):
+        """deploy service unit includes GIT_SSH_COMMAND to bypass known_hosts check.
+
+        Bootstrap creates the deploy user's SSH keypair but does not populate
+        ~/.ssh/known_hosts. Without StrictHostKeyChecking=accept-new the first
+        git fetch fails with SSH exit 255 (issue #116).
+        """
+        out = self._render(tmp_path)
+        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        expected = "Environment=GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"
+        assert expected in service
+
 
 class TestServiceNameOverride:
     """service.service_name overrides the generated systemd unit filename."""
