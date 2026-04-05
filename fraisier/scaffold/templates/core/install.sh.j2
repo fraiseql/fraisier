@@ -164,7 +164,7 @@ else
 fi
 
 # Create app users (separate from deploy user for least privilege)
-{% for fraise in fraises %}
+{% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set app_user = env_config.get('service', {}).get('user') %}
 {% if app_user and app_user != scaffold.deploy_user %}
@@ -245,7 +245,7 @@ fi
 
 # Install systemd units
 echo "  Installing systemd units"
-{% for fraise in fraises %}
+{% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set svc = env_config.service_base %}
 if [ -f "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" ]; then
@@ -257,7 +257,7 @@ fi
 
 # Install socket-activated deploy units
 echo "  Installing socket-activated deploy units"
-{% for fraise in fraises %}
+{% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set socket_unit = deploy_socket_name(env_config, env_name) %}
 {% set socket_stem = socket_unit[:-7] %}
@@ -293,7 +293,7 @@ if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ]; then
            /etc/nginx/sites-enabled/{{ project_name }}
 fi
 
-{% for fraise in fraises %}
+{% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set nginx_stem = env_config.get('nginx', {}).get('server_name') or (fraise.get('name', '') + '_' + env_name) if env_config.get('nginx') else None %}
 {% if nginx_stem %}

@@ -256,8 +256,19 @@ class ServerBootstrapper:
         try:
             from fraisier.scaffold.renderer import ScaffoldRenderer
 
+            # Determine the server hosting this environment so we only upload
+            # configs relevant to it (nginx, systemd units, etc.).
+            server = self.config.environments.get(self.environment, {}).get("server")
+            if server is None:
+                for fraise_cfg in self.config.fraises.values():
+                    env_cfg = fraise_cfg.get("environments", {}).get(self.environment)
+                    if isinstance(env_cfg, dict):
+                        server = env_cfg.get("server")
+                        if server:
+                            break
+
             with tempfile.TemporaryDirectory() as local_dir:
-                renderer = ScaffoldRenderer(self.config)
+                renderer = ScaffoldRenderer(self.config, server=server)
                 renderer.output_dir = Path(local_dir)
                 renderer.render()
                 self.runner.run(["mkdir", "-p", remote_dir])

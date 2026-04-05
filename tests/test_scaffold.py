@@ -3770,3 +3770,80 @@ scaffold:
         yaml = self._base_yaml(tmp_path, "api.printoptim.dev.service")
         out = self._render(tmp_path, yaml)
         assert (out / "systemd" / "printoptim_api_production.service").exists()
+
+
+class TestServerFilteredBootstrapScaffold:
+    """Bootstrap renders only nginx/systemd files for the target server (#111)."""
+
+    _MULTI_SERVER_YAML = """\
+name: myapp
+scaffold:
+  deploy_user: deployer
+  output_dir: {output_dir}
+  nginx:
+    ssl_provider: letsencrypt
+environments:
+  development:
+    server: server-a
+  production:
+    server: server-b
+fraises:
+  api:
+    type: api
+    environments:
+      development:
+        app_path: /var/www/dev
+        nginx:
+          server_name: api.dev.example.com
+      production:
+        app_path: /var/www/prod
+        nginx:
+          server_name: api.example.com
+"""
+
+    def _render(self, tmp_path, server):
+        from fraisier.config import FraisierConfig
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        out = tmp_path / "output"
+        p = tmp_path / "fraises.yaml"
+        p.write_text(self._MULTI_SERVER_YAML.format(output_dir=out))
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config, server=server)
+        renderer.render()
+        return out
+
+    def test_server_a_only_generates_dev_nginx_config(self, tmp_path):
+        """ScaffoldRenderer with server-a generates dev nginx config, not prod."""
+        out = self._render(tmp_path, "server-a")
+        assert (out / "nginx" / "api.dev.example.com.conf").exists()
+        assert not (out / "nginx" / "api.example.com.conf").exists()
+
+    def test_server_b_only_generates_prod_nginx_config(self, tmp_path):
+        """ScaffoldRenderer with server-b generates prod nginx config, not dev."""
+        out = self._render(tmp_path, "server-b")
+        assert (out / "nginx" / "api.example.com.conf").exists()
+        assert not (out / "nginx" / "api.dev.example.com.conf").exists()
+
+    def test_install_sh_only_installs_local_nginx_configs(self, tmp_path):
+        """install.sh generated for server-a does not reference prod nginx config."""
+        out = self._render(tmp_path, "server-a")
+        install_sh = (out / "install.sh").read_text()
+        assert "api.dev.example.com" in install_sh
+        assert "api.example.com" not in install_sh
+
+    def test_install_sh_server_b_does_not_reference_dev_nginx(self, tmp_path):
+        """install.sh generated for server-b does not reference dev nginx config."""
+        out = self._render(tmp_path, "server-b")
+        install_sh = (out / "install.sh").read_text()
+        assert "api.example.com" in install_sh
+        assert "api.dev.example.com" not in install_sh
+
+    def test_server_a_only_generates_dev_deploy_socket(self, tmp_path):
+        """ScaffoldRenderer with server-a generates dev deploy socket, not prod."""
+        out = self._render(tmp_path, "server-a")
+        systemd_dir = out / "systemd"
+        dev_sockets = [f for f in systemd_dir.iterdir() if "development" in f.name]
+        prod_sockets = [f for f in systemd_dir.iterdir() if "production" in f.name]
+        assert dev_sockets
+        assert not prod_sockets

@@ -491,7 +491,7 @@ class ScaffoldRenderer:
 
         # Per-fraise systemd service templates
         project = self.context["project_name"]
-        for fraise in self.context["fraises"]:
+        for fraise in self.context["local_fraises"]:
             name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
                 base = _resolve_service_base(project, name, env_name, env_config or {})
@@ -570,7 +570,7 @@ class ScaffoldRenderer:
         """Render socket-activated deploy units for each fraise-environment combo."""
         rendered: list[str] = []
 
-        for fraise in self.context["fraises"]:
+        for fraise in self.context["local_fraises"]:
             fraise_name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
                 socket_unit = deploy_socket_name(env_config, env_name)
@@ -783,7 +783,7 @@ class ScaffoldRenderer:
         """
         files: list[str] = []
         project = self.context["project_name"]
-        for fraise in self.context["fraises"]:
+        for fraise in self.context["local_fraises"]:
             name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
                 if not isinstance(env_config, dict):
