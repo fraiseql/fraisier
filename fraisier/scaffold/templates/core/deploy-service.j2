@@ -8,7 +8,7 @@ Documentation=https://fraisier.readthedocs.io/en/latest/socket-deployment.html
 Type=simple
 User={{ scaffold.deploy_user }}
 WorkingDirectory=/home/{{ scaffold.deploy_user }}
-ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier deploy-daemon --project={{ project_name }}
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier deploy-daemon --project={{ fraise_name }}
 StandardInput=socket
 StandardOutput=journal
 StandardError=journal
