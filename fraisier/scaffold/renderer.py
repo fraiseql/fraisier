@@ -650,6 +650,7 @@ class ScaffoldRenderer:
             {
                 "fraise_name": fraise_name,
                 "environment": env_name,
+                "env_config": env_config,
                 "socket_unit_name": socket_unit,
                 "socket_stem": socket_stem,
             }

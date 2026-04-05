@@ -3630,6 +3630,53 @@ scaffold:
         ).read_text()
         assert "EnvironmentFile=-/etc/fraisier/secrets.env" in service
 
+    def test_deploy_service_has_readwrite_paths_for_git_repo_and_app_path(
+        self, tmp_path
+    ):
+        """deploy service includes ReadWritePaths for git_repo and app_path.
+
+        ProtectSystem=strict makes the filesystem read-only, which prevents
+        the deploy daemon from running 'git fetch' (writes to the bare repo)
+        and 'git checkout' (writes to the app worktree). ReadWritePaths
+        exceptions are required for both paths (issue #115).
+        """
+        from fraisier.config import FraisierConfig
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api.myapp.io
+        git_repo: /var/git/api.myapp.io.git
+scaffold:
+  output_dir: {tmp_path / "output"}
+  deploy_user: myproj_deploy
+"""
+        )
+        config = FraisierConfig(p)
+        ScaffoldRenderer(config).render()
+        service = (
+            tmp_path / "output" / "systemd" / "fraisier-production@.service"
+        ).read_text()
+        assert "ReadWritePaths=/var/git/api.myapp.io.git" in service
+        assert "ReadWritePaths=/var/www/api.myapp.io" in service
+        assert "ReadWritePaths=/run/fraisier" in service
+
+    def test_deploy_service_omits_readwrite_paths_when_not_configured(self, tmp_path):
+        """ReadWritePaths for git_repo/app_path are omitted when not set."""
+        out = self._render(tmp_path)  # fixture has app_path but no git_repo
+        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        assert "ReadWritePaths=/var/www/prod" in service
+        assert "ReadWritePaths=/run/fraisier" in service
+        # git_repo not set, so no ReadWritePaths for it
+        assert "git_repo" not in service
+
 
 class TestServiceNameOverride:
     """service.service_name overrides the generated systemd unit filename."""

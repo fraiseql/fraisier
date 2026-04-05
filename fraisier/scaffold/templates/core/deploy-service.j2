@@ -23,6 +23,14 @@ EnvironmentFile=-{{ scaffold.deploy_environment_file }}
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
+# Deploy daemon must write to the bare git repo (fetch) and the app worktree (checkout).
+{% if env_config.get('git_repo') %}
+ReadWritePaths={{ env_config['git_repo'] }}
+{% endif %}
+{% if env_config.get('app_path') %}
+ReadWritePaths={{ env_config['app_path'] }}
+{% endif %}
+ReadWritePaths=/run/fraisier
 
 # Logging
 SyslogIdentifier={{ socket_stem }}
