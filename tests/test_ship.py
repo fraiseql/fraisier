@@ -1,7 +1,6 @@
 """Tests for fraisier ship command."""
 
 import contextlib
-import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -12,23 +11,7 @@ from fraisier.cli import main
 
 
 def _setup_project(tmp_path, version="1.0.0", webhook_secret=None):
-    """Create version.json, pyproject.toml, and fraises.yaml."""
-    vj = tmp_path / "version.json"
-    vj.write_text(
-        json.dumps(
-            {
-                "version": version,
-                "commit": "abc123",
-                "branch": "main",
-                "timestamp": "2026-03-23T12:00:00Z",
-                "schema_hash": "",
-                "environment": "",
-                "database_version": "",
-            },
-            indent=2,
-        )
-    )
-
+    """Create pyproject.toml and fraises.yaml."""
     pp = tmp_path / "pyproject.toml"
     pp.write_text(f'[project]\nname = "myapp"\nversion = "{version}"\n')
 
@@ -73,8 +56,6 @@ class TestShipCommand:
                 cfg,
                 "ship",
                 "patch",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -96,8 +77,6 @@ class TestShipCommand:
                 cfg,
                 "ship",
                 "patch",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -123,8 +102,6 @@ class TestShipCommand:
                 cfg,
                 "ship",
                 "patch",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -160,8 +137,6 @@ class TestShipCommand:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -199,8 +174,6 @@ class TestShipCommand:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -232,8 +205,6 @@ class TestShipCommand:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -243,22 +214,6 @@ class TestShipCommand:
 
 def _setup_project_with_pipeline(tmp_path, version="1.0.0"):
     """Create project with ship pipeline config."""
-    vj = tmp_path / "version.json"
-    vj.write_text(
-        json.dumps(
-            {
-                "version": version,
-                "commit": "abc123",
-                "branch": "main",
-                "timestamp": "2026-03-23T12:00:00Z",
-                "schema_hash": "",
-                "environment": "",
-                "database_version": "",
-            },
-            indent=2,
-        )
-    )
-
     pp = tmp_path / "pyproject.toml"
     pp.write_text(f'[project]\nname = "myapp"\nversion = "{version}"\n')
 
@@ -321,8 +276,6 @@ class TestShipPipelineIntegration:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -347,8 +300,6 @@ class TestShipPipelineIntegration:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -375,8 +326,6 @@ class TestShipPipelineIntegration:
                 "patch",
                 "--no-deploy",
                 "--skip-checks",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -408,8 +357,6 @@ class TestShipPipelineIntegration:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -443,8 +390,6 @@ class TestShipPipelineIntegration:
                 "patch",
                 "--no-deploy",
                 "--pr",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -465,8 +410,6 @@ class TestShipPipelineIntegration:
                 "ship",
                 "patch",
                 "--dry-run",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -493,8 +436,6 @@ class TestShipDryRun:
                 "ship",
                 "patch",
                 "--dry-run",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -516,16 +457,13 @@ class TestShipDryRun:
                 "ship",
                 "patch",
                 "--dry-run",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
         )
 
-        # version.json should still be 1.0.0
-        data = json.loads((tmp_path / "version.json").read_text())
-        assert data["version"] == "1.0.0"
+        # pyproject.toml should still be 1.0.0
+        assert 'version = "1.0.0"' in (tmp_path / "pyproject.toml").read_text()
 
     @patch("subprocess.run")
     def test_dry_run_does_not_call_git(self, mock_run, tmp_path):
@@ -541,8 +479,6 @@ class TestShipDryRun:
                 "ship",
                 "patch",
                 "--dry-run",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -567,8 +503,6 @@ class TestShipBumpTypes:
                 cfg,
                 "ship",
                 "minor",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -589,8 +523,6 @@ class TestShipBumpTypes:
                 cfg,
                 "ship",
                 "major",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -603,7 +535,7 @@ class TestShipNoBump:
 
     @patch("subprocess.run")
     def test_ship_no_bump_skips_version_change(self, mock_run, tmp_path):
-        """--no-bump leaves version.json unchanged."""
+        """--no-bump leaves pyproject.toml unchanged."""
         mock_run.return_value = MagicMock(returncode=0)
         cfg = _setup_project(tmp_path, version="1.2.3")
 
@@ -616,17 +548,14 @@ class TestShipNoBump:
                 "ship",
                 "--no-bump",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
         )
         assert result.exit_code == 0
 
-        # version.json should still be 1.2.3
-        data = json.loads((tmp_path / "version.json").read_text())
-        assert data["version"] == "1.2.3"
+        # pyproject.toml should still be 1.2.3
+        assert 'version = "1.2.3"' in (tmp_path / "pyproject.toml").read_text()
 
     @patch("subprocess.run")
     def test_ship_no_bump_commits_with_current_version(self, mock_run, tmp_path):
@@ -643,8 +572,6 @@ class TestShipNoBump:
                 "ship",
                 "--no-bump",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -672,8 +599,6 @@ class TestShipNoBump:
                 "ship",
                 "--no-bump",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -697,8 +622,6 @@ class TestShipNoBump:
                 "ship",
                 "--no-bump",
                 "--dry-run",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -718,8 +641,6 @@ class TestShipNoBump:
                 cfg,
                 "ship",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
             ],
         )
         assert result.exit_code != 0
@@ -738,8 +659,6 @@ class TestShipNoBump:
                 "patch",
                 "--no-bump",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
             ],
         )
         assert result.exit_code != 0
@@ -770,8 +689,6 @@ class TestShipGitPush:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -804,8 +721,6 @@ class TestShipGitPush:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -836,8 +751,6 @@ class TestShipDeploy:
                 "ship",
                 "patch",
                 "--no-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
                 "--pyproject",
                 str(tmp_path / "pyproject.toml"),
             ],
@@ -913,8 +826,6 @@ class TestShipDeploy:
                     str(cfg_file),
                     "ship",
                     "patch",
-                    "--version-file",
-                    str(tmp_path / "version.json"),
                     "--pyproject",
                     str(tmp_path / "pyproject.toml"),
                 ],
@@ -938,8 +849,8 @@ class TestShipDeploy:
                 "ship",
                 "patch",
                 "--dry-run",
-                "--version-file",
-                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
             ],
         )
         assert result.exit_code == 0
@@ -992,8 +903,8 @@ class TestShipDeploy:
                 "ship",
                 "patch",
                 "--wait-deploy",
-                "--version-file",
-                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
             ],
         )
 

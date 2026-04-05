@@ -1,7 +1,7 @@
 """Tests for version management."""
 
-import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,9 +17,11 @@ from fraisier.versioning import (
     VersionSyncTarget,
     bump_version,
     derive_database_version,
+    generate_version_json,
     has_version_changed,
     is_valid_semver,
     parse_semver,
+    read_pyproject_version,
     read_version,
     sync_version_to_targets,
     write_version,
@@ -103,61 +105,45 @@ class TestVersionIO:
 class TestBumpVersion:
     """Test bump_version function."""
 
-    def _write_version_file(self, tmp_path, version="1.2.3"):
-        path = tmp_path / "version.json"
-        info = VersionInfo(version=version)
-        write_version(info, path)
+    def _setup_pyproject(self, tmp_path, version="1.2.3"):
+        path = tmp_path / "pyproject.toml"
+        path.write_text(f'[project]\nname = "myapp"\nversion = "{version}"\n')
         return path
 
     def test_bump_major(self, tmp_path):
         """Major bump increments major and resets minor/patch."""
-        path = self._write_version_file(tmp_path, "1.2.3")
+        path = self._setup_pyproject(tmp_path, "1.2.3")
         result = bump_version(path, "major")
         assert result.version == "2.0.0"
 
     def test_bump_minor(self, tmp_path):
         """Minor bump increments minor and resets patch."""
-        path = self._write_version_file(tmp_path, "1.2.3")
+        path = self._setup_pyproject(tmp_path, "1.2.3")
         result = bump_version(path, "minor")
         assert result.version == "1.3.0"
 
     def test_bump_patch(self, tmp_path):
         """Patch bump increments patch only."""
-        path = self._write_version_file(tmp_path, "1.2.3")
+        path = self._setup_pyproject(tmp_path, "1.2.3")
         result = bump_version(path, "patch")
         assert result.version == "1.2.4"
 
-    def test_bump_creates_backup(self, tmp_path):
-        """bump_version creates a .bak file."""
-        path = self._write_version_file(tmp_path, "1.0.0")
-        bump_version(path, "patch")
-        backup = path.with_suffix(".json.bak")
-        assert backup.exists()
-        backup_data = json.loads(backup.read_text())
-        assert backup_data["version"] == "1.0.0"
-
     def test_bump_invalid_part(self, tmp_path):
         """bump_version raises ValueError for invalid part."""
-        path = self._write_version_file(tmp_path)
+        path = self._setup_pyproject(tmp_path)
         with pytest.raises(ValueError, match="Invalid bump part"):
             bump_version(path, "hotfix")
 
     def test_bump_missing_file(self, tmp_path):
         """bump_version raises FileNotFoundError for missing file."""
-        path = tmp_path / "missing.json"
         with pytest.raises(FileNotFoundError):
-            bump_version(path, "patch")
+            bump_version(tmp_path / "pyproject.toml", "patch")
 
     def test_bump_with_sync_config(self, tmp_path):
         """bump_version syncs to configured targets."""
-        # Set up version.json
-        path = self._write_version_file(tmp_path, "1.0.0")
-
-        # Set up target file
+        path = self._setup_pyproject(tmp_path, "1.0.0")
         target_file = tmp_path / "version.py"
         target_file.write_text('__version__ = "1.0.0"\n')
-
-        # Configure sync
         config = VersionSyncConfig(
             targets=[
                 VersionSyncTarget(
@@ -165,20 +151,13 @@ class TestBumpVersion:
                 )
             ]
         )
-
         result = bump_version(path, "minor", sync_config=config)
         assert result.version == "1.1.0"
-
-        # Check target was updated
-        content = target_file.read_text()
-        assert '__version__ = "1.1.0"' in content
+        assert '__version__ = "1.1.0"' in target_file.read_text()
 
     def test_bump_sync_config_rollback_on_failure(self, tmp_path):
-        """bump_version rolls back version.json if target sync fails."""
-        # Set up version.json
-        path = self._write_version_file(tmp_path, "1.0.0")
-
-        # Set up config with non-existent target
+        """pyproject.toml is unchanged if a sync target fails."""
+        path = self._setup_pyproject(tmp_path, "1.0.0")
         config = VersionSyncConfig(
             targets=[
                 VersionSyncTarget(
@@ -186,13 +165,9 @@ class TestBumpVersion:
                 )
             ]
         )
-
         with pytest.raises(FileNotFoundError):
             bump_version(path, "patch", sync_config=config)
-
-        # version.json should be unchanged due to rollback
-        info = read_version(path)
-        assert info.version == "1.0.0"
+        assert 'version = "1.0.0"' in path.read_text()
 
 
 class TestDjangoMigrateStrategy:
@@ -372,3 +347,93 @@ class TestDeriveAndCompare:
         assert has_version_changed(None, "1.0.0") is True
         assert has_version_changed("1.0.0", "1.0.0") is False
         assert has_version_changed("1.0.0", "2.0.0") is True
+
+
+class TestReadPyprojectVersion:
+    """Tests for read_pyproject_version."""
+
+    def test_reads_version(self, tmp_path):
+        """Returns version string from pyproject.toml."""
+        p = tmp_path / "pyproject.toml"
+        p.write_text('[project]\nname = "myapp"\nversion = "2.3.4"\n')
+        assert read_pyproject_version(p) == "2.3.4"
+
+    def test_missing_file_raises(self, tmp_path):
+        """FileNotFoundError if pyproject.toml does not exist."""
+        with pytest.raises(FileNotFoundError):
+            read_pyproject_version(tmp_path / "pyproject.toml")
+
+    def test_missing_version_line_raises(self, tmp_path):
+        """ValueError if no version = line is found."""
+        p = tmp_path / "pyproject.toml"
+        p.write_text('[project]\nname = "myapp"\n')
+        with pytest.raises(ValueError, match="version"):
+            read_pyproject_version(p)
+
+
+class TestGenerateVersionJson:
+    """Tests for generate_version_json."""
+
+    def _make_pyproject(self, tmp_path: Path, version: str = "0.5.0") -> Path:
+        p = tmp_path / "pyproject.toml"
+        p.write_text(f'[project]\nname = "myapp"\nversion = "{version}"\n')
+        return tmp_path
+
+    @patch("subprocess.run")
+    def test_version_from_pyproject(self, mock_run, tmp_path):
+        """version field comes from pyproject.toml."""
+        self._make_pyproject(tmp_path, "0.5.0")
+        mock_run.return_value = MagicMock(returncode=0, stdout="abc1234\n")
+        info = generate_version_json(tmp_path)
+        assert info.version == "0.5.0"
+
+    @patch("subprocess.run")
+    def test_commit_from_git(self, mock_run, tmp_path):
+        """commit field is populated from git rev-parse."""
+        self._make_pyproject(tmp_path)
+        mock_run.return_value = MagicMock(returncode=0, stdout="deadbeef\n")
+        info = generate_version_json(tmp_path)
+        assert info.commit == "deadbeef"
+
+    @patch("subprocess.run")
+    def test_branch_from_git(self, mock_run, tmp_path):
+        """branch field is populated from git rev-parse --abbrev-ref."""
+        self._make_pyproject(tmp_path)
+
+        def side_effect(cmd, **_kwargs):
+            if "--abbrev-ref" in cmd:
+                return MagicMock(returncode=0, stdout="main\n")
+            return MagicMock(returncode=0, stdout="abc123\n")
+
+        mock_run.side_effect = side_effect
+        info = generate_version_json(tmp_path)
+        assert info.branch == "main"
+
+    @patch("subprocess.run")
+    def test_timestamp_is_set(self, mock_run, tmp_path):
+        """timestamp field is a non-empty ISO string."""
+        self._make_pyproject(tmp_path)
+        mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n")
+        info = generate_version_json(tmp_path)
+        assert info.timestamp
+
+    @patch("subprocess.run")
+    def test_schema_hash_with_schema_dir(self, mock_run, tmp_path):
+        """schema_hash is populated when schema_dir contains SQL files."""
+        self._make_pyproject(tmp_path)
+        mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n")
+        schema_dir = tmp_path / "migrations"
+        schema_dir.mkdir()
+        (schema_dir / "001_init.sql").write_text("CREATE TABLE foo (id INT);")
+        info = generate_version_json(tmp_path, schema_dir=schema_dir)
+        assert info.schema_hash.startswith("sha256:")
+        assert info.database_version
+
+    @patch("subprocess.run")
+    def test_no_schema_dir_leaves_fields_empty(self, mock_run, tmp_path):
+        """schema_hash and database_version are empty when no schema_dir given."""
+        self._make_pyproject(tmp_path)
+        mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n")
+        info = generate_version_json(tmp_path)
+        assert info.schema_hash == ""
+        assert info.database_version == ""

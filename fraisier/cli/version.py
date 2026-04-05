@@ -102,20 +102,20 @@ def version_show(version_file: str) -> None:
 @version_group.command(name="bump")
 @click.argument("part", type=click.Choice(["major", "minor", "patch"]))
 @click.option(
-    "--version-file",
+    "--pyproject",
     "-f",
-    default="version.json",
-    help="Path to version.json",
+    default="pyproject.toml",
+    help="Path to pyproject.toml",
 )
 @click.option("--dry-run", is_flag=True, help="Show what would change")
 @click.option("--no-tag", is_flag=True, help="Skip git tag creation")
 def version_bump(
     part: str,
-    version_file: str,
+    pyproject: str,
     dry_run: bool,
     no_tag: bool,  # noqa: ARG001
 ) -> None:
-    """Bump project version (major, minor, or patch).
+    """Bump project version in pyproject.toml (major, minor, or patch).
 
     \b
     Examples:
@@ -123,15 +123,10 @@ def version_bump(
         fraisier version bump minor --dry-run
         fraisier version bump major --no-tag
     """
-    from fraisier.versioning import bump_version, parse_semver, read_version
+    from fraisier.versioning import bump_version, parse_semver
 
-    path = Path(version_file)
-    info = read_version(path)
-    if info is None:
-        console.print(f"[red]Error:[/red] Version file not found: {version_file}")
-        raise SystemExit(1)
-
-    old_version = info.version
+    path = Path(pyproject)
+    old_version = _read_current_version(path)
     major, minor, patch_v = parse_semver(old_version)
 
     if part == "major":
@@ -170,16 +165,10 @@ def version_bump(
     "--skip-checks", is_flag=True, help="Skip pipeline checks, just bump+commit+push"
 )
 @click.option(
-    "--version-file",
-    type=click.Path(),
-    default="version.json",
-    help="Path to version.json",
-)
-@click.option(
     "--pyproject",
     type=click.Path(),
     default="pyproject.toml",
-    help="Path to pyproject.toml",
+    help="Path to pyproject.toml (single source of truth for version)",
 )
 @click.option(
     "--wait-deploy",
@@ -202,7 +191,6 @@ def ship(
     create_pr: bool,
     pr_base: str | None,
     skip_checks: bool,
-    version_file: str,
     pyproject: str,
     wait_deploy: bool,
     deploy_timeout: int,
@@ -232,9 +220,8 @@ def ship(
 
     from fraisier.versioning import bump_version, parse_semver
 
-    version_path = Path(version_file)
     pyproject_path = Path(pyproject)
-    current = _read_current_version(version_path)
+    current_version = _read_current_version(pyproject_path)
 
     # Resolve ship config (may be None if no fraises.yaml)
     config = ctx.obj.get("config") if ctx.obj else None
@@ -244,8 +231,8 @@ def ship(
     if no_bump:
         if dry_run:
             _ship_dry_run_no_bump(
-                current.version,
-                version_path,
+                current_version,
+                pyproject_path,
                 ship_config,
                 has_pipeline,
                 create_pr,
@@ -255,7 +242,7 @@ def ship(
             return
 
         _ship_commit_push_deploy(
-            current,
+            current_version,
             ship_config,
             has_pipeline,
             create_pr,
@@ -263,18 +250,17 @@ def ship(
             no_deploy,
             wait_deploy,
             deploy_timeout,
-            label=f"v{current.version} (no bump)",
+            label=f"v{current_version} (no bump)",
         )
         return
 
-    new = _calc_new_version(current.version, bump_type, parse_semver)
+    new = _calc_new_version(current_version, bump_type, parse_semver)
 
     if dry_run:
         _ship_dry_run(
-            current.version,
+            current_version,
             new,
             bump_type,
-            version_path,
             pyproject_path,
             ship_config,
             has_pipeline,
@@ -284,12 +270,11 @@ def ship(
         )
         return
 
-    pp = pyproject_path if pyproject_path.exists() else None
-    info = bump_version(version_path, bump_type, pyproject_path=pp)
-    console.print(f"[green]Version bumped:[/green] {current.version} -> {info.version}")
+    info = bump_version(pyproject_path, bump_type)
+    console.print(f"[green]Version bumped:[/green] {current_version} -> {info.version}")
 
     _ship_commit_push_deploy(
-        info,
+        info.version,
         ship_config,
         has_pipeline,
         create_pr,
@@ -302,7 +287,7 @@ def ship(
 
 
 def _ship_commit_push_deploy(
-    info: object,
+    version: str,
     ship_config: object,
     has_pipeline: bool,
     create_pr: bool,
@@ -315,12 +300,12 @@ def _ship_commit_push_deploy(
 ) -> None:
     """Run the commit-push-PR-deploy sequence."""
     if has_pipeline:
-        _ship_with_pipeline(info, ship_config)
+        _ship_with_pipeline(version, ship_config)
     else:
-        _ship_legacy(info)
+        _ship_legacy(version)
 
     if create_pr:
-        _ship_create_pr(info.version, pr_base, ship_config)
+        _ship_create_pr(version, pr_base, ship_config)
 
     console.print(f"[green]Shipped {label}[/green]")
 
@@ -328,23 +313,23 @@ def _ship_commit_push_deploy(
         _trigger_deploy_for_current_branch(wait_deploy, deploy_timeout)
 
 
-def _read_current_version(version_path: Path) -> object:
-    """Read and validate the current version file."""
-    from fraisier.versioning import read_version
+def _read_current_version(pyproject_path: Path) -> str:
+    """Read and return the current version string from pyproject.toml."""
+    from fraisier.versioning import read_pyproject_version
 
-    if not version_path.exists():
-        console.print(f"[red]Error:[/red] {version_path} not found")
-        raise SystemExit(1)
-    current = read_version(version_path)
-    if current is None:
-        console.print(f"[red]Error:[/red] Cannot read {version_path}")
-        raise SystemExit(1)
-    return current
+    try:
+        return read_pyproject_version(pyproject_path)
+    except FileNotFoundError:
+        console.print(f"[red]Error:[/red] {pyproject_path} not found")
+        raise SystemExit(1) from None
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise SystemExit(1) from None
 
 
 def _calc_new_version(
     current_version: str,
-    bump_type: str,
+    bump_type: str | None,
     parse_semver: object,
 ) -> str:
     """Calculate the new version string."""
@@ -359,8 +344,7 @@ def _calc_new_version(
 def _ship_dry_run(
     current_version: str,
     new: str,
-    bump_type: str,
-    version_path: Path,
+    bump_type: str | None,
     pyproject_path: Path,
     ship_config: object,
     has_pipeline: bool,
@@ -371,7 +355,7 @@ def _ship_dry_run(
     """Print dry-run plan for ship."""
     console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{new}")
     console.print(f"  Bump: {current_version} -> {new} ({bump_type})")
-    console.print(f"  Files: {version_path}, {pyproject_path}")
+    console.print(f"  File: {pyproject_path}")
     if has_pipeline:
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
@@ -386,7 +370,7 @@ def _ship_dry_run(
 
 def _ship_dry_run_no_bump(
     current_version: str,
-    version_path: Path,
+    pyproject_path: Path,
     ship_config: object,
     has_pipeline: bool,
     create_pr: bool,
@@ -396,7 +380,7 @@ def _ship_dry_run_no_bump(
     """Print dry-run plan for ship --no-bump."""
     console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{current_version} (no bump)")
     console.print(f"  Version: {current_version} (unchanged)")
-    console.print(f"  Files: {version_path}")
+    console.print(f"  File: {pyproject_path}")
     if has_pipeline:
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
@@ -445,7 +429,7 @@ def _git_push() -> None:
 
 
 def _ship_with_pipeline(
-    info: object,
+    version: str,
     ship_config: object,
 ) -> None:
     """Ship using the check pipeline (--no-verify commit)."""
@@ -475,20 +459,20 @@ def _ship_with_pipeline(
 
     # Commit with --no-verify (we already ran all checks)
     subprocess.run(
-        ["git", "commit", "--no-verify", "-m", f"release: v{info.version}"],
+        ["git", "commit", "--no-verify", "-m", f"release: v{version}"],
         check=True,
     )
     _git_push()
 
 
-def _ship_legacy(info: object) -> None:
+def _ship_legacy(version: str) -> None:
     """Ship without pipeline (backward compat, uses pre-commit hooks)."""
     import subprocess
 
     subprocess.run(["git", "add", "--update"], check=True)
     try:
         subprocess.run(
-            ["git", "commit", "-m", f"release: v{info.version}"],
+            ["git", "commit", "-m", f"release: v{version}"],
             check=True,
         )
     except subprocess.CalledProcessError:
@@ -504,7 +488,7 @@ def _ship_legacy(info: object) -> None:
         )
         subprocess.run(["git", "add", "--update"], check=True)
         subprocess.run(
-            ["git", "commit", "-m", f"release: v{info.version}"],
+            ["git", "commit", "-m", f"release: v{version}"],
             check=True,
         )
     _git_push()

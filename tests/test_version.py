@@ -157,88 +157,47 @@ class TestSemverValidation:
 
 
 class TestBumpVersion:
-    """Test atomic version bumping."""
+    """Test atomic version bumping via pyproject.toml."""
+
+    def _setup(self, tmp_path, version="1.2.3"):
+        path = tmp_path / "pyproject.toml"
+        path.write_text(f'[project]\nname = "myapp"\nversion = "{version}"\n')
+        return path
 
     def test_bump_patch(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            bump_version,
-            read_version,
-            write_version,
-        )
+        from fraisier.versioning import bump_version
 
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.2.3"), path)
-
+        path = self._setup(tmp_path, "1.2.3")
         result = bump_version(path, "patch")
         assert result.version == "1.2.4"
-
-        loaded = read_version(path)
-        assert loaded is not None
-        assert loaded.version == "1.2.4"
+        assert 'version = "1.2.4"' in path.read_text()
 
     def test_bump_minor(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            bump_version,
-            write_version,
-        )
+        from fraisier.versioning import bump_version
 
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.2.3"), path)
-
+        path = self._setup(tmp_path, "1.2.3")
         result = bump_version(path, "minor")
         assert result.version == "1.3.0"
 
     def test_bump_major(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            bump_version,
-            write_version,
-        )
+        from fraisier.versioning import bump_version
 
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.2.3"), path)
-
+        path = self._setup(tmp_path, "1.2.3")
         result = bump_version(path, "major")
         assert result.version == "2.0.0"
 
-    def test_bump_creates_backup(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            bump_version,
-            write_version,
-        )
-
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0"), path)
-
-        bump_version(path, "patch")
-        backup = tmp_path / "version.json.bak"
-        assert backup.exists()
-
-        data = json.loads(backup.read_text())
-        assert data["version"] == "1.0.0"
-
     def test_bump_invalid_part_raises(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            bump_version,
-            write_version,
-        )
+        from fraisier.versioning import bump_version
 
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0"), path)
-
+        path = self._setup(tmp_path)
         with pytest.raises(ValueError, match="Invalid bump part"):
             bump_version(path, "invalid")
 
     def test_bump_missing_file_raises(self, tmp_path):
         from fraisier.versioning import bump_version
 
-        path = tmp_path / "nonexistent.json"
         with pytest.raises(FileNotFoundError):
-            bump_version(path, "patch")
+            bump_version(tmp_path / "pyproject.toml", "patch")
 
 
 class TestSyncPyproject:
@@ -278,58 +237,6 @@ class TestSyncPyproject:
             sync_pyproject_version("1.0.0", pyproject)
 
 
-class TestUpdateSchemaHash:
-    """Test schema hash update in version.json."""
-
-    def test_update_schema_hash(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            read_version,
-            update_schema_info,
-            write_version,
-        )
-
-        version_path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0"), version_path)
-
-        schema_dir = tmp_path / "sql"
-        schema_dir.mkdir()
-        (schema_dir / "001.sql").write_text("CREATE TABLE x (id int);")
-
-        update_schema_info(version_path, schema_dir)
-
-        v = read_version(version_path)
-        assert v is not None
-        assert v.schema_hash.startswith("sha256:")
-        assert len(v.schema_hash) > 10
-
-    def test_schema_hash_changes_on_migration(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            read_version,
-            update_schema_info,
-            write_version,
-        )
-
-        version_path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0"), version_path)
-
-        schema_dir = tmp_path / "sql"
-        schema_dir.mkdir()
-        (schema_dir / "001.sql").write_text("CREATE TABLE x (id int);")
-
-        update_schema_info(version_path, schema_dir)
-        v1 = read_version(version_path)
-
-        (schema_dir / "002.sql").write_text("ALTER TABLE x ADD y text;")
-        update_schema_info(version_path, schema_dir)
-        v2 = read_version(version_path)
-
-        assert v1 is not None
-        assert v2 is not None
-        assert v1.schema_hash != v2.schema_hash
-
-
 class TestDatabaseVersion:
     """Test database version derivation."""
 
@@ -351,34 +258,10 @@ class TestDatabaseVersion:
         dbv = derive_database_version(sequence=42)
         assert dbv.endswith(".042")
 
-    def test_update_schema_info_sets_database_version(self, tmp_path):
-        from fraisier.versioning import (
-            VersionInfo,
-            read_version,
-            update_schema_info,
-            write_version,
-        )
-
-        version_path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0"), version_path)
-
-        schema_dir = tmp_path / "sql"
-        schema_dir.mkdir()
-        (schema_dir / "001.sql").write_text("CREATE TABLE x;")
-        (schema_dir / "002.sql").write_text("ALTER TABLE x;")
-
-        update_schema_info(version_path, schema_dir)
-
-        v = read_version(version_path)
-        assert v is not None
-        assert v.database_version != ""
-        # Sequence should be 2 (number of SQL files)
-        assert v.database_version.endswith(".002")
-
 
 @pytest.fixture
 def version_config_file(tmp_path):
-    """Create fraises.yaml + version.json for CLI tests."""
+    """Create fraises.yaml, pyproject.toml, and version.json for CLI tests."""
     config_file = tmp_path / "fraises.yaml"
     config_file.write_text("""
 git:
@@ -395,6 +278,12 @@ version:
   sync_pyproject: true
 """)
 
+    # pyproject.toml is the version source of truth
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "myapp"\nversion = "1.2.3"\n'
+    )
+
+    # version.json is a server-generated file (read by `version show`)
     version_file = tmp_path / "version.json"
     version_file.write_text(
         json.dumps(
@@ -475,17 +364,16 @@ class TestVersionBumpCommand:
                 "version",
                 "bump",
                 "patch",
-                "--version-file",
-                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
             ],
         )
 
         assert result.exit_code == 0, result.output
         assert "1.2.4" in result.output
 
-        # Verify file was actually updated
-        data = json.loads((tmp_path / "version.json").read_text())
-        assert data["version"] == "1.2.4"
+        # Verify pyproject.toml was updated
+        assert 'version = "1.2.4"' in (tmp_path / "pyproject.toml").read_text()
 
     def test_version_bump_dry_run(self, version_config_file):
         from fraisier.cli import main
@@ -501,8 +389,8 @@ class TestVersionBumpCommand:
                 "version",
                 "bump",
                 "minor",
-                "--version-file",
-                str(tmp_path / "version.json"),
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
                 "--dry-run",
             ],
         )
@@ -510,9 +398,8 @@ class TestVersionBumpCommand:
         assert result.exit_code == 0, result.output
         assert "1.3.0" in result.output
 
-        # Verify file was NOT updated
-        data = json.loads((tmp_path / "version.json").read_text())
-        assert data["version"] == "1.2.3"
+        # Verify pyproject.toml was NOT updated
+        assert 'version = "1.2.3"' in (tmp_path / "pyproject.toml").read_text()
 
 
 class TestVersionGating:

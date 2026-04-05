@@ -137,6 +137,31 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 self._regenerate_scaffold(config_path=opt_config)
                 self._install_scaffold()
 
+    def _generate_version_json(self) -> None:
+        """Write version.json to app_path from pyproject.toml + git metadata.
+
+        Non-fatal: logs a warning and continues if anything fails (e.g. no
+        pyproject.toml in the deployed project).
+        """
+        if not self.app_path:
+            return
+        from fraisier.versioning import generate_version_json, write_version
+
+        app_dir = Path(self.app_path)
+        try:
+            schema_dir: Path | None = None
+            if self.database_config:
+                raw = self.database_config.get("migrations_dir", "db/migrations")
+                candidate = Path(raw) if Path(raw).is_absolute() else app_dir / raw
+                if candidate.is_dir():
+                    schema_dir = candidate
+
+            info = generate_version_json(app_dir, schema_dir=schema_dir)
+            write_version(info, app_dir / "version.json")
+            logger.info("Generated version.json: v%s (%s)", info.version, info.commit)
+        except Exception as exc:
+            logger.warning("Could not generate version.json: %s", exc)
+
     def _run_database_migrations(self) -> None:
         """Run database migrations, stopping the service first for rebuild."""
         if self._is_rebuild_strategy() and self.systemd_service:
@@ -202,6 +227,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
                 # Step 2: Install dependencies
                 self._install_dependencies()
+
+                # Step 2.5: Generate version.json from pyproject.toml + git metadata
+                self._generate_version_json()
 
                 # Step 3: Run database migrations via strategy if configured
                 if self.database_config:

@@ -140,42 +140,37 @@ def read_version(path: Path) -> VersionInfo | None:
 
 
 def bump_version(
-    path: Path,
+    pyproject_path: Path,
     part: str,
     sync_config: VersionSyncConfig | None = None,
-    pyproject_path: Path | None = None,  # Deprecated: use sync_config
 ) -> VersionInfo:
-    """Atomically bump the version in *path* and optionally sync to target files.
+    """Atomically bump the version in *pyproject_path*.
 
-    Uses temp-file + rename for atomicity. If sync targets are specified,
-    all files are written together — if any write fails, no files are modified.
+    ``pyproject.toml`` is the single source of truth for the version string.
+    Uses a temp-file + rename for atomicity: if any sync-target write fails,
+    ``pyproject.toml`` is left unchanged.
 
     Args:
-        path: Path to version.json.
+        pyproject_path: Path to pyproject.toml.
         part: "major", "minor", or "patch".
-        sync_config: Optional configuration for syncing to multiple target files.
-        pyproject_path: Deprecated: use sync_config instead.
+        sync_config: Optional configuration for syncing to additional files
+            (e.g. ``__init__.py``).
 
     Returns:
-        Updated VersionInfo.
+        VersionInfo with the new version string (all other fields empty).
 
     Raises:
-        FileNotFoundError: If version.json does not exist.
-        ValueError: If *part* is invalid.
+        FileNotFoundError: If pyproject.toml does not exist.
+        ValueError: If *part* is invalid or version line is missing.
     """
+    import os
     import tempfile
-
-    if not path.exists():
-        raise FileNotFoundError(f"Version file not found: {path}")
 
     if part not in ("major", "minor", "patch"):
         raise ValueError(f"Invalid bump part: {part!r}")
 
-    info = read_version(path)
-    if info is None:
-        raise FileNotFoundError(f"Could not read: {path}")
-
-    major, minor, patch_v = parse_semver(info.version)
+    current = read_pyproject_version(pyproject_path)
+    major, minor, patch_v = parse_semver(current)
 
     if part == "major":
         major += 1
@@ -189,43 +184,31 @@ def bump_version(
 
     new_version = f"{major}.{minor}.{patch_v}"
 
-    # Create backup
-    backup_path = path.with_suffix(".json.bak")
-    backup_path.write_text(path.read_text())
-
-    # Write to temp files first, then rename for atomicity.
-    # If pyproject sync fails, version.json is not modified either.
-    version_content = (
-        json.dumps({**info.to_dict(), "version": new_version}, indent=2) + "\n"
+    # Build the new pyproject.toml content via regex substitution.
+    original_content = pyproject_path.read_text()
+    new_content = _PYPROJECT_VERSION_RE.sub(
+        rf"\g<1>{new_version}\g<3>", original_content
     )
 
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    tmp_version = Path(tmp_path)
+    # Write to temp file first; sync additional targets before committing.
+    # If any step fails, pyproject.toml stays unchanged.
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=pyproject_path.parent, suffix=".tmp")
+    tmp_path = Path(tmp_name)
     try:
-        tmp_version.write_text(version_content)
+        tmp_path.write_text(new_content)
 
-        # Sync to target files before committing version.json
         if sync_config is not None:
             sync_version_to_targets(new_version, sync_config)
-        elif pyproject_path is not None:
-            # Backward compatibility
-            sync_pyproject_version(new_version, pyproject_path)
 
-        # Commit version.json last (atomic rename)
-        tmp_version.rename(path)
-    except OSError:
-        # Rollback: remove temp, leave originals untouched.
-        # If targets were already written, restore from backup.
-        tmp_version.unlink(missing_ok=True)
+        # Atomic rename — commits pyproject.toml only after all targets succeed.
+        tmp_path.rename(pyproject_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
         raise
     finally:
-        # Clean up temp file descriptor
-        import os
-
         os.close(tmp_fd)
 
-    info.version = new_version
-    return info
+    return VersionInfo(version=new_version)
 
 
 _PYPROJECT_VERSION_RE = re.compile(r'^(version\s*=\s*")([^"]+)(")', re.MULTILINE)
@@ -280,40 +263,86 @@ def sync_version_to_targets(version: str, sync_config: VersionSyncConfig) -> Non
             backup_path.unlink(missing_ok=True)
 
 
+def read_pyproject_version(pyproject_path: Path) -> str:
+    """Read the version string from a pyproject.toml file.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If no ``version =`` line is found.
+    """
+    if not pyproject_path.exists():
+        raise FileNotFoundError(f"pyproject.toml not found: {pyproject_path}")
+    content = pyproject_path.read_text()
+    m = _PYPROJECT_VERSION_RE.search(content)
+    if not m:
+        raise ValueError(f"No version field found in {pyproject_path}")
+    return m.group(2)
+
+
+def generate_version_json(
+    app_path: Path,
+    schema_dir: Path | None = None,
+) -> "VersionInfo":
+    """Build a VersionInfo from pyproject.toml + git metadata.
+
+    Reads the version string from ``app_path/pyproject.toml``, queries git
+    for commit SHA and branch, and optionally computes schema_hash /
+    database_version from SQL files in *schema_dir*.
+
+    This function does **not** write any file — the caller is responsible
+    for calling ``write_version(info, dest_path)``.
+
+    Args:
+        app_path: Root directory of the managed project (must contain pyproject.toml).
+        schema_dir: Optional path to a directory containing ``*.sql`` migration files.
+
+    Returns:
+        VersionInfo populated with version, commit, branch, timestamp, and
+        optionally schema_hash / database_version.
+    """
+    import subprocess
+    from datetime import UTC, datetime
+
+    version = read_pyproject_version(app_path / "pyproject.toml")
+
+    def _git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(app_path), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    commit = _git("rev-parse", "--short", "HEAD")
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    timestamp = datetime.now(tz=UTC).isoformat()
+
+    schema_hash = ""
+    database_version = ""
+    if schema_dir is not None:
+        from fraisier.dbops.schema import _compute_schema_hash
+
+        schema_hash = f"sha256:{_compute_schema_hash(schema_dir)}"
+        sql_count = len(list(schema_dir.glob("*.sql")))
+        database_version = derive_database_version(sequence=sql_count)
+
+    return VersionInfo(
+        version=version,
+        commit=commit,
+        branch=branch,
+        timestamp=timestamp,
+        schema_hash=schema_hash,
+        database_version=database_version,
+    )
+
+
 def derive_database_version(*, sequence: int) -> str:
     """Derive a database version string in ``YYYY.MM.DD.NNN`` format."""
     from datetime import UTC, datetime
 
     now = datetime.now(tz=UTC)
     return f"{now.year}.{now.month:02d}.{now.day:02d}.{sequence:03d}"
-
-
-def update_schema_info(
-    version_path: Path,
-    schema_dir: Path,
-) -> VersionInfo:
-    """Update schema_hash and database_version in version.json.
-
-    Computes the SHA-256 hash of all ``*.sql`` files in *schema_dir*
-    and stores it (prefixed with ``sha256:``) in version.json.
-    The database_version is derived from the current date and the
-    number of migration files.
-    """
-    from fraisier.dbops.schema import _compute_schema_hash
-
-    info = read_version(version_path)
-    if info is None:
-        info = VersionInfo()
-
-    schema_hash = _compute_schema_hash(schema_dir)
-    info.schema_hash = f"sha256:{schema_hash}"
-
-    # Count SQL files for sequence number
-    sql_count = len(list(schema_dir.glob("*.sql")))
-    info.database_version = derive_database_version(sequence=sql_count)
-
-    write_version(info, version_path)
-    return info
 
 
 def has_version_changed(

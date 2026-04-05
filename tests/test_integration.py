@@ -379,108 +379,62 @@ class TestBackupRestoreCycle:
 
 
 class TestVersionManagementIntegration:
-    """Integration: bump -> verify version.json + pyproject.toml."""
+    """Integration: bump pyproject.toml + generate version.json at deploy time."""
 
-    def test_bump_updates_version_json(self, tmp_path):
-        """bump_version updates version.json with new version."""
-        from fraisier.versioning import (
-            VersionInfo,
-            bump_version,
-            read_version,
-            write_version,
-        )
+    def test_bump_updates_pyproject(self, tmp_path):
+        """bump_version updates pyproject.toml with new version."""
+        from fraisier.versioning import bump_version
 
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0", commit="abc123"), path)
+        path = tmp_path / "pyproject.toml"
+        path.write_text('[project]\nname = "myapp"\nversion = "1.0.0"\n')
 
         result = bump_version(path, "minor")
         assert result.version == "1.1.0"
+        assert 'version = "1.1.0"' in path.read_text()
 
-        loaded = read_version(path)
-        assert loaded is not None
-        assert loaded.version == "1.1.0"
-
-    def test_bump_creates_backup_file(self, tmp_path):
-        """bump_version creates .bak file with old version."""
-        from fraisier.versioning import VersionInfo, bump_version, write_version
-
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="2.3.4"), path)
-
-        bump_version(path, "patch")
-
-        backup = tmp_path / "version.json.bak"
-        assert backup.exists()
-        data = json.loads(backup.read_text())
-        assert data["version"] == "2.3.4"
-
-    def test_bump_and_sync_pyproject(self, tmp_path):
-        """bump_version + sync_pyproject_version updates both files."""
+    def test_bump_and_sync_init(self, tmp_path):
+        """bump_version with sync_config also updates __init__.py."""
         from fraisier.versioning import (
-            VersionInfo,
+            VersionSyncConfig,
+            VersionSyncTarget,
             bump_version,
-            sync_pyproject_version,
-            write_version,
         )
 
-        version_path = tmp_path / "version.json"
-        pyproject_path = tmp_path / "pyproject.toml"
-        write_version(VersionInfo(version="1.0.0"), version_path)
-        pyproject_path.write_text('[project]\nname = "myapp"\nversion = "1.0.0"\n')
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('[project]\nname = "myapp"\nversion = "1.0.0"\n')
+        init = tmp_path / "__init__.py"
+        init.write_text('__version__ = "1.0.0"\n')
 
-        result = bump_version(version_path, "major")
-        sync_pyproject_version(result.version, pyproject_path)
-
+        sync_config = VersionSyncConfig(
+            targets=[
+                VersionSyncTarget(path=init, regex=r'^(__version__\s*=\s*")([^"]+)(")')
+            ]
+        )
+        result = bump_version(pyproject, "major", sync_config=sync_config)
         assert result.version == "2.0.0"
-        pyproject_content = pyproject_path.read_text()
-        assert 'version = "2.0.0"' in pyproject_content
+        assert 'version = "2.0.0"' in pyproject.read_text()
+        assert '__version__ = "2.0.0"' in init.read_text()
 
-    def test_schema_hash_tracking(self, tmp_path):
-        """update_schema_info tracks schema hash in version.json."""
-        from fraisier.versioning import (
-            VersionInfo,
-            read_version,
-            update_schema_info,
-            write_version,
-        )
+    def test_schema_hash_via_generate_version_json(self, tmp_path):
+        """generate_version_json populates schema_hash from SQL files."""
+        from unittest.mock import MagicMock, patch
 
-        version_path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0"), version_path)
+        from fraisier.versioning import generate_version_json
 
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('[project]\nname = "myapp"\nversion = "3.1.4"\n')
         schema_dir = tmp_path / "sql"
         schema_dir.mkdir()
         (schema_dir / "001.sql").write_text("CREATE TABLE users (id int);")
         (schema_dir / "002.sql").write_text("ALTER TABLE users ADD name text;")
 
-        update_schema_info(version_path, schema_dir)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n")
+            info = generate_version_json(tmp_path, schema_dir=schema_dir)
 
-        v = read_version(version_path)
-        assert v is not None
-        assert v.schema_hash.startswith("sha256:")
-        assert v.database_version.endswith(".002")
-
-    def test_version_rollback_on_failure(self, tmp_path):
-        """Backup file allows rollback after failure."""
-        from fraisier.versioning import (
-            VersionInfo,
-            bump_version,
-            read_version,
-            write_version,
-        )
-
-        path = tmp_path / "version.json"
-        write_version(VersionInfo(version="1.0.0"), path)
-
-        bump_version(path, "patch")
-        assert read_version(path).version == "1.0.1"
-
-        # Simulate rollback by restoring .bak
-        backup = tmp_path / "version.json.bak"
-        assert backup.exists()
-        import shutil
-
-        shutil.copy2(backup, path)
-        assert read_version(path).version == "1.0.0"
+        assert info.version == "3.1.4"
+        assert info.schema_hash.startswith("sha256:")
+        assert info.database_version.endswith(".002")
 
 
 class TestWebhookToDeployIntegration:
