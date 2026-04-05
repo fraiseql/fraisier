@@ -7,10 +7,11 @@ Wants=network-online.target
 Type=exec
 User={{ scaffold.deploy_user }}
 Group={{ scaffold.deploy_user }}
-ExecStart=/usr/local/bin/fraisier-webhook
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-webhook
 Restart=on-failure
 RestartSec=5
-WatchdogSec=120
+# WatchdogSec intentionally omitted: uvicorn does not implement sd_notify
+# watchdog pings, so WatchdogSec would kill the process every N seconds.
 
 # Environment
 EnvironmentFile=/etc/fraisier/{{ project_name }}.webhook.env
@@ -26,9 +27,10 @@ MemoryMax=512M
 CPUAccounting=true
 
 # Security hardening
+# ProtectHome intentionally omitted: fraisier-webhook is installed as a uv tool
+# and runs from ~/.local, which ProtectHome (any value) makes inaccessible.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
