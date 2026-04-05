@@ -31,6 +31,7 @@ class ValidationCheckResult:
     passed: bool
     message: str | None = None
     severity: str = "error"
+    fix_command: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict."""
@@ -41,6 +42,8 @@ class ValidationCheckResult:
         }
         if self.message:
             d["message"] = self.message
+        if self.fix_command:
+            d["fix_command"] = self.fix_command
         return d
 
 

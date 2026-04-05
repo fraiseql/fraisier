@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from fraisier.validation import ValidationCheckResult
@@ -10,6 +11,17 @@ from fraisier.validation import ValidationCheckResult
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
     from fraisier.runners import SSHRunner
+
+
+@dataclass
+class RepairResult:
+    """Result of applying a single fix remotely."""
+
+    check_name: str
+    fix_command: str
+    applied: bool
+    stdout: str = field(default="")
+    stderr: str = field(default="")
 
 
 class RemoteDeploymentValidator:
@@ -61,10 +73,33 @@ class RemoteDeploymentValidator:
 
         return results
 
+    def repair_all(self, results: list[ValidationCheckResult]) -> list[RepairResult]:
+        """Apply fixes for all failed checks that have a fix_command."""
+        repair_results = []
+        for result in results:
+            if result.passed or result.fix_command is None:
+                continue
+            proc = self._remote_shell(result.fix_command)
+            repair_results.append(
+                RepairResult(
+                    check_name=result.name,
+                    fix_command=result.fix_command,
+                    applied=proc.returncode == 0,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                )
+            )
+        return repair_results
+
     def _remote(
         self, cmd: list[str], *, timeout: int = 15
     ) -> subprocess.CompletedProcess[str]:
         return self.runner.run(cmd, timeout=timeout, check=False)
+
+    def _remote_shell(
+        self, cmd: str, *, timeout: int = 30
+    ) -> subprocess.CompletedProcess[str]:
+        return self.runner.run(["sh", "-c", cmd], timeout=timeout, check=False)
 
     def _check_ssh(self) -> ValidationCheckResult:
         try:
@@ -113,6 +148,7 @@ class RemoteDeploymentValidator:
                     f"Fix: sudo chown -R {self.deploy_user} {git_repo}"
                 ),
                 severity="error",
+                fix_command=f"chown -R {self.deploy_user} {git_repo}",
             )
 
         return ValidationCheckResult(
@@ -141,6 +177,9 @@ class RemoteDeploymentValidator:
                     f"sudo chown {self.deploy_user} {app_path}"
                 ),
                 severity="error",
+                fix_command=(
+                    f"mkdir -p {app_path} && chown {self.deploy_user} {app_path}"
+                ),
             )
 
         owner = self._remote(["stat", "-c", "%U", app_path]).stdout.strip()
@@ -153,6 +192,7 @@ class RemoteDeploymentValidator:
                     f"Fix: sudo chown {self.deploy_user} {app_path}"
                 ),
                 severity="error",
+                fix_command=f"chown {self.deploy_user} {app_path}",
             )
 
         return ValidationCheckResult(
@@ -185,6 +225,7 @@ class RemoteDeploymentValidator:
                 f"Fix: sudo systemctl enable --now {service_name}"
             ),
             severity="error",
+            fix_command=f"systemctl enable --now {service_name}",
         )
 
     def _check_systemd_socket(self) -> ValidationCheckResult:
@@ -206,6 +247,7 @@ class RemoteDeploymentValidator:
                 f"Fix: sudo systemctl enable --now {socket_name}"
             ),
             severity="error",
+            fix_command=f"systemctl enable --now {socket_name}",
         )
 
     def _check_wrapper_scripts(self) -> list[ValidationCheckResult]:
@@ -230,6 +272,7 @@ class RemoteDeploymentValidator:
                             f"Fix: chmod 755 {path}"
                         ),
                         severity="error",
+                        fix_command=f"chmod 755 {path}",
                     )
                 )
             else:
@@ -318,4 +361,5 @@ class RemoteDeploymentValidator:
                 f"Fix: sudo systemctl enable --now {service_name}"
             ),
             severity="error",
+            fix_command=f"systemctl enable --now {service_name}",
         )

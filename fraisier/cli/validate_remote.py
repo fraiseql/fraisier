@@ -7,7 +7,7 @@ import json
 import click
 from rich.table import Table
 
-from ._helpers import console, require_config
+from ._helpers import console, require_config, resolve_sudo_password
 from .bootstrap import _resolve_server_and_runner
 from .main import main
 
@@ -88,7 +88,6 @@ def validate_remote(
         fraisier validate-remote my_api production --become-password-command "op read op://…"
         fraisier validate-remote my_api production --server myserver.com
     """
-    from fraisier.bootstrap import resolve_become_password
     from fraisier.remote_validator import RemoteDeploymentValidator
 
     config = require_config(ctx)
@@ -100,35 +99,9 @@ def validate_remote(
         )
         raise SystemExit(1)
 
-    # Resolution order (mirrors bootstrap):
-    # 1. CLI --become-password-command
-    # 2. bootstrap.environments.<env>.become_password_command
-    # 3. bootstrap.servers.<server>.become_password_command
-    # 4. bootstrap.become_password_command (global)
-    sudo_password = None
-    if become_password_command is None:
-        raw_bootstrap = config._config.get("bootstrap", {}) or {}
-
-        env_override = (raw_bootstrap.get("environments") or {}).get(environment) or {}
-        become_password_command = env_override.get("become_password_command")
-
-        if become_password_command is None:
-            env_cfg = config.environments.get(environment)
-            server_name = env_cfg.get("server") if isinstance(env_cfg, dict) else None
-            if server_name:
-                servers = raw_bootstrap.get("servers") or {}
-                srv_override = servers.get(server_name) or {}
-                become_password_command = srv_override.get("become_password_command")
-
-        if become_password_command is None:
-            become_password_command = raw_bootstrap.get("become_password_command")
-
-    if become_password_command:
-        sudo = True
-        sudo_password = resolve_become_password(become_password_command)
-    elif ask_become_pass:
-        sudo = True
-        sudo_password = click.prompt("SUDO password", hide_input=True, err=True)
+    sudo, sudo_password = resolve_sudo_password(
+        config, environment, become_password_command, sudo, ask_become_pass
+    )
 
     target_server, runner = _resolve_server_and_runner(
         ctx,

@@ -58,6 +58,51 @@ def parse_since(value: str) -> str:
         ) from err
 
 
+def resolve_sudo_password(
+    config: FraisierConfig,
+    environment: str,
+    become_password_command: str | None,
+    sudo: bool,
+    ask_become_pass: bool,
+) -> tuple[bool, str | None]:
+    """Resolve sudo password from CLI arg or config, prompt if needed.
+
+    Resolution order:
+      1. CLI --become-password-command
+      2. bootstrap.environments.<env>.become_password_command
+      3. bootstrap.servers.<server>.become_password_command
+      4. bootstrap.become_password_command (global)
+      5. Interactive prompt if --ask-become-pass
+
+    Returns:
+        (sudo, sudo_password) — sudo may be forced True when a password is found.
+    """
+    from fraisier.bootstrap import resolve_become_password
+
+    if become_password_command is None:
+        raw_bootstrap = config._config.get("bootstrap", {}) or {}
+
+        env_override = (raw_bootstrap.get("environments") or {}).get(environment) or {}
+        become_password_command = env_override.get("become_password_command")
+
+        if become_password_command is None:
+            env_cfg = config.environments.get(environment)
+            server_name = env_cfg.get("server") if isinstance(env_cfg, dict) else None
+            if server_name:
+                servers = raw_bootstrap.get("servers") or {}
+                srv_override = servers.get(server_name) or {}
+                become_password_command = srv_override.get("become_password_command")
+
+        if become_password_command is None:
+            become_password_command = raw_bootstrap.get("become_password_command")
+
+    if become_password_command:
+        return True, resolve_become_password(become_password_command)
+    if ask_become_pass:
+        return True, click.prompt("SUDO password", hide_input=True, err=True)
+    return sudo, None
+
+
 def require_config(ctx: click.Context) -> FraisierConfig:
     """Get config from context, aborting with a clear error if missing."""
     config = ctx.obj.get("config")

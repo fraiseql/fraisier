@@ -1602,6 +1602,7 @@ from . import health as _health_mod  # noqa: E402, F401
 from . import logs as _logs_mod  # noqa: E402, F401
 from . import ops as _ops_mod  # noqa: E402, F401
 from . import providers as _providers_mod  # noqa: E402, F401
+from . import repair_remote as _repair_remote_mod  # noqa: E402, F401
 from . import scaffold as _scaffold_mod  # noqa: E402, F401
 from . import setup as _setup_mod  # noqa: E402, F401
 from . import test_components as _test_components_mod  # noqa: E402, F401
