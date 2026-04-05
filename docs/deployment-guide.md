@@ -243,11 +243,15 @@ fraisier deploy my_api production
 
 The deployment sequence:
 
-1. **Config sync**: copies `fraises.yaml` from the git worktree to `/opt/<project>/` and
-   detects whether it changed. If changed, regenerates and installs scaffold automatically.
-2. **Git fetch + checkout**: fetches from `clone_url`, checks out `branch` into `app_path`.
-3. **Install dependencies**: runs `install.command` (e.g. `uv sync --frozen`) in `app_path`,
-   optionally as `install.user` via `sudo -u`.
+1. **Git fetch + checkout**: fetches from `clone_url`, checks out `branch` into `app_path`.
+2. **Install dependencies**: runs `install.command` (e.g. `uv sync --frozen`) in `app_path`,
+   optionally as `install.user` via `sudo -u`. If `install.user` differs from `deploy_user`,
+   fraisier ensures `.venv` is owned by `install.user` before running (prevents permission
+   errors if the directory was previously written by the deploy user).
+3. **Config sync**: copies `fraises.yaml` from the git worktree to the path set in
+   `FRAISIER_CONFIG` (injected into the deploy daemon by the systemd unit — defaults to
+   `/opt/fraisier/fraises.yaml`). Detects whether the file changed using a SHA-256 hash. If
+   changed, regenerates and installs scaffold automatically.
 4. **Database migrations**: runs the configured strategy (see below).
 5. **Service restart**: calls `systemctl restart` via the restricted wrapper script.
 6. **Health check**: polls `health_check.url` with exponential backoff until the service
@@ -371,10 +375,15 @@ Fraisier separates deployment and application concerns into two system users:
 | User | Purpose | Has access to |
 |---|---|---|
 | `deploy_user` (e.g. `fraisier`) | Runs fraisier, the webhook, git operations | `app_path` (write), systemctl wrapper, pg wrapper |
-| `service.user` (e.g. `myapp`) | Runs the application process | `app_path` (read), database |
+| `service.user` / `install.user` (e.g. `myapp`) | Runs the application process and install command | `app_path` (read/exec), database |
 
 The deploy user never runs the application. The application user never touches deployment
 infrastructure.
+
+When `install.user` differs from `deploy_user`, fraisier runs `chown -R <install.user>
+<app_path>/.venv` before the install step. This prevents permission errors that occur when the
+`.venv` directory (gitignored, so not recreated by checkout) was previously owned by the deploy
+user.
 
 ### Wrapper scripts
 

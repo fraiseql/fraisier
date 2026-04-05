@@ -89,6 +89,13 @@ Now you can SSH without specifying the key:
 ssh prod-1.example.com
 ```
 
+> **Note — deploy user `known_hosts`**: The SSH keys above are for *your* connection to the
+> server. The deploy user on the server (e.g. `fraisier_deploy`) also needs to reach your git
+> host (github.com, GitLab, etc.) over SSH for `git fetch`. The generated deploy service unit
+> automatically sets `GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new`, so the first
+> fetch succeeds without manually seeding `~/.ssh/known_hosts` as the deploy user. This is
+> self-healing — it picks up host key rotations automatically.
+
 ---
 
 ## Step 2: Configure Bare Metal Provider

@@ -97,11 +97,12 @@ fraisier deploy FRAISE ENVIRONMENT [OPTIONS]
 **Automatic Configuration Synchronization**
 
 When you run `fraisier deploy`, Fraisier automatically:
-- Syncs `fraises.yaml` from git to the server
-- Detects if configuration changed using hash comparison
+- Syncs `fraises.yaml` from the git worktree to the path in `FRAISIER_CONFIG` (set by the
+  deploy service unit, defaults to `/opt/fraisier/fraises.yaml`)
+- Detects if configuration changed using SHA-256 hash comparison
 - Regenerates and installs scaffold files if needed
 
-This keeps the server in sync with your git repository automatically. See [deployment-guide.md](./deployment-guide.md#configuration-synchronization-automatic) for details.
+This keeps the server in sync with your git repository automatically. See [deployment-guide.md](./deployment-guide.md#first-deployment) for details.
 
 **Examples:**
 
@@ -487,6 +488,10 @@ fraisier bootstrap --environment <env> [OPTIONS]
 8. Run `install.sh --standalone` (systemd units, nginx, sudoers)
 9. Enable and start the deploy socket unit
 10. Run `fraisier validate-setup` remotely and report
+
+The generated deploy service unit automatically sets `GIT_SSH_COMMAND=ssh -o
+StrictHostKeyChecking=accept-new`, so the first `git fetch` succeeds without needing to
+pre-populate `known_hosts` for github.com or your git host.
 
 **Requirements:**
 

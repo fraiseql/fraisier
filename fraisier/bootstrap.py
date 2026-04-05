@@ -86,6 +86,11 @@ class ServerBootstrapper:
     Every step is idempotent: re-running bootstrap on a partially-set-up
     server is safe.  Steps that find the work already done report
     ``already_done=True`` in verbose output.
+
+    The generated deploy service unit sets
+    ``GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new`` so the
+    first ``git fetch`` succeeds without needing ``known_hosts`` pre-seeded
+    for the git host.
     """
 
     _FRAISIER_CONFIG_PATH = "/opt/fraisier/fraises.yaml"
