@@ -38,6 +38,10 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
+# Runtime directory (created by systemd at startup, owned by deploy user)
+RuntimeDirectory=fraisier
+RuntimeDirectoryMode=0750
+
 # Writable paths
 ReadWritePaths=/var/lib/fraisier
 ReadWritePaths=/run/fraisier

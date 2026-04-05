@@ -187,6 +187,16 @@ else
     echo "  ${PROJECT_DIR} already exists"
 fi
 
+# Create fraisier runtime directories (owned by deploy user)
+for fraisier_dir in /opt/fraisier /var/lib/fraisier /etc/fraisier; do
+    if [ ! -d "${fraisier_dir}" ]; then
+        echo "  Creating ${fraisier_dir}"
+        _run sudo mkdir -p "${fraisier_dir}"
+    fi
+    _run sudo chown "${DEPLOY_USER}:${DEPLOY_USER}" "${fraisier_dir}"
+    _run sudo chmod 750 "${fraisier_dir}"
+done
+
 # Install uv (Astral Python toolchain)
 if ! command -v uv &>/dev/null; then
     echo "  Installing uv"
