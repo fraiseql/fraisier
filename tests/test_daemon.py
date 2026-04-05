@@ -314,7 +314,7 @@ class TestExecuteDeploymentRequest:
 
     @patch("fraisier.daemon.get_config")
     def test_execute_wrong_user_fails_with_clear_message(self, mock_get_config):
-        """Running as wrong user fails before touching the lock, with a clear message."""
+        """Wrong user fails before lock with a clear message."""
         mock_config = MagicMock()
         mock_config.get_fraise_environment.return_value = {
             "type": "api",
@@ -459,7 +459,8 @@ class TestDeployDaemonCommand:
                 "type": "api",
                 "app_path": "/opt/test",
             }
-            mock_config_instance.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
+            current_user = pwd.getpwuid(os.getuid()).pw_name
+            mock_config_instance.get_deploy_user.return_value = current_user
             mock_config.return_value = mock_config_instance
 
             mock_deployer = MagicMock()
@@ -502,7 +503,8 @@ class TestDeployDaemonCommand:
                 "type": "api",
                 "app_path": "/opt/test",
             }
-            mock_config_instance.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
+            current_user = pwd.getpwuid(os.getuid()).pw_name
+            mock_config_instance.get_deploy_user.return_value = current_user
             mock_config.return_value = mock_config_instance
 
             mock_deployer = MagicMock()

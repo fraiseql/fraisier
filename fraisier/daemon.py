@@ -138,7 +138,8 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
         expected_user = config.get_deploy_user(request.project, request.environment)
         if current_user != expected_user:
             error_msg = (
-                f"Deployment must run as '{expected_user}' but running as '{current_user}'.\n"
+                f"Deployment must run as '{expected_user}'"
+                f" but running as '{current_user}'.\n"
                 f"Run with: sudo -u {expected_user} fraisier deploy-daemon ..."
             )
             logger.error(
