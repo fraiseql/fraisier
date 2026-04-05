@@ -6,6 +6,7 @@ SQLite (fraisier.db) = State & History (what's deployed, what happened)
 Follows CQRS pattern with clear separation of write (tb_*) and read (v_*) models.
 """
 
+import os
 import sqlite3
 import threading
 from collections.abc import Generator
@@ -23,7 +24,10 @@ DEFAULT_DB_PATH = Path("/opt/fraisier/fraisier.db")
 
 
 def get_db_path() -> Path:
-    """Get database path, preferring /opt location, falling back to local."""
+    """Get database path from FRAISIER_DB_PATH env, /opt/fraisier, or package dir."""
+    env_path = os.getenv("FRAISIER_DB_PATH")
+    if env_path:
+        return Path(env_path)
     if DEFAULT_DB_PATH.parent.exists():
         return DEFAULT_DB_PATH
     return Path(__file__).parent.parent / "fraisier.db"

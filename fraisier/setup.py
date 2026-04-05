@@ -554,6 +554,7 @@ class ServerSetup:
             f"FRAISIER_WEBHOOK_SECRET={secret}\n"
             f"FRAISIER_CONFIG={config_path}\n"
             "FRAISIER_PORT=8080\n"
+            "FRAISIER_DB_PATH=/var/lib/fraisier/fraisier.db\n"
         )
         project = self.config.project_name
         env_filename = f"fraisier-{project}.webhook.env"
