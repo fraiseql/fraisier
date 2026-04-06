@@ -272,6 +272,9 @@ if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
        /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.service
     _run sudo cp "${HELPER_SOCKET_SRC}" \
        /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.socket
+    _run sudo systemctl daemon-reload
+    # Restart the helper socket so its socket file is (re)created under /run/fraisier/
+    _run sudo systemctl restart fraisier-{{ project_name }}-systemctl-helper.socket || true
 fi
 
 # Install sudoers fragment

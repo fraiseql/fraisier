@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] - 2026-04-06
+
+### Fixed
+
+- **systemctl helper socket file missing after webhook restart** — `install.sh` installed the
+  helper service and socket unit files but never restarted the socket, so the socket file in
+  `/run/fraisier/` was never (re)created. Added `systemctl restart fraisier-{project}-systemctl-helper.socket`
+  after the install step, mirroring the pattern used for deploy socket units.
+
+---
+
 ## [0.5.7] - 2026-04-06
 
 ### Fixed
