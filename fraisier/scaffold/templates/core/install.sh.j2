@@ -102,6 +102,21 @@ _check_exists() {
   return 0
 }
 
+# Helper function to ensure directory exists with correct ownership and permissions
+_ensure_dir() {
+  local path="$1"
+  local owner="$2"
+  local group="$3"
+  local mode="$4"
+
+  if [ ! -d "$path" ]; then
+    echo "  Creating $path"
+    _run sudo mkdir -p "$path"
+  fi
+  _run sudo chown "$owner:$group" "$path"
+  _run sudo chmod "$mode" "$path"
+}
+
 # Helper function to check prerequisites
 _validate_prerequisites() {
   local has_errors=false
@@ -187,28 +202,12 @@ else
     echo "  ${PROJECT_DIR} already exists"
 fi
 
-# Create fraisier runtime directories (owned by deploy user)
-for fraisier_dir in /opt/fraisier /var/lib/fraisier /etc/fraisier; do
-    if [ ! -d "${fraisier_dir}" ]; then
-        echo "  Creating ${fraisier_dir}"
-        _run sudo mkdir -p "${fraisier_dir}"
-    fi
-    _run sudo chown "${DEPLOY_USER}:${DEPLOY_USER}" "${fraisier_dir}"
-    _run sudo chmod 750 "${fraisier_dir}"
-done
-
-# Ensure bare git repo directories exist and are owned by the deploy user
-{% for fraise in local_fraises %}
-{% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% if env_config.get('git_repo') %}
-GIT_REPO="{{ env_config['git_repo'] }}"
-if [ ! -d "${GIT_REPO}" ]; then
-    echo "  Creating bare git repo dir ${GIT_REPO}"
-    _run sudo mkdir -p "${GIT_REPO}"
-fi
-_run sudo chown "${DEPLOY_USER}:${DEPLOY_USER}" "${GIT_REPO}"
+# Create managed directories in depth order (parents before children)
+# All paths are derived from PathManifest for consistency across provisioning
+{% for mp in manifest.sorted_by_depth() %}
+{% if mp.create_if_missing %}
+_ensure_dir "{{ mp.path }}" "{{ mp.owner }}" "{{ mp.group }}" "{{ '%o' | format(mp.mode) }}"
 {% endif %}
-{% endfor %}
 {% endfor %}
 
 # Install uv (Astral Python toolchain)
