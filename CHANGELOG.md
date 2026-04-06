@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2026-04-06
+
+### Fixed
+
+- **`/run/fraisier/` still wiped during v0.5.7 → v0.5.10 upgrade** — the previous fix
+  stopped the helper service *before* daemon-reload, which meant systemd used the OLD
+  unit (which had `RuntimeDirectory=fraisier`) for the stop phase and still wiped the
+  directory. The correct approach is to copy the new unit files, run `daemon-reload`
+  first (so systemd loads the new unit without `RuntimeDirectory`), and *then* restart
+  the service — the stop phase now uses the new unit and `/run/fraisier/` is preserved.
+
+---
+
 ## [0.5.10] - 2026-04-06
 
 ### Fixed

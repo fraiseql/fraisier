@@ -268,26 +268,24 @@ HELPER_SERVICE_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemct
 HELPER_SOCKET_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.socket"
 if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
     echo "  Installing systemctl helper service and socket"
-    # Stop the old helper service BEFORE installing the new unit file and running
-    # daemon-reload. Older versions of the helper service had RuntimeDirectory=fraisier,
-    # which causes systemd to wipe /run/fraisier/ when the service stops. Stopping it
-    # explicitly here (while the webhook service keeps /run/fraisier/ alive) prevents
-    # that from happening at daemon-reload time or during a later stop.
-    _run sudo systemctl stop fraisier-{{ project_name }}-systemctl-helper.service 2>/dev/null || true
-    _run sudo systemctl stop fraisier-{{ project_name }}-systemctl-helper.socket 2>/dev/null || true
     _run sudo cp "${HELPER_SERVICE_SRC}" \
        /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.service
     _run sudo cp "${HELPER_SOCKET_SRC}" \
        /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.socket
+    # daemon-reload FIRST: after this, the new unit is in memory (no RuntimeDirectory=fraisier).
+    # Restarting the service AFTER daemon-reload means the stop phase uses the new (safe) unit,
+    # so /run/fraisier/ is NOT wiped. Stopping BEFORE daemon-reload would use the old unit and
+    # wipe /run/fraisier/ because older versions had RuntimeDirectory=fraisier.
     _run sudo systemctl daemon-reload
-    # Restart deploy sockets in case /run/fraisier/ was disturbed during the transition
+    _run sudo systemctl restart fraisier-{{ project_name }}-systemctl-helper.service 2>/dev/null || true
+    # Restart deploy sockets to ensure socket files exist after any transition turbulence
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set socket_unit = deploy_socket_name(env_config, env_name) %}
     _run sudo systemctl restart {{ socket_unit }} || true
 {% endfor %}
 {% endfor %}
-    # Start the helper socket — new unit has no RuntimeDirectory so it is safe
+    # Restart helper socket to ensure socket file exists
     _run sudo systemctl restart fraisier-{{ project_name }}-systemctl-helper.socket || true
 fi
 
