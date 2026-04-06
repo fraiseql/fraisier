@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-04-06
+
+### Breaking Changes
+
+- Scaffold output changed: regenerate and reinstall all systemd service units after upgrading.
+  Generated webhook and deploy-daemon services now use `FRAISIER_SYSTEMCTL_SOCKET` instead
+  of `FRAISIER_SYSTEMCTL_WRAPPER`. The generated sudoers fragment no longer contains
+  a systemctl-wrapper NOPASSWD entry.
+
+### Added
+
+- **`fraisier-systemctl-helper`** — root-privileged Unix socket helper for service management.
+  Replaces the sudo/wrapper mechanism entirely. Runs as root under systemd socket activation,
+  validates commands against an allowlist baked into `ExecStart` args, calls `systemctl`
+  directly. `NoNewPrivileges=true` on all services including the helper itself.
+- New scaffold templates: `systemctl-helper.service.j2`, `systemctl-helper.socket.j2`.
+  Generated as `fraisier-{project}-systemctl-helper.{service,socket}`, installed to
+  `/etc/systemd/system/` by `install.sh`, socket enabled on first install.
+- `FRAISIER_SYSTEMCTL_SOCKET` environment variable in webhook and deploy-daemon service units —
+  points to `/run/fraisier/systemctl-{project}.sock`.
+- `resolver.py`: new `systemctl_socket` property.
+
+### Fixed
+
+- **#123: `NoNewPrivileges=true` blocked sudo in webhook service** — sudo is no longer used
+  for service management; all services keep `NoNewPrivileges=true`.
+- **#122: wrapper called without sudo** — the wrapper mechanism is superseded; the new helper
+  requires no sudo at all.
+
+### Removed
+
+- systemctl NOPASSWD block from generated `sudoers` fragment (no longer needed).
+
+---
+
 ## [0.5.0] - 2026-04-06
 
 ### Breaking Changes
