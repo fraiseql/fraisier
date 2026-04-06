@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.15] - 2026-04-06
+
+### Fixed
+
+- **Watchdog kills uvicorn-based services every 60 seconds** — `service.j2` unconditionally
+  added `WatchdogSec=60` but uvicorn does not implement `sd_notify` keepalive pings, so
+  systemd would kill every instance exactly 60 seconds after startup. Removed `WatchdogSec`
+  from the template (the fraisier-webhook template already omitted it with an explanatory
+  comment for the same reason).
+
+---
+
 ## [0.5.14] - 2026-04-06
 
 ### Fixed

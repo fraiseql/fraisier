@@ -20,7 +20,8 @@ ExecStart={{ app_path }}/.venv/bin/uvicorn {{ fraise.name }}.main:app --host 0.0
 {% endif %}
 Restart=on-failure
 RestartSec=5
-WatchdogSec=60
+# WatchdogSec intentionally omitted: the default server does not implement
+# sd_notify and would be killed every 60 s if a watchdog were configured.
 
 # Resource limits
 MemoryMax={{ memory_max }}
