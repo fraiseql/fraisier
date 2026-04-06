@@ -281,6 +281,25 @@ class TestBuildServerSocket:
         ):
             _build_server_socket(frozenset())
 
+    def test_main_logs_allowed_services(self):
+        """_build_server_socket logs the set of allowed services."""
+        environ = {"LISTEN_FDS": "1"}
+        allowed = frozenset({"api.service", "web.service"})
+
+        with (
+            patch.dict("os.environ", environ, clear=False),
+            patch("socket.fromfd") as mock_fromfd,
+            patch("fraisier.systemctl_helper.logger") as mock_logger,
+        ):
+            mock_sock = MagicMock()
+            mock_fromfd.return_value = mock_sock
+
+            _build_server_socket(allowed)
+
+            mock_logger.info.assert_called_once()
+            call_args = mock_logger.info.call_args[0]
+            assert "ready" in call_args[0]
+
 
 class TestAllowlistIntegration:
     """Verify that only exactly matching service names are permitted."""
