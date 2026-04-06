@@ -94,40 +94,41 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
     # Global paths
     global_paths: list[ManagedPath] = []
 
-    # /opt/fraisier
+    # /opt/fraisier - accessed by deploy services and webhook
     global_paths.append(
         ManagedPath(
             path=Path("/opt/fraisier"),
             owner=deploy_user,
             group=deploy_user,
             mode=0o755,
-            read_write_units=(),
+            read_write_units=("fraisier-webhook",),
             create_if_missing=True,
         )
     )
     seen_global.add("/opt/fraisier")
 
-    # /var/lib/fraisier
+    # /var/lib/fraisier - accessed by deploy services and webhook
     global_paths.append(
         ManagedPath(
             path=Path("/var/lib/fraisier"),
             owner=deploy_user,
             group=deploy_user,
             mode=0o755,
-            read_write_units=(),
+            read_write_units=("fraisier-webhook",),
             create_if_missing=True,
         )
     )
     seen_global.add("/var/lib/fraisier")
 
     # /run/fraisier (managed by systemd, don't create)
+    # Accessed by deploy services and webhook
     global_paths.append(
         ManagedPath(
             path=Path("/run/fraisier"),
             owner=deploy_user,
             group=deploy_user,
             mode=0o755,
-            read_write_units=(),
+            read_write_units=("fraisier-webhook",),
             create_if_missing=False,
         )
     )
@@ -148,7 +149,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
             socket_stem = socket_unit.removesuffix(".socket")
             deploy_socket_stems.add(socket_stem)
 
-            # Get git_repo path
+            # Get git_repo path - needed by deploy service and webhook
             git_repo = env_config.get("git_repo")
             if git_repo:
                 path_str = str(git_repo)
@@ -160,12 +161,12 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                             owner=deploy_user,
                             group=deploy_user,
                             mode=0o755,
-                            read_write_units=(socket_stem,),
+                            read_write_units=(socket_stem, "fraisier-webhook"),
                             create_if_missing=True,
                         )
                     )
 
-            # Get app_path
+            # Get app_path - needed by deploy service and webhook
             app_path = env_config.get("app_path")
             if app_path:
                 path_str = str(app_path)
@@ -177,7 +178,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                             owner=deploy_user,
                             group=deploy_user,
                             mode=0o755,
-                            read_write_units=(socket_stem,),
+                            read_write_units=(socket_stem, "fraisier-webhook"),
                             create_if_missing=True,
                         )
                     )
