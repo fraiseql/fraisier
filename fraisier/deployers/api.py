@@ -32,8 +32,13 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     - Health check verification
     """
 
-    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
-        super().__init__(config, runner=runner)
+    def __init__(
+        self,
+        config: dict[str, Any],
+        runner: CommandRunner | None = None,
+        config_object: Any | None = None,
+    ):
+        super().__init__(config, runner=runner, config_object=config_object)
         self._init_git_deploy(config)
         self.git_repo = config.get("git_repo")
         self.systemd_service = config.get("systemd_service")

@@ -21,8 +21,13 @@ class ETLDeployer(GitDeployMixin, BaseDeployer):
     Uses bare repo pattern for git operations, then runs configured scripts.
     """
 
-    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
-        super().__init__(config, runner=runner)
+    def __init__(
+        self,
+        config: dict[str, Any],
+        runner: CommandRunner | None = None,
+        config_object: Any | None = None,
+    ):
+        super().__init__(config, runner=runner, config_object=config_object)
         self._init_git_deploy(config)
         self.script_path = config.get("script_path")
         self.database_config = config.get("database", {})

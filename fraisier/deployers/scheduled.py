@@ -22,8 +22,13 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
     Pulls code via bare repo pattern, then manages systemd timers.
     """
 
-    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
-        super().__init__(config, runner=runner)
+    def __init__(
+        self,
+        config: dict[str, Any],
+        runner: CommandRunner | None = None,
+        config_object: Any | None = None,
+    ):
+        super().__init__(config, runner=runner, config_object=config_object)
         self._init_git_deploy(config)
         self.systemd_service = config.get("systemd_service")
         self.systemd_timer = config.get("systemd_timer")

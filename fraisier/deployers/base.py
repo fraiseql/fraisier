@@ -52,6 +52,7 @@ class BaseDeployer(ABC):
         self,
         config: dict[str, Any],
         runner: CommandRunner | None = None,
+        config_object: Any | None = None,
     ):
         """Initialize deployer with fraise configuration.
 
@@ -59,10 +60,12 @@ class BaseDeployer(ABC):
             config: Fraise configuration from fraises.yaml
             runner: Optional CommandRunner for executing shell commands.
                 Defaults to LocalRunner (local subprocess execution).
+            config_object: Optional typed FraisierConfig for manifest operations.
         """
         from fraisier.runners import LocalRunner
 
         self.config = config
+        self.config_object = config_object
         self.fraise_name = config.get("fraise_name", "unknown")
         self.environment = config.get("environment", "unknown")
         self.runner = runner or LocalRunner()

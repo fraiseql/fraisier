@@ -29,8 +29,13 @@ class DockerComposeDeployer(BaseDeployer):
         image_tag: Tag to deploy (optional, uses IMAGE_TAG env var)
     """
 
-    def __init__(self, config: dict[str, Any], runner: CommandRunner | None = None):
-        super().__init__(config, runner=runner)
+    def __init__(
+        self,
+        config: dict[str, Any],
+        runner: CommandRunner | None = None,
+        config_object: Any | None = None,
+    ):
+        super().__init__(config, runner=runner, config_object=config_object)
         self.compose_file = config.get("compose_file", "docker-compose.yml")
         self.project_name = config.get("project_name", "fraisier")
         self.service_name = config.get("service_name")

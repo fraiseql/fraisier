@@ -609,10 +609,10 @@ class TestAPIDeployer:
         default = Path("/opt/fraisier/fraises.yaml")
         assert mock_sync.call_args.kwargs["dest_path"] == default
 
-    def test_install_dependencies_chowns_venv_when_exists(
+    def test_install_dependencies_with_different_users(
         self, tmp_path, mock_subprocess
     ):
-        """`_install_dependencies` chowns .venv to install_user when users differ."""
+        """_install_dependencies uses sudo -u when install_user differs."""
         venv = tmp_path / ".venv"
         venv.mkdir()
 
@@ -629,10 +629,10 @@ class TestAPIDeployer:
 
         deployer._install_dependencies()
 
-        assert mock_subprocess.call_count == 2
-        chown_call = mock_subprocess.call_args_list[0][0][0]
-        assert chown_call[:3] == ["chown", "-R", "appuser"]
-        assert chown_call[3] == str(venv)
+        # Should call install command with sudo -u appuser
+        assert mock_subprocess.call_count == 1
+        install_call = mock_subprocess.call_args_list[0][0][0]
+        assert install_call[:3] == ["sudo", "-u", "appuser"]
 
     def test_install_dependencies_skips_chown_when_no_venv(
         self, tmp_path, mock_subprocess
