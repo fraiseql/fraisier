@@ -85,8 +85,7 @@ class RemoteDeploymentValidator:
             ValidationCheckResult with passed=True or False, and fix_command if needed
         """
         # Use stat to check if path exists and get owner:group
-        stat_cmd = f"stat -c '%U %G' {shlex.quote(str(mp.path))} 2>/dev/null"
-        proc = self._remote_shell(stat_cmd)
+        proc = self._remote(["stat", "-c", "%U %G", str(mp.path)])
 
         if proc.returncode != 0 or not proc.stdout.strip():
             # Path doesn't exist
@@ -99,7 +98,15 @@ class RemoteDeploymentValidator:
             )
 
         # Path exists — check owner:group
-        actual_owner, actual_group = proc.stdout.strip().split()
+        output_parts = proc.stdout.strip().split()
+        if len(output_parts) < 2:
+            # Old format with just owner; try getting group separately
+            actual_owner = output_parts[0] if output_parts else ""
+            # Assume group equals owner if not provided separately
+            actual_group = actual_owner
+        else:
+            actual_owner, actual_group = output_parts[0], output_parts[1]
+
         if actual_owner == mp.owner and actual_group == mp.group:
             # Correct ownership
             return ValidationCheckResult(name=f"path:{mp.path}", passed=True)

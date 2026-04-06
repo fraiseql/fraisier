@@ -123,6 +123,15 @@ def validate_remote(
     validator = RemoteDeploymentValidator(fraise_config, runner, config)
     results = validator.run_all()
 
+    # Add manifest-driven path checks (only if SSH succeeded)
+    ssh_passed = any(r.name == "ssh_connectivity" and r.passed for r in results)
+    if ssh_passed:
+        from fraisier.manifest import build_manifest
+
+        manifest = build_manifest(config)
+        manifest_checks = validator.check_manifest_paths(manifest)
+        results.extend(manifest_checks)
+
     all_passed = all(r.passed for r in results if r.severity == "error")
     has_errors = any(not r.passed and r.severity == "error" for r in results)
 
