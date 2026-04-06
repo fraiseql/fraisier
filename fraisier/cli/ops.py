@@ -123,16 +123,15 @@ def history(
 
     if not deployments:
         if as_json:
-            console.print("[]")
+            click.echo("[]")
         else:
             console.print("[yellow]No deployment history found[/yellow]")
         return
 
     if as_json:
-        # Output as JSON
         import json
 
-        console.print(json.dumps(deployments, indent=2, default=str))
+        click.echo(json.dumps(deployments, indent=2, default=str))
         return
 
     table = Table(title="Deployment History")

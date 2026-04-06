@@ -26,22 +26,36 @@ from ._helpers import _get_deployer, console
     help="Path to fraises.yaml configuration file",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose/debug output")
+@click.option(
+    "--no-color",
+    is_flag=True,
+    envvar="NO_COLOR",
+    help="Disable colored output (also honoured via NO_COLOR env var).",
+)
 @click.pass_context
-def main(ctx: click.Context, config: str | None, verbose: bool) -> None:
+def main(ctx: click.Context, config: str | None, verbose: bool, no_color: bool) -> None:
     """Fraisier - Deployment orchestrator for the FraiseQL ecosystem.
 
     Manage deployments for all your fraises (services) across multiple providers
     (Bare Metal, Docker Compose).
 
     \b
+    Machine-readable output:
+        Most commands accept --json for structured JSON output on stdout.
+        Errors are written to stderr so they don't corrupt JSON pipelines.
+        Set NO_COLOR=1 (or pass --no-color) to strip ANSI from all output.
+
+    \b
     Examples:
         fraisier list
         fraisier trigger-deploy my_api production
         fraisier deployment-status my_api
-        fraisier providers
-        fraisier provider-info bare_metal
-        fraisier provider-test docker_compose -f config.yaml
+        fraisier history --json | jq '.[] | select(.status=="failed")'
+        NO_COLOR=1 fraisier validate --json
     """
+    if no_color:
+        os.environ["NO_COLOR"] = "1"
+
     if verbose:
         import logging
 
@@ -633,12 +647,6 @@ def trigger_deploy(
                     f"  For long deployments, increase timeout: --timeout {timeout * 2}"
                 )
                 raise SystemExit(1) from None
-
-        # Debug
-        if wait:
-            console.print(
-                f"DEBUG: wait=True, response_data length: {len(response_data)}"
-            )
 
         # Handle wait/follow modes
         if follow:

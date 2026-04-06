@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 from rich.console import Console
@@ -12,7 +13,40 @@ from rich.console import Console
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
 
-console = Console()
+
+class _LazyConsole:
+    """Lazy-initialized Rich Console.
+
+    Delays Console construction until the first call so that a
+    ``--no-color`` CLI flag (or the ``NO_COLOR`` environment variable)
+    can be set *before* any output is produced.  All attribute and method
+    accesses are transparently delegated to the underlying Console.
+    """
+
+    def __init__(self, *, stderr: bool = False) -> None:
+        self._stderr = stderr
+        self._console: Console | None = None
+
+    def _get(self) -> Console:
+        if self._console is None:
+            self._console = Console(
+                stderr=self._stderr,
+                no_color=bool(os.environ.get("NO_COLOR")),
+            )
+        return self._console
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get(), name)
+
+    # Explicit delegation for the hot-path method so type checkers are happy.
+    def print(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        self._get().print(*args, **kwargs)
+
+
+# stdout console — respects NO_COLOR env var and --no-color flag
+console: Any = _LazyConsole()
+# stderr console — for error messages; keeps stdout/stderr cleanly separated
+err_console: Any = _LazyConsole(stderr=True)
 
 
 def parse_since(value: str) -> str:
@@ -107,10 +141,12 @@ def require_config(ctx: click.Context) -> FraisierConfig:
     """Get config from context, aborting with a clear error if missing."""
     config = ctx.obj.get("config")
     if config is None:
-        raise click.UsageError(
-            "No fraises.yaml config found. "
-            "Run 'fraisier init' to create one or use --config to specify a path."
+        err_console.print(
+            "[red]Error:[/red] No fraises.yaml found. "
+            "Run [bold]fraisier init[/bold] to create one, "
+            "or use [bold]--config[/bold] to specify a path."
         )
+        raise SystemExit(2)
     return config
 
 
