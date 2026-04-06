@@ -11,7 +11,12 @@ Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_n
 {% if allowed_services %}
 Environment=FRAISIER_SYSTEMCTL_WRAPPER=/usr/local/libexec/fraisier/systemctl-{{ project_name }}
 {% endif %}
-ExecStart=/usr/local/bin/fraisier trigger-deploy {{ fraise_names | first }} production --force
+{% set fraisier_bin = '/home/' ~ scaffold.deploy_user ~ '/.local/bin/fraisier' %}
+{% for fraise in local_fraises %}
+{% for env_name in fraise.get('environments', {}) %}
+ExecStart={{ fraisier_bin }} --config {{ scaffold.config_path }} trigger-deploy {{ fraise.name }} {{ env_name }} --force
+{% endfor %}
+{% endfor %}
 
 # Security hardening
 NoNewPrivileges=true
@@ -24,6 +29,6 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=/var/lib/fraisier /var/log/fraisier
-{% for fraise in fraises %}
+{% for fraise in local_fraises %}
 ReadWritePaths=/opt/{{ fraise.name }}
 {% endfor %}

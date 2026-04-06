@@ -356,7 +356,7 @@ class TestParseConfitureOutput:
 
 def _has_confiture_hooks():
     try:
-        from confiture.core.hooks.builtin import BackupHook  # noqa: F401
+        from confiture.core.hooks.builtin import BackupHook
 
         return True
     except ImportError:

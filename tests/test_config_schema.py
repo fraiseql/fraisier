@@ -5,9 +5,10 @@ from pathlib import Path
 import pytest
 
 from fraisier.config.schema import (
+    DEFAULT_SECURITY,
+    SECURITY_DIRECTIVE_MAP,
     AuditHookConfig,
     BackupHookConfig,
-    DEFAULT_SECURITY,
     DeploymentConfig,
     DiscordHookConfig,
     EmailHookConfig,
@@ -21,7 +22,6 @@ from fraisier.config.schema import (
     NotificationHooksConfig,
     PostgresLoggingConfig,
     ScaffoldConfig,
-    SECURITY_DIRECTIVE_MAP,
     ServiceConfig,
     ShipCheckConfig,
     ShipConfig,

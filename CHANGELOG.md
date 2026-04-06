@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.16] - 2026-04-06
+
+### Fixed
+
+- **`poll-deploy.service.j2` deploys wrong fraise on wrong environment** — The service
+  hardcoded `{{ fraise_names | first }} production`, so only the first fraise was polled and
+  the environment was always `production` regardless of which server the unit ran on. The
+  service now loops over `local_fraises` (server-filtered) and generates one `ExecStart`
+  line per (fraise, environment) pair. The binary path was also wrong (`/usr/local/bin/fraisier`
+  instead of the deploy user's uv-tool path) and is now consistent with all other templates.
+
+- **`ScaffoldConfig` missing `socket_user`/`socket_group` fields** — The deploy-socket
+  template referenced `scaffold.socket_user` and `scaffold.socket_group` via Jinja
+  `|default('www-data')` filters, making them silently unconfigurable. Both fields are now
+  declared in `ScaffoldConfig` with `"www-data"` as the default.
+
+- **Bootstrap uploads scaffold without checking for placeholder files** — When a template
+  file is missing from the package, `ScaffoldRenderer` writes a `# Placeholder:` stub. The
+  bootstrap step now inspects each rendered file and fails early with a clear error rather
+  than uploading broken stubs that produce confusing failures on the remote server.
+
+- **Config module refactor lint cleanup** — The `config/` package re-export module had
+  stale unused imports (`_config`, `_config_lock` without `noqa`), an unsorted `__all__`,
+  and test files had `noqa` directives that were no longer needed after adding `F401` to the
+  test ignore list. All cleaned up.
+
+---
+
 ## [0.5.15] - 2026-04-06
 
 ### Fixed

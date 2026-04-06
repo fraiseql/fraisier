@@ -13,7 +13,7 @@ from fraisier.providers import (
 )
 
 try:
-    import httpx  # noqa: F401
+    import httpx
 
     _has_httpx = True
 except ImportError:

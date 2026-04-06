@@ -282,6 +282,15 @@ class ServerBootstrapper:
                 renderer = ScaffoldRenderer(self.config, server=server)
                 renderer.output_dir = Path(local_dir)
                 renderer.render()
+                # Detect placeholder files written for missing templates so we
+                # fail fast here rather than uploading broken scaffold files
+                # that produce confusing errors on the remote server.
+                for p in Path(local_dir).rglob("*"):
+                    if p.is_file():
+                        first_line = p.read_text(errors="replace").splitlines()[:1]
+                        if first_line and first_line[0].startswith("# Placeholder:"):
+                            msg = f"Scaffold template missing: {first_line[0]}"
+                            raise RuntimeError(msg)
                 self.runner.run(["mkdir", "-p", remote_dir])
                 self.runner.upload_tree(Path(local_dir), remote_dir)
 

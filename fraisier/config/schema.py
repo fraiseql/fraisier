@@ -370,6 +370,8 @@ class ScaffoldConfig:
     deploy_user: str = "fraisier"
     config_path: str = "/opt/fraisier/fraises.yaml"
     deploy_environment_file: str | None = None
+    socket_user: str = "www-data"
+    socket_group: str = "www-data"
     systemd: SystemdScaffoldConfig = field(default_factory=SystemdScaffoldConfig)
     nginx: NginxScaffoldConfig = field(default_factory=NginxScaffoldConfig)
     github_actions: GithubActionsScaffoldConfig = field(
