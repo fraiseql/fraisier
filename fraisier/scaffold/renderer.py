@@ -305,6 +305,19 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
     else:
         local_fraises = fraises_list
 
+    # Build machine_env_map: filter to only that server's machines when --server given
+    full_machine_env_map = config.get_machine_environment_map()
+    if server is not None:
+        # Get machines for the specified server
+        machines_for_server = config.servers.get(server, [])
+        machine_env_map = {
+            m: full_machine_env_map[m]
+            for m in machines_for_server
+            if m in full_machine_env_map
+        }
+    else:
+        machine_env_map = full_machine_env_map
+
     return {
         "manifest": build_manifest(config),
         "scaffold": config.scaffold,
@@ -321,6 +334,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "allowed_services": _collect_allowed_services(project_name, fraises_list),
         "deploy_users": _collect_deploy_users(config, fraises_list),
         "sudoers_rules": _collect_deduplicated_sudoers_rules(config, fraises_list),
+        "machine_env_map": machine_env_map,
     }
 
 

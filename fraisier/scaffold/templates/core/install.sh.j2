@@ -69,6 +69,31 @@ else
   SCAFFOLD_DIR="${PROJECT_DIR}/scripts/generated"
 fi
 
+# Server detection (baked at scaffold time by fraisier)
+{% if machine_env_map %}
+# Multi-server mode: filter based on runtime hostname
+declare -A _FRAISIER_MACHINE_ENVS
+{% for machine, envs in machine_env_map.items() %}
+_FRAISIER_MACHINE_ENVS["{{ machine }}"]="{{ envs | join(' ') }}"
+{% endfor %}
+
+_FRAISIER_CURRENT_HOST=$(hostname -s)
+_FRAISIER_CURRENT_ENVS="${_FRAISIER_MACHINE_ENVS["$_FRAISIER_CURRENT_HOST"]:-}"
+if [[ -z "$_FRAISIER_CURRENT_ENVS" ]]; then
+    echo "Error: This machine ('$_FRAISIER_CURRENT_HOST') is not registered in fraises.yaml." >&2
+    echo "  Known machines: {{ machine_env_map.keys() | list | join(', ') }}" >&2
+    echo "  Add this machine under 'servers:' and re-run 'fraisier scaffold'." >&2
+    exit 1
+fi
+
+_env_active() { [[ " $_FRAISIER_CURRENT_ENVS " == *" $1 "* ]]; }
+{% else %}
+# servers: section is required
+echo "Error: 'servers:' section is required in fraises.yaml." >&2
+echo "  Add logical servers and machine hostnames, then re-run 'fraisier scaffold'." >&2
+exit 1
+{% endif %}
+
 # Helper function to run commands conditionally
 _run() {
   if [[ "$VALIDATE_ONLY" == "true" ]]; then
@@ -183,11 +208,13 @@ fi
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set app_user = env_config.get('service', {}).get('user') %}
 {% if app_user and app_user != scaffold.deploy_user %}
-if ! id -u "{{ app_user }}" &>/dev/null; then
-    echo "  Creating app user {{ app_user }}"
-    _run sudo useradd --system --create-home --shell /usr/sbin/nologin "{{ app_user }}"
-else
-    echo "  App user {{ app_user }} already exists"
+if _env_active "{{ env_name }}"; then
+    if ! id -u "{{ app_user }}" &>/dev/null; then
+        echo "  Creating app user {{ app_user }}"
+        _run sudo useradd --system --create-home --shell /usr/sbin/nologin "{{ app_user }}"
+    else
+        echo "  App user {{ app_user }} already exists"
+    fi
 fi
 {% endif %}
 {% endfor %}
@@ -258,7 +285,9 @@ if [ -f "${WEBHOOK_SRC}" ]; then
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set socket_unit = deploy_socket_name(env_config, env_name) %}
-    _run sudo systemctl restart {{ socket_unit }} || true
+    if _env_active "{{ env_name }}"; then
+        _run sudo systemctl restart {{ socket_unit }} || true
+    fi
 {% endfor %}
 {% endfor %}
 fi
@@ -282,7 +311,9 @@ if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set socket_unit = deploy_socket_name(env_config, env_name) %}
-    _run sudo systemctl restart {{ socket_unit }} || true
+    if _env_active "{{ env_name }}"; then
+        _run sudo systemctl restart {{ socket_unit }} || true
+    fi
 {% endfor %}
 {% endfor %}
     # Restart helper socket to ensure socket file exists
@@ -310,9 +341,11 @@ echo "  Installing systemd units"
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set svc = env_config.service_base %}
-if [ -f "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" ]; then
-    _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" \
-       /etc/systemd/system/{{ svc }}.service
+if _env_active "{{ env_name }}"; then
+    if [ -f "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" ]; then
+        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" \
+           /etc/systemd/system/{{ svc }}.service
+    fi
 fi
 {% endfor %}
 {% endfor %}
@@ -325,13 +358,15 @@ echo "  Installing socket-activated deploy units"
 {% set socket_stem = socket_unit[:-7] %}
 {% set socket_name = socket_unit %}
 {% set service_name = socket_stem ~ '@.service' %}
-if [ -f "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" ]; then
-    _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" \
-       /etc/systemd/system/{{ socket_name }}
-fi
-if [ -f "${SCAFFOLD_DIR}/systemd/{{ service_name }}" ]; then
-    _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ service_name }}" \
-       /etc/systemd/system/{{ service_name }}
+if _env_active "{{ env_name }}"; then
+    if [ -f "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" ]; then
+        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" \
+           /etc/systemd/system/{{ socket_name }}
+    fi
+    if [ -f "${SCAFFOLD_DIR}/systemd/{{ service_name }}" ]; then
+        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ service_name }}" \
+           /etc/systemd/system/{{ service_name }}
+    fi
 fi
 {% endfor %}
 {% endfor %}
@@ -365,12 +400,14 @@ fi
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set nginx_stem = env_config.get('nginx', {}).get('server_name') or (fraise.get('name', '') + '_' + env_name) if env_config.get('nginx') else None %}
 {% if nginx_stem %}
-if [ -f "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" ]; then
-    echo "  Installing nginx config for {{ nginx_stem }}"
-    _run sudo cp "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" \
-       /etc/nginx/sites-available/{{ nginx_stem }}
-    _run sudo ln -sf /etc/nginx/sites-available/{{ nginx_stem }} \
-           /etc/nginx/sites-enabled/{{ nginx_stem }}
+if _env_active "{{ env_name }}"; then
+    if [ -f "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" ]; then
+        echo "  Installing nginx config for {{ nginx_stem }}"
+        _run sudo cp "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" \
+           /etc/nginx/sites-available/{{ nginx_stem }}
+        _run sudo ln -sf /etc/nginx/sites-available/{{ nginx_stem }} \
+               /etc/nginx/sites-enabled/{{ nginx_stem }}
+    fi
 fi
 {% endif %}
 {% endfor %}

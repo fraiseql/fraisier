@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.17] - 2026-04-06
+
+### Fixed
+
+- **Multi-server `install.sh` silent overwrites (#125)** — Running `fraisier scaffold --server A`
+  then `--server B` silently overwrote `install.sh` with B's config, corrupting deployments on
+  server A. The problem occurred because `install.sh` was rendered per-server at scaffold time,
+  and successive runs overwrote the same output file. Fixed by adding runtime server detection:
+  `install.sh` now detects the current machine's hostname at startup and conditionally installs
+  only the units relevant to that machine. Requires new `servers:` section in `fraises.yaml`
+  mapping logical server hostnames to machine hostnames (e.g., `prod.example.com` → 
+  `[backend-prod-01, backend-prod-02]`). Single `install.sh` now works across the entire cluster
+  with zero ambiguity.
+
+---
+
 ## [0.5.16] - 2026-04-06
 
 ### Fixed

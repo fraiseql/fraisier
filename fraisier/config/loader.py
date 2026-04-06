@@ -103,6 +103,7 @@ class FraisierConfig:
         with Path(self.config_path).open() as f:
             self._config = yaml.safe_load(f)
         self._validate_fraises()
+        self._validate_servers()
         self._validate_branch_mapping()
         self._validate_notifications()
         self._validate_hooks()
@@ -119,6 +120,27 @@ class FraisierConfig:
                 if not isinstance(env_config, dict):
                     continue
                 self._validate_environment(name, env_config)
+
+    def _validate_servers(self) -> None:
+        """Validate servers section: no machine hostname should appear twice."""
+        servers = self._config.get("servers", {})
+        if not servers:
+            return
+
+        machines_to_servers: dict[str, str] = {}
+        for logical_server, server_config in servers.items():
+            if not isinstance(server_config, dict):
+                continue
+            machine_list = server_config.get("machine_hostnames", []) or []
+            for machine in machine_list:
+                if machine in machines_to_servers:
+                    existing = machines_to_servers[machine]
+                    raise ValidationError(
+                        f"Machine '{machine}' appears under both "
+                        f"'{existing}' and '{logical_server}' in servers:. "
+                        f"Each machine can only belong to one logical server."
+                    )
+                machines_to_servers[machine] = logical_server
 
     def _validate_environment(self, fraise_name: str, env: dict) -> None:
         """Validate a single fraise environment config."""
@@ -591,6 +613,23 @@ class FraisierConfig:
         """Get global webhook configuration."""
         return self._config.get("webhook", {})
 
+    @property
+    def servers(self) -> dict[str, list[str]]:
+        """Map logical server hostname → list of machine hostnames.
+
+        Example:
+            servers:
+              prod.example.com:
+                machine_hostnames: [backend-prod-01, backend-prod-02]
+        """
+        raw = self._config.get("servers", {}) or {}
+        return {
+            logical: (
+                entry.get("machine_hostnames", []) if isinstance(entry, dict) else []
+            )
+            for logical, entry in raw.items()
+        }
+
     def get_fraise(self, fraise_name: str) -> dict[str, Any] | None:
         """Get configuration for a fraise (all environments)."""
         return self.fraises.get(fraise_name)
@@ -772,6 +811,21 @@ class FraisierConfig:
                     matched[env_name] = None
 
         return list(matched)
+
+    def get_machine_environment_map(self) -> dict[str, list[str]]:
+        """Build reverse map: machine_hostname → [env_name, ...].
+
+        For each machine in the servers: section, collect all environments
+        assigned to its logical server.
+
+        Returns empty dict if servers: section is not configured.
+        """
+        result: dict[str, list[str]] = {}
+        for logical_server, machines in self.servers.items():
+            envs = self.get_environments_for_server(logical_server)
+            for machine in machines:
+                result.setdefault(machine, []).extend(envs)
+        return result
 
     def list_fraises_detailed(self) -> list[dict[str, Any]]:
         """List all fraises with detailed info (type, description, environments)."""

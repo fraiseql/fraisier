@@ -473,6 +473,118 @@ environments:
         assert result == []
 
 
+class TestGetMachineEnvironmentMap:
+    """Tests for machine hostname → environment reverse mapping."""
+
+    def _make_config(self, tmp_path, yaml_content: str) -> FraisierConfig:
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(str(p))
+
+    def test_returns_machine_to_envs_mapping(self, tmp_path):
+        """Happy path: build reverse mapping from servers + environments."""
+        config = self._make_config(
+            tmp_path,
+            """\
+servers:
+  prod.example.com:
+    machine_hostnames: [backend-prod-01, backend-prod-02]
+  staging.example.com:
+    machine_hostnames: [backend-staging-01]
+
+environments:
+  production:
+    server: prod.example.com
+  staging:
+    server: staging.example.com
+""",
+        )
+        result = config.get_machine_environment_map()
+        assert result == {
+            "backend-prod-01": ["production"],
+            "backend-prod-02": ["production"],
+            "backend-staging-01": ["staging"],
+        }
+
+    def test_multiple_machines_same_server(self, tmp_path):
+        """Multiple machines under one logical server inherit all its envs."""
+        config = self._make_config(
+            tmp_path,
+            """\
+servers:
+  prod.example.com:
+    machine_hostnames: [backend-01, backend-02, backend-03]
+
+environments:
+  production:
+    server: prod.example.com
+  canary:
+    server: prod.example.com
+""",
+        )
+        result = config.get_machine_environment_map()
+        expected_envs = ["production", "canary"]
+        for machine in ["backend-01", "backend-02", "backend-03"]:
+            assert sorted(result[machine]) == sorted(expected_envs)
+
+    def test_empty_when_no_servers_section(self, tmp_path):
+        """Without servers: section, returns empty dict."""
+        config = self._make_config(
+            tmp_path,
+            """\
+environments:
+  production:
+    server: prod.example.com
+""",
+        )
+        result = config.get_machine_environment_map()
+        assert result == {}
+
+    def test_ignores_server_with_empty_machine_list(self, tmp_path):
+        """Logical server with no machines contributes nothing to map."""
+        config = self._make_config(
+            tmp_path,
+            """\
+servers:
+  prod.example.com:
+    machine_hostnames: [backend-prod-01]
+  empty.example.com:
+    machine_hostnames: []
+
+environments:
+  production:
+    server: prod.example.com
+  orphaned:
+    server: empty.example.com
+""",
+        )
+        result = config.get_machine_environment_map()
+        assert result == {
+            "backend-prod-01": ["production"],
+        }
+
+    def test_validation_errors_on_duplicate_machine(self, tmp_path):
+        """Machine appearing under two logical servers is an error."""
+        with pytest.raises(
+            ValidationError,
+            match=r"appears under both.*prod\.example\.com.*prodalt\.example\.com",
+        ):
+            self._make_config(
+                tmp_path,
+                """\
+servers:
+  prod.example.com:
+    machine_hostnames: [backend-prod-01]
+  prodalt.example.com:
+    machine_hostnames: [backend-prod-01]
+
+environments:
+  production:
+    server: prod.example.com
+""",
+            )
+
+
 class TestRestoreMigrateValidation:
     """Validation for restore_migrate strategy config."""
 

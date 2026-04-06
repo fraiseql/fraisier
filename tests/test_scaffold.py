@@ -3878,6 +3878,12 @@ class TestServerFilteredBootstrapScaffold:
 
     _MULTI_SERVER_YAML = """\
 name: myapp
+servers:
+  server-a:
+    machine_hostnames: [server-a-backend-01]
+  server-b:
+    machine_hostnames: [server-b-backend-01]
+
 scaffold:
   deploy_user: deployer
   output_dir: {output_dir}
