@@ -227,12 +227,14 @@ def _collect_deduplicated_sudoers_rules(
     rules_dict: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     for fraise in fraises_list:
+        # install config may be at fraise level or env level; env level takes precedence
+        fraise_install = fraise.get("install") or {}
         for env_name, env_config in fraise.get("environments", {}).items():
             if not isinstance(env_config, dict):
                 continue
 
             deploy_user = env_config.get("deploy_user", config.scaffold.deploy_user)
-            install = env_config.get("install") or {}
+            install = env_config.get("install") or fraise_install
 
             if isinstance(install, dict):
                 install_user = install.get("user")
