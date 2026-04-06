@@ -20,20 +20,23 @@ def resolve_become_password(command: str) -> str:
     """Run a shell command and capture its stdout as the sudo password.
 
     The command output is stripped of trailing whitespace.  If the command
-    exits with a non-zero status, a ``RuntimeError`` is raised containing
-    the stderr output.
+    exits with a non-zero status, a ``RuntimeError`` is raised.
 
     **Security**: the returned value must never be logged.
+    ``become_password_command`` runs with ``shell=True`` to support pipe
+    commands common in password managers (e.g. ``pass show foo | head -1``).
+    Because of this, ``fraises.yaml`` must be treated as a trusted file and
+    its access restricted to the deploy user (mode 0600 or equivalent).
     """
     result = subprocess.run(
         command,
-        shell=True,
+        shell=True,  # intentional — fraises.yaml is operator-controlled
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        msg = f"become_password_command failed: {result.stderr.strip()}"
+        msg = "become_password_command failed (check become_password_command config)"
         raise RuntimeError(msg)
     return result.stdout.strip()
 

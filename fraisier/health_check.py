@@ -20,12 +20,38 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from fraisier.config import HealthConfig, HealthResponseConfig
 
 from .logging import ContextualLogger
 from .metrics import get_metrics_recorder
+
+_ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+def _validate_health_check_url(url: str) -> None:
+    """Reject URLs with dangerous schemes (file://, ftp://, etc.).
+
+    Health checks legitimately target localhost and private networks since
+    fraisier deploys services on the same or nearby hosts.  This validation
+    prevents exploitation of dangerous non-HTTP schemes (file://, ftp://,
+    gopher://, dict://, etc.) which urllib will follow transparently.
+
+    Raises:
+        ValueError: If the URL scheme is not http or https.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_URL_SCHEMES:
+        msg = (
+            f"Health check URL scheme {parsed.scheme!r} is not allowed"
+            " (use http/https)"
+        )
+        raise ValueError(msg)
+    if not parsed.hostname:
+        msg = "Health check URL must have a hostname"
+        raise ValueError(msg)
 
 
 class HealthCheckResult:
@@ -105,7 +131,11 @@ class HTTPHealthChecker(HealthChecker):
 
         Args:
             url: URL to check (e.g., 'http://localhost:8000/health')
+
+        Raises:
+            ValueError: If the URL targets a private or loopback address.
         """
+        _validate_health_check_url(url)
         self.url = url
         self.logger = logging.getLogger(__name__)
 
@@ -706,6 +736,7 @@ class AggregateHealthChecker:
             url = f"{base_url}{endpoint}"
             start = time.time()
             try:
+                _validate_health_check_url(url)
                 response = urllib.request.urlopen(url, timeout=5.0)
                 duration_ms = (time.time() - start) * 1000
                 if response.status < 400:
@@ -715,7 +746,7 @@ class AggregateHealthChecker:
                         status="healthy",
                         response_time_ms=round(duration_ms, 1),
                     )
-            except (urllib.error.URLError, OSError, TimeoutError):
+            except (urllib.error.URLError, OSError, TimeoutError, ValueError):
                 continue
 
         duration_ms = (time.time() - start) * 1000

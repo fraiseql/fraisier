@@ -561,8 +561,9 @@ class TestResolveBecomePassword:
         with pytest.raises(RuntimeError, match="become_password_command failed"):
             resolve_become_password("false")
 
-    def test_raises_includes_stderr(self):
-        with pytest.raises(RuntimeError, match="not found"):
+    def test_raises_on_failure_with_stderr(self):
+        # Error message no longer leaks stderr to avoid information disclosure
+        with pytest.raises(RuntimeError, match="become_password_command failed"):
             resolve_become_password("echo 'not found' >&2 && exit 1")
 
     def test_supports_pipe_commands(self):

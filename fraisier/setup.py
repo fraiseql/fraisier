@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import shlex
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -308,8 +309,9 @@ class ServerSetup:
                     check=[
                         "bash",
                         "-c",
-                        f'[ -L "{link_name}" ] && '
-                        f'[ "$(readlink "{link_name}")" = "{git_repo}" ]',
+                        f'[ -L {shlex.quote(link_name)} ] && '
+                        f'[ "$(readlink {shlex.quote(link_name)})"'
+                        f" = {shlex.quote(git_repo)} ]",
                     ],
                     category="symlink",
                 )

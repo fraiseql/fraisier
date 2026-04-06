@@ -130,7 +130,10 @@ class TestCollectWebhookSecrets:
             secrets = _collect_webhook_secrets()
         assert secrets == [secret]
 
-    def test_fallback_to_config_file(self):
+    def test_no_fallback_to_config_file(self):
+        # Webhook secrets must come from environment variables only.
+        # Secrets in fraises.yaml (version-controlled) are not picked up
+        # to prevent accidental secret exposure via git history.
         from fraisier.webhook import _collect_webhook_secrets
 
         secret = "c" * 32
@@ -142,7 +145,7 @@ class TestCollectWebhookSecrets:
                 "github": {"webhook_secret": secret}
             }
             secrets = _collect_webhook_secrets()
-        assert secrets == [secret]
+        assert secrets == []
 
 
 class TestMultiSecretSignatureVerification:

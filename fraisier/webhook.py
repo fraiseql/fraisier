@@ -447,18 +447,6 @@ def _collect_webhook_secrets() -> list[str]:
         if key.startswith(prefix) and value:
             _add(value, key)
 
-    # 3. Fallback to config file
-    if not secrets:
-        try:
-            config = get_config()
-            git_config = config.get_git_provider_config()
-            for provider_conf in git_config.values():
-                is_dict = isinstance(provider_conf, dict)
-                if is_dict and "webhook_secret" in provider_conf:
-                    _add(provider_conf["webhook_secret"], "fraises.yaml")
-        except FileNotFoundError:
-            pass
-
     return secrets
 
 
