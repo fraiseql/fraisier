@@ -1,10 +1,16 @@
 """Tests for deployment status file (state machine, atomic writes)."""
 
+import contextlib
 import json
 import threading
 from unittest.mock import patch
 
-from fraisier.status import DeploymentStatusFile, read_status, write_status
+from fraisier.status import (
+    DeploymentStatusFile,
+    elapsed_seconds,
+    read_status,
+    write_status,
+)
 
 
 class TestDeploymentStatusFile:
@@ -257,6 +263,57 @@ class TestFailedStatusDetails:
         assert loaded.last_error == last_error
         assert loaded.last_error is not None
         assert loaded.last_error["timestamp"] == "2026-03-22T10:05:00+00:00"
+
+
+class TestElapsedSeconds:
+    """Test elapsed_seconds computation."""
+
+    def test_elapsed_seconds_returns_none_for_missing_started_at(self):
+        """elapsed_seconds returns None when started_at is None."""
+        status = DeploymentStatusFile(
+            fraise_name="myfraise",
+            environment="production",
+            started_at=None,
+        )
+        result = elapsed_seconds(status)
+        assert result is None
+
+    def test_elapsed_seconds_returns_float_for_z_suffix(self):
+        """elapsed_seconds parses Z-suffixed ISO 8601 and returns float."""
+        status = DeploymentStatusFile(
+            fraise_name="myfraise",
+            environment="production",
+            started_at="2026-04-06T10:00:00Z",
+        )
+        result = elapsed_seconds(status)
+        assert isinstance(result, float)
+        assert result >= 0
+
+    def test_elapsed_seconds_returns_none_for_invalid_timestamp(self):
+        """elapsed_seconds returns None for unparseable timestamp."""
+        status = DeploymentStatusFile(
+            fraise_name="myfraise",
+            environment="production",
+            started_at="not-a-date",
+        )
+        result = elapsed_seconds(status)
+        assert result is None
+
+    def test_write_status_cleans_up_tmp_on_rename_error(self, tmp_path):
+        """write_status removes .tmp file if rename raises OSError."""
+        status = DeploymentStatusFile(
+            fraise_name="myfraise",
+            environment="production",
+        )
+        with (
+            patch("pathlib.Path.rename", side_effect=OSError("disk full")),
+            contextlib.suppress(OSError),
+        ):
+            write_status(status, status_dir=tmp_path)
+
+        # No .tmp file should remain
+        tmp_files = list(tmp_path.glob("*.tmp"))
+        assert tmp_files == []
 
 
 class TestComputeDeploymentState:

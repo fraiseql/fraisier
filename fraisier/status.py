@@ -130,23 +130,3 @@ def elapsed_seconds(status: DeploymentStatusFile) -> float | None:
         return time.time() - started_ts
     except (ValueError, TypeError, AttributeError):
         return None
-
-    try:
-        # Parse ISO 8601 timestamp (assume UTC)
-        # Format: 2026-04-03T10:00:00+00:00 or 2026-04-03T10:00:00Z
-        if status.started_at.endswith("Z"):
-            started_ts = time.mktime(
-                time.strptime(status.started_at[:-1], "%Y-%m-%dT%H:%M:%S")
-            )
-        else:
-            # Remove timezone offset for simplicity (assume UTC)
-            started_str = (
-                status.started_at.split("+")[0].split("-")[-1]
-                if "+" in status.started_at
-                else status.started_at
-            )
-            started_ts = time.mktime(time.strptime(started_str, "%Y-%m-%dT%H:%M:%S"))
-
-        return time.time() - started_ts
-    except (ValueError, TypeError):
-        return None
