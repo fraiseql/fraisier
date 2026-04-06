@@ -141,6 +141,38 @@ def _handle_connection(conn: socket.socket, allowed_services: frozenset[str]) ->
         _send_response(conn, response)
 
 
+def _build_server_socket(allowed_services: frozenset[str]) -> socket.socket:
+    """Acquire socket from systemd socket activation (LISTEN_FDS protocol).
+
+    Args:
+        allowed_services: Set of allowed service names (used for logging).
+
+    Returns:
+        Server socket ready to accept connections.
+
+    Raises:
+        SystemExit: If LISTEN_FDS is not set or zero.
+    """
+    # Acquire socket from systemd socket activation (LISTEN_FDS protocol)
+    listen_fds = int(os.environ.get("LISTEN_FDS", "0"))
+    if listen_fds < 1:
+        logger.error(
+            "LISTEN_FDS not set or zero — must be run via systemd socket activation"
+        )
+        sys.exit(1)
+
+    # First activated socket is fd 3 (SD_LISTEN_FDS_START = 3)
+    server_sock = socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
+    server_sock.setblocking(True)
+
+    logger.info(
+        "fraisier-systemctl-helper ready, allowed services: %s",
+        sorted(allowed_services),
+    )
+
+    return server_sock
+
+
 def main() -> None:
     """Entry point for fraisier-systemctl-helper.
 
@@ -163,22 +195,7 @@ def main() -> None:
             "No allowed services specified — all service calls will be denied"
         )
 
-    # Acquire socket from systemd socket activation (LISTEN_FDS protocol)
-    listen_fds = int(os.environ.get("LISTEN_FDS", "0"))
-    if listen_fds < 1:
-        logger.error(
-            "LISTEN_FDS not set or zero — must be run via systemd socket activation"
-        )
-        sys.exit(1)
-
-    # First activated socket is fd 3 (SD_LISTEN_FDS_START = 3)
-    server_sock = socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
-    server_sock.setblocking(True)
-
-    logger.info(
-        "fraisier-systemctl-helper ready, allowed services: %s",
-        sorted(allowed_services),
-    )
+    server_sock = _build_server_socket(allowed_services)
 
     try:
         while True:

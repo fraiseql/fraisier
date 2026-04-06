@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import socket as _socket
+import subprocess
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from fraisier.systemctl_helper import (
     _ALLOWED_ACTIONS,
+    _build_server_socket,
     _handle_connection,
     _send_error,
     _send_response,
@@ -199,10 +204,82 @@ class TestHandleConnection:
         _handle_connection(server, frozenset())
         client.close()
 
+    def test_send_response_swallows_oserror(self):
+        """_send_response catches OSError and logs without raising."""
+        server, client = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        # Shutdown the client end so sendall on server will fail
+        client.close()
+        # Should not raise, just log warning
+        _send_response(server, {"ok": True})
+        server.close()
+
+    def test_handle_connection_swallows_recv_oserror(self):
+        """_handle_connection catches recv() OSError and returns gracefully."""
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = OSError("Network error")
+        mock_sock.__enter__ = MagicMock(return_value=mock_sock)
+        mock_sock.__exit__ = MagicMock(return_value=False)
+        # Should not raise
+        _handle_connection(mock_sock, frozenset({"test.service"}))
+
+    def test_handle_connection_handles_timeout_expired(self):
+        """_handle_connection catches TimeoutExpired and sends error response."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=[], timeout=120),
+        ):
+            result = self._call(
+                {"action": "restart", "service": "api.service"},
+                frozenset({"api.service"}),
+            )
+
+        assert result["ok"] is False
+        assert "timed out" in result["error"]
+
+    def test_handle_connection_handles_subprocess_oserror(self):
+        """_handle_connection catches OSError from subprocess.run."""
+        with patch("subprocess.run", side_effect=OSError("no such file")):
+            result = self._call(
+                {"action": "restart", "service": "api.service"},
+                frozenset({"api.service"}),
+            )
+
+        assert result["ok"] is False
+        assert "failed to run systemctl" in result["error"]
+
 
 # ---------------------------------------------------------------------------
 # Integration: validate allowed_services are checked correctly
 # ---------------------------------------------------------------------------
+
+
+class TestBuildServerSocket:
+    """Test _build_server_socket initialization."""
+
+    def test_main_exits_on_no_listen_fds(self):
+        """_build_server_socket exits if LISTEN_FDS is not set."""
+        environ = {"LISTEN_FDS": "0"}
+        with (
+            patch.dict("os.environ", environ, clear=False),
+            patch("sys.exit", side_effect=SystemExit(1)),
+            pytest.raises(SystemExit),
+        ):
+            _build_server_socket(frozenset())
+
+    def test_main_exits_on_missing_listen_fds(self):
+        """_build_server_socket exits if LISTEN_FDS is missing."""
+        environ = {}
+        with (
+            patch.dict("os.environ", environ, clear=True),
+            patch("sys.exit", side_effect=SystemExit(1)),
+            pytest.raises(SystemExit),
+        ):
+            _build_server_socket(frozenset())
 
 
 class TestAllowlistIntegration:
