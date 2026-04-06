@@ -3,6 +3,7 @@
 
 upstream {{ project_name }}_{{ fraise.name }}_{{ env_name }}_backend {
     server 127.0.0.1:{{ port }};
+    keepalive 32;
 }
 
 {% set effective_cors = nginx_config.cors_origins_escaped if nginx_config.cors_origins else scaffold.nginx.cors_origins_escaped %}
@@ -48,13 +49,13 @@ server {
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
     ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
 
     # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Content-Security-Policy "default-src 'self'" always;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
 
 {% if effective_cors %}
     # CORS
@@ -70,6 +71,8 @@ server {
     # and cannot be proxied over HTTP; use fraisier trigger-deploy for that.
     location /webhook {
         proxy_pass http://127.0.0.1:{{ scaffold.nginx.webhook_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -86,6 +89,8 @@ server {
     {% endfor %}
         deny {{ rp.deny }};
         proxy_pass http://{{ project_name }}_{{ fraise.name }}_{{ env_name }}_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -94,8 +99,16 @@ server {
 {% endfor %}
 
     location / {
+{% if effective_cors %}
+        # CORS preflight: respond immediately without hitting the backend or rate limiter
+        if ($request_method = OPTIONS) {
+            return 204;
+        }
+{% endif %}
         limit_req zone=api_limit burst=20 nodelay;
         proxy_pass http://{{ project_name }}_{{ fraise.name }}_{{ env_name }}_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
