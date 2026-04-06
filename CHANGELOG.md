@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.13] - 2026-04-06
+
+### Fixed
+
+- **`uv tool install --force` fails with "Permission denied" on reinstall** — the systemctl
+  helper service runs as root and causes Python to create root-owned `__pycache__/`
+  directories inside the deploy user's fraisier tool installation. When uv later tries to
+  force-reinstall fraisier it cannot remove those root-owned directories. Added
+  `Environment=PYTHONDONTWRITEBYTECODE=1` to the helper service so Python never writes
+  bytecode cache files, keeping the tool directory entirely owned by the deploy user.
+
+---
+
 ## [0.5.12] - 2026-04-06
 
 ### Fixed
