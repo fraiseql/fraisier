@@ -6,8 +6,6 @@ ListenStream=/run/fraisier/systemctl-{{ project_name }}.sock
 SocketUser=root
 SocketGroup={{ scaffold.deploy_user }}
 SocketMode=0660
-RuntimeDirectory=fraisier
-RuntimeDirectoryMode=0755
 
 [Install]
 WantedBy=sockets.target

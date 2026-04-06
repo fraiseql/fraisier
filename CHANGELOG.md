@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.12] - 2026-04-06
+
+### Fixed
+
+- **`/run/fraisier/` still root-owned: `systemctl-helper.socket` had `RuntimeDirectory=fraisier`** —
+  the socket unit (which runs as root via `SocketUser=root`) also declared `RuntimeDirectory=fraisier`
+  with `RuntimeDirectoryMode=0755`. On every socket start/restart, systemd recreated `/run/fraisier/`
+  owned by root, overwriting the `printoptim_deploy`-owned directory managed by the webhook service.
+  Removed `RuntimeDirectory` and `RuntimeDirectoryMode` from the socket unit; `/run/fraisier/` is
+  now managed exclusively by the webhook service.
+
+---
+
 ## [0.5.11] - 2026-04-06
 
 ### Fixed
