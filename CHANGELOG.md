@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] - 2026-04-06
+
+### Fixed
+
+- **Every deployment wiped `/run/fraisier/` and destroyed all socket files** — the
+  `systemctl-helper.service` template included `RuntimeDirectory=fraisier` (and
+  `RuntimeDirectoryMode=0755`). Since the helper runs as root, systemd recreated
+  `/run/fraisier/` as a root-owned directory on every activation, wiping the deploy
+  socket files and the helper socket file itself. Removed `RuntimeDirectory` from the
+  helper service; `/run/fraisier/` is now managed exclusively by the webhook service
+  (which uses `RuntimeDirectoryPreserve=restart`).
+
+---
+
 ## [0.5.8] - 2026-04-06
 
 ### Fixed
