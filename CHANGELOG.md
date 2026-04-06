@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.14] - 2026-04-06
+
+### Fixed
+
+- **Bootstrap installs stale fraisier version due to uv index metadata cache** — `uv tool install
+  --force` reinstalls but uses cached PyPI index metadata, so newly published versions are invisible
+  until the cache expires. Added `--refresh-package fraisier` to the bootstrap install command so
+  the index is always refreshed when bootstrapping, ensuring the server receives the exact client
+  version.
+
+---
+
 ## [0.5.13] - 2026-04-06
 
 ### Fixed

@@ -215,7 +215,10 @@ class ServerBootstrapper:
                 "-H",
                 "bash",
                 "-c",
-                f"{uv_path} tool install --force fraisier=={client_version}",
+                (
+                    f"{uv_path} tool install --force"
+                    f" --refresh-package fraisier fraisier=={client_version}"
+                ),
             ],
         )
 
