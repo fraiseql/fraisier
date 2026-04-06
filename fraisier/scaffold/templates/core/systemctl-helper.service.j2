@@ -1,0 +1,24 @@
+[Unit]
+Description=Fraisier systemctl helper for {{ project_name }}
+Requires=fraisier-{{ project_name }}-systemctl-helper.socket
+After=fraisier-{{ project_name }}-systemctl-helper.socket
+Documentation=https://fraisier.readthedocs.io/
+
+[Service]
+Type=simple
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-systemctl-helper{% for svc in allowed_services %} {{ svc }}{% endfor %}
+
+# Security hardening — runs as root but restricted
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RuntimeDirectory=fraisier
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

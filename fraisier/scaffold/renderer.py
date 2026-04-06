@@ -406,6 +406,15 @@ class ScaffoldRenderer:
                         f"/etc/systemd/system/{svc}.service"
                     )
 
+        # Systemctl helper service + socket
+        if self.context["allowed_services"]:
+            helper_svc = f"fraisier-{project_name}-systemctl-helper.service"
+            helper_sock = f"fraisier-{project_name}-systemctl-helper.socket"
+            mapping[f"systemd/{helper_svc}"] = Path(f"/etc/systemd/system/{helper_svc}")
+            mapping[f"systemd/{helper_sock}"] = Path(
+                f"/etc/systemd/system/{helper_sock}"
+            )
+
         # Standard systemd units
         for unit in ["deploy-checker.timer", "backup.timer", "poll-deploy.service"]:
             if unit in ["deploy-checker.timer", "backup.timer"]:
@@ -486,6 +495,10 @@ class ScaffoldRenderer:
             if not dry_run:
                 self._render_template("core/systemctl-wrapper.sh.j2", systemctl_out)
 
+        # Systemctl helper service + socket (always when there are services)
+        if self.context["allowed_services"]:
+            rendered_files.extend(self._render_systemctl_helper(dry_run))
+
         # Webhook service(s) — rendered dynamically to include project name
         rendered_files.extend(self._render_webhook_services(dry_run))
 
@@ -537,6 +550,18 @@ class ScaffoldRenderer:
         if server_slug:
             return f"fraisier-{project}-webhook-{server_slug}.service"
         return f"fraisier-{project}-webhook.service"
+
+    def _render_systemctl_helper(self, dry_run: bool) -> list[str]:
+        """Render the systemctl helper .service and .socket units."""
+        project = self.context["project_name"]
+        service_out = f"systemd/fraisier-{project}-systemctl-helper.service"
+        socket_out = f"systemd/fraisier-{project}-systemctl-helper.socket"
+
+        if not dry_run:
+            self._render_template("core/systemctl-helper.service.j2", service_out)
+            self._render_template("core/systemctl-helper.socket.j2", socket_out)
+
+        return [service_out, socket_out]
 
     def _render_webhook_services(self, dry_run: bool) -> list[str]:
         """Render webhook service unit(s) with project-specific naming.

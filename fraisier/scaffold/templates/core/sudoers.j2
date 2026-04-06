@@ -4,12 +4,6 @@
 
 {% set _admin_strategies = ['rebuild', 'restore_migrate'] %}
 {% set _pg_wrapper_path = '/usr/local/libexec/fraisier/pgadmin-' ~ project_name %}
-{% set _systemctl_wrapper_path = '/usr/local/libexec/fraisier/systemctl-' ~ project_name %}
-
-# Service management via systemctl wrapper
-{% for user in deploy_users %}
-{{ user }} ALL=(root) NOPASSWD: {{ _systemctl_wrapper_path }} *
-{% endfor %}
 
 {% if sudoers_rules %}
 # Dependency install rules (deduplicated)

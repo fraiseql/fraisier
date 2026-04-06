@@ -151,6 +151,21 @@ class TestWebhookPort:
             _ = resolver.webhook_port
 
 
+class TestSystemctlSocket:
+    """ConfigResolver.systemctl_socket: resolve FRAISIER_SYSTEMCTL_SOCKET."""
+
+    def test_env_var_returns_path(self):
+        """FRAISIER_SYSTEMCTL_SOCKET returns env value as str."""
+        sock = "/run/fraisier/systemctl-myproject.sock"
+        resolver = ConfigResolver(environ={"FRAISIER_SYSTEMCTL_SOCKET": sock})
+        assert resolver.systemctl_socket == sock
+
+    def test_unset_returns_none(self):
+        """When unset, returns None."""
+        resolver = ConfigResolver(environ={})
+        assert resolver.systemctl_socket is None
+
+
 class TestSystemctlWrapper:
     """ConfigResolver.systemctl_wrapper: resolve FRAISIER_SYSTEMCTL_WRAPPER."""
 

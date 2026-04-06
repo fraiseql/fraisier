@@ -86,9 +86,7 @@ class ConfigResolver:
 
         # Nothing found
         locations_str = [str(p) for p in _config_search_locations()]
-        raise ConfigurationError(
-            f"fraises.yaml not found in any of: {locations_str}"
-        )
+        raise ConfigurationError(f"fraises.yaml not found in any of: {locations_str}")
 
     @property
     def log_level(self) -> str:
@@ -132,6 +130,19 @@ class ConfigResolver:
         """
         port_str = self._env.get("FRAISIER_WEBHOOK_PORT", "8080")
         return int(port_str)
+
+    @property
+    def systemctl_socket(self) -> str | None:
+        """Resolve systemctl helper Unix socket path.
+
+        Priority:
+        1. FRAISIER_SYSTEMCTL_SOCKET env var
+        2. None if unset
+
+        Returns:
+            Absolute path to the Unix domain socket or None
+        """
+        return self._env.get("FRAISIER_SYSTEMCTL_SOCKET")
 
     @property
     def systemctl_wrapper(self) -> str | None:

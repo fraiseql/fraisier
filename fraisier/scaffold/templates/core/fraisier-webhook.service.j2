@@ -19,7 +19,7 @@ EnvironmentFile=/etc/fraisier/{{ project_name }}.webhook.env
 Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_name }}
 {% endif %}
 {% if allowed_services %}
-Environment=FRAISIER_SYSTEMCTL_WRAPPER=/usr/local/libexec/fraisier/systemctl-{{ project_name }}
+Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock
 {% endif %}
 
 # Resource limits

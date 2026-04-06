@@ -241,13 +241,15 @@ if [ -f "${PG_WRAPPER_SRC}" ]; then
     _run sudo install -m 0755 "${PG_WRAPPER_SRC}" "${PG_WRAPPER_DST}"
 fi
 
-# Install systemctl wrapper (if generated)
-SYSTEMCTL_WRAPPER_SRC="${SCAFFOLD_DIR}/systemctl-wrapper.sh"
-SYSTEMCTL_WRAPPER_DST="/usr/local/libexec/fraisier/systemctl-{{ project_name }}"
-if [ -f "${SYSTEMCTL_WRAPPER_SRC}" ]; then
-    echo "  Installing systemctl wrapper"
-    _run sudo mkdir -p /usr/local/libexec/fraisier
-    _run sudo install -m 0755 "${SYSTEMCTL_WRAPPER_SRC}" "${SYSTEMCTL_WRAPPER_DST}"
+# Install systemctl helper service and socket (replaces old systemctl wrapper)
+HELPER_SERVICE_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.service"
+HELPER_SOCKET_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.socket"
+if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
+    echo "  Installing systemctl helper service and socket"
+    _run sudo cp "${HELPER_SERVICE_SRC}" \
+       /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.service
+    _run sudo cp "${HELPER_SOCKET_SRC}" \
+       /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.socket
 fi
 
 # Install sudoers fragment
@@ -306,6 +308,12 @@ for timer in deploy-checker backup; do
 done
 
 _run sudo systemctl daemon-reload
+
+# Enable and start the systemctl helper socket (socket-activated, runs as root)
+if [ -f /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.socket ]; then
+    echo "  Enabling fraisier-{{ project_name }}-systemctl-helper.socket"
+    _run sudo systemctl enable --now fraisier-{{ project_name }}-systemctl-helper.socket
+fi
 
 # Install nginx config
 if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ]; then
