@@ -534,10 +534,7 @@ def _resolve_bare_repo_skip() -> Path | None:
         if not fraise_config:
             return None
         deployer = _get_deployer(fraise_config.get("type"), fraise_config)
-        if (
-            isinstance(deployer, GitDeployMixin)
-            and not deployer.bare_repo.exists()
-        ):
+        if isinstance(deployer, GitDeployMixin) and not deployer.bare_repo.exists():
             return deployer.bare_repo
     except Exception:
         pass
