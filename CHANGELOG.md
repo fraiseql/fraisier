@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-04-06
+
+### Fixed
+
+- **Webhook service unit not installed by `install.sh`** — `install.sh` installed the
+  systemctl helper, sudoers, app units, and deploy socket units, but never the
+  `fraisier-{project}-webhook.service` file itself. Upgrades to webhook configuration
+  (e.g. `FRAISIER_SYSTEMCTL_SOCKET`, `NoNewPrivileges`, `ReadWritePaths`) were silently
+  not applied on re-bootstrap. Now copies the webhook service file and restarts it.
+- **`fraisier-{project}-webhook.service` added to `get_install_mapping()`** so
+  `scaffold-diff` correctly detects divergence between generated and installed webhook units.
+
+---
+
 ## [0.5.2] - 2026-04-06
 
 ### Fixed

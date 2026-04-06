@@ -241,6 +241,19 @@ if [ -f "${PG_WRAPPER_SRC}" ]; then
     _run sudo install -m 0755 "${PG_WRAPPER_SRC}" "${PG_WRAPPER_DST}"
 fi
 
+# Install webhook service unit
+# The bootstrap renderer is always called with --server, so the webhook file has
+# the generic name (no server slug) but content filtered for this server.
+{% set webhook_service = 'fraisier-' ~ project_name ~ '-webhook.service' %}
+WEBHOOK_SRC="${SCAFFOLD_DIR}/{{ webhook_service }}"
+WEBHOOK_DST="/etc/systemd/system/{{ webhook_service }}"
+if [ -f "${WEBHOOK_SRC}" ]; then
+    echo "  Installing webhook service"
+    _run sudo cp "${WEBHOOK_SRC}" "${WEBHOOK_DST}"
+    _run sudo systemctl daemon-reload
+    _run sudo systemctl restart {{ webhook_service }} || true
+fi
+
 # Install systemctl helper service and socket (replaces old systemctl wrapper)
 HELPER_SERVICE_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.service"
 HELPER_SOCKET_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.socket"

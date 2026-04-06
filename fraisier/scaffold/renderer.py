@@ -408,6 +408,10 @@ class ScaffoldRenderer:
                         f"/etc/systemd/system/{svc}.service"
                     )
 
+        # Webhook service unit (installed as generic name regardless of server slug)
+        webhook_svc = f"fraisier-{project_name}-webhook.service"
+        mapping[webhook_svc] = Path(f"/etc/systemd/system/{webhook_svc}")
+
         # Systemctl helper service + socket
         if self.context["allowed_services"]:
             helper_svc = f"fraisier-{project_name}-systemctl-helper.service"
