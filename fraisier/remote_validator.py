@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -10,6 +11,7 @@ from fraisier.validation import ValidationCheckResult
 
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
+    from fraisier.manifest import PathManifest
     from fraisier.runners import SSHRunner
 
 
@@ -45,6 +47,94 @@ class RemoteDeploymentValidator:
         self.environment = fraise_config.get("environment", "unknown")
         self.project_name = config.project_name
         self.deploy_user = config.get_deploy_user(self.fraise_name, self.environment)
+
+    def check_manifest_paths(
+        self, manifest: PathManifest
+    ) -> list[ValidationCheckResult]:
+        """Check all managed paths from manifest on remote host.
+
+        For each path in the manifest with create_if_missing=True, verify:
+        1. Path exists
+        2. Path is owned by the declared owner:group
+        3. Path has the declared mode
+
+        Returns a ValidationCheckResult per path with a derived fix_command
+        if the path needs fixing.
+
+        Args:
+            manifest: PathManifest containing all managed paths
+
+        Returns:
+            List of ValidationCheckResult instances, one per path to check
+        """
+        results = []
+        for mp in manifest.all_paths():
+            if not mp.create_if_missing:
+                continue  # systemd-managed paths — skip
+            result = self._check_single_path(mp)
+            results.append(result)
+        return results
+
+    def _check_single_path(self, mp: Any) -> ValidationCheckResult:  # ManagedPath
+        """Check a single managed path on remote host.
+
+        Args:
+            mp: ManagedPath to check
+
+        Returns:
+            ValidationCheckResult with passed=True or False, and fix_command if needed
+        """
+        # Use stat to check if path exists and get owner:group
+        stat_cmd = f"stat -c '%U %G' {shlex.quote(str(mp.path))} 2>/dev/null"
+        proc = self._remote_shell(stat_cmd)
+
+        if proc.returncode != 0 or not proc.stdout.strip():
+            # Path doesn't exist
+            return ValidationCheckResult(
+                name=f"path:{mp.path}",
+                passed=False,
+                message=f"{mp.path} does not exist",
+                severity="error",
+                fix_command=self._fix_command_for_path(mp, missing=True),
+            )
+
+        # Path exists — check owner:group
+        actual_owner, actual_group = proc.stdout.strip().split()
+        if actual_owner == mp.owner and actual_group == mp.group:
+            # Correct ownership
+            return ValidationCheckResult(name=f"path:{mp.path}", passed=True)
+
+        # Wrong ownership
+        return ValidationCheckResult(
+            name=f"path:{mp.path}",
+            passed=False,
+            message=(
+                f"{mp.path} owned by {actual_owner}:{actual_group}, "
+                f"expected {mp.owner}:{mp.group}"
+            ),
+            severity="error",
+            fix_command=self._fix_command_for_path(mp, missing=False),
+        )
+
+    def _fix_command_for_path(self, mp: Any, missing: bool) -> str:  # ManagedPath
+        """Generate a fix command for a path.
+
+        Args:
+            mp: ManagedPath to generate command for
+            missing: True if path doesn't exist, False if ownership is wrong
+
+        Returns:
+            Fix command with sudo and quoting
+        """
+        path_quoted = shlex.quote(str(mp.path))
+        if missing:
+            return (
+                f"sudo mkdir -p {path_quoted} && "
+                f"sudo chown {mp.owner}:{mp.group} {path_quoted} && "
+                f"sudo chmod {mp.mode:o} {path_quoted}"
+            )
+        # Path exists but wrong owner
+        return f"sudo chown {mp.owner}:{mp.group} {path_quoted}"
 
     def run_all(self) -> list[ValidationCheckResult]:
         """Run all remote deployment readiness checks."""
