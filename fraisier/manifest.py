@@ -58,6 +58,18 @@ class PathManifest:
             if path.owner == user:
                 yield path
 
+    def sorted_by_depth(self) -> Iterable[ManagedPath]:
+        """Return all paths sorted by depth (parents before children).
+
+        Paths with fewer path components come first, ensuring parent directories
+        are created before child directories. Within the same depth, preserves
+        the original order.
+
+        Returns:
+            Iterable of ManagedPath sorted by depth (ascending)
+        """
+        return sorted(self.all_paths(), key=lambda p: len(p.path.parts))
+
 
 def build_manifest(config: FraisierConfig) -> PathManifest:
     """Construct PathManifest from FraisierConfig.

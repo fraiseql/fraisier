@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from fraisier.config import FraisierConfig, ScaffoldConfig
 from fraisier.manifest import ManagedPath, PathManifest, build_manifest
 
 
@@ -25,7 +24,8 @@ class TestManagedPath:
         assert path.owner == "fraisier"
         assert path.group == "fraisier"
         assert path.mode == 0o755
-        assert path.read_write_units == ("fraisier-deploy.service", "fraisier-api.service")
+        units = ("fraisier-deploy.service", "fraisier-api.service")
+        assert path.read_write_units == units
         assert path.create_if_missing is True
 
     def test_create_if_missing_defaults_true(self):
@@ -308,14 +308,14 @@ class TestBuildManifest:
         env_paths = list(manifest.env_paths)
 
         # The fixture should have at least one environment with app_path
-        app_paths = [str(p.path) for p in env_paths if "app" in str(p.path).lower()]
         # Some environments may not have app_path, so check if we have paths at all
         assert len(env_paths) > 0
 
     def test_venv_path_owned_by_install_user_when_different(
         self, fraisier_config_with_install_user_fixture
     ):
-        """When install.user differs from deploy_user, .venv is owned by install.user."""
+        """When install.user differs from deploy_user, .venv is owned by install.user.
+        """
         manifest = build_manifest(fraisier_config_with_install_user_fixture)
         all_paths = list(manifest.all_paths())
 
@@ -323,8 +323,11 @@ class TestBuildManifest:
         venv_paths = [p for p in all_paths if ".venv" in str(p.path)]
         if venv_paths:
             # If venv paths exist, they should be owned by a non-deploy user
+            deploy_user = (
+                fraisier_config_with_install_user_fixture.scaffold.deploy_user
+            )
             for venv_path in venv_paths:
-                assert venv_path.owner != fraisier_config_with_install_user_fixture.scaffold.deploy_user
+                assert venv_path.owner != deploy_user
 
     def test_deduplicates_shared_git_repos(self, fraisier_config_fixture):
         """If two environments share a git_repo, only one ManagedPath is created."""
@@ -337,3 +340,95 @@ class TestBuildManifest:
         # Count duplicates
         duplicates = [p for p in path_strings if path_strings.count(p) > 1]
         assert len(duplicates) == 0
+
+
+class TestPathManifestSorting:
+    """PathManifest.sorted_by_depth: sort paths by depth for install order."""
+
+    def test_sorted_by_depth_parent_before_child(self):
+        """Paths with fewer components come before paths with more components."""
+        path1 = ManagedPath(
+            path=Path("/var/lib"),
+            owner="root",
+            group="root",
+            mode=0o755,
+            read_write_units=(),
+        )
+        path2 = ManagedPath(
+            path=Path("/var/lib/fraisier"),
+            owner="fraisier",
+            group="fraisier",
+            mode=0o755,
+            read_write_units=(),
+        )
+        path3 = ManagedPath(
+            path=Path("/var/lib/fraisier/data"),
+            owner="fraisier",
+            group="fraisier",
+            mode=0o755,
+            read_write_units=(),
+        )
+        manifest = PathManifest(
+            global_paths=(path3, path2, path1),
+            env_paths=(),
+        )
+        sorted_paths = list(manifest.sorted_by_depth())
+        assert sorted_paths == [path1, path2, path3]
+
+    def test_sorted_by_depth_same_depth_preserves_order(self):
+        """Paths with same depth preserve their original order."""
+        path1 = ManagedPath(
+            path=Path("/opt/fraisier"),
+            owner="fraisier",
+            group="fraisier",
+            mode=0o755,
+            read_write_units=(),
+        )
+        path2 = ManagedPath(
+            path=Path("/var/lib/fraisier"),
+            owner="fraisier",
+            group="fraisier",
+            mode=0o755,
+            read_write_units=(),
+        )
+        manifest = PathManifest(
+            global_paths=(path1, path2),
+            env_paths=(),
+        )
+        sorted_paths = list(manifest.sorted_by_depth())
+        # Both have depth 2, so preserve order
+        assert sorted_paths == [path1, path2]
+
+    def test_sorted_by_depth_mixed_depths(self):
+        """Sorting works correctly with mixed depth paths."""
+        paths_unordered = [
+            ManagedPath(
+                path=Path("/a/b/c/d"),
+                owner="root",
+                group="root",
+                mode=0o755,
+                read_write_units=(),
+            ),
+            ManagedPath(
+                path=Path("/a"),
+                owner="root",
+                group="root",
+                mode=0o755,
+                read_write_units=(),
+            ),
+            ManagedPath(
+                path=Path("/a/b"),
+                owner="root",
+                group="root",
+                mode=0o755,
+                read_write_units=(),
+            ),
+        ]
+        manifest = PathManifest(
+            global_paths=tuple(paths_unordered),
+            env_paths=(),
+        )
+        sorted_paths = list(manifest.sorted_by_depth())
+        depths = [len(p.path.parts) for p in sorted_paths]
+        # Should be in ascending order of depth
+        assert depths == sorted(depths)
