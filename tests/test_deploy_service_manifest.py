@@ -1,6 +1,5 @@
 """Tests for deploy-service.j2 integration with PathManifest."""
 
-from pathlib import Path
 
 import pytest
 
@@ -207,7 +206,7 @@ fraises:
         assert "/opt/fraisier" in content
 
     def test_deploy_service_no_hardcoded_readwrite_conditionals(self, tmp_path):
-        """deploy-service.j2 no longer has hardcoded conditional ReadWritePaths blocks."""
+        """deploy-service.j2 has no hardcoded conditional ReadWritePaths blocks."""
         config = self._make_config(
             tmp_path,
             """

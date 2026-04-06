@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-06
+
+### Breaking Changes
+
+- Scaffold output changed: regenerate and reinstall `install.sh` and all systemd service
+  units after upgrading. Generated files are now derived from the path ownership manifest
+  rather than per-concern template logic.
+
+### Added
+
+- **PathManifest** — declarative, typed registry of every filesystem path fraisier manages,
+  with ownership, permissions, and systemd unit bindings. Replaces scattered path logic.
+- **ConfigResolver** — single source of truth for environment variable overrides;
+  replaces scattered `os.getenv` calls across the codebase.
+- `validate-remote` path checks are now manifest-driven; new managed paths get validation
+  and repair automatically without handwritten checkers.
+
+### Fixed
+
+- **#121: `.venv` owned by the wrong user** — now deleted and recreated by the install step
+  instead of failing with a non-root `chown` error.
+- **ReadWritePaths in generated service units** — now complete and derived from the manifest;
+  no more per-bug additions.
+
+### Removed
+
+- Runtime `chown` call in `_install_dependencies` (replaced by manifest-driven delete-and-recreate).
+- Hardcoded path-ownership checks in `remote_validator.py` (replaced by manifest loop).
+- Scattered `os.getenv` calls outside `resolver.py` and `_env.py`.
+
+---
+
 ## [0.4.18] - 2026-04-05
 
 ### Fixed

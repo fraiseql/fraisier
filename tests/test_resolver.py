@@ -24,7 +24,9 @@ class TestDbPath:
 
     def test_default_when_env_unset(self, tmp_path, monkeypatch):
         """When unset, returns /var/lib/fraisier/fraisier.db if it exists."""
-        monkeypatch.setattr("fraisier.resolver.DEFAULT_DB_PATH", tmp_path / "fraisier.db")
+        monkeypatch.setattr(
+            "fraisier.resolver.DEFAULT_DB_PATH", tmp_path / "fraisier.db"
+        )
         tmp_path.mkdir(exist_ok=True)
 
         resolver = ConfigResolver(environ={})
@@ -76,7 +78,7 @@ class TestConfigPath:
         )
 
         resolver = ConfigResolver(environ={})
-        with pytest.raises(ConfigurationError, match="fraises.yaml not found"):
+        with pytest.raises(ConfigurationError, match=r"fraises\.yaml not found"):
             _ = resolver.config_path
 
     def test_returns_path_object(self, tmp_path):

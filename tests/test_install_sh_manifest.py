@@ -1,8 +1,6 @@
 """Tests for install.sh.j2 integration with PathManifest."""
 
-from pathlib import Path
 
-import pytest
 
 from fraisier.config import FraisierConfig
 from fraisier.scaffold.renderer import ScaffoldRenderer
@@ -133,15 +131,10 @@ fraises:
             **renderer.context
         )
 
-        # Parent /var/www should come before child /var/www/api
-        var_index = content.find("/var")
-        www_index = content.find("/var/www")
-        www_api_index = content.find("/var/www/api")
-
-        if www_api_index > 0 and www_index > 0:
-            # If both appear, www should come first (parent before child)
-            # This is a weak assertion because they might both be in the same line
-            assert www_index < www_api_index or www_index == www_index
+        # Parent paths should come before child paths
+        # (e.g., /var before /var/www before /var/www/api)
+        # Just verify that _ensure_dir is called for app_path
+        assert "_ensure_dir" in content and "/var/www" in content
 
     def test_install_sh_only_creates_paths_with_create_if_missing(self, tmp_path):
         """install.sh only calls _ensure_dir for paths with create_if_missing=True."""
@@ -173,8 +166,8 @@ fraises:
         # (it might still be referenced, but not created)
         lines = content.split("\n")
         run_fraisier_create_lines = [
-            l for l in lines
-            if "/run/fraisier" in l and "_ensure_dir" in l
+            line for line in lines
+            if "/run/fraisier" in line and "_ensure_dir" in line
         ]
         # Should be empty or minimal (systemd manages /run)
         assert len(run_fraisier_create_lines) == 0
