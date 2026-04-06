@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-04-06
+
+### Fixed
+
+- **Deploy service missing `ReadWritePaths` for `/opt/fraisier`, `/var/lib/fraisier`, `/run/fraisier`** —
+  `build_manifest()` was collecting deploy socket stems *after* building the global paths, so the deploy
+  service unit stems were absent from `read_write_units` on the three shared fraisier directories.
+  Stems are now collected first and included in `shared_rw_units` used by all global paths.
+- **`GIT_SSH_COMMAND` env assignment ignored by systemd** — the unquoted value
+  `Environment=GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new` caused systemd to log
+  `Invalid environment assignment, ignoring: -o` (spaces split the value into separate tokens).
+  Fixed to `Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"`.
+
+---
+
 ## [0.5.5] - 2026-04-06
 
 ### Fixed

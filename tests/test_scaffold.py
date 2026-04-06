@@ -3725,8 +3725,10 @@ scaffold:
         """
         out = self._render(tmp_path)
         service = (out / "systemd" / "fraisier-production@.service").read_text()
-        expected = "Environment=GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"
-        assert expected in service
+        ssh_env = (
+            'Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"'
+        )
+        assert ssh_env in service
 
 
 class TestServiceNameOverride:

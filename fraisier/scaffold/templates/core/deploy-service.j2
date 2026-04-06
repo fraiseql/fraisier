@@ -14,7 +14,7 @@ StandardOutput=journal
 StandardError=journal
 Environment=FRAISIER_CONFIG={{ scaffold.config_path }}
 # Allow git fetch to succeed on first run without known_hosts pre-seeded.
-Environment=GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new
+Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"
 {% if allowed_services %}
 Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock
 {% endif %}

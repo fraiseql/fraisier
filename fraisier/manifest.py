@@ -88,6 +88,16 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
     """
     deploy_user = config.scaffold.deploy_user
 
+    # Collect deploy socket stems first so global paths can reference them
+    deploy_socket_stems: set[str] = set()
+    for fraise_config in config.fraises.values():
+        for env_name, env_config in fraise_config.get("environments", {}).items():
+            socket_unit = deploy_socket_name(env_config, env_name)
+            deploy_socket_stems.add(socket_unit.removesuffix(".socket"))
+
+    # Units that need access to shared fraisier directories
+    shared_rw_units = ("fraisier-webhook", *sorted(deploy_socket_stems))
+
     # Track all seen paths to avoid duplicates
     seen_global: set[str] = set()
 
@@ -101,7 +111,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
             owner=deploy_user,
             group=deploy_user,
             mode=0o755,
-            read_write_units=("fraisier-webhook",),
+            read_write_units=shared_rw_units,
             create_if_missing=True,
         )
     )
@@ -114,7 +124,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
             owner=deploy_user,
             group=deploy_user,
             mode=0o755,
-            read_write_units=("fraisier-webhook",),
+            read_write_units=shared_rw_units,
             create_if_missing=True,
         )
     )
@@ -128,7 +138,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
             owner=deploy_user,
             group=deploy_user,
             mode=0o755,
-            read_write_units=("fraisier-webhook",),
+            read_write_units=shared_rw_units,
             create_if_missing=False,
         )
     )
@@ -138,8 +148,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
     env_paths: list[ManagedPath] = []
     seen_paths: set[str] = set()
 
-    # Collect all deploy socket stems for later (config_dir needs them all)
-    deploy_socket_stems: set[str] = set()
+    # deploy_socket_stems already collected above
 
     for fraise_config in config.fraises.values():
         for env_name, env_config in fraise_config.get("environments", {}).items():
