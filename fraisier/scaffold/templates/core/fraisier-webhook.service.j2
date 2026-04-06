@@ -41,6 +41,9 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # Runtime directory (created by systemd at startup, owned by deploy user)
 RuntimeDirectory=fraisier
 RuntimeDirectoryMode=0750
+# Preserve /run/fraisier/ across restarts so deploy socket files created by
+# other units (fraisier-*.socket) survive webhook service restarts.
+RuntimeDirectoryPreserve=restart
 
 # Writable paths (from manifest, filtered by server via local_fraises)
 # Collect all paths from local_fraises for server filtering
