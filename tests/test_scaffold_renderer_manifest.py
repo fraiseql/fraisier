@@ -1,9 +1,5 @@
 """Tests for ScaffoldRenderer integration with PathManifest."""
 
-from pathlib import Path
-
-import pytest
-
 from fraisier.config import FraisierConfig
 from fraisier.manifest import PathManifest
 from fraisier.scaffold.renderer import _build_context
@@ -130,7 +126,8 @@ fraises:
         manifest = context["manifest"]
 
         # Check that paths have the deploy unit listed
-        deploy_paths = list(manifest.paths_for_unit("myapp-deploy.service"))
+        # Socket stem is "fraisier-{env_name}" derived from deploy_socket_name
+        deploy_paths = list(manifest.paths_for_unit("fraisier-dev"))
         assert len(deploy_paths) > 0
 
         # At least git_repo and app_path should be in there
