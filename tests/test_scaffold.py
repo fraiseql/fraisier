@@ -1940,12 +1940,10 @@ fraises:
 
         # The helper units are rendered with the project prefix
         helper_svc = (
-            tmp_path / "output" / "systemd"
-            / "fraisier-myproj-systemctl-helper.service"
+            tmp_path / "output" / "systemd" / "fraisier-myproj-systemctl-helper.service"
         )
         helper_sock = (
-            tmp_path / "output" / "systemd"
-            / "fraisier-myproj-systemctl-helper.socket"
+            tmp_path / "output" / "systemd" / "fraisier-myproj-systemctl-helper.socket"
         )
         assert helper_svc.exists()
         assert helper_sock.exists()
@@ -1991,8 +1989,7 @@ fraises:
 
         # Systemctl helper service lists allowed services in ExecStart
         helper_svc = (
-            tmp_path / "output" / "systemd"
-            / "fraisier-myproj-systemctl-helper.service"
+            tmp_path / "output" / "systemd" / "fraisier-myproj-systemctl-helper.service"
         )
         helper_content = helper_svc.read_text()
         assert "myproj_my_api_production.service" in helper_content

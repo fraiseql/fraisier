@@ -609,9 +609,7 @@ class TestAPIDeployer:
         default = Path("/opt/fraisier/fraises.yaml")
         assert mock_sync.call_args.kwargs["dest_path"] == default
 
-    def test_install_dependencies_with_different_users(
-        self, tmp_path, mock_subprocess
-    ):
+    def test_install_dependencies_with_different_users(self, tmp_path, mock_subprocess):
         """_install_dependencies uses sudo -u when install_user differs."""
         venv = tmp_path / ".venv"
         venv.mkdir()

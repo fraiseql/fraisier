@@ -1,6 +1,5 @@
 """Tests for deploy-service.j2 integration with PathManifest."""
 
-
 import pytest
 
 from fraisier.config import FraisierConfig
@@ -34,7 +33,7 @@ fraises:
       production:
         app_path: /var/www/api
         git_repo: /var/repos/api.git
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         renderer._validate_names()
@@ -63,6 +62,7 @@ fraises:
 
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
+
         socket_unit = deploy_socket_name(env_config, env_name)
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
@@ -92,7 +92,7 @@ fraises:
       dev:
         app_path: /var/www/web/dev
         git_repo: /var/repos/web.git
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         renderer._validate_names()
@@ -106,6 +106,7 @@ fraises:
 
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
+
         socket_unit = deploy_socket_name(env_config, "dev")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
@@ -136,7 +137,7 @@ fraises:
       prod:
         app_path: /var/www/backend
         git_repo: /var/repos/backend.git
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         renderer._validate_names()
@@ -151,6 +152,7 @@ fraises:
 
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
+
         socket_unit = deploy_socket_name(env_config, "prod")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
@@ -179,7 +181,7 @@ fraises:
     environments:
       dev:
         app_path: /var/www/api
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         renderer._validate_names()
@@ -194,6 +196,7 @@ fraises:
 
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
+
         socket_unit = deploy_socket_name(env_config, "dev")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
@@ -222,7 +225,7 @@ fraises:
     environments:
       dev:
         app_path: /var/www/api
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
 
@@ -236,6 +239,7 @@ fraises:
 
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
+
         socket_unit = deploy_socket_name(env_config, "dev")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem

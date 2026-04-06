@@ -314,8 +314,7 @@ class TestBuildManifest:
     def test_venv_path_owned_by_install_user_when_different(
         self, fraisier_config_with_install_user_fixture
     ):
-        """When install.user differs from deploy_user, .venv is owned by install.user.
-        """
+        """When install.user differs from deploy_user, .venv is owned by install.user."""
         manifest = build_manifest(fraisier_config_with_install_user_fixture)
         all_paths = list(manifest.all_paths())
 
@@ -323,9 +322,7 @@ class TestBuildManifest:
         venv_paths = [p for p in all_paths if ".venv" in str(p.path)]
         if venv_paths:
             # If venv paths exist, they should be owned by a non-deploy user
-            deploy_user = (
-                fraisier_config_with_install_user_fixture.scaffold.deploy_user
-            )
+            deploy_user = fraisier_config_with_install_user_fixture.scaffold.deploy_user
             for venv_path in venv_paths:
                 assert venv_path.owner != deploy_user
 

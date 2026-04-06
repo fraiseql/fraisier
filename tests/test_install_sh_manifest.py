@@ -1,7 +1,5 @@
 """Tests for install.sh.j2 integration with PathManifest."""
 
-
-
 from fraisier.config import FraisierConfig
 from fraisier.scaffold.renderer import ScaffoldRenderer
 
@@ -32,7 +30,7 @@ fraises:
     environments:
       dev:
         app_path: /var/www/api
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         content = renderer.env.get_template("core/install.sh.j2").render(
@@ -62,7 +60,7 @@ fraises:
       production:
         app_path: /var/www/my_api/prod
         git_repo: /var/repos/my_api.git
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         content = renderer.env.get_template("core/install.sh.j2").render(
@@ -93,7 +91,7 @@ fraises:
     environments:
       dev:
         git_repo: /var/repos/api.git
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         content = renderer.env.get_template("core/install.sh.j2").render(
@@ -124,7 +122,7 @@ fraises:
       prod:
         app_path: /var/www/api/prod/app
         git_repo: /var/repos/api.git
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         content = renderer.env.get_template("core/install.sh.j2").render(
@@ -153,7 +151,7 @@ fraises:
     environments:
       dev:
         app_path: /var/www/api
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         content = renderer.env.get_template("core/install.sh.j2").render(
@@ -166,8 +164,7 @@ fraises:
         # (it might still be referenced, but not created)
         lines = content.split("\n")
         run_fraisier_create_lines = [
-            line for line in lines
-            if "/run/fraisier" in line and "_ensure_dir" in line
+            line for line in lines if "/run/fraisier" in line and "_ensure_dir" in line
         ]
         # Should be empty or minimal (systemd manages /run)
         assert len(run_fraisier_create_lines) == 0
@@ -189,7 +186,7 @@ fraises:
     environments:
       prod:
         app_path: /var/www/api
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         content = renderer.env.get_template("core/install.sh.j2").render(
@@ -218,7 +215,7 @@ fraises:
     environments:
       dev:
         app_path: /var/www/api
-"""
+""",
         )
         renderer = ScaffoldRenderer(config)
         content = renderer.env.get_template("core/install.sh.j2").render(
