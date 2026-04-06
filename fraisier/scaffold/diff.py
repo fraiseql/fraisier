@@ -258,9 +258,7 @@ def apply_scaffold_diffs(
                 failed.append((diff.installed_path, result.stderr.strip()))
 
     # Reload systemd if any unit files were updated
-    systemd_changed = any(
-        str(p).startswith("/etc/systemd/") for p in applied
-    )
+    systemd_changed = any(str(p).startswith("/etc/systemd/") for p in applied)
     if systemd_changed:
         subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
 

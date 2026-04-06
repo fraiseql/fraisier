@@ -45,8 +45,7 @@ def _validate_health_check_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
         msg = (
-            f"Health check URL scheme {parsed.scheme!r} is not allowed"
-            " (use http/https)"
+            f"Health check URL scheme {parsed.scheme!r} is not allowed (use http/https)"
         )
         raise ValueError(msg)
     if not parsed.hostname:

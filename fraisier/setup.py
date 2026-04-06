@@ -309,7 +309,7 @@ class ServerSetup:
                     check=[
                         "bash",
                         "-c",
-                        f'[ -L {shlex.quote(link_name)} ] && '
+                        f"[ -L {shlex.quote(link_name)} ] && "
                         f'[ "$(readlink {shlex.quote(link_name)})"'
                         f" = {shlex.quote(git_repo)} ]",
                     ],

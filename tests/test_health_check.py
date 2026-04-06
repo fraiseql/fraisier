@@ -12,7 +12,37 @@ from fraisier.health_check import (
     HealthCheckResult,
     HTTPHealthChecker,
     TCPHealthChecker,
+    _validate_health_check_url,
 )
+
+
+class TestValidateHealthCheckUrl:
+    """Tests for _validate_health_check_url."""
+
+    def test_http_localhost_allowed(self):
+        _validate_health_check_url("http://localhost:8000/health")
+
+    def test_https_allowed(self):
+        _validate_health_check_url("https://example.com/health")
+
+    def test_http_ip_allowed(self):
+        _validate_health_check_url("http://127.0.0.1:8080/ping")
+
+    def test_file_scheme_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_health_check_url("file:///etc/passwd")
+
+    def test_ftp_scheme_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_health_check_url("ftp://example.com/file")
+
+    def test_no_hostname_rejected(self):
+        with pytest.raises(ValueError, match="hostname"):
+            _validate_health_check_url("http://")
+
+    def test_httpchecker_rejects_bad_scheme(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            HTTPHealthChecker("file:///etc/hosts")
 
 
 class TestHTTPHealthChecker:

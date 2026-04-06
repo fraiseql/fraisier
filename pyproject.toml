@@ -87,6 +87,7 @@ omit = [
     "*/tests/*",
     "*/test_*",
     "fraisier/_env.py",
+    "fraisier/cli/*",
 ]
 
 [tool.coverage.report]

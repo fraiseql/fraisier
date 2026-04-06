@@ -98,9 +98,7 @@ def scaffold_diff(
             console.print(f"[red]✗[/red] Failed {path}: {error}")
 
         if failures:
-            console.print(
-                f"\n[red]{len(failures)} file(s) failed to apply.[/red]"
-            )
+            console.print(f"\n[red]{len(failures)} file(s) failed to apply.[/red]")
             raise SystemExit(1)
 
         console.print(f"\n[green]Applied {len(applied)} change(s).[/green]")
