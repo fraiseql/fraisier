@@ -469,6 +469,7 @@ class FraisierConfig:
             deploy_user=deploy_user,
             config_path=raw.get("config_path", "/opt/fraisier/fraises.yaml"),
             deploy_environment_file=raw.get("deploy_environment_file"),
+            template_dir=raw.get("template_dir"),
             systemd=SystemdScaffoldConfig(
                 security_hardening=raw_systemd.get("security_hardening", True),
                 memory_max_default=raw_systemd.get("memory_max_default", "4G"),

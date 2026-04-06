@@ -370,8 +370,18 @@ class ScaffoldRenderer:
         self.config = config
         self.server = server
         self.output_dir = Path(config.scaffold.output_dir)
+
+        loaders: list[jinja2.BaseLoader] = []
+        template_dir = config.scaffold.template_dir
+        if template_dir:
+            custom_path = Path(template_dir)
+            if not custom_path.is_absolute():
+                custom_path = Path(config.config_path).parent / custom_path
+            loaders.append(jinja2.FileSystemLoader(str(custom_path)))
+        loaders.append(jinja2.FileSystemLoader(str(_TEMPLATES_DIR)))
+
         self.env = jinja2.Environment(
-            loader=jinja2.FileSystemLoader(str(_TEMPLATES_DIR)),
+            loader=jinja2.ChoiceLoader(loaders),
             undefined=jinja2.StrictUndefined,
             keep_trailing_newline=True,
             trim_blocks=True,
