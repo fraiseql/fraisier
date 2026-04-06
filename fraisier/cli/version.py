@@ -238,6 +238,7 @@ def ship(
                 create_pr,
                 pr_base,
                 no_deploy,
+                bare_repo_skip=_resolve_bare_repo_skip() if not no_deploy else None,
             )
             return
 
@@ -267,6 +268,7 @@ def ship(
             create_pr,
             pr_base,
             no_deploy,
+            bare_repo_skip=_resolve_bare_repo_skip() if not no_deploy else None,
         )
         return
 
@@ -351,6 +353,7 @@ def _ship_dry_run(
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
+    bare_repo_skip: Path | None = None,
 ) -> None:
     """Print dry-run plan for ship."""
     console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{new}")
@@ -365,7 +368,7 @@ def _ship_dry_run(
         base = pr_base or (ship_config.pr_base if ship_config else None)
         console.print(f"  PR: create against {base or '<default branch>'}")
     if not no_deploy:
-        console.print("  Deploy: trigger for branch-mapped fraises")
+        _print_deploy_note(bare_repo_skip)
 
 
 def _ship_dry_run_no_bump(
@@ -376,6 +379,7 @@ def _ship_dry_run_no_bump(
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
+    bare_repo_skip: Path | None = None,
 ) -> None:
     """Print dry-run plan for ship --no-bump."""
     console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{current_version} (no bump)")
@@ -390,6 +394,16 @@ def _ship_dry_run_no_bump(
         base = pr_base or (ship_config.pr_base if ship_config else None)
         console.print(f"  PR: create against {base or '<default branch>'}")
     if not no_deploy:
+        _print_deploy_note(bare_repo_skip)
+
+
+def _print_deploy_note(bare_repo_skip: Path | None) -> None:
+    if bare_repo_skip:
+        console.print(
+            f"  Deploy: skip — bare repo {bare_repo_skip} not found"
+            f" (webhook will deploy)"
+        )
+    else:
         console.print("  Deploy: trigger for branch-mapped fraises")
 
 
@@ -494,6 +508,42 @@ def _ship_legacy(version: str) -> None:
     _git_push()
 
 
+def _resolve_bare_repo_skip() -> Path | None:
+    """Return the bare_repo path if it is missing locally, else None.
+
+    Used by dry-run to accurately preview whether a local deploy will be
+    skipped in favour of the server-side webhook.  Failures are swallowed
+    so dry-run always completes.
+    """
+    import subprocess as sp
+
+    from fraisier.config import get_config
+    from fraisier.deployers.mixins import GitDeployMixin
+
+    from ._helpers import _get_deployer
+
+    try:
+        branch = sp.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        config = get_config()
+        fraise_config = config.get_fraise_for_branch(branch)
+        if not fraise_config:
+            return None
+        deployer = _get_deployer(fraise_config.get("type"), fraise_config)
+        if (
+            isinstance(deployer, GitDeployMixin)
+            and not deployer.bare_repo.exists()
+        ):
+            return deployer.bare_repo
+    except Exception:
+        pass
+    return None
+
+
 def _trigger_deploy_for_current_branch(
     wait_deploy: bool = False, deploy_timeout: int = 300
 ) -> None:
@@ -537,6 +587,16 @@ def _trigger_deploy_for_current_branch(
     if deployer is None:
         console.print(f"[red]Error:[/red] Unknown fraise type '{fraise_type}'")
         raise SystemExit(1)
+
+    from fraisier.deployers.mixins import GitDeployMixin
+
+    if isinstance(deployer, GitDeployMixin) and not deployer.bare_repo.exists():
+        console.print(
+            f"[yellow]Skipping local deploy for {fraise_name} ({environment}): "
+            f"bare repo {deployer.bare_repo} not found — "
+            f"deploy will be triggered via webhook.[/yellow]"
+        )
+        return
 
     console.print(f"[green]Deploying {fraise_name} -> {environment}...[/green]")
     try:

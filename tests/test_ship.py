@@ -483,7 +483,11 @@ class TestShipDryRun:
                 str(tmp_path / "pyproject.toml"),
             ],
         )
-        mock_run.assert_not_called()
+        calls = [c[0][0] for c in mock_run.call_args_list if c[0]]
+        destructive = {"git add", "git commit", "git push"}
+        assert not any(
+            " ".join(cmd[:2]) in destructive for cmd in calls if isinstance(cmd, list)
+        ), f"dry-run must not invoke destructive git commands, got: {calls}"
 
 
 class TestShipBumpTypes:
@@ -856,6 +860,68 @@ class TestShipDeploy:
         assert result.exit_code == 0
         assert "Deploy" in result.output
 
+    @patch("subprocess.run")
+    def test_ship_dry_run_shows_skip_when_bare_repo_missing(self, mock_run, tmp_path):
+        """ship --dry-run shows accurate skip note when bare repo is absent."""
+        from fraisier.deployers.api import APIDeployer
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="main\n", stderr="")
+        cfg_data = {
+            "fraises": {
+                "my_api": {
+                    "type": "api",
+                    "environments": {
+                        "production": {
+                            "name": "my-api",
+                            "app_path": "/var/www/api",
+                            "git_repo": str(tmp_path / "nonexistent.git"),
+                        },
+                    },
+                },
+            },
+            "branch_mapping": {
+                "main": {"fraise": "my_api", "environment": "production"},
+            },
+        }
+        cfg_file = tmp_path / "fraises.yaml"
+        cfg_file.write_text(yaml.dump(cfg_data))
+        _setup_project(tmp_path)
+
+        mock_deployer = MagicMock(spec=APIDeployer)
+        mock_deployer.bare_repo = tmp_path / "nonexistent.git"
+
+        runner = CliRunner()
+        with (
+            patch("fraisier.config.get_config") as mock_gc,
+            patch("fraisier.cli._helpers._get_deployer", return_value=mock_deployer),
+        ):
+            mock_cfg = MagicMock()
+            mock_cfg.get_fraise_for_branch.return_value = {
+                "fraise_name": "my_api",
+                "environment": "production",
+                "type": "api",
+                "git_repo": str(tmp_path / "nonexistent.git"),
+            }
+            mock_gc.return_value = mock_cfg
+
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(cfg_file),
+                    "ship",
+                    "patch",
+                    "--dry-run",
+                    "--pyproject",
+                    str(tmp_path / "pyproject.toml"),
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert "skip" in result.output.lower()
+        assert "webhook" in result.output
+        assert "trigger for branch-mapped fraises" not in result.output
+
     @patch(
         "fraisier.locking.deployment_lock",
         return_value=contextlib.nullcontext(),
@@ -911,3 +977,65 @@ class TestShipDeploy:
         assert result.exit_code == 0
         # Should show health verification
         assert "Verifying deployment" in result.output
+
+    @patch("subprocess.run")
+    def test_ship_skips_deploy_when_bare_repo_missing(self, mock_run, tmp_path):
+        """ship skips local deploy gracefully when bare repo does not exist."""
+        from fraisier.deployers.api import APIDeployer
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="main\n", stderr="")
+        cfg_data = {
+            "fraises": {
+                "my_api": {
+                    "type": "api",
+                    "environments": {
+                        "production": {
+                            "name": "my-api",
+                            "app_path": "/var/www/api",
+                            "git_repo": "/var/git/api.printoptim.dev.git",
+                        },
+                    },
+                },
+            },
+            "branch_mapping": {
+                "main": {"fraise": "my_api", "environment": "production"},
+            },
+        }
+        cfg_file = tmp_path / "fraises.yaml"
+        cfg_file.write_text(yaml.dump(cfg_data))
+        _setup_project(tmp_path)
+
+        mock_deployer = MagicMock(spec=APIDeployer)
+        mock_deployer.bare_repo = tmp_path / "nonexistent.git"  # does not exist
+
+        runner = CliRunner()
+        with (
+            patch("fraisier.config.get_config") as mock_gc,
+            patch("fraisier.cli._helpers._get_deployer", return_value=mock_deployer),
+        ):
+            mock_cfg = MagicMock()
+            mock_cfg.get_fraise_for_branch.return_value = {
+                "fraise_name": "my_api",
+                "environment": "production",
+                "type": "api",
+                "app_path": "/var/www/api",
+                "git_repo": str(tmp_path / "nonexistent.git"),
+            }
+            mock_gc.return_value = mock_cfg
+
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    str(cfg_file),
+                    "ship",
+                    "patch",
+                    "--pyproject",
+                    str(tmp_path / "pyproject.toml"),
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_deployer.execute.assert_not_called()
+        assert "Skipping local deploy" in result.output
+        assert "webhook" in result.output
