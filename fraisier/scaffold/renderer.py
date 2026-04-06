@@ -20,6 +20,7 @@ from fraisier.config import (
     NginxEnvConfig,
     ServiceConfig,
 )
+from fraisier.manifest import build_manifest
 from fraisier.naming import deploy_socket_name
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -303,6 +304,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         local_fraises = fraises_list
 
     return {
+        "manifest": build_manifest(config),
         "scaffold": config.scaffold,
         "deployment": config.deployment,
         "health": config.health,
