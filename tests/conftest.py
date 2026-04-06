@@ -289,3 +289,59 @@ def confiture_project(pg_test_db, tmp_path):
     )
 
     return config_path, migrations_dir, test_url, db_name
+
+
+@pytest.fixture
+def fraisier_config_fixture(tmp_path: Path) -> FraisierConfig:
+    """Create a FraisierConfig fixture for testing manifest creation."""
+    config_file = tmp_path / "fraises.yaml"
+    config_file.write_text(
+        """
+scaffold:
+  output_dir: scripts/generated
+  deploy_user: fraisier
+  config_path: /opt/fraisier/fraises.yaml
+
+fraises:
+  my_api:
+    type: api
+    description: Test API service
+    environments:
+      development:
+        app_path: /var/www/my_api/dev
+        git_repo: /var/repos/my_api.git
+        systemd_service: my_api-dev.service
+      production:
+        app_path: /var/www/my_api/prod
+        git_repo: /var/repos/my_api.git
+        systemd_service: my_api-prod.service
+"""
+    )
+    return FraisierConfig(str(config_file))
+
+
+@pytest.fixture
+def fraisier_config_with_install_user_fixture(tmp_path: Path) -> FraisierConfig:
+    """Create a FraisierConfig with install.user different from deploy_user."""
+    config_file = tmp_path / "fraises.yaml"
+    config_file.write_text(
+        """
+scaffold:
+  output_dir: scripts/generated
+  deploy_user: fraisier
+  config_path: /opt/fraisier/fraises.yaml
+
+fraises:
+  my_api:
+    type: api
+    description: Test API service
+    install:
+      user: appuser
+    environments:
+      production:
+        app_path: /var/www/my_api/prod
+        git_repo: /var/repos/my_api.git
+        systemd_service: my_api-prod.service
+"""
+    )
+    return FraisierConfig(str(config_file))
