@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,3 +200,68 @@ def _file_matches_filters(rel_path: str, matching_deploy_paths: set[str]) -> boo
         return rel_path in matching_deploy_paths
 
     return True
+
+
+def apply_scaffold_diffs(
+    config: FraisierConfig,
+    diffs: list[FileDiff],
+    server: str | None = None,
+) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Apply scaffold diffs by overwriting changed installed files with sudo.
+
+    Args:
+        config: Fraisier configuration
+        diffs: FileDiff list — only "differs" and "missing_installed" are applied
+        server: Optional server filter passed to renderer
+
+    Returns:
+        Tuple of (applied_paths, failures) where failures is
+        list of (path, error_message)
+    """
+    from fraisier.scaffold.renderer import ScaffoldRenderer
+
+    to_apply = [d for d in diffs if d.status in ("differs", "missing_installed")]
+    if not to_apply:
+        return [], []
+
+    renderer = ScaffoldRenderer(config, server=server)
+    original_output_dir = renderer.output_dir
+
+    applied: list[Path] = []
+    failed: list[tuple[Path, str]] = []
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        renderer.output_dir = temp_path
+
+        try:
+            renderer.render(dry_run=False)
+        finally:
+            renderer.output_dir = original_output_dir
+
+        for diff in to_apply:
+            generated_file = temp_path / diff.generated_path
+            if not generated_file.exists():
+                msg = f"Generated file not found: {diff.generated_path}"
+                failed.append((diff.installed_path, msg))
+                continue
+
+            result = subprocess.run(
+                ["sudo", "cp", str(generated_file), str(diff.installed_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                applied.append(diff.installed_path)
+            else:
+                failed.append((diff.installed_path, result.stderr.strip()))
+
+    # Reload systemd if any unit files were updated
+    systemd_changed = any(
+        str(p).startswith("/etc/systemd/") for p in applied
+    )
+    if systemd_changed:
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+
+    return applied, failed

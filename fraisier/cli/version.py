@@ -542,6 +542,14 @@ def _trigger_deploy_for_current_branch(
     try:
         with deployment_lock(fraise_name):
             result = deployer.execute()
+    except PermissionError:
+        # Lock dir not writable (developer machine) — skip local lock and deploy anyway.
+        # The lock only guards against concurrent deploys on the server itself.
+        console.print(
+            "[yellow]Warning:[/yellow] Cannot acquire deploy lock "
+            "(no write access to lock dir) — deploying without lock"
+        )
+        result = deployer.execute()
     except Exception as e:
         if "already running" in str(e).lower():
             console.print(f"[red]Deploy already running for '{fraise_name}'[/red]")

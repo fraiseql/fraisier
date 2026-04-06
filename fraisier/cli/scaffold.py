@@ -87,10 +87,24 @@ def scaffold_diff(
     console.print(f"\nSummary: {changed_count}/{total_files} files differ")
 
     if apply and changed_count > 0:
+        from fraisier.scaffold.diff import apply_scaffold_diffs
+
         console.print("\n[cyan]Applying changes...[/cyan]")
-        # TODO: Implement selective scaffold-install
-        console.print("[yellow]--apply not yet implemented[/yellow]")
-        raise SystemExit(1)
+        applied, failures = apply_scaffold_diffs(config, diffs, server=server)
+
+        for path in applied:
+            console.print(f"[green]✓[/green] Updated {path}")
+        for path, error in failures:
+            console.print(f"[red]✗[/red] Failed {path}: {error}")
+
+        if failures:
+            console.print(
+                f"\n[red]{len(failures)} file(s) failed to apply.[/red]"
+            )
+            raise SystemExit(1)
+
+        console.print(f"\n[green]Applied {len(applied)} change(s).[/green]")
+        raise SystemExit(0)
 
     # Exit with appropriate code
     raise SystemExit(1 if changed_count > 0 else 0)
