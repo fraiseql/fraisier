@@ -252,6 +252,15 @@ if [ -f "${WEBHOOK_SRC}" ]; then
     _run sudo cp "${WEBHOOK_SRC}" "${WEBHOOK_DST}"
     _run sudo systemctl daemon-reload
     _run sudo systemctl restart {{ webhook_service }} || true
+    # Restart deploy sockets so their socket files are recreated under /run/fraisier/.
+    # The webhook service owns RuntimeDirectory=fraisier; even with
+    # RuntimeDirectoryPreserve=restart, a first-time install wipes the dir.
+{% for fraise in local_fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% set socket_unit = deploy_socket_name(env_config, env_name) %}
+    _run sudo systemctl restart {{ socket_unit }} || true
+{% endfor %}
+{% endfor %}
 fi
 
 # Install systemctl helper service and socket (replaces old systemctl wrapper)
