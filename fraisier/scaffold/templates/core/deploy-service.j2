@@ -27,13 +27,13 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 # Deploy daemon must write to the bare git repo (fetch), the app worktree (checkout),
 # the config file directory (fraises.yaml sync), and the lock/socket directory.
-{% if env_config.get('git_repo') %}
-ReadWritePaths={{ env_config['git_repo'] }}
-{% endif %}
-{% if env_config.get('app_path') %}
-ReadWritePaths={{ env_config['app_path'] }}
-{% endif %}
+# Fraise-specific paths are derived from PathManifest for consistency.
+{% for mp in manifest.paths_for_unit(socket_stem) %}
+ReadWritePaths={{ mp.path }}
+{% endfor %}
+# Runtime directory managed by systemd
 ReadWritePaths=/run/fraisier
+# Config directory
 ReadWritePaths={{ scaffold.config_dir }}
 
 # Logging

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fraisier.config import FraisierConfig
+from fraisier.naming import deploy_socket_name
 
 
 @dataclass(frozen=True)
@@ -132,44 +133,34 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
     )
     seen_global.add("/run/fraisier")
 
-    # Config directory (only if not already in the list)
-    config_dir = Path(config.scaffold.config_dir)
-    config_dir_str = str(config_dir)
-    if config_dir_str not in seen_global:
-        global_paths.append(
-            ManagedPath(
-                path=config_dir,
-                owner=deploy_user,
-                group=deploy_user,
-                mode=0o755,
-                read_write_units=(
-                    f"{config.project_name}-deploy.service",
-                ),
-                create_if_missing=True,
-            )
-        )
-        seen_global.add(config_dir_str)
-
     # Per-environment paths
     env_paths: list[ManagedPath] = []
     seen_paths: set[str] = set()
 
+    # Collect all deploy socket stems for later (config_dir needs them all)
+    deploy_socket_stems: set[str] = set()
+
     for fraise_config in config.fraises.values():
-        for env_config in fraise_config.get("environments", {}).values():
+        for env_name, env_config in fraise_config.get("environments", {}).items():
+            # Derive the deploy socket unit stem for this environment
+            # (e.g., "fraisier-production" from socket "fraisier-production.socket")
+            socket_unit = deploy_socket_name(env_config, env_name)
+            socket_stem = socket_unit.removesuffix(".socket")
+            deploy_socket_stems.add(socket_stem)
+
             # Get git_repo path
             git_repo = env_config.get("git_repo")
             if git_repo:
                 path_str = str(git_repo)
                 if path_str not in seen_paths:
                     seen_paths.add(path_str)
-                    unit_stem = f"{config.project_name}-deploy.service"
                     env_paths.append(
                         ManagedPath(
                             path=Path(git_repo),
                             owner=deploy_user,
                             group=deploy_user,
                             mode=0o755,
-                            read_write_units=(unit_stem,),
+                            read_write_units=(socket_stem,),
                             create_if_missing=True,
                         )
                     )
@@ -180,14 +171,13 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                 path_str = str(app_path)
                 if path_str not in seen_paths:
                     seen_paths.add(path_str)
-                    unit_stem = f"{config.project_name}-deploy.service"
                     env_paths.append(
                         ManagedPath(
                             path=Path(app_path),
                             owner=deploy_user,
                             group=deploy_user,
                             mode=0o755,
-                            read_write_units=(unit_stem,),
+                            read_write_units=(socket_stem,),
                             create_if_missing=True,
                         )
                     )
@@ -213,6 +203,23 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                                     create_if_missing=True,
                                 )
                             )
+
+    # Config directory (only if not already in the list)
+    # Needs write access from all deploy services
+    config_dir = Path(config.scaffold.config_dir)
+    config_dir_str = str(config_dir)
+    if config_dir_str not in seen_global:
+        global_paths.append(
+            ManagedPath(
+                path=config_dir,
+                owner=deploy_user,
+                group=deploy_user,
+                mode=0o755,
+                read_write_units=tuple(sorted(deploy_socket_stems)),
+                create_if_missing=True,
+            )
+        )
+        seen_global.add(config_dir_str)
 
     return PathManifest(
         global_paths=tuple(global_paths),
