@@ -202,6 +202,27 @@ def _file_matches_filters(rel_path: str, matching_deploy_paths: set[str]) -> boo
     return True
 
 
+def _sudo_copy(src: Path, dst: Path) -> tuple[bool, str]:
+    """Copy a file using sudo cp.
+
+    Args:
+        src: Source file path
+        dst: Destination file path
+
+    Returns:
+        Tuple of (success, error_message). error_message is empty if successful.
+    """
+    result = subprocess.run(
+        ["sudo", "cp", str(src), str(dst)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True, ""
+    return False, result.stderr.strip()
+
+
 def apply_scaffold_diffs(
     config: FraisierConfig,
     diffs: list[FileDiff],
@@ -246,16 +267,11 @@ def apply_scaffold_diffs(
                 failed.append((diff.installed_path, msg))
                 continue
 
-            result = subprocess.run(
-                ["sudo", "cp", str(generated_file), str(diff.installed_path)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
+            success, error_msg = _sudo_copy(generated_file, diff.installed_path)
+            if success:
                 applied.append(diff.installed_path)
             else:
-                failed.append((diff.installed_path, result.stderr.strip()))
+                failed.append((diff.installed_path, error_msg))
 
     # Reload systemd if any unit files were updated
     systemd_changed = any(str(p).startswith("/etc/systemd/") for p in applied)
