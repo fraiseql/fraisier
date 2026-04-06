@@ -82,7 +82,7 @@ class TestHTTPHealthChecker:
                 url="http://localhost/health",
                 code=503,
                 msg="Service Unavailable",
-                hdrs=None,
+                hdrs=None,  # ty: ignore[invalid-argument-type]
                 fp=None,
             ),
         ):
@@ -117,7 +117,7 @@ class TestHTTPHealthChecker:
                 url="http://localhost/health",
                 code=503,
                 msg="Service Unavailable",
-                hdrs=None,
+                hdrs=None,  # ty: ignore[invalid-argument-type]
                 fp=None,
             ),
         ):
@@ -138,7 +138,7 @@ class TestHTTPHealthChecker:
                 url="http://localhost/health",
                 code=404,
                 msg="Not Found",
-                hdrs=None,
+                hdrs=None,  # ty: ignore[invalid-argument-type]
                 fp=None,
             ),
         ):

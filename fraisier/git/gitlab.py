@@ -34,6 +34,7 @@ class GitLabProvider(GitProvider):
         if not token:
             return False
 
+        assert self.webhook_secret is not None
         return hmac.compare_digest(self.webhook_secret, token)
 
     def parse_webhook_event(

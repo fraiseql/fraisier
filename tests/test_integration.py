@@ -569,7 +569,7 @@ class TestWebhookToDeployIntegration:
             provider = get_provider(
                 provider_name, {"webhook_secret": cfg["webhook_secret"]}
             )
-            event = provider.parse_webhook_event(cfg["headers"], cfg["payload"])
+            event = provider.parse_webhook_event(cfg["headers"], cfg["payload"])  # ty: ignore[invalid-argument-type]
             assert event.provider == provider_name, f"{provider_name}: wrong provider"
             assert event.is_push is True, f"{provider_name}: not detected as push"
             assert event.branch is not None, f"{provider_name}: missing branch"

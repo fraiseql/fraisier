@@ -38,7 +38,7 @@ class JSONFormatter(logging.Formatter):
         Returns:
             JSON-formatted log string
         """
-        log_obj = {
+        log_obj: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
@@ -55,15 +55,17 @@ class JSONFormatter(logging.Formatter):
 
         # Add exception info if present
         if record.exc_info:
+            exc_type = record.exc_info[0]
             log_obj["exception"] = {
-                "type": record.exc_info[0].__name__,
+                "type": exc_type.__name__ if exc_type is not None else "Unknown",
                 "message": str(record.exc_info[1]),
                 "traceback": self.formatException(record.exc_info),
             }
 
         # Add extra fields
-        if hasattr(record, "extra_fields"):
-            log_obj.update(record.extra_fields)
+        extra_fields = getattr(record, "extra_fields", None)
+        if isinstance(extra_fields, dict):
+            log_obj.update(extra_fields)
 
         return json.dumps(log_obj)
 

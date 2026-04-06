@@ -4,6 +4,8 @@ Each template returns a YAML string for a fraises.yaml scaffold
 tailored to a specific framework.
 """
 
+from collections.abc import Callable
+
 
 def generic_template() -> str:
     """Generic fraises.yaml template."""
@@ -170,7 +172,7 @@ environments:
 """
 
 
-TEMPLATES: dict[str, callable] = {
+TEMPLATES: dict[str, Callable[[], str]] = {
     "generic": generic_template,
     "django": django_template,
     "rails": rails_template,

@@ -271,7 +271,11 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
             # Enrich each env_config with the precomputed service_base so
             # templates can use it directly without duplicating the resolution logic.
             enriched = {}
-            for env_name, env_config in entry.get("environments", {}).items():
+            environments = entry.get("environments")
+            env_dict: dict[str, Any] = (
+                environments if isinstance(environments, dict) else {}
+            )
+            for env_name, env_config in env_dict.items():
                 ec = dict(env_config or {})
                 ec["service_base"] = _resolve_service_base(
                     project_name, name, env_name, ec
@@ -355,7 +359,7 @@ class ScaffoldRenderer:
             trim_blocks=True,
             lstrip_blocks=True,
         )
-        self.env.globals["deploy_socket_name"] = deploy_socket_name
+        self.env.globals["deploy_socket_name"] = deploy_socket_name  # ty: ignore[invalid-assignment]
         self.context = _build_context(config, server)
 
     def get_core_template_paths(self) -> list[str]:

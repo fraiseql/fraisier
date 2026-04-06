@@ -119,7 +119,7 @@ class TestAPIDeployer:
 
         assert result.success is False
         assert result.status == DeploymentStatus.FAILED
-        assert "Deployment failed" in result.error_message or result.error_message
+        assert result.error_message is not None
 
     def test_fetch_and_checkout_called_during_execute(
         self,
@@ -1116,6 +1116,7 @@ class TestAPIDeployerChdirForStrategy:
         result = deployer.execute()
 
         assert result.success is False
+        assert result.error_message is not None
         assert "app_path does not exist" in result.error_message
 
 

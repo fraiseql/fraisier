@@ -269,9 +269,9 @@ class BaseDeployer(ABC):
             ["sh", "-c", f"cd {project_dir} && fraisier -c {config_path} scaffold"]
         )
 
-        if not result.ok:
+        if result.returncode != 0:
             raise DeploymentError(
-                f"Failed to regenerate scaffold files: {result.output}"
+                f"Failed to regenerate scaffold files: {result.stdout}"
             )
 
         logger.info("✓ Scaffold files regenerated")
@@ -292,8 +292,8 @@ class BaseDeployer(ABC):
         # Run scaffold install
         result = self.runner.run(["fraisier", "scaffold-install", "--yes"])
 
-        if not result.ok:
-            raise DeploymentError(f"Failed to install scaffold files: {result.output}")
+        if result.returncode != 0:
+            raise DeploymentError(f"Failed to install scaffold files: {result.stdout}")
 
         logger.info("✓ Scaffold files installed")
 
@@ -326,7 +326,7 @@ class BaseDeployer(ABC):
                 ["git", "-C", str(app_path), "checkout", "HEAD~1", "--", "fraises.yaml"]
             )
 
-            if result.ok:
+            if result.returncode == 0:
                 # Re-sync the previous version to server
                 self._sync_fraises_yaml(
                     source_path=app_path / "fraises.yaml", dest_path=config_path
@@ -339,7 +339,7 @@ class BaseDeployer(ABC):
                 logger.info("✓ Configuration rolled back")
                 return True
             else:
-                logger.warning("Could not restore previous config: %s", result.output)
+                logger.warning("Could not restore previous config: %s", result.stdout)
                 return False
         except Exception as e:
             logger.error("Config rollback failed: %s", e)

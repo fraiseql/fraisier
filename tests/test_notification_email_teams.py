@@ -287,7 +287,7 @@ class TestDispatcherEmailTeams:
         }
         dispatcher = NotificationDispatcher.from_config(config)
         notifier = dispatcher._handlers["failure"][0]
-        assert notifier.smtp_password == "secret123"
+        assert notifier.smtp_password == "secret123"  # ty: ignore[unresolved-attribute]
 
     def test_teams_with_mention(self):
         config = {
@@ -301,7 +301,7 @@ class TestDispatcherEmailTeams:
         }
         dispatcher = NotificationDispatcher.from_config(config)
         notifier = dispatcher._handlers["failure"][0]
-        assert notifier.mention_on_failure == "@engineering"
+        assert notifier.mention_on_failure == "@engineering"  # ty: ignore[unresolved-attribute]
 
 
 class TestConfigValidation:

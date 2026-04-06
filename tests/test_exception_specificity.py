@@ -24,14 +24,14 @@ class TestDockerComposeExceptionSpecificity:
     def test_get_current_version_propagates_non_subprocess_error(self):
         """RuntimeError in get_current_version should propagate."""
         deployer = self._make_deployer()
-        deployer.runner.run.side_effect = RuntimeError("unexpected")
+        deployer.runner.run.side_effect = RuntimeError("unexpected")  # ty: ignore[invalid-assignment]
         with pytest.raises(RuntimeError, match="unexpected"):
             deployer.get_current_version()
 
     def test_health_check_propagates_non_subprocess_error(self):
         """RuntimeError in health_check should propagate."""
         deployer = self._make_deployer()
-        deployer.runner.run.side_effect = RuntimeError("unexpected")
+        deployer.runner.run.side_effect = RuntimeError("unexpected")  # ty: ignore[invalid-assignment]
         with pytest.raises(RuntimeError, match="unexpected"):
             deployer.health_check()
 
@@ -40,7 +40,7 @@ class TestDockerComposeExceptionSpecificity:
         import subprocess
 
         deployer = self._make_deployer()
-        deployer.runner.run.side_effect = subprocess.CalledProcessError(1, "docker")
+        deployer.runner.run.side_effect = subprocess.CalledProcessError(1, "docker")  # ty: ignore[invalid-assignment]
         assert deployer.get_current_version() is None
 
     def test_health_check_still_catches_subprocess_error(self):
@@ -48,7 +48,7 @@ class TestDockerComposeExceptionSpecificity:
         import subprocess
 
         deployer = self._make_deployer()
-        deployer.runner.run.side_effect = subprocess.CalledProcessError(1, "docker")
+        deployer.runner.run.side_effect = subprocess.CalledProcessError(1, "docker")  # ty: ignore[invalid-assignment]
         assert deployer.health_check() is False
 
 

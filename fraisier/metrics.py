@@ -18,7 +18,7 @@ except ImportError:
     PROMETHEUS_AVAILABLE = False
 
     # Create dummy classes to prevent errors
-    class Counter:  # type: ignore
+    class Counter:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -28,7 +28,7 @@ except ImportError:
         def inc(self, *args, **kwargs):
             pass
 
-    class Gauge:  # type: ignore
+    class Gauge:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -44,7 +44,7 @@ except ImportError:
         def dec(self, *args, **kwargs):
             pass
 
-    class Histogram:  # type: ignore
+    class Histogram:
         def __init__(self, *args, **kwargs):
             pass
 

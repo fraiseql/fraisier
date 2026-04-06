@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from fraisier.runners import SSHRunner
 
 from ._helpers import console, require_config, resolve_sudo_password
 from .main import main
@@ -19,7 +23,7 @@ def _resolve_server_and_runner(
     server: str | None,
     sudo: bool = False,
     sudo_password: str | None = None,
-) -> tuple[str, object]:
+) -> tuple[str, SSHRunner]:
     """Resolve the target server and build an SSHRunner.
 
     Shared by ``bootstrap`` and ``bootstrap-preflight``.

@@ -7,7 +7,7 @@ Aligns with FraiseQL's PostgreSQL implementation patterns.
 """
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 from psycopg.rows import dict_row
@@ -104,7 +104,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
             converted_query = self._convert_placeholders(query)
 
             async with self._pool.connection() as conn, conn.cursor() as cursor:
-                await cursor.execute(converted_query, params or [])
+                await cursor.execute(cast("Any", converted_query), params or [])
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
         except psycopg.Error as e:  # pragma: no cover
@@ -135,7 +135,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
             converted_query = self._convert_placeholders(query)
 
             async with self._pool.connection() as conn, conn.cursor() as cursor:
-                await cursor.execute(converted_query, params or [])
+                await cursor.execute(cast("Any", converted_query), params or [])
                 rows_affected = cursor.rowcount
                 # For INSERT, try to get RETURNING value
                 if "RETURNING" in query.upper():
@@ -198,7 +198,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                 raise RuntimeError("Not connected to database")
 
             async with self._pool.connection() as conn, conn.cursor() as cursor:
-                await cursor.execute(query, values)
+                await cursor.execute(cast("Any", query), values)
                 result = await cursor.fetchone()
                 if result:
                     inserted_id = (

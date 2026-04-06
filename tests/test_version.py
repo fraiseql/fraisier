@@ -91,6 +91,7 @@ class TestVersionFileIO:
         )
 
         v = read_version(path)
+        assert v is not None
         assert v.version == "1.2.3"
         assert v.commit == "xyz"
 

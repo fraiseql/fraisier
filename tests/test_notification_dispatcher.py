@@ -114,4 +114,4 @@ class TestEnvVarExpansion:
         config = {"on_failure": [{"type": "slack", "webhook_url": "${SLACK_URL}"}]}
         dispatcher = NotificationDispatcher.from_config(config)
         notifier = dispatcher._handlers["failure"][0]
-        assert notifier.webhook_url == "https://hooks.slack.com/real"
+        assert notifier.webhook_url == "https://hooks.slack.com/real"  # ty: ignore[unresolved-attribute]

@@ -13,7 +13,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fraisier.testing._manager import TemplateInfo, TemplateManager, TemplateStatus
 
@@ -34,7 +34,7 @@ def database_fixture(
     project_dir: Path | None = None,
     confiture_config: Path | str | None = None,
     connection_url: str | None = None,
-    scope: str = "session",
+    scope: Literal["session", "package", "module", "class", "function"] = "session",
 ) -> Any:
     """Create a pytest fixture that provides a test database template.
 

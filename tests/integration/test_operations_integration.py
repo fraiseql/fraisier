@@ -24,7 +24,7 @@ class TestCreateDbIntegration:
             assert code == 0, f"createdb failed: {stderr}"
         finally:
             with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
-                conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
+                conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")  # ty: ignore[no-matching-overload]
 
     def test_create_db_with_owner(self, pg_superuser_url):
         from fraisier.dbops.operations import create_db
@@ -49,7 +49,7 @@ class TestCreateDbIntegration:
                 assert row[0] == owner
         finally:
             with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
-                conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
+                conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")  # ty: ignore[no-matching-overload]
 
 
 class TestDropDbIntegration:
@@ -70,6 +70,7 @@ class TestDropDbIntegration:
                 "SELECT count(*) FROM pg_database WHERE datname = %s",
                 (db_name,),
             ).fetchone()
+            assert row is not None
             assert row[0] == 0
 
     def test_drop_nonexistent_db_returns_error(self, pg_superuser_url):

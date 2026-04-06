@@ -61,7 +61,7 @@ def logs(
         console.print(
             f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"
         )
-        raise click.Exit(1)
+        raise SystemExit(1)
 
     # Build unit pattern
     unit_pattern = _resolve_deploy_unit_pattern(config, fraise, environment)

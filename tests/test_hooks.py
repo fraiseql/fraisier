@@ -25,7 +25,7 @@ def _context(phase=HookPhase.BEFORE_DEPLOY, **kwargs):
         "phase": phase,
     }
     defaults.update(kwargs)
-    return HookContext(**defaults)
+    return HookContext(**defaults)  # ty: ignore[invalid-argument-type]
 
 
 class _StubHook:
@@ -191,6 +191,7 @@ class TestBackupHook:
         result = hook.execute(_context())
 
         assert not result.success
+        assert result.error is not None
         assert "pg_dump failed" in result.error
 
     @patch("fraisier.hooks.backup.subprocess.run")
@@ -419,7 +420,7 @@ class TestHookDispatcher:
         }
         runner = build_hook_runner(config)
         hook = runner._hooks[HookPhase.BEFORE_DEPLOY][0]
-        assert hook.database_url == "postgresql://real-host/db"
+        assert hook.database_url == "postgresql://real-host/db"  # ty: ignore[unresolved-attribute]
 
 
 class TestHookConfigValidation:

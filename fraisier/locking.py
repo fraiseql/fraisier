@@ -115,8 +115,8 @@ def deployment_lock(fraise_name: str) -> Generator[None]:
         cfg = get_config().deployment
     except FileNotFoundError:
         # No config file — fall back to file lock
-        with file_deployment_lock(fraise_name) as lp:
-            yield lp  # type: ignore[misc]
+        with file_deployment_lock(fraise_name):
+            yield
             return
 
     if cfg.lock_backend == "database":
@@ -127,7 +127,7 @@ def deployment_lock(fraise_name: str) -> Generator[None]:
             yield
     else:
         with file_deployment_lock(fraise_name, lock_dir=Path(cfg.lock_dir)):
-            yield  # type: ignore[misc]
+            yield
 
 
 class DatabaseDeploymentLock:

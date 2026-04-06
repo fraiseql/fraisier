@@ -253,6 +253,7 @@ class TestStatusFileUpdates:
         status = read_status("myapi", status_dir=status_dir)
         assert status is not None
         assert status.state == "failed"
+        assert status.error_message is not None
         assert "clone failed" in status.error_message
 
     def test_status_file_rolled_back_after_auto_rollback(self, tmp_path):

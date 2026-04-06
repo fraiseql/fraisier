@@ -537,6 +537,7 @@ class TestValidationCheck:
             message="Provider 'docker_compose' not installed",
         )
         assert r.passed is False
+        assert r.message is not None
         assert "not installed" in r.message
 
 

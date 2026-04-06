@@ -67,7 +67,7 @@ class RemoteDeploymentValidator:
         ]:
             result = check()
             if isinstance(result, list):
-                results.extend(result)
+                results.extend(result)  # ty: ignore[invalid-argument-type]
             else:
                 results.append(result)
 

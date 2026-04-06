@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fraisier.deployers.base import DeploymentResult
+    from fraisier.runners import CommandRunner
 
 logger = logging.getLogger("fraisier")
 
@@ -34,6 +35,12 @@ class GitDeployMixin:
     Expects the consuming class to set self.fraise_name and self.environment
     (typically via BaseDeployer.__init__).
     """
+
+    # These attributes are provided by BaseDeployer (the consuming class).
+    fraise_name: str
+    environment: str
+    runner: CommandRunner
+    config: dict[str, Any]
 
     def _init_git_deploy(self, config: dict[str, Any]) -> None:
         """Initialize git deploy fields from config."""
@@ -91,6 +98,9 @@ class GitDeployMixin:
         """
         if self.clone_url:
             clone_bare_repo(self.clone_url, self.bare_repo)
+        assert self.app_path is not None, (
+            "app_path must be set before calling _git_pull"
+        )
         old_sha, new_sha = fetch_and_checkout(
             self.bare_repo, Path(self.app_path), self.branch
         )
@@ -146,6 +156,9 @@ class GitDeployMixin:
     ) -> None:
         """Rollback worktree to *target* SHA via bare repo checkout."""
         r = runner or self.runner
+        assert self.app_path is not None, (
+            "app_path must be set before calling _git_rollback"
+        )
         worktree = Path(self.app_path)
         r.run(
             [

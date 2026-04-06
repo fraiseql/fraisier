@@ -195,7 +195,10 @@ async def _run_deployment(
         # Get deployer
         from .runners import runner_from_config
 
-        runner = runner_from_config(deploy_config.get("ssh"))
+        ssh_config = deploy_config.get("ssh")
+        runner = runner_from_config(
+            ssh_config if isinstance(ssh_config, dict) else None
+        )
 
         if fraise_type == "api":
             from .deployers.api import APIDeployer

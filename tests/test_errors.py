@@ -381,6 +381,7 @@ class TestMigrationErrors:
             "Test",
             db_error="unique constraint violation",
         )
+        assert error2.classification is not None
         assert error2.classification.error_type == "constraint"
         assert error2.classification.recoverable is False
 

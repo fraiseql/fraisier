@@ -175,6 +175,7 @@ class TestExecuteDeploymentRequest:
 
         result = execute_deployment_request(request)
         assert result.success is False
+        assert result.error_message is not None
         assert "Project 'unknown' not found" in result.error_message
         assert "/opt/fraisier/fraises.yaml" in result.error_message
         assert "Available projects: api, web, worker" in result.error_message
@@ -205,6 +206,7 @@ class TestExecuteDeploymentRequest:
 
         result = execute_deployment_request(request)
         assert result.success is False
+        assert result.error_message is not None
         assert "FRAISIER_CONFIG environment variable is not set" in result.error_message
         assert "Searched locations:" in result.error_message
         assert "systemd" in result.error_message
@@ -339,6 +341,7 @@ class TestExecuteDeploymentRequest:
         assert result.success is False
         assert result.status == "failed"
         assert result.message == "Wrong user"
+        assert result.error_message is not None
         assert "expected_deploy_user" in result.error_message
         assert "sudo -u expected_deploy_user" in result.error_message
 
@@ -473,6 +476,7 @@ class TestDeployDaemonCommand:
 
             assert result.success is True
             assert result.status == "dry_run_no_changes"
+            assert result.message is not None
             assert "Already up to date" in result.message
             assert result.deployed_version == "abc123"
 
@@ -517,4 +521,5 @@ class TestDeployDaemonCommand:
 
             assert result.success is True
             assert result.status == "dry_run_plan"
+            assert result.message is not None
             assert "Would deploy abc123 -> def456" in result.message

@@ -108,7 +108,7 @@ class TestRendering:
             "timestamp": "2026-03-24T10:00:00+00:00",
         }
         defaults.update(kwargs)
-        return DeployEvent(**defaults)
+        return DeployEvent(**defaults)  # ty: ignore[invalid-argument-type]
 
     def test_render_issue_body_failure(self):
         event = self._make_event()

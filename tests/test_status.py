@@ -255,6 +255,7 @@ class TestFailedStatusDetails:
 
         assert loaded is not None
         assert loaded.last_error == last_error
+        assert loaded.last_error is not None
         assert loaded.last_error["timestamp"] == "2026-03-22T10:05:00+00:00"
 
 

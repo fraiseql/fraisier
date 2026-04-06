@@ -160,6 +160,7 @@ class TestExecHealthChecker:
         checker = ExecHealthChecker("sleep 10")
         result = checker.check(timeout=0.1)
         assert not result.success
+        assert result.message is not None
         assert "timeout" in result.message.lower()
 
 

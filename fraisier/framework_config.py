@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 try:
     import tomllib
 except ImportError:
-    import tomli as tomllib
+    import tomli as tomllib  # ty: ignore[unresolved-import]
 
 
 class FrameworkConfig:

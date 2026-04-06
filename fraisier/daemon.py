@@ -162,7 +162,8 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
             )
 
             # Get deployer to show what would happen
-            deployer = _get_deployer(fraise_config.get("type"), fraise_config)
+            fraise_type: str = fraise_config.get("type") or ""
+            deployer = _get_deployer(fraise_type, fraise_config)
 
             if deployer is None:
                 raise ValueError(f"Unknown fraise type '{fraise_config.get('type')}'")
@@ -209,7 +210,8 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
             pass  # This will be handled by deployer logic
 
         # Get deployer (reuse existing logic)
-        deployer = _get_deployer(fraise_config.get("type"), fraise_config)
+        fraise_type_str: str = fraise_config.get("type") or ""
+        deployer = _get_deployer(fraise_type_str, fraise_config)
 
         if deployer is None:
             raise ValueError(f"Unknown fraise type '{fraise_config.get('type')}'")

@@ -127,6 +127,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
     def _sync_config_if_needed(self) -> None:
         """Sync fraises.yaml from git checkout and regenerate scaffold if changed."""
+        if not self.app_path:
+            return
         fraisier_config_env = os.environ.get("FRAISIER_CONFIG")
         opt_config = Path(fraisier_config_env or "/opt/fraisier/fraises.yaml")
         app_config = Path(self.app_path) / "fraises.yaml"
@@ -601,7 +603,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
     def _rollback_database(
         self, current_version: str | None, target: str
-    ) -> DeploymentResult | None:
+    ) -> DeploymentResult:
         """Roll back database migrations. Returns failure result or None."""
         strategy, confiture_config, migrations_dir, database_url = (
             self._resolve_strategy()

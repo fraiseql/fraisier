@@ -77,6 +77,7 @@ class TestValidationRunner:
         runner = ValidationRunner(config)
         result = runner._check_config_valid()
         assert result.passed is False
+        assert result.message is not None
         assert "No fraises" in result.message
 
     @patch("fraisier.validation.pwd")
@@ -98,6 +99,7 @@ class TestValidationRunner:
         results = runner._check_deploy_user()
         failed = [r for r in results if not r.passed]
         assert len(failed) >= 1
+        assert failed[0].message is not None
         assert "ghost" in failed[0].message
 
     def test_fraises_have_environments_pass(self):
@@ -119,6 +121,7 @@ class TestValidationRunner:
         runner = ValidationRunner(config)
         result = runner._check_fraises_have_environments()
         assert result.passed is False
+        assert result.message is not None
         assert "etl" in result.message
 
     @patch("fraisier.validation.pwd")

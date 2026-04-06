@@ -22,7 +22,7 @@ def _event(**kwargs) -> DeployEvent:
         "timestamp": "2026-01-01T00:00:00+00:00",
     }
     defaults.update(kwargs)
-    return DeployEvent(**defaults)
+    return DeployEvent(**defaults)  # ty: ignore[invalid-argument-type]
 
 
 class TestSlackNotifier:

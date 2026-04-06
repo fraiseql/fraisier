@@ -69,6 +69,6 @@ class TestServiceNameValidation:
             else:
                 await method("valid-web_service.1")
         except ValueError:
-            pytest.fail(f"{method_name} raised ValueError for valid service name")
+            pytest.fail(f"{method_name} raised ValueError for valid service name")  # ty: ignore[invalid-argument-type]
         except Exception:
             pass  # Other errors (json parse, etc.) are fine

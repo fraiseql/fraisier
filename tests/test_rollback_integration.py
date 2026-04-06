@@ -25,7 +25,7 @@ def _make_deployer(
     Uses a real LocalRunner so git commands execute for real.
     Only systemctl and health checks need mocking.
     """
-    config = {
+    config: dict[str, object] = {
         "fraise_name": "test_api",
         "environment": "production",
         "app_path": str(env.worktree),
@@ -189,6 +189,7 @@ class TestDeployRollbackIntegration:
 
         assert not result.success
         assert result.status == DeploymentStatus.ROLLBACK_FAILED
+        assert result.error_message is not None
         assert "manual intervention" in result.error_message.lower()
 
         # Incident file should have been written

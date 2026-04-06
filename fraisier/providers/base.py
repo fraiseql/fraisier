@@ -66,13 +66,15 @@ class DeploymentProvider(ABC):
     - Logging and error handling
     """
 
+    name: str
+
     def __init__(self, config: "dict[str, Any] | ProviderConfig"):
         """Initialize provider with configuration.
 
         Args:
             config: Provider-specific configuration (dict or ProviderConfig)
         """
-        if hasattr(config, "to_provider_dict"):
+        if isinstance(config, ProviderConfig):
             self.config = config.to_provider_dict()
         else:
             self.config = config

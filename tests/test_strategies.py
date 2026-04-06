@@ -208,7 +208,7 @@ def _make_config(**overrides) -> RestoreConfig:
         "backup_dir": Path("/backup/production"),
     }
     defaults.update(overrides)
-    return RestoreConfig(**defaults)
+    return RestoreConfig(**defaults)  # ty: ignore[invalid-argument-type]
 
 
 class TestRestoreMigrateStrategy:

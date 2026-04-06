@@ -261,7 +261,7 @@ class TestHealthCheckPollingStrategies:
             },
         )
 
-        docker_provider = DockerComposeProvider(provider)
+        docker_provider = DockerComposeProvider(provider)  # ty: ignore[invalid-argument-type]
 
         # Mock health check to simulate startup delay
         check_count = [0]
@@ -298,7 +298,7 @@ class TestHealthCheckPollingStrategies:
             },
         )
 
-        docker_provider = DockerComposeProvider(provider)
+        docker_provider = DockerComposeProvider(provider)  # ty: ignore[invalid-argument-type]
 
         # Mock health check to always fail
         def health_check_mock(service_name):
@@ -337,7 +337,7 @@ class TestHealthCheckPollingStrategies:
             },
         )
 
-        docker_provider = DockerComposeProvider(provider)
+        docker_provider = DockerComposeProvider(provider)  # ty: ignore[invalid-argument-type]
 
         # Mock HTTP health check to fail, then TCP to succeed
         with patch.object(docker_provider, "health_check") as mock_check:
@@ -347,8 +347,8 @@ class TestHealthCheckPollingStrategies:
             assert docker_provider.health_check("api") is False
 
             # Switch to different check type (simulated)
-            docker_provider.health_check_type = "tcp"
-            docker_provider.health_check_port = 8000
+            docker_provider.health_check_type = "tcp"  # ty: ignore[unresolved-attribute]
+            docker_provider.health_check_port = 8000  # ty: ignore[unresolved-attribute]
 
             # Second attempt succeeds
             assert docker_provider.health_check("api") is True
@@ -397,7 +397,7 @@ class TestProviderConfigurationManagement:
 
         # Should have same configuration
         assert provider1.name == provider2.name
-        assert provider1.ssh_host == provider2.ssh_host
+        assert provider1.ssh_host == provider2.ssh_host  # ty: ignore[unresolved-attribute]
 
     def test_invalid_provider_type_raises_error(self):
         """Test that requesting unknown provider type raises error."""

@@ -24,7 +24,7 @@ def _failure_event(**kwargs) -> DeployEvent:
         "timestamp": "2026-01-01T00:00:00+00:00",
     }
     defaults.update(kwargs)
-    return DeployEvent(**defaults)
+    return DeployEvent(**defaults)  # ty: ignore[invalid-argument-type]
 
 
 def _success_event(**kwargs) -> DeployEvent:
@@ -37,7 +37,7 @@ def _success_event(**kwargs) -> DeployEvent:
         "timestamp": "2026-01-01T00:00:00+00:00",
     }
     defaults.update(kwargs)
-    return DeployEvent(**defaults)
+    return DeployEvent(**defaults)  # ty: ignore[invalid-argument-type]
 
 
 class TestGitIssueNotifierDedup:

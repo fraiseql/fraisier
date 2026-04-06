@@ -258,7 +258,7 @@ class MigrationError(DatabaseError):
             self.classification = classify_migration_error(db_error, direction or "up")
 
         # Build context dict with migration-specific fields
-        migration_context = {
+        migration_context: dict[str, object] = {
             "migration_file": migration_file,
             "direction": direction,
             "step": step,

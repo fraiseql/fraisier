@@ -41,6 +41,7 @@ class GiteaProvider(GitProvider):
         # Remove prefix if present
         signature = signature.removeprefix("sha256=")
 
+        assert self.webhook_secret is not None
         expected = hmac.new(
             self.webhook_secret.encode(),
             payload,

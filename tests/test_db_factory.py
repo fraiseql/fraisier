@@ -69,7 +69,7 @@ class TestSetDefaultAdapter:
     @pytest.mark.asyncio
     async def test_set_and_clear_default_adapter(self):
         mock_adapter = object()
-        await set_default_adapter(mock_adapter)
+        await set_default_adapter(mock_adapter)  # ty: ignore[invalid-argument-type]
 
         import fraisier.db.factory as factory_module
 

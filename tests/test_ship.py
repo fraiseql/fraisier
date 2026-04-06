@@ -15,7 +15,7 @@ def _setup_project(tmp_path, version="1.0.0", webhook_secret=None):
     pp = tmp_path / "pyproject.toml"
     pp.write_text(f'[project]\nname = "myapp"\nversion = "{version}"\n')
 
-    config = {
+    config: dict[str, object] = {
         "fraises": {
             "my_api": {
                 "type": "api",
@@ -119,7 +119,7 @@ class TestShipCommand:
         # First commit fails (pre-commit modified files), retry succeeds
         def side_effect(cmd, **kwargs):
             if cmd[:2] == ["git", "commit"] and not hasattr(side_effect, "retried"):
-                side_effect.retried = True
+                side_effect.retried = True  # ty: ignore[unresolved-attribute]
                 raise subprocess.CalledProcessError(1, cmd)
             # git diff --quiet returns 1 = dirty (files were modified by hook)
             if cmd == ["git", "diff", "--quiet"]:

@@ -194,7 +194,7 @@ def pg_container():
     try:
         from testcontainers.postgres import PostgresContainer
     except ImportError:
-        pytest.skip("testcontainers not installed")
+        pytest.skip("testcontainers not installed")  # ty: ignore[too-many-positional-arguments]
 
     with PostgresContainer("postgres:16", driver=None) as pg:
         yield pg
@@ -213,19 +213,19 @@ def pg_test_db(pg_superuser_url):
 
     db_name = f"test_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
-        conn.execute(f"CREATE DATABASE {db_name}")
+        conn.execute(f"CREATE DATABASE {db_name}")  # ty: ignore[no-matching-overload]
 
     test_url = replace_db_name(pg_superuser_url, db_name)
     yield test_url, db_name
 
     with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
         # Terminate any lingering connections before dropping
-        conn.execute(
+        conn.execute(  # ty: ignore[no-matching-overload]
             "SELECT pg_terminate_backend(pid) "
             "FROM pg_stat_activity "
             f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
         )
-        conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
+        conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")  # ty: ignore[no-matching-overload]
 
 
 @pytest.fixture

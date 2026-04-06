@@ -43,6 +43,7 @@ fraises:
 """)
         config = FraisierConfig(str(cfg_file))
         env = config.get_fraise_environment("my_api", "production")
+        assert env is not None
         deployer = APIDeployer(env, runner=MagicMock())
         assert deployer.lock_timeout == 300
 
@@ -62,6 +63,7 @@ fraises:
 """)
         config = FraisierConfig(str(cfg_file))
         env = config.get_fraise_environment("my_api", "production")
+        assert env is not None
         deployer = APIDeployer(env, runner=MagicMock())
         assert deployer.lock_timeout == 60
 

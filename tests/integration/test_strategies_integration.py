@@ -73,6 +73,7 @@ class TestMigrateStrategyIntegration:
                 "SELECT count(*) FROM information_schema.tables "
                 "WHERE table_schema = 'public' AND table_name = 'tb_example'"
             ).fetchone()
+            assert row is not None
             assert row[0] == 0
 
 
@@ -97,6 +98,7 @@ class TestRebuildStrategyIntegration:
                 "SELECT count(*) FROM information_schema.tables "
                 "WHERE table_schema = 'public' AND table_name = 'tb_example'"
             ).fetchone()
+            assert row is not None
             assert row[0] == 1
 
     def test_rebuild_is_repeatable(self, confiture_project, pg_superuser_url):
@@ -128,6 +130,7 @@ class TestRebuildStrategyIntegration:
         # Data from before rebuild should be gone
         with psycopg.connect(test_url) as conn:
             row = conn.execute("SELECT count(*) FROM tb_example").fetchone()
+            assert row is not None
             assert row[0] == 0
 
     def test_rollback_calls_execute(self, confiture_project, pg_superuser_url):
@@ -162,6 +165,7 @@ class TestRebuildStrategyIntegration:
                     "SELECT count(*) FROM pg_roles WHERE rolname = %s",
                     (role,),
                 ).fetchone()
+                assert row is not None
                 assert row[0] == 1, f"Role {role} was not created"
 
             # Clean up roles after test

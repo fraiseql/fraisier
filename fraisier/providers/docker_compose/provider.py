@@ -189,7 +189,7 @@ class DockerComposeProvider(DeploymentProvider):
                 ) from e
 
             return (
-                process.returncode,
+                process.returncode if process.returncode is not None else -1,
                 stdout_data.decode(),
                 stderr_data.decode(),
             )

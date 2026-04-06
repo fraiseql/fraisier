@@ -6,6 +6,10 @@ import os
 import socket
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import builtins
 
 import click
 from rich.table import Table
@@ -225,6 +229,7 @@ def status(
         return
 
     # Single fraise view: existing behavior
+    assert environment is not None  # guaranteed by the check above
     _show_single_status(config, fraise, environment)
 
 
@@ -1208,9 +1213,9 @@ def _build_diagnostic_issues(
     socket_path: Path,
     ctx: click.Context,
     fraise: str,
-) -> tuple[list[str], list[dict]]:
-    issues_found: list[str] = []
-    suggestions: list[dict] = []
+) -> tuple[builtins.list[str], builtins.list[dict]]:
+    issues_found: builtins.list[str] = []
+    suggestions: builtins.list[dict] = []
 
     if not socket_check["can_connect"]:
         issues_found.append("socket_connectivity")
@@ -1315,8 +1320,8 @@ def _output_diagnose_results(
     environment: str,
     diagnostic_results: dict,
     status_check: dict,
-    issues_found: list[str],
-    suggestions: list[dict],
+    issues_found: builtins.list[str],
+    suggestions: builtins.list[dict],
 ) -> None:
     if json_flag:
         import json as json_module
@@ -1364,7 +1369,7 @@ def _output_diagnose_results(
 
 def _diagnose_socket_connectivity(socket_path: Path) -> dict:
     """Test if socket is accepting connections."""
-    result = {
+    result: dict[str, object] = {
         "socket_exists": socket_path.exists(),
         "can_connect": False,
         "error": None,
@@ -1389,7 +1394,7 @@ def _diagnose_socket_connectivity(socket_path: Path) -> dict:
 
 def _diagnose_deployment_status(status_path: Path) -> dict:
     """Analyze recent deployment status."""
-    result = {
+    result: dict[str, object] = {
         "status_file_exists": status_path.exists(),
         "status": None,
         "deployed_version": None,

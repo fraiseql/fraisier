@@ -33,6 +33,7 @@ class GitHubProvider(GitProvider):
         if not signature:
             return False
 
+        assert self.webhook_secret is not None
         expected = (
             "sha256="
             + hmac.new(

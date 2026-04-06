@@ -18,7 +18,7 @@ def _make_manager(**kwargs):
         "connection_url": "postgresql://localhost/testdb",
     }
     defaults.update(kwargs)
-    return TemplateManager(**defaults)
+    return TemplateManager(**defaults)  # ty: ignore[invalid-argument-type]
 
 
 class TestEnsureTemplate:

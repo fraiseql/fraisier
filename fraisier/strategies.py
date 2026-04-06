@@ -1275,7 +1275,8 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             with Migrator.from_config(
                 env, migrations_dir=project_dir / "db" / "migrations"
             ) as m:
-                applied_versions = m.get_applied_versions()
+                status = m.status()
+                applied_versions = status.applied
                 return applied_versions[-1] if applied_versions else None
 
         except Exception as e:
@@ -1292,17 +1293,13 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             with Migrator.from_config(
                 env, migrations_dir=project_dir / "db" / "migrations"
             ) as m:
-                pending_files = m.find_pending()
-                if pending_files:
-                    # Extract version from filename
-                    # (format: YYYYMMDDHHMMSS_description.up.sql)
-                    latest_file = max(pending_files)
-                    # Version is the timestamp prefix
-                    version = latest_file.name.split("_", 1)[0]
-                    return version
+                status = m.status()
+                pending_versions = status.pending
+                if pending_versions:
+                    return max(pending_versions)
 
                 # If no pending, latest is the current
-                applied_versions = m.get_applied_versions()
+                applied_versions = status.applied
                 return applied_versions[-1] if applied_versions else None
 
         except Exception as e:
@@ -1347,7 +1344,11 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             )
 
     def migrate_down(
-        self, project_dir: Path, target: str, database_url: str | None = None
+        self,
+        project_dir: Path,
+        target: str,
+        database_url: str | None = None,
+        steps: int = 1,
     ) -> MigrationResult:
         """Rollback Confiture migrations."""
         from fraisier.dbops.confiture import migrate_down
@@ -1358,7 +1359,10 @@ class ConfitureMigrateStrategy(MigrationStrategy):
 
             # Run rollback
             result = migrate_down(
-                config_path, migrations_dir=migrations_dir, database_url=database_url
+                config_path,
+                migrations_dir=migrations_dir,
+                steps=steps,
+                database_url=database_url,
             )
 
             return MigrationResult(
@@ -1384,16 +1388,21 @@ class ConfitureMigrateStrategy(MigrationStrategy):
             with Migrator.from_config(
                 env, migrations_dir=project_dir / "db" / "migrations"
             ) as m:
-                applied = m.get_applied_migrations_with_timestamps()
+                status = m.status()
+                applied_migrations = [
+                    mi for mi in status.migrations if mi.status == "applied"
+                ]
                 # Convert to our format
                 history = [
                     {
-                        "version": migration["version"],
+                        "version": mi.version,
                         "applied": True,
-                        "description": (f"Confiture migration {migration['version']}"),
-                        "timestamp": migration.get("applied_at"),
+                        "description": f"Confiture migration {mi.version}",
+                        "timestamp": (
+                            mi.applied_at.isoformat() if mi.applied_at else None
+                        ),
                     }
-                    for migration in applied[-limit:]
+                    for mi in applied_migrations[-limit:]
                 ]
                 return history
 

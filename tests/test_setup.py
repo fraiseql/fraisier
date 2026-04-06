@@ -452,7 +452,7 @@ class TestExecute:
         setup = ServerSetup(config, runner)
 
         with patch.object(setup._renderer, "render"):
-            setup._write_env_file = lambda: None
+            setup._write_env_file = lambda: None  # ty: ignore[invalid-assignment]
             results = setup.execute()
 
         assert len(results) > 0
@@ -465,7 +465,7 @@ class TestExecute:
         setup = ServerSetup(config, runner)
 
         with patch.object(setup._renderer, "render"):
-            setup._write_env_file = lambda: None
+            setup._write_env_file = lambda: None  # ty: ignore[invalid-assignment]
             setup.execute()
 
         mkdir_cmds = [c for c in runner.calls if "mkdir" in c]
@@ -477,7 +477,7 @@ class TestExecute:
         setup = ServerSetup(config, runner)
 
         with patch.object(setup._renderer, "render"):
-            setup._write_env_file = lambda: None
+            setup._write_env_file = lambda: None  # ty: ignore[invalid-assignment]
             results = setup.execute()
 
         failed = [(a, ok) for a, ok in results if not ok]

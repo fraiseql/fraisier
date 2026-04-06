@@ -68,7 +68,7 @@ class ValidationRunner:
         for check in basic_checks:
             outcome = check()
             if isinstance(outcome, list):
-                results.extend(outcome)
+                results.extend(outcome)  # ty: ignore[invalid-argument-type]
             else:
                 results.append(outcome)
         return results
@@ -530,7 +530,7 @@ class DeploymentReadinessValidator:
         for check in checks:
             result = check()
             if isinstance(result, list):
-                results.extend(result)
+                results.extend(result)  # ty: ignore[invalid-argument-type]
             else:
                 results.append(result)
 

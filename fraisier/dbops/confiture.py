@@ -246,6 +246,9 @@ def dry_run_execute(
             if env.migration.view_helpers == "auto":
                 from confiture.core.view_manager import ViewManager
 
+                assert m._conn is not None, (
+                    "Connection must be available inside context"
+                )
                 vm = ViewManager(m._conn)
                 if not vm.helpers_installed():
                     vm.install_helpers()
@@ -322,6 +325,7 @@ def migrate_up(
         if env.migration.view_helpers == "auto":
             from confiture.core.view_manager import ViewManager
 
+            assert m._conn is not None, "Connection must be available inside context"
             vm = ViewManager(m._conn)
             if not vm.helpers_installed():
                 vm.install_helpers()

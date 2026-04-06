@@ -42,6 +42,7 @@ class TestGitHubIssueClient:
         }
         client = GitIssueClient("github", "tok", "owner/repo")
         result = client.find_open_issue("deploy failure")
+        assert result is not None
         assert result["number"] == 7
 
     def test_find_open_issue_none(self, mock_httpx):
@@ -98,6 +99,7 @@ class TestGitLabIssueClient:
         ]
         client = GitIssueClient("gitlab", "tok", "grp/repo")
         result = client.find_open_issue("deploy")
+        assert result is not None
         assert result["iid"] == 3
 
 
@@ -137,6 +139,7 @@ class TestBitbucketIssueClient:
         }
         client = GitIssueClient("bitbucket", "tok", "owner/repo")
         result = client.find_open_issue("deploy")
+        assert result is not None
         assert result["id"] == 5
 
 

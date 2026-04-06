@@ -28,7 +28,7 @@ class DeploymentLockStore:
         """
 
         # Convert datetime object to ISO format string if needed
-        if hasattr(expires_at, "isoformat"):
+        if isinstance(expires_at, datetime):
             expires_at_str = expires_at.isoformat()
         else:
             expires_at_str = expires_at

@@ -191,7 +191,7 @@ def test_install(ctx: click.Context, fraise: str, environment: str) -> None:
         )
         raise SystemExit(1)
 
-    fraise_type = fraise_config.get("type")
+    fraise_type = fraise_config.get("type") or ""
     deployer = _get_deployer(fraise_type, fraise_config)
 
     if deployer is None:

@@ -45,7 +45,7 @@ def pg_url():
     """Get PostgreSQL URL, skip if not available."""
     url = os.getenv("FRAISIER_TEST_PG_URL")
     if not url:
-        pytest.skip("FRAISIER_TEST_PG_URL not set — skipping integration test")
+        pytest.skip("FRAISIER_TEST_PG_URL not set — skipping integration test")  # ty: ignore[too-many-positional-arguments]
     return url
 
 
@@ -63,7 +63,7 @@ def migration_env(tmp_path, pg_url):
             cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
             tables = [row[0] for row in cur.fetchall()]
             for table in tables:
-                cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+                cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')  # ty: ignore[no-matching-overload]
 
     migrations_dir = tmp_path / "migrations"
     config_path = _write_confiture_config(tmp_path, pg_url)
