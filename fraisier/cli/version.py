@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from ._helpers import console
 from .main import main
+
+if TYPE_CHECKING:
+    from fraisier.config import ShipConfig
 
 
 def _get_systemd_version() -> str:
@@ -218,14 +222,14 @@ def ship(
         )
         raise SystemExit(1)
 
-    from fraisier.versioning import bump_version, parse_semver
+    from fraisier.versioning import bump_version
 
     pyproject_path = Path(pyproject)
     current_version = _read_current_version(pyproject_path)
 
     # Resolve ship config (may be None if no fraises.yaml)
     config = ctx.obj.get("config") if ctx.obj else None
-    ship_config = config.ship if config else None
+    ship_config: ShipConfig | None = config.ship if config else None
     has_pipeline = bool(ship_config and ship_config.checks and not skip_checks)
 
     if no_bump:
@@ -255,7 +259,7 @@ def ship(
         )
         return
 
-    new = _calc_new_version(current_version, bump_type, parse_semver)
+    new = _calc_new_version(current_version, bump_type)
 
     if dry_run:
         _ship_dry_run(
@@ -272,6 +276,7 @@ def ship(
         )
         return
 
+    assert bump_type is not None  # guaranteed by the CLI argument validation above
     info = bump_version(pyproject_path, bump_type)
     console.print(f"[green]Version bumped:[/green] {current_version} -> {info.version}")
 
@@ -290,7 +295,7 @@ def ship(
 
 def _ship_commit_push_deploy(
     version: str,
-    ship_config: object,
+    ship_config: ShipConfig | None,
     has_pipeline: bool,
     create_pr: bool,
     pr_base: str | None,
@@ -329,12 +334,10 @@ def _read_current_version(pyproject_path: Path) -> str:
         raise SystemExit(1) from None
 
 
-def _calc_new_version(
-    current_version: str,
-    bump_type: str | None,
-    parse_semver: object,
-) -> str:
+def _calc_new_version(current_version: str, bump_type: str | None) -> str:
     """Calculate the new version string."""
+    from fraisier.versioning import parse_semver
+
     major, minor, patch_v = parse_semver(current_version)
     if bump_type == "major":
         return f"{major + 1}.0.0"
@@ -348,7 +351,7 @@ def _ship_dry_run(
     new: str,
     bump_type: str | None,
     pyproject_path: Path,
-    ship_config: object,
+    ship_config: ShipConfig | None,
     has_pipeline: bool,
     create_pr: bool,
     pr_base: str | None,
@@ -360,6 +363,7 @@ def _ship_dry_run(
     console.print(f"  Bump: {current_version} -> {new} ({bump_type})")
     console.print(f"  File: {pyproject_path}")
     if has_pipeline:
+        assert ship_config is not None
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
             console.print(f"    [{c.phase}] {c.name}")
@@ -374,7 +378,7 @@ def _ship_dry_run(
 def _ship_dry_run_no_bump(
     current_version: str,
     pyproject_path: Path,
-    ship_config: object,
+    ship_config: ShipConfig | None,
     has_pipeline: bool,
     create_pr: bool,
     pr_base: str | None,
@@ -386,6 +390,7 @@ def _ship_dry_run_no_bump(
     console.print(f"  Version: {current_version} (unchanged)")
     console.print(f"  File: {pyproject_path}")
     if has_pipeline:
+        assert ship_config is not None
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
             console.print(f"    [{c.phase}] {c.name}")
@@ -410,7 +415,7 @@ def _print_deploy_note(bare_repo_skip: Path | None) -> None:
 def _ship_create_pr(
     version: str,
     pr_base: str | None,
-    ship_config: object,
+    ship_config: ShipConfig | None,
 ) -> None:
     """Create a PR after push."""
     base = pr_base or (ship_config.pr_base if ship_config else None)
@@ -444,13 +449,14 @@ def _git_push() -> None:
 
 def _ship_with_pipeline(
     version: str,
-    ship_config: object,
+    ship_config: ShipConfig | None,
 ) -> None:
     """Ship using the check pipeline (--no-verify commit)."""
     import subprocess
 
     from fraisier.ship.pipeline import ShipPipeline
 
+    assert ship_config is not None  # only called when has_pipeline is True
     cwd = Path.cwd()
     pipeline = ShipPipeline(ship_config, cwd, console)
 
