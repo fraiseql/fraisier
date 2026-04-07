@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **fraisier health table lacks Environment column (#132)** — The table merged fraise name and environment into a single Service column. Added a dedicated Environment column for clarity, with Service showing only the fraise name.
 
+- **fraisier health does not display migration number** — Added support for parsing and displaying migration information from health endpoint responses. Added `include_migration` config option and Migration column in health table.
+
 ## [0.5.24] - 2026-04-07
 
 ### Added

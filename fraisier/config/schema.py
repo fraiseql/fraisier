@@ -420,6 +420,7 @@ class HealthResponseConfig:
     include_database: bool = False
     include_environment: bool = False
     include_commit: bool = False
+    include_migration: bool = False
 
 
 @dataclass

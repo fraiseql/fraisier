@@ -87,6 +87,7 @@ health:
     include_database: false
     include_environment: false
     include_commit: false
+    include_migration: false
 """
         )
         from fraisier.config import FraisierConfig

@@ -87,6 +87,7 @@ def health(
         table.add_column("URL", style="dim")
         table.add_column("Status")
         table.add_column("Response", style="yellow")
+        table.add_column("Migration", style="dim")
 
         for svc_name, svc in result.services.items():
             svc_color = "green" if svc.status == "healthy" else "red"
@@ -97,6 +98,7 @@ def health(
                 svc.url,
                 f"[{svc_color}]{svc.status}[/{svc_color}]",
                 f"{svc.response_time_ms:.1f}ms",
+                svc.migration or "",
             )
 
         console.print(table)

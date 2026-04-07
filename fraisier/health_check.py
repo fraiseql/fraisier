@@ -10,6 +10,7 @@ Provides enhanced health checking capabilities:
 """
 
 import asyncio
+import json
 import logging
 import shlex
 import subprocess
@@ -668,6 +669,7 @@ class ServiceHealthResult:
     status: str  # "healthy" | "unhealthy"
     response_time_ms: float
     version: str | None = None
+    migration: str | None = None
 
 
 @dataclass
@@ -696,6 +698,10 @@ class AggregateHealthResult:
                 response_config is None or response_config.include_version
             ) and svc.version is not None:
                 svc_data["version"] = svc.version
+            if (
+                response_config is None or response_config.include_migration
+            ) and svc.migration is not None:
+                svc_data["migration"] = svc.migration
             services_dict[svc_name] = svc_data
 
         result["services"] = services_dict
@@ -739,11 +745,23 @@ class AggregateHealthChecker:
                 response = urllib.request.urlopen(url, timeout=5.0)
                 duration_ms = (time.time() - start) * 1000
                 if response.status < 400:
+                    # Parse response for additional data
+                    version = None
+                    migration = None
+                    try:
+                        data = json.loads(response.read().decode("utf-8"))
+                        version = data.get("version")
+                        migration = data.get("migration")
+                    except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
+                        pass  # Ignore parsing errors, keep None
+
                     return ServiceHealthResult(
                         name=name,
                         url=base_url,
                         status="healthy",
                         response_time_ms=round(duration_ms, 1),
+                        version=version,
+                        migration=migration,
                     )
             except (urllib.error.URLError, OSError, TimeoutError, ValueError):
                 continue
