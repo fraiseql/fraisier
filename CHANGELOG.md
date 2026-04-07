@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.21] - 2026-04-07
+## [0.5.22] - 2026-04-07
 
 ### Added
 
@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `restore_migrate` strategy and generates correct `fraisier db restore` commands.
   When running `fraisier scaffold-install --apply` on existing servers, the broken service
   unit is automatically replaced with the corrected one.
+  Conditionally rendered only when `restore_migrate` is configured to avoid invalid
+  systemd units in configs without staging restore.
 
 - **CLI consistency** — All fraise database commands now use positional `ENVIRONMENT`
   arguments instead of flags (e.g., `fraisier db restore api staging` instead of
