@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
 import click
+from rich.console import Console
 from rich.table import Table
 
 from ._helpers import console
@@ -18,12 +21,19 @@ from .main import main
     is_flag=True,
     help="Wait for all services to be healthy",
 )
+@click.option(
+    "--width",
+    type=int,
+    default=None,
+    help="Table width in characters (default: terminal width)",
+)
 @click.pass_context
 def health(
     ctx: click.Context,
     env: str | None,
     as_json: bool,
     wait: bool,  # noqa: ARG001
+    width: int | None,
 ) -> None:
     """Check health of all services.
 
@@ -32,6 +42,7 @@ def health(
         fraisier health
         fraisier health --json
         fraisier health --env production
+        fraisier health --width 200
     """
     from fraisier.health_check import AggregateHealthChecker
 
@@ -80,25 +91,33 @@ def health(
         return
 
     # Rich table output
+    try:
+        terminal_width = width or os.get_terminal_size().columns
+    except OSError:
+        terminal_width = width or 120
+
+    no_color = bool(os.environ.get("NO_COLOR"))
+    table_console = Console(width=terminal_width, no_color=no_color)
+
     status_color = {
         "healthy": "green",
         "degraded": "yellow",
         "unhealthy": "red",
     }
     color = status_color.get(result.status, "white")
-    console.print(
+    table_console.print(
         f"\n[bold]Aggregate Status:[/bold] [{color}]{result.status}[/{color}]"
     )
 
     if result.services:
-        table = Table(title="Service Health")
-        table.add_column("Service", style="cyan")
-        table.add_column("Environment", style="cyan")
+        table = Table(title="Service Health", expand=True)
+        table.add_column("Service", style="cyan", no_wrap=True)
+        table.add_column("Environment", style="cyan", no_wrap=True)
         table.add_column("URL", style="dim")
-        table.add_column("Status")
-        table.add_column("Response", style="yellow")
-        table.add_column("Version", style="dim")
-        table.add_column("Migration", style="dim")
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Response", style="yellow", no_wrap=True)
+        table.add_column("Version", style="dim", no_wrap=True)
+        table.add_column("Migration", style="dim", no_wrap=True)
 
         for svc_name, svc in result.services.items():
             svc_color = "green" if svc.status == "healthy" else "red"
@@ -113,9 +132,9 @@ def health(
                 svc.migration or "",
             )
 
-        console.print(table)
+        table_console.print(table)
 
-    console.print(f"[dim]Total: {result.response_time_ms:.1f}ms[/dim]\n")
+    table_console.print(f"[dim]Total: {result.response_time_ms:.1f}ms[/dim]\n")
 
 
 @main.command(name="validate")
