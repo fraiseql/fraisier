@@ -161,6 +161,23 @@ class FraisierConfig:
                         f"got {type(val).__name__}"
                     )
 
+            # Headers should be a dict
+            headers = hc.get("headers")
+            if headers is not None and not isinstance(headers, dict):
+                errors.append(
+                    f"{fraise_name}: health_check.headers must be a dict, "
+                    f"got {type(headers).__name__}"
+                )
+
+            # Field mappings should be strings
+            for field in ("version_field", "migration_field"):
+                val = hc.get(field)
+                if val is not None and not isinstance(val, str):
+                    errors.append(
+                        f"{fraise_name}: health_check.{field} must be a string, "
+                        f"got {type(val).__name__}"
+                    )
+
         # Numeric fields at top level
         for field in ("timeout", "lock_timeout"):
             val = env.get(field)
@@ -520,6 +537,8 @@ class FraisierConfig:
                 include_environment=raw_response.get("include_environment", False),
                 include_commit=raw_response.get("include_commit", False),
             ),
+            version_field=raw.get("version_field", "version"),
+            migration_field=raw.get("migration_field", "migration"),
         )
 
     @property

@@ -31,7 +31,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.5.26"
+version = "0.5.27"
 
 [project.optional-dependencies]
 all-databases = [
@@ -130,6 +130,7 @@ ignore = [
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-asyncio>=0.23.0",
 ]
 
 [tool.ty.rules]

@@ -38,8 +38,10 @@ def health(
     config = ctx.obj["config"]
     health_config = config.health
 
-    # Build service map: name -> base URL from fraise port configs
-    services: dict[str, str] = {}
+    # Build service map: name -> ServiceHealthConfig from fraise health_check configs
+    from fraisier.health_check import ServiceHealthConfig
+
+    services: dict[str, ServiceHealthConfig] = {}
     for fraise_name in config.list_fraises():
         fraise = config.get_fraise(fraise_name)
         if not fraise:
@@ -48,13 +50,21 @@ def health(
             if env and env_name != env:
                 continue
             port = env_config.get("port")
-            health_url = env_config.get("health_check", {})
-            if isinstance(health_url, dict):
-                health_url = health_url.get("url")
-            if health_url:
-                services[f"{fraise_name}-{env_name}"] = health_url.rsplit("/", 1)[0]
+            hc_config = env_config.get("health_check", {})
+            if isinstance(hc_config, dict) and hc_config.get("url"):
+                # Use full health_check config
+                service_config = ServiceHealthConfig(
+                    url=hc_config["url"],
+                    headers=hc_config.get("headers"),
+                    version_field=hc_config.get("version_field"),
+                    migration_field=hc_config.get("migration_field"),
+                )
+                services[f"{fraise_name}-{env_name}"] = service_config
             elif port:
-                services[f"{fraise_name}-{env_name}"] = f"http://localhost:{port}"
+                # Fallback to port-based URL
+                services[f"{fraise_name}-{env_name}"] = ServiceHealthConfig(
+                    url=f"http://localhost:{port}/health"
+                )
 
     checker = AggregateHealthChecker(
         services=services,

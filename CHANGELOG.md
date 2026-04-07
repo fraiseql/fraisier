@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.27] - 2026-04-07
+
+### Added
+
+- **Custom per-environment health endpoints with headers and field mappings (#136)** — `fraisier health` now uses the full `health_check.url` from each environment config as-is (no path stripping). Optional `health_check.headers` dict allows authenticated endpoints. Optional per-environment `version_field` and `migration_field` override the global defaults with dot-notation path support (e.g. `versions.app`). Falls back to global `health.version_field` / `health.migration_field` when not set per-environment.
+
+### Fixed
+
+- **pytest-asyncio missing from dev dependency group** — `pytest-asyncio` was declared in `[project.optional-dependencies]` but not in `[dependency-groups]`, causing async tests to fail silently after `uv sync`.
+
 ## [0.5.25] - 2026-04-07
 
 ### Fixed

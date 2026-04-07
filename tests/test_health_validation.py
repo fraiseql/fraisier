@@ -280,12 +280,12 @@ class TestAggregateHealthChecker:
         from unittest.mock import patch as mock_patch
 
         from fraisier.config import HealthConfig
-        from fraisier.health_check import AggregateHealthChecker
+        from fraisier.health_check import AggregateHealthChecker, ServiceHealthConfig
 
         checker = AggregateHealthChecker(
             services={
-                "management": "http://localhost:8042",
-                "backend": "http://localhost:4001",
+                "management": ServiceHealthConfig(url="http://localhost:8042"),
+                "backend": ServiceHealthConfig(url="http://localhost:4001"),
             },
             health_config=HealthConfig(),
         )
@@ -313,18 +313,19 @@ class TestAggregateHealthChecker:
         from unittest.mock import patch as mock_patch
 
         from fraisier.config import HealthConfig
-        from fraisier.health_check import AggregateHealthChecker
+        from fraisier.health_check import AggregateHealthChecker, ServiceHealthConfig
 
         checker = AggregateHealthChecker(
             services={
-                "management": "http://localhost:8042",
-                "backend": "http://localhost:4001",
+                "management": ServiceHealthConfig(url="http://localhost:8042"),
+                "backend": ServiceHealthConfig(url="http://localhost:4001"),
             },
             health_config=HealthConfig(),
         )
 
         def mock_urlopen(url, *, timeout=5.0):
-            if "4001" in url:
+            url_str = url.full_url if hasattr(url, "full_url") else str(url)
+            if "4001" in url_str:
                 raise urllib.error.URLError("Connection refused")
             m = MagicMock()
             m.status = 200
@@ -347,11 +348,11 @@ class TestAggregateHealthChecker:
         from unittest.mock import patch as mock_patch
 
         from fraisier.config import HealthConfig
-        from fraisier.health_check import AggregateHealthChecker
+        from fraisier.health_check import AggregateHealthChecker, ServiceHealthConfig
 
         checker = AggregateHealthChecker(
             services={
-                "management": "http://localhost:8042",
+                "management": ServiceHealthConfig(url="http://localhost:8042"),
             },
             health_config=HealthConfig(),
         )
@@ -371,19 +372,20 @@ class TestAggregateHealthChecker:
         from unittest.mock import patch as mock_patch
 
         from fraisier.config import HealthConfig
-        from fraisier.health_check import AggregateHealthChecker
+        from fraisier.health_check import AggregateHealthChecker, ServiceHealthConfig
 
         cfg = HealthConfig(endpoints=["/health", "/healthz", "/readyz"])
         checker = AggregateHealthChecker(
-            services={"api": "http://localhost:4001"},
+            services={"api": ServiceHealthConfig(url="http://localhost:4001")},
             health_config=cfg,
         )
 
         attempted_urls = []
 
         def mock_urlopen(url, *, timeout=5.0):
-            attempted_urls.append(url)
-            if url.endswith("/readyz"):
+            url_str = url.full_url if hasattr(url, "full_url") else str(url)
+            attempted_urls.append(url_str)
+            if url_str == "http://localhost:4001":
                 m = MagicMock()
                 m.status = 200
                 m.read.return_value = b"{}"
@@ -398,9 +400,62 @@ class TestAggregateHealthChecker:
             result = checker.check_all()
 
         assert result.status == "healthy"
-        assert "http://localhost:4001/health" in attempted_urls
-        assert "http://localhost:4001/healthz" in attempted_urls
-        assert "http://localhost:4001/readyz" in attempted_urls
+        assert attempted_urls == ["http://localhost:4001"]
+
+    def test_custom_headers_and_fields(self):
+        """Test that custom headers and field mappings are used per service."""
+        from unittest.mock import patch as mock_patch
+
+        from fraisier.config import HealthConfig
+        from fraisier.health_check import AggregateHealthChecker, ServiceHealthConfig
+
+        # Custom config with headers and field mappings
+        service_config = ServiceHealthConfig(
+            url="http://localhost:4001/custom/status",
+            headers={"Authorization": "Bearer token123", "X-Custom": "value"},
+            version_field="app.version",
+            migration_field="db.migration",
+        )
+
+        checker = AggregateHealthChecker(
+            services={"api": service_config},
+            health_config=HealthConfig(
+                version_field="version", migration_field="migration"
+            ),
+        )
+
+        requested_headers = {}
+
+        def mock_urlopen(request, *, timeout=5.0):
+            if hasattr(request, "headers"):
+                requested_headers.update(dict(request.headers))
+            m = MagicMock()
+            m.status = 200
+            # Response with custom field structure
+            m.read.return_value = (
+                b'{"app": {"version": "1.2.3"}, "db": {"migration": "42"}}'
+            )
+            m.__enter__ = lambda s: s
+            m.__exit__ = MagicMock(return_value=False)
+            return m
+
+        with mock_patch(
+            "fraisier.health_check.urllib.request.urlopen", side_effect=mock_urlopen
+        ):
+            result = checker.check_all()
+
+        assert result.status == "healthy"
+        service_result = result.services["api"]
+        assert service_result.status == "healthy"
+        assert service_result.url == "http://localhost:4001/custom/status"
+        assert service_result.version == "1.2.3"
+        assert service_result.migration == "42"
+
+        # Check that headers were passed
+        assert requested_headers.get("Authorization") == "Bearer token123"
+        assert (
+            requested_headers.get("X-custom") == "value"
+        )  # urllib capitalizes first letter after dash
 
 
 class TestHealthCLI:

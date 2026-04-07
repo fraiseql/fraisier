@@ -32,6 +32,16 @@ from .metrics import get_metrics_recorder
 _ALLOWED_URL_SCHEMES = {"http", "https"}
 
 
+def _get_nested(data: dict, path: str) -> str | None:
+    """Extract a value from a nested dict using dot notation (e.g. 'versions.app')."""
+    current: object = data
+    for key in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return str(current) if current is not None else None
+
+
 def _validate_health_check_url(url: str) -> None:
     """Reject URLs with dangerous schemes (file://, ftp://, etc.).
 
@@ -661,6 +671,16 @@ class CompositeHealthChecker:
 
 
 @dataclass
+class ServiceHealthConfig:
+    """Per-service health check configuration."""
+
+    url: str
+    headers: dict[str, str] | None = None
+    version_field: str | None = None
+    migration_field: str | None = None
+
+
+@dataclass
 class ServiceHealthResult:
     """Health result for a single service."""
 
@@ -720,56 +740,70 @@ class AggregateHealthChecker:
 
     def __init__(
         self,
-        services: dict[str, str],
+        services: dict[str, "ServiceHealthConfig"],
         health_config: "HealthConfig",
     ):
         """Initialize aggregate health checker.
 
         Args:
-            services: Mapping of service name -> base URL (e.g. "http://localhost:4001")
+            services: Mapping of service name -> ServiceHealthConfig
             health_config: HealthConfig with endpoints list and timeouts
         """
         self.services = services
         self.health_config = health_config
         self.logger = logging.getLogger(__name__)
 
-    def _check_service(self, name: str, base_url: str) -> ServiceHealthResult:
-        """Check a single service, trying endpoints in order."""
-        base_url = base_url.rstrip("/")
+    def _check_service(
+        self, name: str, service_config: "ServiceHealthConfig"
+    ) -> ServiceHealthResult:
+        """Check a single service using its full URL."""
+        url = service_config.url
         start = time.time()
-        for endpoint in self.health_config.endpoints:
-            url = f"{base_url}{endpoint}"
-            start = time.time()
-            try:
-                _validate_health_check_url(url)
-                response = urllib.request.urlopen(url, timeout=5.0)
-                duration_ms = (time.time() - start) * 1000
-                if response.status < 400:
-                    # Parse response for additional data
-                    version = None
-                    migration = None
-                    try:
-                        data = json.loads(response.read().decode("utf-8"))
-                        version = data.get("version")
-                        migration = data.get("migration")
-                    except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
-                        pass  # Ignore parsing errors, keep None
+        try:
+            _validate_health_check_url(url)
 
-                    return ServiceHealthResult(
-                        name=name,
-                        url=base_url,
-                        status="healthy",
-                        response_time_ms=round(duration_ms, 1),
-                        version=version,
-                        migration=migration,
+            # Create request with headers if provided
+            request = urllib.request.Request(url)
+            if service_config.headers:
+                for key, value in service_config.headers.items():
+                    request.add_header(key, value)
+
+            response = urllib.request.urlopen(request, timeout=5.0)
+            duration_ms = (time.time() - start) * 1000
+            if response.status < 400:
+                # Parse response for additional data
+                version = None
+                migration = None
+                try:
+                    data = json.loads(response.read().decode("utf-8"))
+                    # Use per-service field mappings if provided, else global
+                    version_field = (
+                        service_config.version_field or self.health_config.version_field
                     )
-            except (urllib.error.URLError, OSError, TimeoutError, ValueError):
-                continue
+                    migration_field = (
+                        service_config.migration_field
+                        or self.health_config.migration_field
+                    )
+                    version = _get_nested(data, version_field)
+                    migration = _get_nested(data, migration_field)
+                except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
+                    pass  # Ignore parsing errors, keep None
+
+                return ServiceHealthResult(
+                    name=name,
+                    url=url,
+                    status="healthy",
+                    response_time_ms=round(duration_ms, 1),
+                    version=version,
+                    migration=migration,
+                )
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+            pass
 
         duration_ms = (time.time() - start) * 1000
         return ServiceHealthResult(
             name=name,
-            url=base_url,
+            url=url,
             status="unhealthy",
             response_time_ms=round(duration_ms, 1),
         )
@@ -779,8 +813,8 @@ class AggregateHealthChecker:
         overall_start = time.time()
         results: dict[str, ServiceHealthResult] = {}
 
-        for name, base_url in self.services.items():
-            results[name] = self._check_service(name, base_url)
+        for name, service_config in self.services.items():
+            results[name] = self._check_service(name, service_config)
 
         total_ms = round((time.time() - overall_start) * 1000, 1)
 

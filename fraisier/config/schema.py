@@ -431,6 +431,8 @@ class HealthConfig:
     deploy_poll_interval_seconds: int = 5
     endpoints: list[str] = field(default_factory=lambda: ["/health"])
     response: HealthResponseConfig = field(default_factory=HealthResponseConfig)
+    version_field: str = "version"
+    migration_field: str = "migration"
 
 
 @dataclass

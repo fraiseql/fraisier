@@ -504,15 +504,17 @@ class TestAggregateHealthChecker:
     def test_check_service_empty_endpoints_no_unbound_error(self):
         """Empty endpoints returns unhealthy, not UnboundLocalError."""
         from fraisier.config import HealthConfig
-        from fraisier.health_check import AggregateHealthChecker
+        from fraisier.health_check import AggregateHealthChecker, ServiceHealthConfig
 
         health_config = HealthConfig(endpoints=[])
         checker = AggregateHealthChecker(
-            services={"api": "http://localhost:4001"},
+            services={"api": ServiceHealthConfig(url="http://localhost:4001")},
             health_config=health_config,
         )
 
-        result = checker._check_service("api", "http://localhost:4001")
+        result = checker._check_service(
+            "api", ServiceHealthConfig(url="http://localhost:4001")
+        )
         assert result.status == "unhealthy"
 
 
