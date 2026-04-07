@@ -423,9 +423,9 @@ class TestDbRestore:
                 assert result.exit_code == 0
                 assert "1 migration(s) applied" in result.output
             finally:
-                import os
+                from pathlib import Path
 
-                os.unlink(backup_path)
+                Path(backup_path).unlink()
 
     def test_db_restore_skips_external_db(self, runner, restore_config):
         """db restore skips when external_db is true."""
