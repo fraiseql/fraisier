@@ -452,12 +452,13 @@ health:
         mock_result.status = "healthy"
         mock_result.response_time_ms = 12.0
         mock_svc = MagicMock()
-        mock_svc.name = "management"
+        mock_svc.name = "management-development"
         mock_svc.url = ":8042"
         mock_svc.status = "healthy"
         mock_svc.response_time_ms = 5.0
         mock_svc.version = None
-        mock_result.services = {"management": mock_svc}
+        mock_svc.migration = None
+        mock_result.services = {"management-development": mock_svc}
 
         with patch("fraisier.health_check.AggregateHealthChecker") as mock_checker_cls:
             mock_checker_cls.return_value.check_all.return_value = mock_result
