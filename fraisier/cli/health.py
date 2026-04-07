@@ -87,6 +87,7 @@ def health(
         table.add_column("URL", style="dim")
         table.add_column("Status")
         table.add_column("Response", style="yellow")
+        table.add_column("Version", style="dim")
         table.add_column("Migration", style="dim")
 
         for svc_name, svc in result.services.items():
@@ -98,6 +99,7 @@ def health(
                 svc.url,
                 f"[{svc_color}]{svc.status}[/{svc_color}]",
                 f"{svc.response_time_ms:.1f}ms",
+                svc.version or "",
                 svc.migration or "",
             )
 
