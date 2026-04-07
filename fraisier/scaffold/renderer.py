@@ -450,10 +450,13 @@ class ScaffoldRenderer:
             "deploy-checker.timer",
             "backup.timer",
             "poll-deploy.service",
-            "restore-staging.service",
-            "restore-staging.timer",
         ]:
             mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
+
+        # Restore-staging units (only if there are restore_migrate fraises)
+        if self._has_restore_migrate_fraise():
+            for unit in ["restore-staging.service", "restore-staging.timer"]:
+                mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
 
         # Nginx config
         mapping["nginx/gateway.conf"] = Path(
@@ -566,14 +569,34 @@ class ScaffoldRenderer:
             ("core/deploy-checker.timer.j2", "systemd/deploy-checker.timer"),
             ("core/backup.timer.j2", "systemd/backup.timer"),
             ("core/backup.service.j2", "systemd/backup.service"),
-            ("core/restore-staging.timer.j2", "systemd/restore-staging.timer"),
-            ("core/restore-staging.service.j2", "systemd/restore-staging.service"),
         ]:
             rendered_files.append(timer_out)
             if not dry_run:
                 self._render_template(timer_tpl, timer_out)
 
+        # Restore-staging only if there are fraises with restore_migrate strategy
+        if self._has_restore_migrate_fraise():
+            for timer_tpl, timer_out in [
+                ("core/restore-staging.timer.j2", "systemd/restore-staging.timer"),
+                ("core/restore-staging.service.j2", "systemd/restore-staging.service"),
+            ]:
+                rendered_files.append(timer_out)
+                if not dry_run:
+                    self._render_template(timer_tpl, timer_out)
+
         return rendered_files
+
+    def _has_restore_migrate_fraise(self) -> bool:
+        """Check if any fraise in local_fraises has restore_migrate strategy.
+
+        This determines whether to render the restore-staging service/timer units.
+        """
+        for fraise in self.context.get("local_fraises", []):
+            for env_config in fraise.get("environments", {}).values():
+                db_cfg = env_config.get("database", {})
+                if db_cfg.get("strategy") == "restore_migrate":
+                    return True
+        return False
 
     def _webhook_service_name(self, server_slug: str | None = None) -> str:
         """Return the output filename for a webhook service unit.
