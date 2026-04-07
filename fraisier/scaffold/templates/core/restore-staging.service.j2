@@ -1,0 +1,38 @@
+[Unit]
+Description=Restore {{ project_name }} staging database from production backup
+After=network.target
+
+[Service]
+Type=oneshot
+User={{ scaffold.deploy_user }}
+{% if pg_allowed_databases %}
+Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_name }}
+{% endif %}
+{% if allowed_services %}
+Environment=FRAISIER_SYSTEMCTL_WRAPPER=/usr/local/libexec/fraisier/systemctl-{{ project_name }}
+{% endif %}
+{% set fraisier_bin = '/home/' ~ scaffold.deploy_user ~ '/.local/bin/fraisier' %}
+{% for fraise in local_fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% if env_config.get('database', {}).get('strategy') == 'restore_migrate' %}
+{% if 'staging' in env_name or 'stage' in env_name %}
+ExecStart={{ fraisier_bin }} --config {{ scaffold.config_path }} db restore {{ fraise.name }} {{ env_name }}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/fraisier /var/log/fraisier
+{% for fraise in local_fraises %}
+ReadWritePaths=/opt/{{ fraise.name }}
+{% endfor %}

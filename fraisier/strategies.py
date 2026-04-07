@@ -399,6 +399,7 @@ class RestoreConfig:
     create_template: bool = False
     template_name: str | None = None
     min_tables: int = 0
+    backup_path: Path | None = None
 
 
 class RestoreMigrateStrategy(Strategy):
@@ -454,19 +455,23 @@ class RestoreMigrateStrategy(Strategy):
 
         cfg = self._config
 
-        # Step 1: Find latest backup
-        backup_file = find_latest_backup(cfg.backup_dir, pattern=cfg.backup_pattern)
-        if backup_file is None:
-            raise DatabaseError(
-                f"No backup matching '{cfg.backup_pattern}' in {cfg.backup_dir}",
-            )
-        log.info("Found backup: %s", backup_file)
+        # Step 1: Resolve backup file
+        if cfg.backup_path is not None:
+            backup_file = cfg.backup_path
+            log.info("Using explicit backup: %s", backup_file)
+        else:
+            backup_file = find_latest_backup(cfg.backup_dir, pattern=cfg.backup_pattern)
+            if backup_file is None:
+                raise DatabaseError(
+                    f"No backup matching '{cfg.backup_pattern}' in {cfg.backup_dir}",
+                )
+            log.info("Found backup: %s", backup_file)
 
-        # Step 2: Validate backup age
-        if not validate_backup_age(backup_file, max_age_hours=cfg.max_age_hours):
-            raise DatabaseError(
-                f"Backup {backup_file.name} is older than {cfg.max_age_hours}h",
-            )
+            # Step 2: Validate backup age (only when not explicit)
+            if not validate_backup_age(backup_file, max_age_hours=cfg.max_age_hours):
+                raise DatabaseError(
+                    f"Backup {backup_file.name} is older than {cfg.max_age_hours}h",
+                )
 
         # Step 3: Terminate connections
         terminate_backends(cfg.db_name, connection_url=self._admin_url)
@@ -614,6 +619,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         db_name = kwargs.get("db_name", "")
         if not db_name:
             raise ValueError("restore_migrate strategy requires db_name")
+        backup_path = Path(kwargs["backup_path"]) if kwargs.get("backup_path") else None
         config = RestoreConfig(
             db_name=db_name,
             backup_dir=Path(restore_cfg["backup_dir"]),
@@ -623,6 +629,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             create_template=bool(restore_cfg.get("create_template", False)),
             template_name=restore_cfg.get("template_name"),
             min_tables=int(restore_cfg.get("min_tables", 0)),
+            backup_path=backup_path,
         )
         admin_url = kwargs.get("admin_url")
         return RestoreMigrateStrategy(config, admin_url=admin_url)

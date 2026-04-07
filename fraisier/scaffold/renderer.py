@@ -446,11 +446,14 @@ class ScaffoldRenderer:
             )
 
         # Standard systemd units
-        for unit in ["deploy-checker.timer", "backup.timer", "poll-deploy.service"]:
-            if unit in ["deploy-checker.timer", "backup.timer"]:
-                mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
-            else:
-                mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
+        for unit in [
+            "deploy-checker.timer",
+            "backup.timer",
+            "poll-deploy.service",
+            "restore-staging.service",
+            "restore-staging.timer",
+        ]:
+            mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
 
         # Nginx config
         mapping["nginx/gateway.conf"] = Path(
@@ -563,6 +566,8 @@ class ScaffoldRenderer:
             ("core/deploy-checker.timer.j2", "systemd/deploy-checker.timer"),
             ("core/backup.timer.j2", "systemd/backup.timer"),
             ("core/backup.service.j2", "systemd/backup.service"),
+            ("core/restore-staging.timer.j2", "systemd/restore-staging.timer"),
+            ("core/restore-staging.service.j2", "systemd/restore-staging.service"),
         ]:
             rendered_files.append(timer_out)
             if not dry_run:

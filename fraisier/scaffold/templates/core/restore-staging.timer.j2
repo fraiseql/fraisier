@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for nightly {{ project_name }} staging database restore from production backup
+After=network.target
+
+[Timer]
+# Run at 2 AM local time daily
+OnCalendar=daily
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
