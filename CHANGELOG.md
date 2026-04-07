@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.21] - 2026-04-07
+
+### Added
+
+- **`fraisier db restore` command (#129)** — Expose the staging restore workflow
+  (pg_restore → rollback template → migrate → validate) as a user-facing command. The
+  nightly `restore-staging-from-production-backup.service` systemd unit previously called
+  a broken `trigger-deploy` path and did nothing useful; it now calls
+  `fraisier db restore api staging` and works correctly. Supports `--from-backup` to restore
+  from a specific dump file (useful for testing), `--dry-run` to preview the plan, and
+  `--no-service-restart` to skip service management if needed.
+
+- **Scaffold templates for staging restore** — Generated `restore-staging.service` and
+  `restore-staging.timer` systemd units for nightly restores. Auto-discovers fraises with
+  `restore_migrate` strategy and generates correct `fraisier db restore` commands.
+  When running `fraisier scaffold-install --apply` on existing servers, the broken service
+  unit is automatically replaced with the corrected one.
+
+- **CLI consistency** — All fraise database commands now use positional `ENVIRONMENT`
+  arguments instead of flags (e.g., `fraisier db restore api staging` instead of
+  `fraisier db restore api -e staging`), matching the pattern of `trigger-deploy`, `logs`,
+  and other top-level commands.
+
+---
+
 ## [0.5.17] - 2026-04-06
 
 ### Fixed
