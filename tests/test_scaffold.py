@@ -4032,8 +4032,7 @@ fraises:
         content = (out / "systemd" / "restore-staging.service").read_text()
         assert "ReadWritePaths=/var/www/staging" in content
         rw_lines = [
-            line for line in content.splitlines()
-            if line.startswith("ReadWritePaths=")
+            line for line in content.splitlines() if line.startswith("ReadWritePaths=")
         ]
         assert not any("/opt/" in line for line in rw_lines)
 
@@ -4050,8 +4049,7 @@ fraises:
         content = (out / "poll-deploy.service").read_text()
         assert "ReadWritePaths=/var/www/staging" in content
         rw_lines = [
-            line for line in content.splitlines()
-            if line.startswith("ReadWritePaths=")
+            line for line in content.splitlines() if line.startswith("ReadWritePaths=")
         ]
         assert not any("/opt/" in line for line in rw_lines)
 
