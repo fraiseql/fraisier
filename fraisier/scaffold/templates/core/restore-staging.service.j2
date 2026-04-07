@@ -33,9 +33,11 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=/var/lib/fraisier /var/log/fraisier
+{% set _seen_paths = [] %}
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% if env_config.get('database', {}).get('strategy') == 'restore_migrate' and env_config.get('app_path') %}
+{% if env_config.get('database', {}).get('strategy') == 'restore_migrate' and env_config.get('app_path') and env_config.app_path not in _seen_paths %}
+{% if _seen_paths.append(env_config.app_path) %}{% endif %}
 ReadWritePaths={{ env_config.app_path }}
 {% endif %}
 {% endfor %}

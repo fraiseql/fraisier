@@ -4059,3 +4059,76 @@ fraises:
         content = (out / "poll-deploy.service").read_text()
         assert "FRAISIER_SYSTEMCTL_SOCKET" in content
         assert "FRAISIER_SYSTEMCTL_WRAPPER" not in content
+
+
+class TestDeduplication:
+    """ReadWritePaths and sudoers are deduplicated across fraises."""
+
+    _YAML = """\
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {output_dir}
+environments:
+  staging:
+    server: server-a
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: myapp_staging
+          strategy: restore_migrate
+          restore:
+            backup_dir: /backup/prod
+            backup_pattern: "*.dump"
+  my_etl:
+    type: etl
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: myapp_staging
+          strategy: rebuild
+"""
+
+    def _render(self, tmp_path):
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(self._YAML.format(output_dir=tmp_path / "output"))
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config, server="server-a")
+        renderer.render()
+        return tmp_path / "output"
+
+    def test_poll_deploy_no_duplicate_readwrite_paths(self, tmp_path):
+        """poll-deploy emits each app_path only once even with multiple fraises."""
+        out = self._render(tmp_path)
+        content = (out / "poll-deploy.service").read_text()
+        rw_lines = [
+            line for line in content.splitlines() if line.startswith("ReadWritePaths=")
+        ]
+        staging_lines = [line for line in rw_lines if "/var/www/staging" in line]
+        assert len(staging_lines) == 1
+
+    def test_restore_staging_no_duplicate_readwrite_paths(self, tmp_path):
+        """restore-staging emits each app_path only once."""
+        out = self._render(tmp_path)
+        content = (out / "systemd" / "restore-staging.service").read_text()
+        rw_lines = [
+            line for line in content.splitlines() if line.startswith("ReadWritePaths=")
+        ]
+        staging_lines = [line for line in rw_lines if "/var/www/staging" in line]
+        assert len(staging_lines) == 1
+
+    def test_sudoers_no_duplicate_pg_wrapper_rules(self, tmp_path):
+        """Sudoers emits the pg-wrapper rule once per user."""
+        out = self._render(tmp_path)
+        content = (out / "sudoers").read_text()
+        pg_lines = [line for line in content.splitlines() if "pgadmin-myproj" in line]
+        # Filter to actual rules (not comments)
+        rule_lines = [line for line in pg_lines if not line.startswith("#")]
+        assert len(rule_lines) == 1

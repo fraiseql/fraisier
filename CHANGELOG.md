@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.23] - 2026-04-07
+## [0.5.24] - 2026-04-07
 
 ### Added
 
@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `confiture.yaml`) are now resolved against `app_path` before being passed to confiture.
   Previously, migrations failed when the service's working directory was not the app
   directory, because confiture could not find `db/environments/<env>.yaml` relative to CWD.
+
+- **Deduplicate ReadWritePaths in service templates** — `poll-deploy.service` and
+  `restore-staging.service` now emit each `app_path` once even when multiple fraises
+  share the same path on a server.
+
+- **Deduplicate sudoers pg-wrapper rules** — The sudoers fragment now emits each
+  `(user, pg-wrapper)` rule once regardless of how many environments use admin
+  strategies. Also scoped to `local_fraises` to avoid cross-server leakage.
 
 ---
 
