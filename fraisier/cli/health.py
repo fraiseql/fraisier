@@ -52,9 +52,9 @@ def health(
             if isinstance(health_url, dict):
                 health_url = health_url.get("url")
             if health_url:
-                services[fraise_name] = health_url.rsplit("/", 1)[0]
+                services[f"{fraise_name}-{env_name}"] = health_url.rsplit("/", 1)[0]
             elif port:
-                services[fraise_name] = f"http://localhost:{port}"
+                services[f"{fraise_name}-{env_name}"] = f"http://localhost:{port}"
 
     checker = AggregateHealthChecker(
         services=services,
