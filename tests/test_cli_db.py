@@ -487,3 +487,26 @@ class TestDbRestore:
         mock_svc_mgr_class.assert_not_called()
         mock_svc_mgr.stop.assert_not_called()
         mock_svc_mgr.restart.assert_not_called()
+
+    def test_db_restore_resolves_confiture_config_relative_to_app_path(
+        self, runner, restore_config
+    ):
+        """Relative confiture_config is resolved against app_path."""
+        from pathlib import Path as _Path
+
+        result_mock = MagicMock(success=True, migrations_applied=0)
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ) as mock_execute,
+            patch("fraisier.systemd.SystemdServiceManager"),
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 0
+        # confiture_config arg should be resolved to app_path / confiture.yaml
+        call_args = mock_execute.call_args
+        confiture_arg = call_args[0][0]
+        assert confiture_arg == _Path("/var/www/api/confiture.yaml")

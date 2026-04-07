@@ -254,8 +254,13 @@ def db_restore(
         raise SystemExit(1)
 
     db_name = db_cfg.get("name", fraise)
-    confiture_config = _Path(db_cfg.get("confiture_config", "confiture.yaml"))
     app_path = _Path(env_config.get("app_path", "."))
+    confiture_config_rel = _Path(db_cfg.get("confiture_config", "confiture.yaml"))
+    confiture_config = (
+        confiture_config_rel
+        if confiture_config_rel.is_absolute()
+        else app_path / confiture_config_rel
+    )
     systemd_service = env_config.get("systemd_service")
     admin_url = db_cfg.get("admin_url")
 

@@ -3954,3 +3954,110 @@ fraises:
         prod_sockets = [f for f in systemd_dir.iterdir() if "production" in f.name]
         assert dev_sockets
         assert not prod_sockets
+
+
+class TestServerScopedCollectors:
+    """Collectors (pg_allowed_databases, allowed_services) are filtered by server."""
+
+    _YAML = """\
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {output_dir}
+environments:
+  staging:
+    server: server-a
+  production:
+    server: server-b
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /var/www/staging
+        database:
+          name: myapp_staging
+          strategy: restore_migrate
+          restore:
+            backup_dir: /backup/prod
+            backup_pattern: "*.dump"
+      production:
+        app_path: /var/www/prod
+        database:
+          name: myapp_prod
+          strategy: migrate
+"""
+
+    def _render(self, tmp_path, server):
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(self._YAML.format(output_dir=tmp_path / "output"))
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config, server=server)
+        renderer.render()
+        return tmp_path / "output"
+
+    def test_pg_wrapper_scoped_to_server(self, tmp_path):
+        """pg-wrapper on server-a includes only staging DB, not production."""
+        out = self._render(tmp_path, "server-a")
+        content = (out / "pg-wrapper.sh").read_text()
+        assert "myapp_staging" in content
+        assert "myapp_prod" not in content
+
+    def test_pg_wrapper_not_generated_for_server_without_admin_db(self, tmp_path):
+        """pg-wrapper is not generated for server-b (production uses migrate)."""
+        out = self._render(tmp_path, "server-b")
+        assert not (out / "pg-wrapper.sh").exists()
+
+    def test_systemctl_wrapper_scoped_to_server(self, tmp_path):
+        """systemctl wrapper on server-a lists only staging service."""
+        out = self._render(tmp_path, "server-a")
+        content = (out / "systemctl-wrapper.sh").read_text()
+        assert "myproj_my_api_staging.service" in content
+        assert "myproj_my_api_production.service" not in content
+
+    def test_systemctl_helper_scoped_to_server(self, tmp_path):
+        """systemctl-helper on server-a lists only staging service."""
+        out = self._render(tmp_path, "server-a")
+        helper = (
+            out / "systemd" / "fraisier-myproj-systemctl-helper.service"
+        ).read_text()
+        assert "myproj_my_api_staging.service" in helper
+        assert "myproj_my_api_production.service" not in helper
+
+    def test_restore_staging_readwrite_uses_configured_app_path(self, tmp_path):
+        """restore-staging ReadWritePaths uses actual app_path, not hardcoded /opt."""
+        out = self._render(tmp_path, "server-a")
+        content = (out / "systemd" / "restore-staging.service").read_text()
+        assert "ReadWritePaths=/var/www/staging" in content
+        rw_lines = [
+            line for line in content.splitlines()
+            if line.startswith("ReadWritePaths=")
+        ]
+        assert not any("/opt/" in line for line in rw_lines)
+
+    def test_restore_staging_uses_socket_not_wrapper(self, tmp_path):
+        """restore-staging uses FRAISIER_SYSTEMCTL_SOCKET, not WRAPPER."""
+        out = self._render(tmp_path, "server-a")
+        content = (out / "systemd" / "restore-staging.service").read_text()
+        assert "FRAISIER_SYSTEMCTL_SOCKET" in content
+        assert "FRAISIER_SYSTEMCTL_WRAPPER" not in content
+
+    def test_poll_deploy_readwrite_uses_configured_app_path(self, tmp_path):
+        """poll-deploy ReadWritePaths uses actual app_path, not hardcoded /opt."""
+        out = self._render(tmp_path, "server-a")
+        content = (out / "poll-deploy.service").read_text()
+        assert "ReadWritePaths=/var/www/staging" in content
+        rw_lines = [
+            line for line in content.splitlines()
+            if line.startswith("ReadWritePaths=")
+        ]
+        assert not any("/opt/" in line for line in rw_lines)
+
+    def test_poll_deploy_uses_socket_not_wrapper(self, tmp_path):
+        """poll-deploy uses FRAISIER_SYSTEMCTL_SOCKET, not WRAPPER."""
+        out = self._render(tmp_path, "server-a")
+        content = (out / "poll-deploy.service").read_text()
+        assert "FRAISIER_SYSTEMCTL_SOCKET" in content
+        assert "FRAISIER_SYSTEMCTL_WRAPPER" not in content

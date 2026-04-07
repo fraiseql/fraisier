@@ -9,7 +9,7 @@ User={{ scaffold.deploy_user }}
 Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_name }}
 {% endif %}
 {% if allowed_services %}
-Environment=FRAISIER_SYSTEMCTL_WRAPPER=/usr/local/libexec/fraisier/systemctl-{{ project_name }}
+Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock
 {% endif %}
 {% set fraisier_bin = '/home/' ~ scaffold.deploy_user ~ '/.local/bin/fraisier' %}
 {% for fraise in local_fraises %}
@@ -34,5 +34,9 @@ ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=/var/lib/fraisier /var/log/fraisier
 {% for fraise in local_fraises %}
-ReadWritePaths=/opt/{{ fraise.name }}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% if env_config.get('database', {}).get('strategy') == 'restore_migrate' and env_config.get('app_path') %}
+ReadWritePaths={{ env_config.app_path }}
+{% endif %}
+{% endfor %}
 {% endfor %}

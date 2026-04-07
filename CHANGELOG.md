@@ -30,6 +30,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fraisier db restore api -e staging`), matching the pattern of `trigger-deploy`, `logs`,
   and other top-level commands.
 
+### Fixed
+
+- **Server-scoped scaffold collectors** — `pg_allowed_databases`, `allowed_services`, and
+  `has_database` now use server-filtered fraises (`local_fraises`) instead of the unfiltered
+  global list. Previously, rendering with `--server` included databases and services from
+  all servers, causing cross-server leakage in generated pg-wrapper and systemctl-wrapper
+  allowlists.
+
+- **ReadWritePaths use configured `app_path`** — `restore-staging.service` and
+  `poll-deploy.service` templates now derive `ReadWritePaths` from the actual `app_path`
+  in environment config instead of hardcoded `/opt/<fraise_name>`. restore-staging further
+  restricts paths to environments with `restore_migrate` strategy.
+
+- **Socket-based systemctl for restore and poll-deploy** — `restore-staging.service` and
+  `poll-deploy.service` now use `FRAISIER_SYSTEMCTL_SOCKET` (the socket-activated helper
+  running as root) instead of the legacy `FRAISIER_SYSTEMCTL_WRAPPER` which lacked
+  privilege escalation inside systemd's security namespace.
+
+- **CWD-independent `db restore` migrations** — Relative `confiture_config` paths (default:
+  `confiture.yaml`) are now resolved against `app_path` before being passed to confiture.
+  Previously, migrations failed when the service's working directory was not the app
+  directory, because confiture could not find `db/environments/<env>.yaml` relative to CWD.
+
 ---
 
 ## [0.5.17] - 2026-04-06
