@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **fraisier health only shows last environment when multiple environments share the same fraise name (#130)** — The services dict used `fraise_name` as key, causing overwrites for each environment iteration. Changed to use composite key `f"{fraise_name}-{env_name}"` so all environments appear in the health table.
 
+- **fraisier health URL column strips scheme for remote services (#131)** — The URL display logic incorrectly split on `:` and took the last part, dropping `https://` for remote URLs. Now displays the full base URL.
+
+- **fraisier health table lacks Environment column (#132)** — The table merged fraise name and environment into a single Service column. Added a dedicated Environment column for clarity, with Service showing only the fraise name.
+
 ## [0.5.24] - 2026-04-07
 
 ### Added

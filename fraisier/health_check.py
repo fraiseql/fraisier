@@ -741,7 +741,7 @@ class AggregateHealthChecker:
                 if response.status < 400:
                     return ServiceHealthResult(
                         name=name,
-                        url=f":{base_url.split(':')[-1]}",
+                        url=base_url,
                         status="healthy",
                         response_time_ms=round(duration_ms, 1),
                     )
@@ -751,7 +751,7 @@ class AggregateHealthChecker:
         duration_ms = (time.time() - start) * 1000
         return ServiceHealthResult(
             name=name,
-            url=f":{base_url.split(':')[-1]}",
+            url=base_url,
             status="unhealthy",
             response_time_ms=round(duration_ms, 1),
         )
