@@ -226,32 +226,6 @@ class RestrictedPath:
     deny: str = "all"
 
 
-def _normalize_cors_origins(origins: list) -> list[dict[str, str]]:
-    """Normalize CORS origins to dict format with backward compatibility.
-
-    Args:
-        origins: List of strings or dicts
-
-    Returns:
-        List of normalized dicts with 'pattern' and 'type' keys
-    """
-    normalized = []
-    for o in origins:
-        if isinstance(o, str):
-            # Backward compatibility: detect wildcard patterns
-            if "*" in o and "." in o[o.find("*") :]:
-                # Assume wildcard if * is followed by .
-                type_ = "wildcard"
-            else:
-                type_ = "literal"
-            normalized.append({"pattern": o, "type": type_})
-        elif isinstance(o, dict):
-            normalized.append(o)
-        else:
-            raise ValueError(f"Invalid CORS origin format: {o}")
-    return normalized
-
-
 def _process_cors_origin(origin: dict[str, str]) -> str:
     """Process a CORS origin dict into nginx regex pattern.
 
@@ -278,11 +252,6 @@ def _process_cors_origin(origin: dict[str, str]) -> str:
         raise ValueError(f"Unknown CORS origin type: {origin_type}")
 
 
-def _escape_cors_dots(origin: str) -> str:
-    """Legacy function for backward compatibility - converts literal string."""
-    return _process_cors_origin({"pattern": origin, "type": "literal"})
-
-
 @dataclass
 class NginxEnvConfig:
     """Per-environment nginx configuration."""
@@ -302,8 +271,6 @@ class NginxEnvConfig:
             raise ValidationError(
                 "nginx.ssl_key requires nginx.ssl_cert to also be set",
             )
-        # Normalize CORS origins to dict format
-        self.cors_origins = _normalize_cors_origins(self.cors_origins)
 
     @property
     def cors_origins_escaped(self) -> list[str]:
@@ -359,10 +326,6 @@ class NginxScaffoldConfig:
     rate_limit: str = "10r/s"
     restricted_paths: list[str] = field(default_factory=list)
     webhook_port: int = 8080
-
-    def __post_init__(self) -> None:
-        # Normalize CORS origins to dict format
-        self.cors_origins = _normalize_cors_origins(self.cors_origins)
 
     @property
     def cors_origins_escaped(self) -> list[str]:

@@ -255,13 +255,17 @@ class TestCorsOriginValidation:
 
     def test_literal_domain_dots_escaped(self):
         """'example.com' is auto-escaped to 'example\\.com'."""
-        nc = NginxEnvConfig(cors_origins=["https://example.com"])
+        nc = NginxEnvConfig(
+            cors_origins=[{"pattern": "https://example.com", "type": "literal"}]
+        )
         # CORS origins are processed for nginx regex
         assert nc.cors_origins_escaped == [r"https://example\.com"]
 
     def test_already_escaped_dots_not_double_escaped(self):
         """Already-escaped 'example\\.com' must not become 'example\\\\.com'."""
-        nc = NginxEnvConfig(cors_origins=[r"https://example\.com"])
+        nc = NginxEnvConfig(
+            cors_origins=[{"pattern": r"https://example\.com", "type": "literal"}]
+        )
         # No double-escaping
         assert r"\\." not in nc.cors_origins_escaped[0]
 

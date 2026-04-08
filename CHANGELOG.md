@@ -20,10 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Conditional WatchdogSec support** — `service.watchdog_sec` field enables `WatchdogSec` in systemd service units for servers that support `sd_notify` (e.g., gunicorn). Defaults to disabled for uvicorn compatibility.
 - **Server type configuration** — `service.server_type` field (`"uvicorn"` or `"gunicorn"`) for future server-specific optimizations.
 
+- **Socket-based install helper (#124)** — New `fraisier-install-helper` daemon (socket + service systemd units) runs as `install_user`, accepts install commands over a Unix socket owned by `deploy_user`. Eliminates the `sudo -u` dependency at deploy time. `fraisier-webhook` emits `FRAISIER_INSTALL_SOCKET_*` env vars; `install.sh` installs and enables the units automatically.
+- **Scaffold sync promotion scripts (#139)** — New `sync.sh` scaffold template generates a git-based promotion script per `scaffold.sync` pair defined in `fraises.yaml`. The script fetches, detects drift, creates a sync branch, pre-merges the target, auto-resolves fraisier-owned files, and opens a PR via `gh`.
+- **Stale service file warning at deploy time (#142)** — `fraisier deploy` now warns when the live systemd service file differs from what fraisier would generate, prompting a `fraisier scaffold` run before the next deploy.
+
 ### Fixed
 
 - **Issue #138: nginx CORS map supports wildcard subdomain patterns** — Wildcard patterns like `https://*.example.com` now generate proper nginx regex patterns.
 - **Issue #137: WatchdogSec properly omitted for non-sd_notify servers** — WatchdogSec is now conditionally included only when configured, preventing uvicorn services from being killed every 60 seconds.
+- **Issue #127: gateway.conf spurious SSL catch-all block suppressed** — `server_name` is now aggregated across per-environment nginx blocks when not set at the fraise level, so `has_server_names` is correctly `True` and the `server_name _` SSL catch-all is omitted.
 
 ---
 

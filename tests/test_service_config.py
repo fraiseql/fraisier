@@ -232,7 +232,7 @@ class TestNginxEnvConfigFromEnvDict:
                 "server_name": "api.dev",
                 "ssl_cert": "/etc/ssl/cert.pem",
                 "ssl_key": "/etc/ssl/key.pem",
-                "cors_origins": ["https://app.dev"],
+                "cors_origins": [{"pattern": "https://app.dev", "type": "literal"}],
                 "restricted_paths": [
                     {"path": "/admin/", "allow": ["10.0.0.0/8"], "deny": "all"}
                 ],

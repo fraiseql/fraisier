@@ -660,11 +660,13 @@ class TestServiceFileStaleness:
     def _make_deployer(self, tmp_path, svc="myapp-api.service"):
         from fraisier.deployers.api import APIDeployer
 
-        return APIDeployer({
-            "app_path": str(tmp_path),
-            "systemd_service": svc,
-            "scaffold": {"output_dir": "scripts/generated"},
-        })
+        return APIDeployer(
+            {
+                "app_path": str(tmp_path),
+                "systemd_service": svc,
+                "scaffold": {"output_dir": "scripts/generated"},
+            }
+        )
 
     def test_warns_when_live_differs_from_generated(self, tmp_path, caplog):
         """Warning emitted when generated and live service files diverge."""

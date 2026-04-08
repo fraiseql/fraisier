@@ -290,9 +290,12 @@ class TestInstallViaSocketMethod:
         server_sock.bind(sock_path)
         server_sock.listen(1)
 
-        response_payload = json.dumps(
-            {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
-        ).encode() + b"\n"
+        response_payload = (
+            json.dumps(
+                {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+            ).encode()
+            + b"\n"
+        )
 
         def _serve():
             conn, _ = server_sock.accept()
@@ -325,14 +328,17 @@ class TestInstallViaSocketMethod:
         server_sock.bind(sock_path)
         server_sock.listen(1)
 
-        response_payload = json.dumps(
-            {
-                "ok": False,
-                "stdout": "",
-                "stderr": "lock file out of date",
-                "returncode": 1,
-            }
-        ).encode() + b"\n"
+        response_payload = (
+            json.dumps(
+                {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": "lock file out of date",
+                    "returncode": 1,
+                }
+            ).encode()
+            + b"\n"
+        )
 
         def _serve():
             conn, _ = server_sock.accept()

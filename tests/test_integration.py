@@ -64,7 +64,8 @@ scaffold:
     security_hardening: true
   nginx:
     ssl_provider: letsencrypt
-    cors_origins: ["*.example.io"]
+    cors_origins:
+      - {{pattern: "*.example.io", type: wildcard}}
     rate_limit: "10r/s"
     restricted_paths: ["/admin/"]
   github_actions:
@@ -149,7 +150,8 @@ scaffold:
   output_dir: {output}
   deploy_user: fraisier
   nginx:
-    cors_origins: ["*.example.io"]
+    cors_origins:
+      - {{pattern: "*.example.io", type: wildcard}}
   github_actions:
     python_versions: ["3.12"]
 

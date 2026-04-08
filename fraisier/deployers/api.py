@@ -130,9 +130,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 context=error_details,
             )
 
-    def _check_service_file_staleness_paths(
-        self, generated: Path, live: Path
-    ) -> None:
+    def _check_service_file_staleness_paths(self, generated: Path, live: Path) -> None:
         """Warn if *live* differs from *generated*.  Extracted for testability."""
         if not generated.exists() or not live.exists():
             return
@@ -160,15 +158,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         if not self.systemd_service or not self.app_path:
             return
 
-        scaffold_output_dir = (
-            self.config.get("scaffold", {}) or {}
-        ).get("output_dir", "scripts/generated")
+        scaffold_output_dir = (self.config.get("scaffold", {}) or {}).get(
+            "output_dir", "scripts/generated"
+        )
 
         generated = (
-            Path(self.app_path)
-            / scaffold_output_dir
-            / "systemd"
-            / self.systemd_service
+            Path(self.app_path) / scaffold_output_dir / "systemd" / self.systemd_service
         )
         live = Path("/etc/systemd/system") / self.systemd_service
         self._check_service_file_staleness_paths(generated, live)

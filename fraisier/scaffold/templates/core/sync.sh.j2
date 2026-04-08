@@ -49,6 +49,24 @@ if [ "$MERGE_BASE" = "$SOURCE_SHA" ]; then
     exit 0
 fi
 
+# Show version comparison
+_get_version() {
+    local branch="$1"
+    git show "origin/${branch}:version.json" 2>/dev/null | jq -r '.version // empty' 2>/dev/null \
+        || git show "origin/${branch}:pyproject.toml" 2>/dev/null | grep '^version' | head -1 | cut -d'"' -f2 \
+        || echo "unknown"
+}
+SOURCE_VERSION=$(_get_version "$SOURCE_BRANCH")
+TARGET_VERSION=$(_get_version "$TARGET_BRANCH")
+echo "  Version: ${TARGET_VERSION} → ${SOURCE_VERSION}"
+
+# Confirm before proceeding
+read -r -p "  Proceed with sync? [y/N] " CONFIRM
+if [[ "${CONFIRM,,}" != "y" ]]; then
+    echo "  Aborted."
+    exit 0
+fi
+
 # Create sync branch from source
 echo "  Creating ${SYNC_BRANCH} from origin/${SOURCE_BRANCH}"
 git checkout -b "$SYNC_BRANCH" "origin/${SOURCE_BRANCH}"
@@ -84,13 +102,16 @@ git push origin "$SYNC_BRANCH"
 
 # Create PR targeting the target environment branch
 echo "  Creating PR: ${SYNC_BRANCH} → ${TARGET_BRANCH}"
-gh pr create \
+PR_URL=$(gh pr create \
     --title "Promote ${SOURCE_BRANCH} → ${TARGET_BRANCH}" \
     --body "Automated promotion of \`${SOURCE_BRANCH}\` → \`${TARGET_BRANCH}\` for {{ project_name }}." \
     --base "$TARGET_BRANCH" \
     --head "$SYNC_BRANCH" \
-    --no-maintainer-edit
+    --no-maintainer-edit)
+
+# Enable auto-merge so the PR merges automatically when CI passes
+gh pr merge --auto --squash "$PR_URL"
 
 trap - EXIT
 git checkout "$ORIGINAL_BRANCH"
-echo "==> Done. PR created: ${SOURCE_BRANCH} → ${TARGET_BRANCH}"
+echo "==> Done. PR created and auto-merge enabled: ${PR_URL}"

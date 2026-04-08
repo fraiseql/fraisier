@@ -26,7 +26,9 @@ scaffold:
     memory_max_default: "4G"
   nginx:
     ssl_provider: letsencrypt
-    cors_origins: ["*.example.io", "localhost:*"]
+    cors_origins:
+      - {pattern: "*.example.io", type: wildcard}
+      - {pattern: "localhost:*", type: literal}
     rate_limit: "10r/s"
     restricted_paths: ["/utilities/", "/admin/"]
   github_actions:
@@ -824,7 +826,8 @@ scaffold:
   output_dir: {output}
   nginx:
     ssl_provider: letsencrypt
-    cors_origins: ["*.example.io"]
+    cors_origins:
+      - {{pattern: "*.example.io", type: wildcard}}
     rate_limit: "10r/s"
     restricted_paths: ["/admin/"]
 """.format(output=str(tmp_path / "output")),
@@ -859,8 +862,8 @@ scaffold:
   output_dir: {output}
   nginx:
     cors_origins:
-      - '^https://app\\.example\\.com$'
-      - '^https?://localhost(:[0-9]+)?$'
+      - {{pattern: '^https://app\\.example\\.com$', type: regex}}
+      - {{pattern: '^https?://localhost(:[0-9]+)?$', type: regex}}
 """.format(output=str(tmp_path / "output")),
         )
         from fraisier.scaffold.renderer import ScaffoldRenderer
@@ -892,7 +895,8 @@ scaffold:
   output_dir: {output}
   deploy_user: my_app
   nginx:
-    cors_origins: ["*.example.io"]
+    cors_origins:
+      - {{pattern: "*.example.io", type: wildcard}}
     restricted_paths: ["/admin/"]
   github_actions:
     python_versions: ["3.12"]
@@ -1894,7 +1898,7 @@ fraises:
         nginx:
           server_name: api.myapp.io
           cors_origins:
-            - '^https://app\\.myapp\\.io$'
+            - {{pattern: '^https://app\\.myapp\\.io$', type: regex}}
 scaffold:
   output_dir: {output}
 """.format(output=str(tmp_path / "output")),
@@ -1924,11 +1928,12 @@ fraises:
         nginx:
           server_name: api.myapp.io
           cors_origins:
-            - https://app.myapp.io
+            - {{pattern: "https://app.myapp.io", type: literal}}
 scaffold:
   output_dir: {output}
   nginx:
-    cors_origins: ["https://global.example.com"]
+    cors_origins:
+      - {{pattern: "https://global.example.com", type: literal}}
 """.format(output=str(tmp_path / "output")),
         )
         from fraisier.scaffold.renderer import ScaffoldRenderer
@@ -1957,7 +1962,8 @@ fraises:
 scaffold:
   output_dir: {output}
   nginx:
-    cors_origins: ["https://global.example.com"]
+    cors_origins:
+      - {{pattern: "https://global.example.com", type: literal}}
 """.format(output=str(tmp_path / "output")),
         )
         from fraisier.scaffold.renderer import ScaffoldRenderer
@@ -3432,7 +3438,8 @@ fraises:
             protect_home: "read-only"
         nginx:
           server_name: api.dev.example.com
-          cors_origins: ["https://app.dev.example.com"]
+          cors_origins:
+            - {{pattern: "https://app.dev.example.com", type: literal}}
       production:
         app_path: /var/www/api
         service:
@@ -3454,7 +3461,8 @@ fraises:
           server_name: api.example.com
           ssl_cert: /etc/ssl/api/cert.pem
           ssl_key: /etc/ssl/api/key.pem
-          cors_origins: ["https://app.example.com"]
+          cors_origins:
+            - {{pattern: "https://app.example.com", type: literal}}
           restricted_paths:
             - path: /admin/
               allow: ["10.0.0.0/8"]
