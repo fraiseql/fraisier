@@ -146,6 +146,160 @@ scaffold:
         assert pg.log_lock_waits is False
 
 
+class TestSyncPairConfig:
+    """scaffold.sync pairs parse correctly and generate sync scripts."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_sync_pairs_parse(self, tmp_path):
+        """scaffold.sync parses source/target pairs."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises: {}
+scaffold:
+  sync:
+    - source: dev
+      target: staging
+    - source: staging
+      target: production
+""",
+        )
+        pairs = config.scaffold.sync
+        assert len(pairs) == 2
+        assert pairs[0].source == "dev"
+        assert pairs[0].target == "staging"
+        assert pairs[1].source == "staging"
+        assert pairs[1].target == "production"
+
+    def test_sync_defaults_to_empty(self, tmp_path):
+        """scaffold.sync defaults to empty list when not configured."""
+        config = self._make_config(tmp_path, "name: tp\nfraises: {}\n")
+        assert config.scaffold.sync == []
+
+    def test_sync_scripts_rendered_per_pair(self, tmp_path):
+        """One sync-{source}-to-{target}.sh is rendered per configured pair."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        health_check:
+          url: http://127.0.0.1:8080/health
+scaffold:
+  output_dir: {output}
+  sync:
+    - source: dev
+      target: staging
+    - source: staging
+      target: production
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        rendered = renderer.render()
+
+        assert "sync-dev-to-staging.sh" in rendered
+        assert "sync-staging-to-production.sh" in rendered
+
+    def test_sync_script_contains_correct_branches(self, tmp_path):
+        """Rendered sync script uses the configured source and target branches."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        health_check:
+          url: http://127.0.0.1:8080/health
+scaffold:
+  output_dir: {output}
+  sync:
+    - source: dev
+      target: staging
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "sync-dev-to-staging.sh").read_text()
+        assert 'SOURCE_BRANCH="dev"' in content
+        assert 'TARGET_BRANCH="staging"' in content
+        assert "fraises.yaml" in content
+
+    def test_sync_script_is_executable(self, tmp_path):
+        """Rendered sync script has executable permission bits set."""
+        import stat
+
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        health_check:
+          url: http://127.0.0.1:8080/health
+scaffold:
+  output_dir: {output}
+  sync:
+    - source: dev
+      target: staging
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        script = tmp_path / "output" / "sync-dev-to-staging.sh"
+        assert script.stat().st_mode & stat.S_IXUSR
+
+    def test_no_sync_scripts_when_not_configured(self, tmp_path):
+        """No sync scripts rendered when scaffold.sync is absent."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        health_check:
+          url: http://127.0.0.1:8080/health
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        rendered = renderer.render()
+
+        assert not any("sync-" in f for f in rendered)
+
+
 class TestScaffoldRenderer:
     """Renderer runs core templates, then provider templates."""
 
@@ -1047,6 +1201,46 @@ scaffold:
         assert "server_name backend.example.com" in content
         assert "tp_management_api_backend" in content
         assert "tp_backend_api_backend" in content
+
+    def test_no_ssl_catchall_when_server_name_only_in_per_env_nginx(self, tmp_path):
+        """gateway.conf must not emit catch-all SSL when server_name is per-env only.
+
+        Regression for #127: fraise-level server_name is None but per-env
+        nginx.server_name is set — has_server_names must be True so the
+        catch-all (server_name _) block is suppressed.
+        """
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        health_check:
+          url: http://127.0.0.1:8080/health
+        nginx:
+          server_name: api.example.com
+          ssl_cert: /etc/ssl/certs/api.crt
+          ssl_key: /etc/ssl/private/api.key
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "gateway.conf").read_text()
+        # The listen-80 redirect block always has `server_name _;` — correct.
+        # The bug emits a second listen-443 block with `server_name _` referencing
+        # a non-existent cert.  After the fix, only one `server_name _;` exists.
+        assert content.count("server_name _;") == 1
+        # And the proper named SSL block must be present (has_server_names was True).
+        assert "server_name api.example.com" in content
 
     def test_single_fraise_uses_location_root(self, tmp_path):
         """Single API fraise still gets location / (no prefix needed)."""

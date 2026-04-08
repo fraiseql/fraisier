@@ -1,0 +1,11 @@
+[Unit]
+Description=Fraisier install helper socket for {{ project_name }} ({{ fraise_name }}-{{ env_name }})
+
+[Socket]
+ListenStream=/run/fraisier/install-{{ project_name }}-{{ fraise_name }}-{{ env_name }}.sock
+SocketUser={{ scaffold.deploy_user }}
+SocketGroup={{ scaffold.deploy_user }}
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

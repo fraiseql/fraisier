@@ -116,6 +116,58 @@ def _resolve_command_path(cmd: str) -> str:
     return f"{absolute} {parts[1]}"
 
 
+def _collect_install_helper_sockets(
+    project_name: str,
+    local_fraises: list[dict[str, Any]],
+    deploy_user: str,
+) -> list[dict[str, str]]:
+    """Return one entry per fraise+env that needs a separate install user.
+
+    Each entry contains all fields needed by the webhook template and the
+    install-helper renderer (fraise_name, env_name, install_user, app_path,
+    socket_path, env_var, socket_unit, service_unit).
+    """
+    result: list[dict[str, str]] = []
+    for fraise in local_fraises:
+        fraise_name = fraise["name"]
+        fraise_install = fraise.get("install")
+        for env_name, env_config in fraise.get("environments", {}).items():
+            install = env_config.get("install") or (
+                fraise_install if isinstance(fraise_install, dict) else None
+            )
+            if not isinstance(install, dict):
+                continue
+            install_user = install.get("user")
+            if not install_user or install_user == deploy_user:
+                continue
+            app_path = env_config.get("app_path", "")
+            if not app_path:
+                continue
+            safe_fraise = fraise_name.upper().replace("-", "_")
+            safe_env = env_name.upper().replace("-", "_")
+            result.append(
+                {
+                    "fraise_name": fraise_name,
+                    "env_name": env_name,
+                    "install_user": install_user,
+                    "app_path": str(app_path),
+                    "socket_path": (
+                        f"/run/fraisier/install-{project_name}-{fraise_name}-{env_name}.sock"
+                    ),
+                    "env_var": f"FRAISIER_INSTALL_SOCKET_{safe_fraise}_{safe_env}",
+                    "socket_unit": (
+                        f"fraisier-{project_name}-{fraise_name}-{env_name}"
+                        "-install-helper.socket"
+                    ),
+                    "service_unit": (
+                        f"fraisier-{project_name}-{fraise_name}-{env_name}"
+                        "-install-helper.service"
+                    ),
+                }
+            )
+    return result
+
+
 def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[str]:
     """Collect database names that need admin access (rebuild/restore_migrate).
 
@@ -271,6 +323,19 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
             # Resolve server_name from routing config if present
             entry.setdefault("server_name", None)
             entry.setdefault("location", None)
+            # Aggregate server_name from per-env nginx when not set at fraise level.
+            # Needed so gateway.conf.j2 `has_server_names` is True and the catch-all
+            # SSL block (server_name _) is suppressed.  First env wins — this is only
+            # used for the catch-all gate, not for routing.
+            if entry["server_name"] is None:
+                _raw_envs = entry.get("environments") or {}
+                if isinstance(_raw_envs, dict):
+                    for _ec in _raw_envs.values():
+                        if isinstance(_ec, dict) and isinstance(_ec.get("nginx"), dict):
+                            _sn = _ec["nginx"].get("server_name")
+                            if _sn:
+                                entry["server_name"] = _sn
+                                break
             # Enrich each env_config with the precomputed service_base so
             # templates can use it directly without duplicating the resolution logic.
             enriched = {}
@@ -318,6 +383,11 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
     else:
         machine_env_map = full_machine_env_map
 
+    deploy_user = config.scaffold.deploy_user
+    install_helper_sockets = _collect_install_helper_sockets(
+        project_name, local_fraises, deploy_user
+    )
+
     return {
         "manifest": build_manifest(config),
         "scaffold": config.scaffold,
@@ -335,6 +405,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "deploy_users": _collect_deploy_users(config, fraises_list),
         "sudoers_rules": _collect_deduplicated_sudoers_rules(config, fraises_list),
         "machine_env_map": machine_env_map,
+        "install_helper_sockets": install_helper_sockets,
     }
 
 
@@ -445,6 +516,15 @@ class ScaffoldRenderer:
                 f"/etc/systemd/system/{helper_sock}"
             )
 
+        # Install helper socket + service units
+        for entry in self.context["install_helper_sockets"]:
+            mapping[f"systemd/{entry['socket_unit']}"] = Path(
+                f"/etc/systemd/system/{entry['socket_unit']}"
+            )
+            mapping[f"systemd/{entry['service_unit']}"] = Path(
+                f"/etc/systemd/system/{entry['service_unit']}"
+            )
+
         # Standard systemd units
         for unit in [
             "deploy-checker.timer",
@@ -531,9 +611,16 @@ class ScaffoldRenderer:
             if not dry_run:
                 self._render_template("core/systemctl-wrapper.sh.j2", systemctl_out)
 
+        # Sync scripts — one per configured source→target pair
+        if self.context["scaffold"].sync:
+            rendered_files.extend(self._render_sync_scripts(dry_run))
+
         # Systemctl helper service + socket (always when there are services)
         if self.context["allowed_services"]:
             rendered_files.extend(self._render_systemctl_helper(dry_run))
+
+        # Install helper units: socket+service per fraise+env with separate install user
+        rendered_files.extend(self._render_install_helper_units(dry_run))
 
         # Webhook service(s) — rendered dynamically to include project name
         rendered_files.extend(self._render_webhook_services(dry_run))
@@ -608,6 +695,57 @@ class ScaffoldRenderer:
         if server_slug:
             return f"fraisier-{project}-webhook-{server_slug}.service"
         return f"fraisier-{project}-webhook.service"
+
+    def _render_sync_scripts(self, dry_run: bool) -> list[str]:
+        """Render one sync.sh per configured source→target pair."""
+        rendered: list[str] = []
+        for pair in self.context["scaffold"].sync:
+            out_name = f"sync-{pair.source}-to-{pair.target}.sh"
+            rendered.append(out_name)
+            if not dry_run:
+                pair_context = {**self.context, "pair": pair}
+                try:
+                    tpl = self.env.get_template("core/sync.sh.j2")
+                    content = tpl.render(**pair_context)
+                except jinja2.TemplateNotFound:
+                    content = "# Placeholder: sync.sh.j2\n"
+                self._write_output(out_name, content)
+                # Make executable
+                out_path = Path(self.output_dir) / out_name
+                out_path.chmod(out_path.stat().st_mode | 0o111)
+        return rendered
+
+    def _render_install_helper_units(self, dry_run: bool) -> list[str]:
+        """Render install-helper .socket and .service units for each fraise+env."""
+        rendered: list[str] = []
+        for entry in self.context["install_helper_sockets"]:
+            socket_rel = f"systemd/{entry['socket_unit']}"
+            service_rel = f"systemd/{entry['service_unit']}"
+            rendered.extend([socket_rel, service_rel])
+            if not dry_run:
+                unit_context = {
+                    **self.context,
+                    "fraise_name": entry["fraise_name"],
+                    "env_name": entry["env_name"],
+                    "install_user": entry["install_user"],
+                    "app_path": entry["app_path"],
+                }
+                try:
+                    tpl = self.env.get_template("core/install-helper.socket.j2")
+                    self._write_output(socket_rel, tpl.render(**unit_context))
+                except jinja2.TemplateNotFound:
+                    self._write_output(
+                        socket_rel, "# Placeholder: install-helper.socket.j2\n"
+                    )
+
+                try:
+                    tpl = self.env.get_template("core/install-helper.service.j2")
+                    self._write_output(service_rel, tpl.render(**unit_context))
+                except jinja2.TemplateNotFound:
+                    self._write_output(
+                        service_rel, "# Placeholder: install-helper.service.j2\n"
+                    )
+        return rendered
 
     def _render_systemctl_helper(self, dry_run: bool) -> list[str]:
         """Render the systemctl helper .service and .socket units."""

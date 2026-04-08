@@ -284,14 +284,6 @@ def _escape_cors_dots(origin: str) -> str:
 
 
 @dataclass
-class CorsOrigin:
-    """CORS origin configuration."""
-
-    pattern: str
-    type: str = "literal"  # "literal", "wildcard", "regex"
-
-
-@dataclass
 class NginxEnvConfig:
     """Per-environment nginx configuration."""
 
@@ -424,6 +416,14 @@ PG_LOG_ENV_DEFAULTS: dict[str, dict[str, str | bool]] = {
 
 
 @dataclass
+class SyncPair:
+    """A source→target branch pair for scaffold-generated sync scripts."""
+
+    source: str
+    target: str
+
+
+@dataclass
 class ScaffoldConfig:
     """Parsed scaffold: section from fraises.yaml."""
 
@@ -440,6 +440,7 @@ class ScaffoldConfig:
         default_factory=GithubActionsScaffoldConfig
     )
     postgresql: PostgresLoggingConfig = field(default_factory=PostgresLoggingConfig)
+    sync: list[SyncPair] = field(default_factory=list)
 
     @property
     def config_dir(self) -> str:

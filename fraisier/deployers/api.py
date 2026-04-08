@@ -130,6 +130,49 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 context=error_details,
             )
 
+    def _check_service_file_staleness_paths(
+        self, generated: Path, live: Path
+    ) -> None:
+        """Warn if *live* differs from *generated*.  Extracted for testability."""
+        if not generated.exists() or not live.exists():
+            return
+        if generated.read_text() != live.read_text():
+            logger.warning(
+                "Service file is out of sync with scaffold: %s\n"
+                "  Generated: %s\n"
+                "  Installed: %s\n"
+                "  Run 'fraisier install' to apply the updated unit.",
+                self.systemd_service,
+                generated,
+                live,
+            )
+
+    def _check_service_file_staleness(self) -> None:
+        """Warn if the installed service file differs from the scaffold-generated one.
+
+        Compares ``{app_path}/{scaffold_output_dir}/systemd/{service}.service``
+        against ``/etc/systemd/system/{service}.service``.  A mismatch means the
+        server was not re-provisioned after a scaffold template change and the live
+        service unit may contain stale configuration.
+
+        Non-fatal: logs a WARNING and suggests running ``fraisier install``.
+        """
+        if not self.systemd_service or not self.app_path:
+            return
+
+        scaffold_output_dir = (
+            self.config.get("scaffold", {}) or {}
+        ).get("output_dir", "scripts/generated")
+
+        generated = (
+            Path(self.app_path)
+            / scaffold_output_dir
+            / "systemd"
+            / self.systemd_service
+        )
+        live = Path("/etc/systemd/system") / self.systemd_service
+        self._check_service_file_staleness_paths(generated, live)
+
     def _sync_config_if_needed(self) -> None:
         """Sync fraises.yaml from git checkout and regenerate scaffold if changed."""
         if not self.app_path:
@@ -226,6 +269,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 except Exception as e:
                     logger.warning(f"Config sync failed: {e}")
                     # Continue with deployment - config mismatch is not fatal
+
+                # Warn if the installed service file has drifted from scaffold
+                self._check_service_file_staleness()
 
                 # Step 1: Git pull via bare repo
                 logger.info(f"Deploying via bare repo to {self.app_path}")

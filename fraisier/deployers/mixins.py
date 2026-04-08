@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shlex
+import socket
 import sqlite3
 import subprocess
 import time
@@ -125,6 +128,22 @@ class GitDeployMixin:
         # Only use sudo if install_user differs from deploy_user
         deploy_user = self.config.get("deploy_user")
         if self.install_user and self.install_user != deploy_user:
+            # Try socket helper first — avoids sudo, works with NoNewPrivileges=true
+            safe_fraise = self.fraise_name.upper().replace("-", "_")
+            safe_env = self.environment.upper().replace("-", "_")
+            env_key = f"FRAISIER_INSTALL_SOCKET_{safe_fraise}_{safe_env}"
+            socket_path = os.environ.get(env_key)
+            if socket_path and Path(socket_path).exists():
+                logger.info(
+                    "Installing dependencies via socket %s: %s", socket_path, cmd
+                )
+                self._install_via_socket(socket_path, cmd, self.app_path)
+                return
+            # Fallback to sudo -u (e.g. first bootstrap before socket unit is installed)
+            logger.debug(
+                "Install helper socket not available (%s), falling back to sudo -u",
+                env_key,
+            )
             # Verify manifest ownership and delete paths owned by wrong user
             if hasattr(self, "config_object") and self.config_object:
                 from fraisier.deployers.preflight_ownership import (
@@ -154,6 +173,68 @@ class GitDeployMixin:
                     "suggested_command": suggested,
                 },
             ) from exc
+
+    def _install_via_socket(
+        self, socket_path: str, command: list[str], cwd: str
+    ) -> None:
+        """Run *command* in *cwd* via the install-helper Unix socket.
+
+        Raises:
+            DeploymentError: If the connection fails or the command exits non-zero.
+        """
+        request = json.dumps({"command": command, "cwd": cwd}).encode() + b"\n"
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            with sock:
+                sock.connect(socket_path)
+                sock.sendall(request)
+                sock.shutdown(socket.SHUT_WR)
+                raw = b""
+                buf = bytearray()
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    if b"\n" in buf:
+                        raw = bytes(buf.split(b"\n", 1)[0])
+                        break
+        except OSError as exc:
+            raise DeploymentError(
+                f"Failed to connect to install helper socket {socket_path}: {exc}",
+                context={"socket_path": socket_path, "command": command, "cwd": cwd},
+            ) from exc
+
+        try:
+            response = json.loads(raw.decode())
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise DeploymentError(
+                f"Invalid response from install helper: {exc}",
+                context={
+                    "socket_path": socket_path,
+                    "raw": raw.decode(errors="replace"),
+                },
+            ) from exc
+
+        if not response.get("ok"):
+            error = response.get("error") or response.get("stderr") or "unknown error"
+            suggested = f"cd {cwd} && {shlex.join(command)}"
+            raise DeploymentError(
+                "Install command failed"
+                f" (exit code {response.get('returncode', '?')}):"
+                f" {shlex.join(command)}\n"
+                f"  Directory: {cwd}\n"
+                f"  Error: {error}\n"
+                f"  To debug: {suggested}",
+                context={
+                    "command": command,
+                    "cwd": cwd,
+                    "exit_code": response.get("returncode"),
+                    "stdout": response.get("stdout", ""),
+                    "stderr": response.get("stderr", ""),
+                    "suggested_command": suggested,
+                },
+            )
 
     def _git_rollback(
         self,

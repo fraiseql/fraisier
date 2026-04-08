@@ -21,6 +21,9 @@ Environment=FRAISIER_PG_WRAPPER=/usr/local/libexec/fraisier/pgadmin-{{ project_n
 {% if allowed_services %}
 Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock
 {% endif %}
+{% for ish in install_helper_sockets %}
+Environment={{ ish.env_var }}={{ ish.socket_path }}
+{% endfor %}
 
 # Resource limits
 MemoryMax=512M

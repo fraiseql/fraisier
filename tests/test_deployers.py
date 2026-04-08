@@ -654,6 +654,76 @@ class TestAPIDeployer:
         assert install_call[:3] == ["sudo", "-u", "appuser"]
 
 
+class TestServiceFileStaleness:
+    """_check_service_file_staleness warns when live unit differs from scaffold."""
+
+    def _make_deployer(self, tmp_path, svc="myapp-api.service"):
+        from fraisier.deployers.api import APIDeployer
+
+        return APIDeployer({
+            "app_path": str(tmp_path),
+            "systemd_service": svc,
+            "scaffold": {"output_dir": "scripts/generated"},
+        })
+
+    def test_warns_when_live_differs_from_generated(self, tmp_path, caplog):
+        """Warning emitted when generated and live service files diverge."""
+        import logging
+
+        svc = "myapp-api.service"
+        generated = tmp_path / "generated.service"
+        live = tmp_path / "live.service"
+        generated.write_text("[Service]\nExecStart=/new/path\n")
+        live.write_text("[Service]\nExecStart=/old/path\n")
+
+        deployer = self._make_deployer(tmp_path, svc)
+        with caplog.at_level(logging.WARNING, logger="fraisier"):
+            deployer._check_service_file_staleness_paths(generated, live)
+
+        assert any("out of sync" in r.message for r in caplog.records)
+
+    def test_no_warning_when_files_match(self, tmp_path, caplog):
+        """No warning when generated and live service files are identical."""
+        import logging
+
+        content = "[Service]\nExecStart=/same/path\n"
+        generated = tmp_path / "generated.service"
+        live = tmp_path / "live.service"
+        generated.write_text(content)
+        live.write_text(content)
+
+        deployer = self._make_deployer(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="fraisier"):
+            deployer._check_service_file_staleness_paths(generated, live)
+
+        assert not any("out of sync" in r.message for r in caplog.records)
+
+    def test_skips_when_generated_file_missing(self, tmp_path, caplog):
+        """No warning when generated file does not exist (scaffold not run yet)."""
+        import logging
+
+        deployer = self._make_deployer(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="fraisier"):
+            deployer._check_service_file_staleness_paths(
+                tmp_path / "missing.service",
+                tmp_path / "also-missing.service",
+            )
+
+        assert not any("out of sync" in r.message for r in caplog.records)
+
+    def test_skips_when_no_systemd_service(self, tmp_path, caplog):
+        """No-op when systemd_service is not configured."""
+        import logging
+
+        from fraisier.deployers.api import APIDeployer
+
+        deployer = APIDeployer({"app_path": str(tmp_path)})
+        with caplog.at_level(logging.WARNING, logger="fraisier"):
+            deployer._check_service_file_staleness()
+
+        assert not any("out of sync" in r.message for r in caplog.records)
+
+
 class TestETLDeployer:
     """Tests for ETL deployer."""
 

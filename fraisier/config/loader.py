@@ -28,6 +28,7 @@ from fraisier.config.schema import (
     ScaffoldConfig,
     ShipCheckConfig,
     ShipConfig,
+    SyncPair,
     SystemdScaffoldConfig,
     _config_search_locations,
 )
@@ -518,6 +519,11 @@ class FraisierConfig:
                 log_rotation_age=raw_pg.get("log_rotation_age", "1d"),
                 log_rotation_size=raw_pg.get("log_rotation_size", "100MB"),
             ),
+            sync=[
+                SyncPair(source=p["source"], target=p["target"])
+                for p in (raw.get("sync") or [])
+                if isinstance(p, dict) and p.get("source") and p.get("target")
+            ],
         )
 
     @property

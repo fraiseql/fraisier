@@ -63,6 +63,7 @@ fraisier = "fraisier.cli:main"
 fraisier-mcp = "fraisier.mcp_server:main"
 fraisier-webhook = "fraisier.webhook:run_server"
 fraisier-systemctl-helper = "fraisier.systemctl_helper:main"
+fraisier-install-helper = "fraisier.install_helper:main"
 
 [project.urls]
 Documentation = "https://fraisier.fraiseql.com"

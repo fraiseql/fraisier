@@ -404,6 +404,22 @@ if [ -f /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.socket 
     _run sudo systemctl enable --now fraisier-{{ project_name }}-systemctl-helper.socket
 fi
 
+{% for ish in install_helper_sockets %}
+# Install helper socket for {{ ish.fraise_name }}-{{ ish.env_name }} (runs as {{ ish.install_user }})
+if _env_active "{{ ish.env_name }}"; then
+    if [ -f "${SCAFFOLD_DIR}/systemd/{{ ish.socket_unit }}" ] && \
+       [ -f "${SCAFFOLD_DIR}/systemd/{{ ish.service_unit }}" ]; then
+        echo "  Installing install helper for {{ ish.fraise_name }}-{{ ish.env_name }}"
+        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ ish.socket_unit }}" \
+           /etc/systemd/system/{{ ish.socket_unit }}
+        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ ish.service_unit }}" \
+           /etc/systemd/system/{{ ish.service_unit }}
+        _run sudo systemctl daemon-reload
+        _run sudo systemctl enable --now {{ ish.socket_unit }}
+    fi
+fi
+{% endfor %}
+
 # Install nginx config
 if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ]; then
     echo "  Installing nginx gateway config"

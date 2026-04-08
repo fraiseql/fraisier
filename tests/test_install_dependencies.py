@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentStatus
 from fraisier.deployers.etl import ETLDeployer
@@ -153,6 +155,215 @@ class TestInstallDependenciesExecution:
         deployer._install_dependencies()
 
         mock_runner.run.assert_not_called()
+
+
+class TestInstallViaSocket:
+    """Install via Unix socket helper when FRAISIER_INSTALL_SOCKET_* is set."""
+
+    def test_uses_socket_when_env_var_and_path_exist(self, tmp_path):
+        """When socket env var is set and path exists, uses socket instead of sudo."""
+        socket_file = tmp_path / "install.sock"
+        socket_file.touch()
+
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "fraise_name": "api",
+            "environment": "production",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"FRAISIER_INSTALL_SOCKET_API_PRODUCTION": str(socket_file)},
+            ),
+            patch.object(deployer, "_install_via_socket") as mock_socket,
+        ):
+            deployer._install_dependencies()
+
+        mock_socket.assert_called_once_with(
+            str(socket_file), ["uv", "sync", "--frozen"], "/var/www/api"
+        )
+        mock_runner.run.assert_not_called()
+
+    def test_falls_back_to_sudo_when_socket_missing(self, tmp_path):
+        """Falls back to sudo -u when socket file does not exist."""
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "fraise_name": "api",
+            "environment": "production",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        with patch.dict(
+            "os.environ",
+            {"FRAISIER_INSTALL_SOCKET_API_PRODUCTION": str(tmp_path / "missing.sock")},
+        ):
+            deployer._install_dependencies()
+
+        mock_runner.run.assert_called_once_with(
+            ["sudo", "-u", "appuser", "uv", "sync", "--frozen"],
+            cwd="/var/www/api",
+        )
+
+    def test_falls_back_to_sudo_when_env_var_not_set(self):
+        """Falls back to sudo -u when no socket env var is set."""
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "fraise_name": "api",
+            "environment": "production",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        with patch.dict("os.environ", {}, clear=True):
+            deployer._install_dependencies()
+
+        mock_runner.run.assert_called_once_with(
+            ["sudo", "-u", "appuser", "uv", "sync", "--frozen"],
+            cwd="/var/www/api",
+        )
+
+    def test_hyphenated_names_normalised_to_underscores(self, tmp_path):
+        """Hyphens in fraise/env names become underscores in env var key."""
+        socket_file = tmp_path / "install.sock"
+        socket_file.touch()
+
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "fraise_name": "my-api",
+            "environment": "pre-production",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"FRAISIER_INSTALL_SOCKET_MY_API_PRE_PRODUCTION": str(socket_file)},
+            ),
+            patch.object(deployer, "_install_via_socket") as mock_socket,
+        ):
+            deployer._install_dependencies()
+
+        mock_socket.assert_called_once()
+        mock_runner.run.assert_not_called()
+
+
+class TestInstallViaSocketMethod:
+    """Unit tests for _install_via_socket."""
+
+    def test_sends_correct_json_and_returns_on_success(self, tmp_path):
+        """Connects to socket, sends JSON request, succeeds on ok=true response."""
+        import json
+        import socket as _socket
+        import threading
+
+        sock_path = str(tmp_path / "test.sock")
+        server_sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        server_sock.bind(sock_path)
+        server_sock.listen(1)
+
+        response_payload = json.dumps(
+            {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+        ).encode() + b"\n"
+
+        def _serve():
+            conn, _ = server_sock.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(response_payload)
+            server_sock.close()
+
+        t = threading.Thread(target=_serve, daemon=True)
+        t.start()
+
+        cfg = {"app_path": "/var/www/api", "fraise_name": "api", "environment": "prod"}
+        deployer = APIDeployer(cfg)
+        # Should not raise
+        deployer._install_via_socket(
+            sock_path, ["uv", "sync", "--frozen"], "/var/www/api"
+        )
+        t.join(timeout=2)
+
+    def test_raises_deployment_error_on_ok_false(self, tmp_path):
+        """Raises DeploymentError when response ok=false."""
+        import json
+        import socket as _socket
+        import threading
+
+        from fraisier.errors import DeploymentError
+
+        sock_path = str(tmp_path / "test.sock")
+        server_sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        server_sock.bind(sock_path)
+        server_sock.listen(1)
+
+        response_payload = json.dumps(
+            {
+                "ok": False,
+                "stdout": "",
+                "stderr": "lock file out of date",
+                "returncode": 1,
+            }
+        ).encode() + b"\n"
+
+        def _serve():
+            conn, _ = server_sock.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(response_payload)
+            server_sock.close()
+
+        t = threading.Thread(target=_serve, daemon=True)
+        t.start()
+
+        cfg = {"app_path": "/var/www/api", "fraise_name": "api", "environment": "prod"}
+        deployer = APIDeployer(cfg)
+        with pytest.raises(DeploymentError, match="Install command failed"):
+            deployer._install_via_socket(
+                sock_path, ["uv", "sync", "--frozen"], "/var/www/api"
+            )
+        t.join(timeout=2)
+
+    def test_raises_deployment_error_on_connection_failure(self, tmp_path):
+        """Raises DeploymentError when socket connection fails."""
+        from fraisier.errors import DeploymentError
+
+        cfg = {"app_path": "/var/www/api", "fraise_name": "api", "environment": "prod"}
+        deployer = APIDeployer(cfg)
+        with pytest.raises(DeploymentError, match="Failed to connect"):
+            deployer._install_via_socket(
+                str(tmp_path / "nonexistent.sock"),
+                ["uv", "sync"],
+                "/var/www/api",
+            )
 
 
 class TestInstallStepInAPIDeployer:

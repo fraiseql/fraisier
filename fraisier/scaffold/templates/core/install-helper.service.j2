@@ -1,0 +1,31 @@
+[Unit]
+Description=Fraisier install helper for {{ project_name }} ({{ fraise_name }}-{{ env_name }})
+Requires=fraisier-{{ project_name }}-{{ fraise_name }}-{{ env_name }}-install-helper.socket
+After=fraisier-{{ project_name }}-{{ fraise_name }}-{{ env_name }}-install-helper.socket
+
+[Service]
+Type=simple
+User={{ install_user }}
+Group={{ install_user }}
+# Binary is installed as a uv tool under the deploy user's home directory.
+# ProtectHome is intentionally omitted: the binary lives in ~/.local which
+# ProtectHome (any value) would make inaccessible.
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-install-helper
+
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Pin the uv cache to a known path so ReadWritePaths can cover it exactly.
+Environment=UV_CACHE_DIR=/home/{{ install_user }}/.cache/uv
+
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+# Project directory + uv wheel cache (uv sync writes to both)
+ReadWritePaths={{ app_path }} /home/{{ install_user }}/.cache/uv
+
+[Install]
+WantedBy=multi-user.target
