@@ -102,6 +102,8 @@ class ServiceConfig:
     workers: int = 1
     exec: str | None = None
     type: str = "notify"
+    server_type: str = "uvicorn"  # "uvicorn" or "gunicorn"
+    watchdog_sec: str | None = None  # e.g., "30s", "5m"
     exec_start_pre: list[str] = field(default_factory=list)
     memory_max: str | None = None
     memory_high: str | None = None
@@ -130,6 +132,8 @@ class ServiceConfig:
                 f"service.type must be one of {sorted(_VALID_SERVICE_TYPES)}, "
                 f"got {self.type!r}",
             )
+        # server_type is informational and not currently validated
+        # watchdog_sec validation delegated to systemd at runtime
         for size_field in ("memory_max", "memory_high"):
             val = getattr(self, size_field)
             if val is not None and not _MEMORY_SIZE_RE.match(val):
@@ -196,6 +200,8 @@ class ServiceConfig:
             workers=_get("workers", "worker_count", 1),
             exec=_get("exec", "exec_command"),
             type=svc.get("type", "notify"),
+            server_type=svc.get("server_type", "uvicorn"),
+            watchdog_sec=svc.get("watchdog_sec"),
             exec_start_pre=svc.get("exec_start_pre", []),
             memory_max=_get("memory_max", "memory_max"),
             memory_high=svc.get("memory_high"),
@@ -220,14 +226,69 @@ class RestrictedPath:
     deny: str = "all"
 
 
-def _escape_cors_dots(origin: str) -> str:
-    """Escape unescaped literal dots in a CORS origin for nginx regex.
+def _normalize_cors_origins(origins: list) -> list[dict[str, str]]:
+    """Normalize CORS origins to dict format with backward compatibility.
 
-    Dots that are already escaped (``\\.``) or part of regex
-    metachar sequences (e.g. ``.*``, ``.+``) are left untouched.
+    Args:
+        origins: List of strings or dicts
+
+    Returns:
+        List of normalized dicts with 'pattern' and 'type' keys
     """
-    # Match dots not preceded by backslash and not followed by regex quantifiers
-    return re.sub(r"(?<!\\)\.(?![*+?])", r"\\.", origin)
+    normalized = []
+    for o in origins:
+        if isinstance(o, str):
+            # Backward compatibility: detect wildcard patterns
+            if "*" in o and "." in o[o.find("*") :]:
+                # Assume wildcard if * is followed by .
+                type_ = "wildcard"
+            else:
+                type_ = "literal"
+            normalized.append({"pattern": o, "type": type_})
+        elif isinstance(o, dict):
+            normalized.append(o)
+        else:
+            raise ValueError(f"Invalid CORS origin format: {o}")
+    return normalized
+
+
+def _process_cors_origin(origin: dict[str, str]) -> str:
+    """Process a CORS origin dict into nginx regex pattern.
+
+    Args:
+        origin: Dict with 'pattern' and 'type' keys
+
+    Returns:
+        Nginx regex pattern string
+    """
+    pattern = origin["pattern"]
+    origin_type = origin.get("type", "literal")
+
+    if origin_type == "regex":
+        # Raw regex, no processing
+        return pattern
+    elif origin_type == "wildcard":
+        # Convert subdomain wildcard * to regex pattern, escape dots
+        pattern = re.sub(r"\*(?=\.)", r"[a-zA-Z0-9-]+", pattern)
+        return re.sub(r"(?<!\\)\.(?![*+?])", r"\\.", pattern)
+    elif origin_type == "literal":
+        # Just escape dots
+        return re.sub(r"(?<!\\)\.(?![*+?])", r"\\.", pattern)
+    else:
+        raise ValueError(f"Unknown CORS origin type: {origin_type}")
+
+
+def _escape_cors_dots(origin: str) -> str:
+    """Legacy function for backward compatibility - converts literal string."""
+    return _process_cors_origin({"pattern": origin, "type": "literal"})
+
+
+@dataclass
+class CorsOrigin:
+    """CORS origin configuration."""
+
+    pattern: str
+    type: str = "literal"  # "literal", "wildcard", "regex"
 
 
 @dataclass
@@ -237,7 +298,7 @@ class NginxEnvConfig:
     server_name: str | None = None
     ssl_cert: str | None = None
     ssl_key: str | None = None
-    cors_origins: list[str] = field(default_factory=list)
+    cors_origins: list[dict[str, str]] = field(default_factory=list)
     restricted_paths: list[RestrictedPath] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -249,13 +310,13 @@ class NginxEnvConfig:
             raise ValidationError(
                 "nginx.ssl_key requires nginx.ssl_cert to also be set",
             )
-        # Auto-escape CORS origins for nginx regex
-        self.cors_origins = [_escape_cors_dots(o) for o in self.cors_origins]
+        # Normalize CORS origins to dict format
+        self.cors_origins = _normalize_cors_origins(self.cors_origins)
 
     @property
     def cors_origins_escaped(self) -> list[str]:
-        """Return CORS origins with literal dots escaped for nginx regex."""
-        return [_escape_cors_dots(o) for o in self.cors_origins]
+        """Return CORS origins processed for nginx regex."""
+        return [_process_cors_origin(o) for o in self.cors_origins]
 
     @classmethod
     def from_env_dict(cls, env: dict[str, Any]) -> "NginxEnvConfig | None":
@@ -302,19 +363,19 @@ class NginxScaffoldConfig:
     """Nginx scaffold options."""
 
     ssl_provider: str = "letsencrypt"
-    cors_origins: list[str] = field(default_factory=list)
+    cors_origins: list[dict[str, str]] = field(default_factory=list)
     rate_limit: str = "10r/s"
     restricted_paths: list[str] = field(default_factory=list)
     webhook_port: int = 8080
 
     def __post_init__(self) -> None:
-        # Auto-escape CORS origins for nginx regex
-        self.cors_origins = [_escape_cors_dots(o) for o in self.cors_origins]
+        # Normalize CORS origins to dict format
+        self.cors_origins = _normalize_cors_origins(self.cors_origins)
 
     @property
     def cors_origins_escaped(self) -> list[str]:
-        """Return CORS origins (already escaped)."""
-        return self.cors_origins
+        """Return CORS origins processed for nginx regex."""
+        return [_process_cors_origin(o) for o in self.cors_origins]
 
 
 @dataclass

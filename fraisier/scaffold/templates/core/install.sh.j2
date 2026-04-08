@@ -350,6 +350,23 @@ fi
 {% endfor %}
 {% endfor %}
 
+# Clean up stale WatchdogSec directives in existing service files
+# (Older scaffold versions included WatchdogSec which causes issues with uvicorn)
+echo "  Checking for stale WatchdogSec directives in systemd service files"
+{% for fraise in local_fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% set svc = env_config.service_base %}
+if _env_active "{{ env_name }}"; then
+    SERVICE_FILE="/etc/systemd/system/{{ svc }}.service"
+    if [ -f "$SERVICE_FILE" ] && grep -q "^WatchdogSec=" "$SERVICE_FILE"; then
+        echo "  Removing stale WatchdogSec from $SERVICE_FILE"
+        _run sudo sed -i '/^WatchdogSec=/d' "$SERVICE_FILE"
+        _run sudo systemctl daemon-reload
+    fi
+fi
+{% endfor %}
+{% endfor %}
+
 # Install socket-activated deploy units
 echo "  Installing socket-activated deploy units"
 {% for fraise in local_fraises %}

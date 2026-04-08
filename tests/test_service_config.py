@@ -22,6 +22,8 @@ class TestServiceConfigDefaults:
         assert sc.port is None
         assert sc.workers == 1
         assert sc.exec is None
+        assert sc.server_type == "uvicorn"
+        assert sc.watchdog_sec is None
         assert sc.memory_max is None
         assert sc.memory_high is None
         assert sc.cpu_quota is None
@@ -139,6 +141,26 @@ class TestServiceConfigValidation:
         sc = ServiceConfig(credentials={"pg": "/etc/creds/pg"})
         assert sc.credentials == {"pg": "/etc/creds/pg"}
 
+    def test_server_type_accepts_any_string(self):
+        sc = ServiceConfig(server_type="nginx")
+        assert sc.server_type == "nginx"
+
+    def test_valid_server_type_uvicorn(self):
+        sc = ServiceConfig(server_type="uvicorn")
+        assert sc.server_type == "uvicorn"
+
+    def test_valid_server_type_gunicorn(self):
+        sc = ServiceConfig(server_type="gunicorn")
+        assert sc.server_type == "gunicorn"
+
+    def test_watchdog_sec_accepts_any_string(self):
+        sc = ServiceConfig(watchdog_sec="30min")
+        assert sc.watchdog_sec == "30min"
+
+    def test_valid_watchdog_sec(self):
+        sc = ServiceConfig(watchdog_sec="30s")
+        assert sc.watchdog_sec == "30s"
+
 
 class TestServiceConfigResolvedSecurity:
     """resolved_security merges user overrides with defaults."""
@@ -221,8 +243,8 @@ class TestNginxEnvConfigFromEnvDict:
         assert nc.server_name == "api.dev"
         assert nc.ssl_cert == "/etc/ssl/cert.pem"
         assert nc.ssl_key == "/etc/ssl/key.pem"
-        # CORS origins are auto-escaped for nginx regex
-        assert nc.cors_origins == [r"https://app\.dev"]
+        # CORS origins are processed for nginx regex
+        assert nc.cors_origins_escaped == [r"https://app\.dev"]
         assert len(nc.restricted_paths) == 1
         assert nc.restricted_paths[0].path == "/admin/"
         assert nc.restricted_paths[0].allow == ["10.0.0.0/8"]

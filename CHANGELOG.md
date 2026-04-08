@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-08
+
+### Breaking Changes
+
+- **CORS origins configuration format changed** — `cors_origins` now accepts structured objects instead of plain strings. The old format `["https://*.example.com", "https://api.example.com"]` must be updated to `[{"pattern": "https://*.example.com", "type": "wildcard"}, {"pattern": "https://api.example.com", "type": "literal"}]`. Automatic migration is provided for backward compatibility in existing configs.
+
+### Added
+
+- **Structured CORS origins with explicit types** — `cors_origins` entries now support:
+  - `"type": "literal"` — Escapes dots for nginx regex (e.g., `https://api.example.com` → `~https://api\.example\.com`)
+  - `"type": "wildcard"` — Converts `*` to subdomain regex (e.g., `*.example.com` → `~https://[a-zA-Z0-9-]+\.example\.com`)
+  - `"type": "regex"` — Raw nginx regex without processing (e.g., `^https://.*\.custom\.com$`)
+- **Conditional WatchdogSec support** — `service.watchdog_sec` field enables `WatchdogSec` in systemd service units for servers that support `sd_notify` (e.g., gunicorn). Defaults to disabled for uvicorn compatibility.
+- **Server type configuration** — `service.server_type` field (`"uvicorn"` or `"gunicorn"`) for future server-specific optimizations.
+
+### Fixed
+
+- **Issue #138: nginx CORS map supports wildcard subdomain patterns** — Wildcard patterns like `https://*.example.com` now generate proper nginx regex patterns.
+- **Issue #137: WatchdogSec properly omitted for non-sd_notify servers** — WatchdogSec is now conditionally included only when configured, preventing uvicorn services from being killed every 60 seconds.
+
+---
+
 ## [0.5.28] - 2026-04-07
 
 ### Added

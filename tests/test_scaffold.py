@@ -42,9 +42,9 @@ scaffold:
         assert sc.systemd.security_hardening is True
         assert sc.systemd.memory_max_default == "4G"
         assert sc.nginx.ssl_provider == "letsencrypt"
-        # CORS origins are auto-escaped for nginx regex
-        assert "*\\.example\\.io" in sc.nginx.cors_origins
-        assert "localhost:*" in sc.nginx.cors_origins
+        # CORS origins are auto-processed for nginx regex
+        assert "[a-zA-Z0-9-]+\\.example\\.io" in sc.nginx.cors_origins_escaped
+        assert "localhost:*" in sc.nginx.cors_origins_escaped
         assert sc.nginx.rate_limit == "10r/s"
         assert "/admin/" in sc.nginx.restricted_paths
         assert "3.12" in sc.github_actions.python_versions
@@ -310,6 +310,61 @@ scaffold:
         assert "ExecStart=" in content
         assert "User=my_app" in content
         assert "MemoryMax=8G" in content
+
+    def test_service_unit_includes_watchdog_sec_when_configured(self, tmp_path):
+        """Rendered .service includes WatchdogSec when configured."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        service:
+          server_type: gunicorn
+          watchdog_sec: 30s
+scaffold:
+  output_dir: {output}
+  deploy_user: my_app
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
+        content = svc_path.read_text()
+
+        assert "WatchdogSec=30s" in content
+
+    def test_service_unit_omits_watchdog_sec_by_default(self, tmp_path):
+        """Rendered .service omits WatchdogSec by default."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production: {{}}
+scaffold:
+  output_dir: {output}
+  deploy_user: my_app
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc_path = tmp_path / "output" / "systemd" / "tp_my_api_production.service"
+        content = svc_path.read_text()
+
+        assert "WatchdogSec=" not in content
 
     def test_service_memory_max_uses_default(self, tmp_path):
         """MemoryMax uses scaffold default when not set per-env."""
