@@ -126,7 +126,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["PLR2004", "ARG001", "F401"]  # F401: imports used as existence assertions
+"tests/**" = [
+    "PLR2004",  # Magic values OK in tests
+    "ARG001",
+    "F401",     # Imports used as existence assertions
+    "E501",     # Long lines in fixture YAML strings
+    "ERA001",   # Section-separator comments misidentified as commented-out code
+    "E741",     # Ambiguous variable names OK in tests
+]
 
 [dependency-groups]
 dev = [

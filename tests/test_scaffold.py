@@ -827,6 +827,7 @@ scaffold:
     ):
         """restricted_paths + multiple API fraises without gateway_fraise raises ValidationError."""
         import pytest
+
         from fraisier.errors import ValidationError
 
         config = self._make_config(

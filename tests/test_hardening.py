@@ -408,7 +408,7 @@ deployment:
 
         cfg = self._make_config_file(tmp_path)
         runner = CliRunner()
-        # Just check the flag is accepted (will fail since no socket, but flag parsing works)  # noqa: E501
+        # Just check the flag is accepted (will fail since no socket, but flag parsing works)
         result = runner.invoke(
             main,
             [
@@ -420,7 +420,7 @@ deployment:
                 "--dry-run",
             ],
         )
-        # Exit code 1 is expected since socket doesn't exist, but flag parsing should work  # noqa: E501
+        # Exit code 1 is expected since socket doesn't exist, but flag parsing should work
         assert result.exit_code == 1  # Connection error, not argument error
 
     def test_trigger_deploy_force_flag_accepted(self, tmp_path):
@@ -443,7 +443,7 @@ deployment:
                 "--dry-run",
             ],
         )
-        # Exit code 1 is expected since socket doesn't exist, but flag parsing should work  # noqa: E501
+        # Exit code 1 is expected since socket doesn't exist, but flag parsing should work
         assert result.exit_code == 1  # Connection error, not argument error
 
     def test_trigger_deploy_nonexistent_fraise_fails(self, tmp_path):

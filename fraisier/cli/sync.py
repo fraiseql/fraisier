@@ -134,15 +134,21 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
         f'    gh pr create --title "{pr_title}" --body "{pr_body}"'
         f" --base {tgt} --head {sync_branch} --no-maintainer-edit"
     )
-    console.print(f"    gh pr merge --auto --squash <PR URL>")
-    console.print(f"    git checkout <original-branch>")
+    console.print("    gh pr merge --auto --squash <PR URL>")
+    console.print("    git checkout <original-branch>")
 
 
 @main.command(name="sync")
 @click.argument("target", required=False, default=None)
-@click.option("--list", "list_pairs", is_flag=True, help="List configured sync pairs and exit.")
-@click.option("--check", is_flag=True, help="Show version diff only; no git operations.")
-@click.option("--dry-run", is_flag=True, help="Print commands that would run; make no changes.")
+@click.option(
+    "--list", "list_pairs", is_flag=True, help="List configured sync pairs and exit."
+)
+@click.option(
+    "--check", is_flag=True, help="Show version diff only; no git operations."
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Print commands that would run; make no changes."
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
 @click.pass_context
 def sync_cmd(
@@ -244,8 +250,8 @@ def sync_cmd(
                 ["git", "diff", "--name-only", "--diff-filter=U"]
             ).stdout.splitlines()
 
-            for f in conflicted:
-                f = f.strip()
+            for raw_f in conflicted:
+                f = raw_f.strip()
                 if not f:
                     continue
                 if _is_auto_resolved(f):
