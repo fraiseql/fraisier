@@ -531,7 +531,7 @@ class ScaffoldRenderer:
         for fraise in self.context["fraises"]:
             for env_name, env_config in fraise.get("environments", {}).items():
                 # Deploy socket and service
-                socket_unit = deploy_socket_name(env_config, env_name)
+                socket_unit = deploy_socket_name(env_config, env_name, fraise["name"])
                 socket_stem = socket_unit.removesuffix(".socket")
                 service_unit = f"{socket_stem}@.service"
 
@@ -823,7 +823,7 @@ class ScaffoldRenderer:
         for fraise in self.context["local_fraises"]:
             fraise_name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
-                socket_unit = deploy_socket_name(env_config, env_name)
+                socket_unit = deploy_socket_name(env_config, env_name, fraise_name)
                 socket_stem = socket_unit.removesuffix(".socket")
 
                 socket_rel = f"systemd/{socket_unit}"
@@ -854,7 +854,7 @@ class ScaffoldRenderer:
             return
 
         env_config = fraise_config.get("environments", {}).get(env_name, {})
-        socket_unit = deploy_socket_name(env_config, env_name)
+        socket_unit = deploy_socket_name(env_config, env_name, fraise_name)
         socket_stem = socket_unit.removesuffix(".socket")
 
         # Update context with environment-specific values
@@ -891,7 +891,7 @@ class ScaffoldRenderer:
             return
 
         env_config = fraise_config.get("environments", {}).get(env_name, {})
-        socket_unit = deploy_socket_name(env_config, env_name)
+        socket_unit = deploy_socket_name(env_config, env_name, fraise_name)
         socket_stem = socket_unit.removesuffix(".socket")
 
         # Update context with environment-specific values
@@ -1073,7 +1073,7 @@ class ScaffoldRenderer:
         hc_port = _extract_port(hc_url) if hc_url else None
         port = service.port or hc_port or 8000
 
-        socket_unit = deploy_socket_name(env_config, env_name)
+        socket_unit = deploy_socket_name(env_config, env_name, fraise["name"])
         socket_stem = socket_unit.removesuffix(".socket")
 
         ctx = {

@@ -601,7 +601,7 @@ def trigger_deploy(
     # Build socket path using deploy_socket_name() as the single source of truth
     from fraisier.naming import deploy_socket_name
 
-    socket_unit = deploy_socket_name(fraise_config, environment)
+    socket_unit = deploy_socket_name(fraise_config, environment, fraise)
     socket_stem = socket_unit.removesuffix(".socket")
     socket_dir = Path("/run/fraisier") / socket_stem
     socket_path = socket_dir / "deploy.sock"
@@ -899,7 +899,7 @@ def validate_setup(
     }
 
     env_config = all_environments[environment]
-    socket_unit = deploy_socket_name(env_config, environment)
+    socket_unit = deploy_socket_name(env_config, environment, fraise)
     socket_stem = socket_unit.removesuffix(".socket")
     socket_dir = Path("/run/fraisier") / socket_stem
     socket_path = socket_dir / "deploy.sock"
@@ -1160,7 +1160,7 @@ def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> 
 
     project_name = config.project_name
     run_dir = Path("/run/fraisier")
-    socket_unit = deploy_socket_name(fraise_config, environment)
+    socket_unit = deploy_socket_name(fraise_config, environment, fraise)
     socket_stem = socket_unit.removesuffix(".socket")
     socket_path = run_dir / socket_stem / "deploy.sock"
     status_path = run_dir / f"{project_name}-{environment}.last_deployment"

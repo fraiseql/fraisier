@@ -319,8 +319,8 @@ class ServerBootstrapper:
         from fraisier.naming import deploy_socket_name
 
         sockets = [
-            deploy_socket_name(env_config, self.environment)
-            for fraise_config in self.config.fraises.values()
+            deploy_socket_name(env_config, self.environment, fraise_name)
+            for fraise_name, fraise_config in self.config.fraises.items()
             for env_config in [
                 fraise_config.get("environments", {}).get(self.environment)
             ]

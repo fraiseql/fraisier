@@ -63,7 +63,7 @@ fraises:
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
 
-        socket_unit = deploy_socket_name(env_config, env_name)
+        socket_unit = deploy_socket_name(env_config, env_name, fraise_name)
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
         context["socket_unit_name"] = socket_unit
@@ -107,7 +107,7 @@ fraises:
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
 
-        socket_unit = deploy_socket_name(env_config, "dev")
+        socket_unit = deploy_socket_name(env_config, "dev", "web")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
         context["socket_unit_name"] = socket_unit
@@ -153,7 +153,7 @@ fraises:
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
 
-        socket_unit = deploy_socket_name(env_config, "prod")
+        socket_unit = deploy_socket_name(env_config, "prod", "backend")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
         context["socket_unit_name"] = socket_unit
@@ -197,7 +197,7 @@ fraises:
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
 
-        socket_unit = deploy_socket_name(env_config, "dev")
+        socket_unit = deploy_socket_name(env_config, "dev", "api")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
         context["socket_unit_name"] = socket_unit
@@ -240,7 +240,7 @@ fraises:
         # Derive socket stem the same way as build_manifest does
         from fraisier.naming import deploy_socket_name
 
-        socket_unit = deploy_socket_name(env_config, "dev")
+        socket_unit = deploy_socket_name(env_config, "dev", "api")
         socket_stem = socket_unit.removesuffix(".socket")
         context["socket_stem"] = socket_stem
         context["socket_unit_name"] = socket_unit

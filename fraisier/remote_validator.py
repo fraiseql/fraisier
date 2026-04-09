@@ -328,7 +328,9 @@ class RemoteDeploymentValidator:
     def _check_systemd_socket(self) -> ValidationCheckResult:
         from fraisier.naming import deploy_socket_name
 
-        socket_name = deploy_socket_name(self.fraise_config, self.environment)
+        socket_name = deploy_socket_name(
+            self.fraise_config, self.environment, self.fraise_name
+        )
         status = self._remote(["systemctl", "is-active", socket_name]).stdout.strip()
         if status == "active":
             return ValidationCheckResult(

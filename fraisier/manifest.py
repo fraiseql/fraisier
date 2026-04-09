@@ -90,9 +90,9 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
 
     # Collect deploy socket stems first so global paths can reference them
     deploy_socket_stems: set[str] = set()
-    for fraise_config in config.fraises.values():
+    for fraise_name, fraise_config in config.fraises.items():
         for env_name, env_config in fraise_config.get("environments", {}).items():
-            socket_unit = deploy_socket_name(env_config, env_name)
+            socket_unit = deploy_socket_name(env_config, env_name, fraise_name)
             deploy_socket_stems.add(socket_unit.removesuffix(".socket"))
 
     # Units that need access to shared fraisier directories
@@ -150,11 +150,11 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
 
     # deploy_socket_stems already collected above
 
-    for fraise_config in config.fraises.values():
+    for fraise_name, fraise_config in config.fraises.items():
         for env_name, env_config in fraise_config.get("environments", {}).items():
             # Derive the deploy socket unit stem for this environment
-            # (e.g., "fraisier-production" from socket "fraisier-production.socket")
-            socket_unit = deploy_socket_name(env_config, env_name)
+            # e.g. "fraisier-api-production" from "fraisier-api-production.socket"
+            socket_unit = deploy_socket_name(env_config, env_name, fraise_name)
             socket_stem = socket_unit.removesuffix(".socket")
             deploy_socket_stems.add(socket_stem)
 

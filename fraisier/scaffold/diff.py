@@ -61,7 +61,7 @@ def compute_scaffold_diff(
             for env_key, env_cfg in fraise_cfg.get("environments", {}).items():
                 if env_filter and env_key != env_filter:
                     continue
-                socket_unit = deploy_socket_name(env_cfg, env_key)
+                socket_unit = deploy_socket_name(env_cfg, env_key, fraise_name)
                 socket_stem = socket_unit.removesuffix(".socket")
                 matching_deploy_paths.add(f"systemd/{socket_unit}")
                 matching_deploy_paths.add(f"systemd/{socket_stem}@.service")

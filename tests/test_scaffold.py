@@ -2765,9 +2765,9 @@ fraises:
         content = (tmp_path / "output" / "install.sh").read_text()
         # Must use project-prefixed service names
         assert "myproj_my_api_production.service" in content
-        # Must include socket/service units derived from env name (fallback: env key)
-        assert "fraisier-production.socket" in content
-        assert "fraisier-production@.service" in content
+        # Must include socket/service units derived from fraise name + env key
+        assert "fraisier-my_api-production.socket" in content
+        assert "fraisier-my_api-production@.service" in content
 
     def test_webhook_service_sets_pg_wrapper_env(self, tmp_path):
         """Webhook service sets FRAISIER_PG_WRAPPER when wrapper exists."""
@@ -3897,13 +3897,13 @@ scaffold:
         systemd can spawn one instance per connection (issue #72, Bug 1).
         """
         out = self._render(tmp_path)
-        socket_path = out / "systemd" / "fraisier-production.socket"
+        socket_path = out / "systemd" / "fraisier-api-production.socket"
         socket = socket_path.read_text()
         assert "Accept=yes" in socket
 
     def test_socket_does_not_use_accept_no(self, tmp_path):
         out = self._render(tmp_path)
-        socket_path = out / "systemd" / "fraisier-production.socket"
+        socket_path = out / "systemd" / "fraisier-api-production.socket"
         socket = socket_path.read_text()
         assert "Accept=no" not in socket
 
@@ -3915,13 +3915,13 @@ scaffold:
         (issue #72, Bug 2).
         """
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         assert "StandardOutputFormat" not in service
 
     def test_service_still_has_journal_output(self, tmp_path):
         """StandardOutput=journal must remain after removing the format key."""
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         assert "StandardOutput=journal" in service
         assert "StandardError=journal" in service
 
@@ -3934,42 +3934,44 @@ scaffold:
         fail to exec the binary with ENOENT (issue #72, Bug 3).
         """
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         assert "ProtectHome=" not in service
 
     def test_socket_listens_on_expected_path(self, tmp_path):
         out = self._render(tmp_path)
-        socket_path = out / "systemd" / "fraisier-production.socket"
+        socket_path = out / "systemd" / "fraisier-api-production.socket"
         socket = socket_path.read_text()
-        assert "ListenStream=/run/fraisier/fraisier-production/deploy.sock" in socket
+        assert (
+            "ListenStream=/run/fraisier/fraisier-api-production/deploy.sock" in socket
+        )
 
     def test_service_requires_correct_socket_unit(self, tmp_path):
         """Service unit Requires= must name the socket unit derived from env name."""
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
-        assert "Requires=fraisier-production.socket" in service
-        assert "After=fraisier-production.socket" in service
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
+        assert "Requires=fraisier-api-production.socket" in service
+        assert "After=fraisier-api-production.socket" in service
 
     def test_service_exec_uses_fraise_name(self, tmp_path):
         """deploy-daemon --project must receive the fraise name, not the project name.
 
-        The socket is per-fraise (fraisier-production.socket is for fraise 'api'),
+        The socket is per-fraise (fraisier-api-production.socket is for fraise 'api'),
         so the daemon security gate must match the fraise name. trigger-deploy also
         sends {"project": "<fraise_name>", ...} so the mismatch check passes.
         Using the top-level project name would cause the daemon's fraise lookup to
         fail since config.get_fraise_environment() expects a fraise name.
         """
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         assert "--project=api" in service
         assert "--project=myproj" not in service
 
-    def test_socket_filenames_use_env_name(self, tmp_path):
-        """Unit filenames are derived from the environment name field (or env key)."""
+    def test_socket_filenames_use_fraise_and_env_name(self, tmp_path):
+        """Unit filenames include both fraise name and env key for uniqueness."""
         out = self._render(tmp_path)
         sdir = out / "systemd"
-        assert (sdir / "fraisier-production.socket").exists()
-        assert (sdir / "fraisier-production@.service").exists()
+        assert (sdir / "fraisier-api-production.socket").exists()
+        assert (sdir / "fraisier-api-production@.service").exists()
         assert not (sdir / "fraisier-myproj-api-production-deploy.socket").exists()
         assert not (sdir / "fraisier-myproj-api-production-deploy@.service").exists()
 
@@ -3981,7 +3983,7 @@ scaffold:
         Bug 5).
         """
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         assert "Environment=FRAISIER_CONFIG=/opt/fraisier/fraises.yaml" in service
 
     def test_service_config_path_is_configurable(self, tmp_path):
@@ -4007,7 +4009,7 @@ scaffold:
         )
         config = FraisierConfig(p)
         ScaffoldRenderer(config).render()
-        svc_path = tmp_path / "output" / "systemd" / "fraisier-production@.service"
+        svc_path = tmp_path / "output" / "systemd" / "fraisier-api-production@.service"
         service = svc_path.read_text()
         assert "Environment=FRAISIER_CONFIG=/etc/myapp/fraises.yaml" in service
         assert "/opt/fraisier/fraises.yaml" not in service
@@ -4015,7 +4017,7 @@ scaffold:
     def test_deploy_environment_file_omitted_by_default(self, tmp_path):
         """EnvironmentFile must not appear when deploy_environment_file is unset."""
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         assert "EnvironmentFile" not in service
 
     def test_deploy_environment_file_rendered(self, tmp_path):
@@ -4042,7 +4044,7 @@ scaffold:
         config = FraisierConfig(p)
         ScaffoldRenderer(config).render()
         service = (
-            tmp_path / "output" / "systemd" / "fraisier-production@.service"
+            tmp_path / "output" / "systemd" / "fraisier-api-production@.service"
         ).read_text()
         assert "EnvironmentFile=-/etc/fraisier/secrets.env" in service
 
@@ -4078,7 +4080,7 @@ scaffold:
         config = FraisierConfig(p)
         ScaffoldRenderer(config).render()
         service = (
-            tmp_path / "output" / "systemd" / "fraisier-production@.service"
+            tmp_path / "output" / "systemd" / "fraisier-api-production@.service"
         ).read_text()
         assert "ReadWritePaths=/var/git/api.myapp.io.git" in service
         assert "ReadWritePaths=/var/www/api.myapp.io" in service
@@ -4087,7 +4089,7 @@ scaffold:
     def test_deploy_service_omits_readwrite_paths_when_not_configured(self, tmp_path):
         """ReadWritePaths for git_repo/app_path are omitted when not set."""
         out = self._render(tmp_path)  # fixture has app_path but no git_repo
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         assert "ReadWritePaths=/var/www/prod" in service
         assert "ReadWritePaths=/run/fraisier" in service
         # git_repo not set, so no ReadWritePaths for it
@@ -4101,7 +4103,7 @@ scaffold:
         (issue #115).
         """
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         # Default config_path is /opt/fraisier/fraises.yaml → dir is /opt/fraisier
         assert "ReadWritePaths=/opt/fraisier" in service
 
@@ -4113,7 +4115,7 @@ scaffold:
         git fetch fails with SSH exit 255 (issue #116).
         """
         out = self._render(tmp_path)
-        service = (out / "systemd" / "fraisier-production@.service").read_text()
+        service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         ssh_env = (
             'Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"'
         )

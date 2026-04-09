@@ -279,7 +279,7 @@ if [ -f "${WEBHOOK_SRC}" ]; then
     # RuntimeDirectoryPreserve=restart, a first-time install wipes the dir.
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set socket_unit = deploy_socket_name(env_config, env_name) %}
+{% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
     if _env_active "{{ env_name }}"; then
         _run sudo systemctl restart {{ socket_unit }} || true
     fi
@@ -305,7 +305,7 @@ if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
     # Restart deploy sockets to ensure socket files exist after any transition turbulence
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set socket_unit = deploy_socket_name(env_config, env_name) %}
+{% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
     if _env_active "{{ env_name }}"; then
         _run sudo systemctl restart {{ socket_unit }} || true
     fi
@@ -366,7 +366,7 @@ fi
 echo "  Installing socket-activated deploy units"
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set socket_unit = deploy_socket_name(env_config, env_name) %}
+{% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
 {% set socket_stem = socket_unit[:-7] %}
 {% set socket_name = socket_unit %}
 {% set service_name = socket_stem ~ '@.service' %}
