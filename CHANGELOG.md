@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-04-09
+
+### Added
+
+- **`fraisier sync` CLI command (#140)** — Replaces the `sync.sh` scaffold template. `fraisier sync [pair]` fetches the source branch, detects drift, creates a squash sync branch, auto-resolves fraisier-owned files on merge conflict, and opens a PR with auto-merge enabled. Supports `--list`, `--check` (drift detection only), `--dry-run`, and `--yes` flags.
+
+### Fixed
+
+- **Issue #148: nginx configs always generated for all servers** — `fraisier scaffold` (with or without `--server`) now generates per-environment nginx configs for every server, not just the local one. `scripts/generated/nginx/` is always a complete, committable artifact; each server's `install.sh` uses `_env_active()` to install only its own configs.
+- **Issue #147: CORS wildcard regex anchored and dot-escaped** — Wildcard patterns (e.g. `https://*.example.com`) now produce correctly anchored nginx regexes: dots in the domain are escaped before `*` is expanded, and `^`/`$` anchors are added.
+- **Issue #145: legacy rate_limit.conf removed before nginx reload** — `install.sh` now deletes `/etc/nginx/conf.d/rate_limit.conf` before reloading nginx when `gateway.conf` owns `limit_req_zone`, preventing duplicate-directive errors on servers upgraded from older fraisier versions.
+- **Issue #144: install.sh SCAFFOLD_DIR always derived from script location** — The `SCAFFOLD_DIR` default no longer depends on the `STANDALONE` flag; it is always inferred from the script's own path, fixing silent no-ops when run outside the standard directory.
+
+### Removed
+
+- **`sync.sh.j2` scaffold template** — Replaced by the `fraisier sync` CLI command. Projects that referenced a generated `sync.sh` should switch to `fraisier sync`.
+
+---
+
 ## [0.6.0] - 2026-04-08
 
 ### Breaking Changes
