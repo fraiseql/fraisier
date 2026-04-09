@@ -914,7 +914,7 @@ fraises:
     type: api
     environments:
       production:
-        app_path: /var/www/management.printoptim.com
+        app_path: /var/www/management.example.com
         worker_count: 2
 scaffold:
   output_dir: {output}
@@ -927,7 +927,7 @@ scaffold:
 
         svc = tmp_path / "output" / "systemd" / "tp_management_api_production.service"
         content = svc.read_text()
-        assert "WorkingDirectory=/var/www/management.printoptim.com" in content
+        assert "WorkingDirectory=/var/www/management.example.com" in content
         assert "/opt/management_api" not in content
 
     def test_port_extracted_from_health_check_url(self, tmp_path):
@@ -968,7 +968,7 @@ name: tp
 fraises:
   graphql_gateway:
     type: api
-    exec_command: /usr/local/bin/fraiseql-cli serve --port 4000
+    exec_command: /usr/local/bin/myapp-cli serve --port 4000
     environments:
       production:
         app_path: /var/www/graphql
@@ -984,7 +984,7 @@ scaffold:
 
         svc = tmp_path / "output" / "systemd" / "tp_graphql_gateway_production.service"
         content = svc.read_text()
-        assert "ExecStart=/usr/local/bin/fraiseql-cli serve --port 4000" in content
+        assert "ExecStart=/usr/local/bin/myapp-cli serve --port 4000" in content
         assert "uvicorn" not in content
 
     def test_relative_exec_command_gets_app_path_prepended(self, tmp_path):
@@ -4132,7 +4132,7 @@ class TestServiceNameOverride:
         p = tmp_path / "fraises.yaml"
         p.write_text(
             f"""
-name: printoptim
+name: myapp
 fraises:
   api:
     type: api
@@ -4140,11 +4140,11 @@ fraises:
       dev:
         app_path: /var/www/dev
         service:
-          service_name: api.printoptim.dev
+          service_name: api.dev.example.com
       production:
         app_path: /var/www/prod
 scaffold:
-  deploy_user: printoptim_deploy
+  deploy_user: myapp_deploy
   output_dir: {tmp_path / "output"}
 {yaml_extra}
 """
@@ -4157,27 +4157,27 @@ scaffold:
     def test_service_file_uses_override_name(self, tmp_path):
         """Renderer writes the unit file using the overridden name."""
         out = self._render(tmp_path)
-        assert (out / "systemd" / "api.printoptim.dev.service").exists()
-        assert not (out / "systemd" / "printoptim_api_dev.service").exists()
+        assert (out / "systemd" / "api.dev.example.com.service").exists()
+        assert not (out / "systemd" / "myapp_api_dev.service").exists()
 
     def test_default_name_used_when_no_override(self, tmp_path):
         """Environments without service_name still use the default pattern."""
         out = self._render(tmp_path)
-        assert (out / "systemd" / "printoptim_api_production.service").exists()
+        assert (out / "systemd" / "myapp_api_production.service").exists()
 
     def test_systemctl_wrapper_uses_override_name(self, tmp_path):
         """allowed_services list in the systemctl wrapper uses the override."""
         out = self._render(tmp_path)
         wrapper = (out / "systemctl-wrapper.sh").read_text()
-        assert "api.printoptim.dev.service" in wrapper
-        assert "printoptim_api_dev.service" not in wrapper
+        assert "api.dev.example.com.service" in wrapper
+        assert "myapp_api_dev.service" not in wrapper
 
     def test_install_sh_uses_override_name(self, tmp_path):
         """install.sh cp command targets the overridden filename."""
         out = self._render(tmp_path)
         install = (out / "install.sh").read_text()
-        assert "api.printoptim.dev.service" in install
-        assert "printoptim_api_dev.service" not in install
+        assert "api.dev.example.com.service" in install
+        assert "myapp_api_dev.service" not in install
 
 
 class TestSystemdServiceField:
@@ -4195,7 +4195,7 @@ class TestSystemdServiceField:
 
     def _base_yaml(self, tmp_path, dev_name: str) -> str:
         return f"""
-name: printoptim
+name: myapp
 fraises:
   api:
     type: api
@@ -4206,33 +4206,33 @@ fraises:
       production:
         app_path: /var/www/prod
 scaffold:
-  deploy_user: printoptim_deploy
+  deploy_user: myapp_deploy
   output_dir: {tmp_path / "output"}
 """
 
     def test_systemd_service_with_suffix(self, tmp_path):
         """systemd_service with .service suffix produces the correct filename."""
-        yaml = self._base_yaml(tmp_path, "api.printoptim.dev.service")
+        yaml = self._base_yaml(tmp_path, "api.dev.example.com.service")
         out = self._render(tmp_path, yaml)
-        assert (out / "systemd" / "api.printoptim.dev.service").exists()
-        assert not (out / "systemd" / "printoptim_api_dev.service").exists()
+        assert (out / "systemd" / "api.dev.example.com.service").exists()
+        assert not (out / "systemd" / "myapp_api_dev.service").exists()
 
     def test_systemd_service_without_suffix(self, tmp_path):
         """systemd_service without .service suffix produces the correct filename."""
-        out = self._render(tmp_path, self._base_yaml(tmp_path, "api.printoptim.dev"))
-        assert (out / "systemd" / "api.printoptim.dev.service").exists()
-        assert not (out / "systemd" / "printoptim_api_dev.service").exists()
+        out = self._render(tmp_path, self._base_yaml(tmp_path, "api.dev.example.com"))
+        assert (out / "systemd" / "api.dev.example.com.service").exists()
+        assert not (out / "systemd" / "myapp_api_dev.service").exists()
 
     def test_systemd_service_propagates_to_wrapper_and_install(self, tmp_path):
         """Override appears in systemctl-wrapper.sh allowed list and install.sh."""
-        yaml = self._base_yaml(tmp_path, "api.printoptim.dev.service")
+        yaml = self._base_yaml(tmp_path, "api.dev.example.com.service")
         out = self._render(tmp_path, yaml)
         wrapper = (out / "systemctl-wrapper.sh").read_text()
-        assert "api.printoptim.dev.service" in wrapper
-        assert "printoptim_api_dev.service" not in wrapper
+        assert "api.dev.example.com.service" in wrapper
+        assert "myapp_api_dev.service" not in wrapper
         install = (out / "install.sh").read_text()
-        assert "api.printoptim.dev.service" in install
-        assert "printoptim_api_dev.service" not in install
+        assert "api.dev.example.com.service" in install
+        assert "myapp_api_dev.service" not in install
 
     def test_systemd_service_invalid_chars_raises_at_load_time(self, tmp_path):
         """Invalid systemd_service raises ValidationError at config load."""
@@ -4242,7 +4242,7 @@ scaffold:
 
         p = tmp_path / "fraises.yaml"
         p.write_text(f"""
-name: printoptim
+name: myapp
 fraises:
   api:
     type: api
@@ -4251,7 +4251,7 @@ fraises:
         app_path: /var/www/dev
         systemd_service: bad/name
 scaffold:
-  deploy_user: printoptim_deploy
+  deploy_user: myapp_deploy
   output_dir: {tmp_path / "output"}
 """)
         with pytest.raises(ValidationError, match="systemd_service"):
@@ -4259,9 +4259,9 @@ scaffold:
 
     def test_default_env_still_uses_generated_name(self, tmp_path):
         """Environments without systemd_service use the default pattern."""
-        yaml = self._base_yaml(tmp_path, "api.printoptim.dev.service")
+        yaml = self._base_yaml(tmp_path, "api.dev.example.com.service")
         out = self._render(tmp_path, yaml)
-        assert (out / "systemd" / "printoptim_api_production.service").exists()
+        assert (out / "systemd" / "myapp_api_production.service").exists()
 
 
 class TestServerFilteredBootstrapScaffold:

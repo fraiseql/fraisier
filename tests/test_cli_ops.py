@@ -327,8 +327,8 @@ _MULTI_SERVER_DEPLOYMENTS = [
 ]
 
 _MULTI_SERVER_ENV_MAP: dict[str, list[str]] = {
-    "printoptim.dev": ["development", "staging"],
-    "printoptim.io": ["production"],
+    "server-dev": ["development", "staging"],
+    "server-prod": ["production"],
 }
 
 
@@ -348,7 +348,7 @@ class TestStatusServerFilter:
 
     def test_default_filters_by_current_hostname(self):
         """Without flags, status filters to environments on the current hostname."""
-        result = self._run_status(["--server", "printoptim.dev"])
+        result = self._run_status(["--server", "server-dev"])
         assert result.exit_code == 0
         assert "development" in result.output
         assert "staging" in result.output
@@ -356,7 +356,7 @@ class TestStatusServerFilter:
 
     def test_explicit_server_flag_overrides_hostname(self):
         """--server filters to the specified server's environments."""
-        result = self._run_status(["--server", "printoptim.io"])
+        result = self._run_status(["--server", "server-prod"])
         assert result.exit_code == 0
         assert "production" in result.output
         assert "development" not in result.output
@@ -378,6 +378,6 @@ class TestStatusServerFilter:
 
     def test_server_name_appears_in_table_title(self):
         """The filtered server name is shown in the table title."""
-        result = self._run_status(["--server", "printoptim.dev"])
+        result = self._run_status(["--server", "server-dev"])
         assert result.exit_code == 0
-        assert "printoptim.dev" in result.output
+        assert "server-dev" in result.output

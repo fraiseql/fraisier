@@ -340,7 +340,7 @@ class TestAllowlistIntegration:
 
         with patch("subprocess.run", return_value=mock_result):
             result = self._call(
-                {"action": "is-active", "service": "api.printoptim.dev.service"},
-                frozenset({"api.printoptim.dev.service"}),
+                {"action": "is-active", "service": "api.dev.example.com.service"},
+                frozenset({"api.dev.example.com.service"}),
             )
         assert result["ok"] is True

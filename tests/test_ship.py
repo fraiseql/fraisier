@@ -992,7 +992,7 @@ class TestShipDeploy:
                         "production": {
                             "name": "my-api",
                             "app_path": "/var/www/api",
-                            "git_repo": "/var/git/api.printoptim.dev.git",
+                            "git_repo": "/var/git/api.dev.example.com.git",
                         },
                     },
                 },
