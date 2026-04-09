@@ -4305,17 +4305,21 @@ fraises:
         renderer.render()
         return out
 
-    def test_server_a_only_generates_dev_nginx_config(self, tmp_path):
-        """ScaffoldRenderer with server-a generates dev nginx config, not prod."""
+    def test_server_a_generates_all_nginx_configs(self, tmp_path):
+        """ScaffoldRenderer with server-a generates nginx configs for all servers (#148).
+
+        Per-env nginx configs are always a complete artifact so that running
+        scaffold locally never leaves remote-server configs stale.
+        """
         out = self._render(tmp_path, "server-a")
         assert (out / "nginx" / "api.dev.example.com.conf").exists()
-        assert not (out / "nginx" / "api.example.com.conf").exists()
+        assert (out / "nginx" / "api.example.com.conf").exists()
 
-    def test_server_b_only_generates_prod_nginx_config(self, tmp_path):
-        """ScaffoldRenderer with server-b generates prod nginx config, not dev."""
+    def test_server_b_generates_all_nginx_configs(self, tmp_path):
+        """ScaffoldRenderer with server-b generates nginx configs for all servers (#148)."""
         out = self._render(tmp_path, "server-b")
         assert (out / "nginx" / "api.example.com.conf").exists()
-        assert not (out / "nginx" / "api.dev.example.com.conf").exists()
+        assert (out / "nginx" / "api.dev.example.com.conf").exists()
 
     def test_install_sh_only_installs_local_nginx_configs(self, tmp_path):
         """install.sh generated for server-a does not reference prod nginx config."""

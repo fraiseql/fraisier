@@ -1030,11 +1030,16 @@ class ScaffoldRenderer:
     def _collect_per_env_nginx(self, dry_run: bool) -> list[str]:
         """Discover and render per-environment nginx configs.
 
+        Always generates configs for ALL servers/environments so that
+        ``scripts/generated/nginx/`` is a complete, committable artifact.
+        Each server's ``install.sh`` uses ``_env_active()`` to install only
+        the configs that belong to its own environments (#148).
+
         Returns list of rendered file paths.
         """
         files: list[str] = []
         project = self.context["project_name"]
-        for fraise in self.context["local_fraises"]:
+        for fraise in self.context["fraises"]:
             name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
                 if not isinstance(env_config, dict):
