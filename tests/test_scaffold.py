@@ -45,7 +45,7 @@ scaffold:
         assert sc.systemd.memory_max_default == "4G"
         assert sc.nginx.ssl_provider == "letsencrypt"
         # CORS origins are auto-processed for nginx regex
-        assert "[a-zA-Z0-9-]+\\.example\\.io" in sc.nginx.cors_origins_escaped
+        assert "^[^.]+\\.example\\.io$" in sc.nginx.cors_origins_escaped
         assert "localhost:*" in sc.nginx.cors_origins_escaped
         assert sc.nginx.rate_limit == "10r/s"
         assert "/admin/" in sc.nginx.restricted_paths
@@ -182,125 +182,6 @@ scaffold:
         """scaffold.sync defaults to empty list when not configured."""
         config = self._make_config(tmp_path, "name: tp\nfraises: {}\n")
         assert config.scaffold.sync == []
-
-    def test_sync_scripts_rendered_per_pair(self, tmp_path):
-        """One sync-{source}-to-{target}.sh is rendered per configured pair."""
-        config = self._make_config(
-            tmp_path,
-            """
-name: tp
-fraises:
-  api:
-    type: api
-    environments:
-      production:
-        app_path: /var/www/api
-        health_check:
-          url: http://127.0.0.1:8080/health
-scaffold:
-  output_dir: {output}
-  sync:
-    - source: dev
-      target: staging
-    - source: staging
-      target: production
-""".format(output=str(tmp_path / "output")),
-        )
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        renderer = ScaffoldRenderer(config)
-        rendered = renderer.render()
-
-        assert "sync-dev-to-staging.sh" in rendered
-        assert "sync-staging-to-production.sh" in rendered
-
-    def test_sync_script_contains_correct_branches(self, tmp_path):
-        """Rendered sync script uses the configured source and target branches."""
-        config = self._make_config(
-            tmp_path,
-            """
-name: tp
-fraises:
-  api:
-    type: api
-    environments:
-      production:
-        app_path: /var/www/api
-        health_check:
-          url: http://127.0.0.1:8080/health
-scaffold:
-  output_dir: {output}
-  sync:
-    - source: dev
-      target: staging
-""".format(output=str(tmp_path / "output")),
-        )
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        content = (tmp_path / "output" / "sync-dev-to-staging.sh").read_text()
-        assert 'SOURCE_BRANCH="dev"' in content
-        assert 'TARGET_BRANCH="staging"' in content
-        assert "fraises.yaml" in content
-
-    def test_sync_script_is_executable(self, tmp_path):
-        """Rendered sync script has executable permission bits set."""
-        import stat
-
-        config = self._make_config(
-            tmp_path,
-            """
-name: tp
-fraises:
-  api:
-    type: api
-    environments:
-      production:
-        app_path: /var/www/api
-        health_check:
-          url: http://127.0.0.1:8080/health
-scaffold:
-  output_dir: {output}
-  sync:
-    - source: dev
-      target: staging
-""".format(output=str(tmp_path / "output")),
-        )
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        script = tmp_path / "output" / "sync-dev-to-staging.sh"
-        assert script.stat().st_mode & stat.S_IXUSR
-
-    def test_no_sync_scripts_when_not_configured(self, tmp_path):
-        """No sync scripts rendered when scaffold.sync is absent."""
-        config = self._make_config(
-            tmp_path,
-            """
-name: tp
-fraises:
-  api:
-    type: api
-    environments:
-      production:
-        app_path: /var/www/api
-        health_check:
-          url: http://127.0.0.1:8080/health
-scaffold:
-  output_dir: {output}
-""".format(output=str(tmp_path / "output")),
-        )
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        renderer = ScaffoldRenderer(config)
-        rendered = renderer.render()
-
-        assert not any("sync-" in f for f in rendered)
-
 
 class TestScaffoldRenderer:
     """Renderer runs core templates, then provider templates."""
@@ -875,6 +756,104 @@ scaffold:
         assert "map $http_origin $cors_origin" in content
         assert "if ($http_origin" not in content
         assert "Access-Control-Allow-Origin $cors_origin" in content
+
+    def test_restricted_paths_proxy_to_explicit_gateway_fraise(self, tmp_path):
+        """restricted_paths proxy_pass uses gateway_fraise when explicitly configured.
+
+        Regression for #146: without gateway_fraise, the restricted_paths block used
+        local_fraises[0] which is order-dependent and breaks with multiple fraises.
+        """
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  worker:
+    type: api
+    environments:
+      production:
+        worker_count: 1
+  api:
+    type: api
+    environments:
+      production:
+        worker_count: 4
+scaffold:
+  output_dir: {output}
+  nginx:
+    restricted_paths: ["/admin/"]
+    gateway_fraise: api
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "gateway.conf").read_text()
+        # restricted path must proxy to the explicitly configured fraise, not [0]
+        assert "location /admin/" in content
+        assert "proxy_pass http://tp_api_backend" in content
+
+    def test_restricted_paths_proxy_infers_single_fraise(self, tmp_path):
+        """restricted_paths proxy_pass auto-infers the fraise when only one exists."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+  nginx:
+    restricted_paths: ["/internal/"]
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "gateway.conf").read_text()
+        assert "location /internal/" in content
+        assert "proxy_pass http://tp_my_api_backend" in content
+
+    def test_multiple_api_fraises_with_restricted_paths_without_gateway_fraise_raises(
+        self, tmp_path
+    ):
+        """restricted_paths + multiple API fraises without gateway_fraise raises ValidationError."""
+        import pytest
+        from fraisier.errors import ValidationError
+
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        worker_count: 4
+  worker:
+    type: api
+    environments:
+      production:
+        worker_count: 1
+scaffold:
+  output_dir: {output}
+  nginx:
+    restricted_paths: ["/admin/"]
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        with pytest.raises(ValidationError, match="gateway_fraise"):
+            ScaffoldRenderer(config)
 
 
 _SCAFFOLD_YAML = """
@@ -3337,7 +3316,156 @@ fraises:
         renderer.render()
 
         content = (tmp_path / "output" / "install.sh").read_text()
-        assert "conf.d" not in content
+        # The PostgreSQL *logging* section only appears when has_database is true
+        assert "PostgreSQL logging configs" not in content
+
+
+class TestWildcardCorsOrigins:
+    """CORS wildcard processing — issue #147."""
+
+    def test_wildcard_produces_anchored_regex_with_no_dot_class(self):
+        """Wildcard CORS origin produces ^…[^.]+…$ nginx regex (issue #147)."""
+        from fraisier.config.schema import _process_cors_origin
+
+        result = _process_cors_origin({"pattern": "https://*.example.com", "type": "wildcard"})
+        assert result == "^https://[^.]+\\.example\\.com$"
+
+    def test_wildcard_no_protocol_produces_anchored_regex(self):
+        """Bare wildcard *.example.io also anchored (issue #147)."""
+        from fraisier.config.schema import _process_cors_origin
+
+        result = _process_cors_origin({"pattern": "*.example.io", "type": "wildcard"})
+        assert result == "^[^.]+\\.example\\.io$"
+
+    def test_wildcard_renders_in_nginx_map(self, tmp_path):
+        """gateway.conf map block contains anchored pattern for wildcard origin (issue #147)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {tmp_path / "output"}
+  nginx:
+    cors_origins:
+      - {{pattern: "https://*.example.com", type: wildcard}}
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "nginx" / "gateway.conf").read_text()
+        assert "^https://[^.]+\\.example\\.com$" in content
+
+
+class TestInstallShScaffoldDir:
+    """install.sh SCAFFOLD_DIR defaults to script directory — issue #144."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_install_sh_defaults_scaffold_dir_to_script_directory(self, tmp_path):
+        """install.sh must default SCAFFOLD_DIR to its own directory, not PROJECT_DIR (issue #144)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        # Must default to the script's own directory, not PROJECT_DIR/scripts/generated
+        assert 'dirname "$(realpath "$0")"' in content
+        assert '${PROJECT_DIR}/scripts/generated' not in content
+
+
+class TestInstallShRateLimitConflict:
+    """install.sh removes legacy rate_limit.conf before nginx reload — issue #145."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_install_sh_removes_legacy_rate_limit_conf(self, tmp_path):
+        """install.sh detects and removes /etc/nginx/conf.d/rate_limit.conf (issue #145)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+  nginx:
+    rate_limit: "10r/s"
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        assert "rate_limit.conf" in content
+        assert "limit_req_zone" in content
+        assert "rm" in content
+
+    def test_install_sh_nginx_reload_not_masked(self, tmp_path):
+        """nginx reload in install.sh must not be swallowed by _run || true (issue #145)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        # nginx reload must be direct (not inside _run) so failures surface
+        assert "sudo nginx -t && sudo systemctl reload nginx" in content
+        # The reload line itself must not have || true appended
+        reload_line = next(
+            (l for l in content.splitlines() if "systemctl reload nginx" in l), ""
+        )
+        assert "|| true" not in reload_line
 
 
 class TestConfitureTemplates:
@@ -4211,6 +4339,25 @@ fraises:
         prod_sockets = [f for f in systemd_dir.iterdir() if "production" in f.name]
         assert dev_sockets
         assert not prod_sockets
+
+    def test_gateway_conf_ssl_cert_uses_local_server_name(self, tmp_path):
+        """gateway.conf SSL cert path uses the server's own server_name, not another server's.
+
+        Regression for #143: when fraise has environments on multiple servers with
+        different nginx.server_name values, the gateway.conf generated for each server
+        must use that server's server_name — not the first env's server_name globally.
+        """
+        out = self._render(tmp_path, "server-b")
+        content = (out / "nginx" / "gateway.conf").read_text()
+        assert "ssl_certificate /etc/letsencrypt/live/api.example.com/fullchain.pem" in content
+        assert "api.dev.example.com" not in content
+
+    def test_gateway_conf_ssl_cert_server_a_uses_dev_name(self, tmp_path):
+        """gateway.conf for server-a uses dev server_name in SSL cert, not prod's."""
+        out = self._render(tmp_path, "server-a")
+        content = (out / "nginx" / "gateway.conf").read_text()
+        assert "ssl_certificate /etc/letsencrypt/live/api.dev.example.com/fullchain.pem" in content
+        assert "api.example.com/fullchain" not in content
 
 
 class TestServerScopedCollectors:

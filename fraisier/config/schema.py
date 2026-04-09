@@ -242,9 +242,11 @@ def _process_cors_origin(origin: dict[str, str]) -> str:
         # Raw regex, no processing
         return pattern
     elif origin_type == "wildcard":
-        # Convert subdomain wildcard * to regex pattern, escape dots
-        pattern = re.sub(r"\*(?=\.)", r"[a-zA-Z0-9-]+", pattern)
-        return re.sub(r"(?<!\\)\.(?![*+?])", r"\\.", pattern)
+        # Escape literal dots first, then convert * to [^.]+ and add anchors.
+        # [^.]+ matches exactly one subdomain label (no dots allowed inside).
+        pattern = re.sub(r"(?<!\\)\.(?![*+?{])", r"\\.", pattern)
+        pattern = re.sub(r"\*", r"[^.]+", pattern)
+        return f"^{pattern}$"
     elif origin_type == "literal":
         # Just escape dots
         return re.sub(r"(?<!\\)\.(?![*+?])", r"\\.", pattern)
@@ -326,6 +328,7 @@ class NginxScaffoldConfig:
     rate_limit: str = "10r/s"
     restricted_paths: list[str] = field(default_factory=list)
     webhook_port: int = 8080
+    gateway_fraise: str | None = None
 
     @property
     def cors_origins_escaped(self) -> list[str]:

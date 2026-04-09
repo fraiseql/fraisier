@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
-- **CORS origins configuration format changed** — `cors_origins` now accepts structured objects instead of plain strings. The old format `["https://*.example.com", "https://api.example.com"]` must be updated to `[{"pattern": "https://*.example.com", "type": "wildcard"}, {"pattern": "https://api.example.com", "type": "literal"}]`. Automatic migration is provided for backward compatibility in existing configs.
+- **CORS origins configuration format changed** — `cors_origins` now requires structured objects. Plain strings are no longer accepted. Update `["https://*.example.com", "https://api.example.com"]` to `[{"pattern": "https://*.example.com", "type": "wildcard"}, {"pattern": "https://api.example.com", "type": "literal"}]`.
 
 ### Added
 

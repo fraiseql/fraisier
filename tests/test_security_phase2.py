@@ -282,4 +282,4 @@ class TestCorsOriginValidation:
         nc = NginxEnvConfig(
             cors_origins=[{"pattern": "https://*.example.com", "type": "wildcard"}]
         )
-        assert nc.cors_origins_escaped == [r"https://[a-zA-Z0-9-]+\.example\.com"]
+        assert nc.cors_origins_escaped == [r"^https://[^.]+\.example\.com$"]

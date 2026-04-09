@@ -498,6 +498,7 @@ class FraisierConfig:
                 rate_limit=raw_nginx.get("rate_limit", "10r/s"),
                 restricted_paths=raw_nginx.get("restricted_paths", []),
                 webhook_port=raw_nginx.get("webhook_port", 8080),
+                gateway_fraise=raw_nginx.get("gateway_fraise"),
             ),
             github_actions=GithubActionsScaffoldConfig(
                 python_versions=raw_gh.get("python_versions", ["3.12"]),

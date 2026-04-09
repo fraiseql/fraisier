@@ -152,6 +152,7 @@ scaffold:
   nginx:
     cors_origins:
       - {{pattern: "*.example.io", type: wildcard}}
+    gateway_fraise: management
   github_actions:
     python_versions: ["3.12"]
 

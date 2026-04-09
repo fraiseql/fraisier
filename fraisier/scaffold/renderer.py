@@ -19,6 +19,7 @@ from fraisier.config import (
     FraisierConfig,
     NginxEnvConfig,
     ServiceConfig,
+    ValidationError,
 )
 from fraisier.manifest import build_manifest
 from fraisier.naming import deploy_socket_name
@@ -367,6 +368,19 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
             }
             for f in fraises_list
         ]
+        # Re-derive server_name from server-local environments only.
+        # The fraises_list aggregation above used all environments (first wins),
+        # which gives the wrong server_name when environments on different servers
+        # have distinct nginx.server_name values.
+        for lf in local_fraises:
+            local_sn: str | None = None
+            for ec in lf.get("environments", {}).values():
+                if isinstance(ec, dict) and isinstance(ec.get("nginx"), dict):
+                    sn = ec["nginx"].get("server_name")
+                    if sn:
+                        local_sn = sn
+                        break
+            lf["server_name"] = local_sn
     else:
         local_fraises = fraises_list
 
@@ -388,6 +402,12 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         project_name, local_fraises, deploy_user
     )
 
+    gateway_fraise = _resolve_gateway_fraise(
+        config.scaffold.nginx.gateway_fraise,
+        local_fraises,
+        has_restricted_paths=bool(config.scaffold.nginx.restricted_paths),
+    )
+
     return {
         "manifest": build_manifest(config),
         "scaffold": config.scaffold,
@@ -406,7 +426,33 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "sudoers_rules": _collect_deduplicated_sudoers_rules(config, fraises_list),
         "machine_env_map": machine_env_map,
         "install_helper_sockets": install_helper_sockets,
+        "gateway_fraise": gateway_fraise,
     }
+
+
+def _resolve_gateway_fraise(
+    explicit: str | None,
+    local_fraises: list[dict[str, Any]],
+    has_restricted_paths: bool,
+) -> str | None:
+    """Return the fraise name that the nginx gateway proxies restricted paths to.
+
+    If ``explicit`` is set, it is used directly.  With exactly one API fraise
+    the name is inferred automatically.  Multiple API fraises without an explicit
+    value is an error only when ``restricted_paths`` are configured, since that
+    is the only place ``gateway_fraise`` is referenced in the template.
+    """
+    if explicit:
+        return explicit
+    api_names = [f["name"] for f in local_fraises if f.get("type") == "api"]
+    if len(api_names) == 1:
+        return api_names[0]
+    if len(api_names) > 1 and has_restricted_paths:
+        raise ValidationError(
+            "scaffold.nginx.gateway_fraise must be set when multiple API fraises "
+            f"share a server (found: {', '.join(api_names)})"
+        )
+    return None
 
 
 def _infer_project_name(config: FraisierConfig) -> str:
@@ -611,10 +657,6 @@ class ScaffoldRenderer:
             if not dry_run:
                 self._render_template("core/systemctl-wrapper.sh.j2", systemctl_out)
 
-        # Sync scripts — one per configured source→target pair
-        if self.context["scaffold"].sync:
-            rendered_files.extend(self._render_sync_scripts(dry_run))
-
         # Systemctl helper service + socket (always when there are services)
         if self.context["allowed_services"]:
             rendered_files.extend(self._render_systemctl_helper(dry_run))
@@ -695,25 +737,6 @@ class ScaffoldRenderer:
         if server_slug:
             return f"fraisier-{project}-webhook-{server_slug}.service"
         return f"fraisier-{project}-webhook.service"
-
-    def _render_sync_scripts(self, dry_run: bool) -> list[str]:
-        """Render one sync.sh per configured source→target pair."""
-        rendered: list[str] = []
-        for pair in self.context["scaffold"].sync:
-            out_name = f"sync-{pair.source}-to-{pair.target}.sh"
-            rendered.append(out_name)
-            if not dry_run:
-                pair_context = {**self.context, "pair": pair}
-                try:
-                    tpl = self.env.get_template("core/sync.sh.j2")
-                    content = tpl.render(**pair_context)
-                except jinja2.TemplateNotFound:
-                    content = "# Placeholder: sync.sh.j2\n"
-                self._write_output(out_name, content)
-                # Make executable
-                out_path = Path(self.output_dir) / out_name
-                out_path.chmod(out_path.stat().st_mode | 0o111)
-        return rendered
 
     def _render_install_helper_units(self, dry_run: bool) -> list[str]:
         """Render install-helper .socket and .service units for each fraise+env."""

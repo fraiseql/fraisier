@@ -58,15 +58,10 @@ DEPLOY_USER="{{ scaffold.deploy_user }}"
 PROJECT_DIR="/opt/{{ project_name }}"
 
 # Determine the directory containing scaffold files.
-# In standalone mode the caller specifies the path (or we default to this
-# script's own directory).  In normal mode the files live inside the cloned
-# project at the well-known generated path.
-if [[ "$STANDALONE" == "true" ]]; then
-  if [[ -z "$SCAFFOLD_DIR" ]]; then
-    SCAFFOLD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  fi
-else
-  SCAFFOLD_DIR="${PROJECT_DIR}/scripts/generated"
+# Default: the directory that contains this script (works when install.sh is
+# deployed alongside the other generated files).  Override with --scaffold-dir.
+if [[ -z "$SCAFFOLD_DIR" ]]; then
+  SCAFFOLD_DIR="$(dirname "$(realpath "$0")")"
 fi
 
 # Server detection (baked at scaffold time by fraisier)
@@ -445,6 +440,15 @@ fi
 {% endif %}
 {% endfor %}
 {% endfor %}
+
+# Remove legacy /etc/nginx/conf.d/rate_limit.conf if gateway.conf now contains
+# limit_req_zone — having both causes a duplicate-zone crash on nginx reload.
+if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ] && \
+   grep -q "limit_req_zone" "${SCAFFOLD_DIR}/nginx/gateway.conf" && \
+   [ -f /etc/nginx/conf.d/rate_limit.conf ]; then
+    echo "  Removing legacy /etc/nginx/conf.d/rate_limit.conf (now handled by gateway.conf)"
+    _run sudo rm -f /etc/nginx/conf.d/rate_limit.conf
+fi
 
 if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
     sudo nginx -t && sudo systemctl reload nginx

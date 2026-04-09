@@ -1618,6 +1618,7 @@ from . import providers as _providers_mod  # noqa: E402, F401
 from . import repair_remote as _repair_remote_mod  # noqa: E402, F401
 from . import scaffold as _scaffold_mod  # noqa: E402, F401
 from . import setup as _setup_mod  # noqa: E402, F401
+from . import sync as _sync_mod  # noqa: E402, F401
 from . import test_components as _test_components_mod  # noqa: E402, F401
 from . import test_db as _test_db_mod  # noqa: E402, F401
 from . import validate_remote as _validate_remote_mod  # noqa: E402, F401
