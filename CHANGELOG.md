@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-04-09
+
+### Fixed
+
+- **Issue: deploy socket name collision with multiple fraises** — `deploy_socket_name()` now includes the fraise name in the default unit name: `fraisier-{fraise_name}-{env_key}.socket`. Previously, multiple fraises sharing the same env key (e.g. `production`) generated the same socket unit name, causing last-write-wins overwrites. Resolution order: `systemd_deploy_socket` override → `fraisier-{env.name}.socket` (if `env.name` set) → `fraisier-{fraise}-{env}.socket` (new default) → `fraisier-{env}.socket` (legacy fallback).
+
+---
+
 ## [0.7.0] - 2026-04-09
 
 ### Added
