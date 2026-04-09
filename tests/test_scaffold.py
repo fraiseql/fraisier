@@ -183,6 +183,7 @@ scaffold:
         config = self._make_config(tmp_path, "name: tp\nfraises: {}\n")
         assert config.scaffold.sync == []
 
+
 class TestScaffoldRenderer:
     """Renderer runs core templates, then provider templates."""
 
@@ -3328,7 +3329,9 @@ class TestWildcardCorsOrigins:
         """Wildcard CORS origin produces ^…[^.]+…$ nginx regex (issue #147)."""
         from fraisier.config.schema import _process_cors_origin
 
-        result = _process_cors_origin({"pattern": "https://*.example.com", "type": "wildcard"})
+        result = _process_cors_origin(
+            {"pattern": "https://*.example.com", "type": "wildcard"}
+        )
         assert result == "^https://[^.]+\\.example\\.com$"
 
     def test_wildcard_no_protocol_produces_anchored_regex(self):
@@ -3399,7 +3402,7 @@ fraises:
         content = (tmp_path / "output" / "install.sh").read_text()
         # Must default to the script's own directory, not PROJECT_DIR/scripts/generated
         assert 'dirname "$(realpath "$0")"' in content
-        assert '${PROJECT_DIR}/scripts/generated' not in content
+        assert "${PROJECT_DIR}/scripts/generated" not in content
 
 
 class TestInstallShRateLimitConflict:
@@ -4354,14 +4357,20 @@ fraises:
         """
         out = self._render(tmp_path, "server-b")
         content = (out / "nginx" / "gateway.conf").read_text()
-        assert "ssl_certificate /etc/letsencrypt/live/api.example.com/fullchain.pem" in content
+        assert (
+            "ssl_certificate /etc/letsencrypt/live/api.example.com/fullchain.pem"
+            in content
+        )
         assert "api.dev.example.com" not in content
 
     def test_gateway_conf_ssl_cert_server_a_uses_dev_name(self, tmp_path):
         """gateway.conf for server-a uses dev server_name in SSL cert, not prod's."""
         out = self._render(tmp_path, "server-a")
         content = (out / "nginx" / "gateway.conf").read_text()
-        assert "ssl_certificate /etc/letsencrypt/live/api.dev.example.com/fullchain.pem" in content
+        assert (
+            "ssl_certificate /etc/letsencrypt/live/api.dev.example.com/fullchain.pem"
+            in content
+        )
         assert "api.example.com/fullchain" not in content
 
 

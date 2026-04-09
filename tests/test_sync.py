@@ -18,6 +18,7 @@ _PATCH = "fraisier.cli.sync.subprocess.run"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _mk(returncode: int = 0, stdout: str = "", stderr: str = "") -> MagicMock:
     m = MagicMock()
     m.returncode = returncode
@@ -51,37 +52,46 @@ def _setup(tmp_path, pairs: list[dict]) -> str:
 # Unit: _is_auto_resolved
 # ---------------------------------------------------------------------------
 
+
 class TestIsAutoResolved:
     def test_version_json(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("version.json") is True
 
     def test_pyproject_toml(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("pyproject.toml") is True
 
     def test_uv_lock(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("uv.lock") is True
 
     def test_fraises_yaml(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("fraises.yaml") is True
 
     def test_scripts_generated_prefix(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("scripts/generated/nginx/gateway.conf") is True
 
     def test_scripts_generated_exact(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("scripts/generated") is True
 
     def test_source_file_not_auto_resolved(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("src/api/routes.py") is False
 
     def test_scripts_non_generated_not_auto_resolved(self):
         from fraisier.cli.sync import _is_auto_resolved
+
         assert _is_auto_resolved("scripts/deploy.sh") is False
 
 
@@ -89,35 +99,42 @@ class TestIsAutoResolved:
 # Unit: _resolve_pair
 # ---------------------------------------------------------------------------
 
+
 class TestResolvePair:
     def _pairs(self, *specs):
         from fraisier.config.schema import SyncPair
+
         return [SyncPair(source=s, target=t) for s, t in specs]
 
     def test_single_pair_no_target(self):
         from fraisier.cli.sync import _resolve_pair
+
         p = _resolve_pair(None, self._pairs(("dev", "staging")))
         assert p.source == "dev" and p.target == "staging"
 
     def test_multiple_pairs_no_target_exits(self):
         from fraisier.cli.sync import _resolve_pair
+
         with pytest.raises(SystemExit) as exc:
             _resolve_pair(None, self._pairs(("dev", "staging"), ("staging", "prod")))
         assert exc.value.code == 1
 
     def test_multiple_pairs_explicit_target(self):
         from fraisier.cli.sync import _resolve_pair
+
         p = _resolve_pair("prod", self._pairs(("dev", "staging"), ("staging", "prod")))
         assert p.source == "staging" and p.target == "prod"
 
     def test_unknown_target_exits(self):
         from fraisier.cli.sync import _resolve_pair
+
         with pytest.raises(SystemExit) as exc:
             _resolve_pair("nope", self._pairs(("dev", "staging")))
         assert exc.value.code == 1
 
     def test_empty_pairs_exits(self):
         from fraisier.cli.sync import _resolve_pair
+
         with pytest.raises(SystemExit) as exc:
             _resolve_pair(None, [])
         assert exc.value.code == 1
@@ -127,15 +144,18 @@ class TestResolvePair:
 # Unit: _read_branch_version
 # ---------------------------------------------------------------------------
 
+
 class TestReadBranchVersion:
     def test_reads_version_json(self):
         from fraisier.cli.sync import _read_branch_version
+
         with patch(_PATCH) as m:
             m.side_effect = [_mk(returncode=0, stdout='{"version": "2.3.1"}')]
             assert _read_branch_version("main") == "2.3.1"
 
     def test_falls_back_to_pyproject(self):
         from fraisier.cli.sync import _read_branch_version
+
         pyproject = '[project]\nname = "myapp"\nversion = "1.5.0"\n'
         with patch(_PATCH) as m:
             m.side_effect = [
@@ -146,12 +166,14 @@ class TestReadBranchVersion:
 
     def test_returns_unknown_when_both_missing(self):
         from fraisier.cli.sync import _read_branch_version
+
         with patch(_PATCH) as m:
             m.side_effect = [_mk(returncode=1), _mk(returncode=1)]
             assert _read_branch_version("main") == "unknown"
 
     def test_invalid_json_falls_back_to_pyproject(self):
         from fraisier.cli.sync import _read_branch_version
+
         with patch(_PATCH) as m:
             m.side_effect = [
                 _mk(returncode=0, stdout="not-json"),
@@ -164,6 +186,7 @@ class TestReadBranchVersion:
 # CLI: --list flag
 # ---------------------------------------------------------------------------
 
+
 class TestSyncListFlag:
     def test_list_shows_configured_pairs(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -175,7 +198,10 @@ class TestSyncListFlag:
     def test_list_multiple_pairs(self, tmp_path):
         cfg = _setup(
             tmp_path,
-            [{"source": "dev", "target": "staging"}, {"source": "staging", "target": "prod"}],
+            [
+                {"source": "dev", "target": "staging"},
+                {"source": "staging", "target": "prod"},
+            ],
         )
         result = CliRunner().invoke(main, ["-c", cfg, "sync", "--list"])
         assert result.exit_code == 0
@@ -192,6 +218,7 @@ class TestSyncListFlag:
 # ---------------------------------------------------------------------------
 # CLI: --check flag
 # ---------------------------------------------------------------------------
+
 
 class TestSyncCheckFlag:
     def test_check_shows_version_diff(self, tmp_path):
@@ -222,7 +249,10 @@ class TestSyncCheckFlag:
     def test_check_ambiguous_target_exits_1(self, tmp_path):
         cfg = _setup(
             tmp_path,
-            [{"source": "dev", "target": "staging"}, {"source": "staging", "target": "prod"}],
+            [
+                {"source": "dev", "target": "staging"},
+                {"source": "staging", "target": "prod"},
+            ],
         )
         result = CliRunner().invoke(main, ["-c", cfg, "sync", "--check"])
         assert result.exit_code == 1
@@ -230,7 +260,10 @@ class TestSyncCheckFlag:
     def test_check_explicit_target(self, tmp_path):
         cfg = _setup(
             tmp_path,
-            [{"source": "dev", "target": "staging"}, {"source": "staging", "target": "prod"}],
+            [
+                {"source": "dev", "target": "staging"},
+                {"source": "staging", "target": "prod"},
+            ],
         )
         with patch(_PATCH) as m:
             m.side_effect = [
@@ -246,20 +279,24 @@ class TestSyncCheckFlag:
 # CLI: already in sync
 # ---------------------------------------------------------------------------
 
+
 class TestSyncAlreadyInSync:
     def test_exits_0_when_already_in_sync(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         sha = "abc123" * 7
         with patch(_PATCH) as m:
             m.side_effect = [
-                _mk(stdout="main\n"),     # git rev-parse HEAD
-                _mk(),                    # git fetch
-                _mk(stdout=sha + "\n"),   # git rev-parse origin/dev
-                _mk(stdout=sha + "\n"),   # git merge-base (== source_sha)
+                _mk(stdout="main\n"),  # git rev-parse HEAD
+                _mk(),  # git fetch
+                _mk(stdout=sha + "\n"),  # git rev-parse origin/dev
+                _mk(stdout=sha + "\n"),  # git merge-base (== source_sha)
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 0
-        assert "up to date" in result.output.lower() or "nothing to sync" in result.output.lower()
+        assert (
+            "up to date" in result.output.lower()
+            or "nothing to sync" in result.output.lower()
+        )
 
     def test_no_git_write_ops_when_already_in_sync(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -281,6 +318,7 @@ class TestSyncAlreadyInSync:
 # CLI: happy path
 # ---------------------------------------------------------------------------
 
+
 class TestSyncHappyPath:
     """Full successful sync: clean merge, PR created, auto-merge enabled."""
 
@@ -290,20 +328,20 @@ class TestSyncHappyPath:
 
     def _side_effects(self):
         return [
-            _mk(stdout="main\n"),                              # git rev-parse HEAD
-            _mk(),                                             # git fetch
-            _mk(stdout=self.SHA + "\n"),                       # git rev-parse origin/dev
-            _mk(stdout=self.MERGE_BASE + "\n"),                # git merge-base
-            _mk(returncode=0, stdout='{"version": "1.1.0"}'), # version dev
-            _mk(returncode=0, stdout='{"version": "1.0.0"}'), # version staging
-            _mk(),                                             # git checkout -b
-            _mk(),                                             # git merge (clean)
-            _mk(returncode=1),                                 # git diff --cached (staged)
-            _mk(),                                             # git commit pre-merge
-            _mk(),                                             # git push
-            _mk(stdout=self.PR_URL + "\n"),                    # gh pr create
-            _mk(),                                             # gh pr merge
-            _mk(),                                             # git checkout main
+            _mk(stdout="main\n"),  # git rev-parse HEAD
+            _mk(),  # git fetch
+            _mk(stdout=self.SHA + "\n"),  # git rev-parse origin/dev
+            _mk(stdout=self.MERGE_BASE + "\n"),  # git merge-base
+            _mk(returncode=0, stdout='{"version": "1.1.0"}'),  # version dev
+            _mk(returncode=0, stdout='{"version": "1.0.0"}'),  # version staging
+            _mk(),  # git checkout -b
+            _mk(),  # git merge (clean)
+            _mk(returncode=1),  # git diff --cached (staged)
+            _mk(),  # git commit pre-merge
+            _mk(),  # git push
+            _mk(stdout=self.PR_URL + "\n"),  # gh pr create
+            _mk(),  # gh pr merge
+            _mk(),  # git checkout main
         ]
 
     def test_exits_0_and_prints_pr_url(self, tmp_path):
@@ -349,13 +387,13 @@ class TestSyncHappyPath:
                 _mk(stdout=self.MERGE_BASE + "\n"),
                 _mk(returncode=0, stdout='{"version": "1.1.0"}'),
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
-                _mk(),                 # git checkout -b
-                _mk(),                 # git merge (clean)
-                _mk(returncode=0),     # git diff --cached --quiet (nothing staged)
-                _mk(),                 # git push (no commit)
+                _mk(),  # git checkout -b
+                _mk(),  # git merge (clean)
+                _mk(returncode=0),  # git diff --cached --quiet (nothing staged)
+                _mk(),  # git push (no commit)
                 _mk(stdout=self.PR_URL + "\n"),
                 _mk(),
-                _mk(),                 # git checkout main
+                _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 0
@@ -367,6 +405,7 @@ class TestSyncHappyPath:
 # ---------------------------------------------------------------------------
 # CLI: conflict resolution
 # ---------------------------------------------------------------------------
+
 
 class TestSyncConflicts:
     SHA = "deadbeef" * 5
@@ -383,19 +422,19 @@ class TestSyncConflicts:
                 _mk(stdout=self.MERGE_BASE + "\n"),
                 _mk(returncode=0, stdout='{"version": "1.1.0"}'),
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
-                _mk(),                                          # git checkout -b
-                _mk(returncode=1),                              # git merge (conflict)
+                _mk(),  # git checkout -b
+                _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="version.json\npyproject.toml\n"),  # diff --filter=U (first)
-                _mk(),                                          # checkout origin/dev -- version.json
-                _mk(),                                          # git add version.json
-                _mk(),                                          # checkout origin/dev -- pyproject.toml
-                _mk(),                                          # git add pyproject.toml
-                _mk(stdout=""),                                 # diff --filter=U (remaining: clean)
-                _mk(),                                          # git commit
-                _mk(),                                          # git push
-                _mk(stdout=self.PR_URL + "\n"),                 # gh pr create
-                _mk(),                                          # gh pr merge
-                _mk(),                                          # git checkout main
+                _mk(),  # checkout origin/dev -- version.json
+                _mk(),  # git add version.json
+                _mk(),  # checkout origin/dev -- pyproject.toml
+                _mk(),  # git add pyproject.toml
+                _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _mk(),  # git commit
+                _mk(),  # git push
+                _mk(stdout=self.PR_URL + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 0
@@ -411,13 +450,13 @@ class TestSyncConflicts:
                 _mk(stdout=self.MERGE_BASE + "\n"),
                 _mk(returncode=0, stdout='{"version": "1.1.0"}'),
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
-                _mk(),                             # git checkout -b
-                _mk(returncode=1),                 # git merge (conflict)
-                _mk(stdout="src/routes.py\n"),     # diff --filter=U (first)
+                _mk(),  # git checkout -b
+                _mk(returncode=1),  # git merge (conflict)
+                _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 # src/routes.py is not auto-resolved → no checkout/add
-                _mk(stdout="src/routes.py\n"),     # diff --filter=U (remaining)
-                _mk(),                             # git checkout main (cleanup)
-                _mk(),                             # git branch -D (cleanup)
+                _mk(stdout="src/routes.py\n"),  # diff --filter=U (remaining)
+                _mk(),  # git checkout main (cleanup)
+                _mk(),  # git branch -D (cleanup)
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 1
@@ -451,6 +490,7 @@ class TestSyncConflicts:
 # CLI: confirmation prompt
 # ---------------------------------------------------------------------------
 
+
 class TestSyncConfirmation:
     SHA = "deadbeef" * 5
     MERGE_BASE = "cafe1234" * 5
@@ -481,14 +521,14 @@ class TestSyncConfirmation:
         with patch(_PATCH) as m:
             m.side_effect = [
                 *self._pre_confirm_effects(),
-                _mk(),                        # git checkout -b
-                _mk(),                        # git merge (clean)
-                _mk(returncode=1),            # git diff --cached (staged)
-                _mk(),                        # git commit
-                _mk(),                        # git push
-                _mk(stdout=pr_url + "\n"),    # gh pr create
-                _mk(),                        # gh pr merge
-                _mk(),                        # git checkout main
+                _mk(),  # git checkout -b
+                _mk(),  # git merge (clean)
+                _mk(returncode=1),  # git diff --cached (staged)
+                _mk(),  # git commit
+                _mk(),  # git push
+                _mk(stdout=pr_url + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 0
@@ -499,6 +539,7 @@ class TestSyncConfirmation:
 # CLI: error cases
 # ---------------------------------------------------------------------------
 
+
 class TestSyncErrorCases:
     def test_no_pairs_configured_exits_1(self, tmp_path):
         cfg = _setup(tmp_path, [])
@@ -508,7 +549,10 @@ class TestSyncErrorCases:
     def test_ambiguous_target_exits_1(self, tmp_path):
         cfg = _setup(
             tmp_path,
-            [{"source": "dev", "target": "staging"}, {"source": "staging", "target": "prod"}],
+            [
+                {"source": "dev", "target": "staging"},
+                {"source": "staging", "target": "prod"},
+            ],
         )
         result = CliRunner().invoke(main, ["-c", cfg, "sync"])
         assert result.exit_code == 1
@@ -527,6 +571,7 @@ class TestSyncErrorCases:
 # ---------------------------------------------------------------------------
 # CLI: --dry-run
 # ---------------------------------------------------------------------------
+
 
 class TestSyncDryRun:
     def test_dry_run_exits_zero(self, tmp_path):
@@ -590,7 +635,10 @@ class TestSyncDryRun:
     def test_dry_run_with_explicit_target(self, tmp_path):
         cfg = _setup(
             tmp_path,
-            [{"source": "dev", "target": "staging"}, {"source": "staging", "target": "prod"}],
+            [
+                {"source": "dev", "target": "staging"},
+                {"source": "staging", "target": "prod"},
+            ],
         )
         with patch(_PATCH):
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "prod", "--dry-run"])

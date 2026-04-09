@@ -279,19 +279,23 @@ def sync_cmd(
 
             _run(
                 [
-                    "git", "commit", "--no-edit", "-m",
+                    "git",
+                    "commit",
+                    "--no-edit",
+                    "-m",
                     f"Pre-merge {tgt} into sync branch (auto-resolved fraisier files)",
                 ]
             )
         else:
             # Clean merge — commit only if something was staged.
-            staged = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"], check=False
-            )
+            staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
             if staged.returncode != 0:
                 _run(
                     [
-                        "git", "commit", "--no-edit", "-m",
+                        "git",
+                        "commit",
+                        "--no-edit",
+                        "-m",
                         f"Pre-merge {tgt} into sync branch",
                     ]
                 )
@@ -299,16 +303,20 @@ def sync_cmd(
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
         _run(["git", "push", "origin", sync_branch])
 
-        console.print(
-            f"  Creating PR: [bold]{sync_branch}[/bold] → [bold]{tgt}[/bold]"
-        )
+        console.print(f"  Creating PR: [bold]{sync_branch}[/bold] → [bold]{tgt}[/bold]")
         pr_result = subprocess.run(
             [
-                "gh", "pr", "create",
-                "--title", f"Promote {source} → {tgt}",
-                "--body", f"Automated promotion of `{source}` → `{tgt}`.",
-                "--base", tgt,
-                "--head", sync_branch,
+                "gh",
+                "pr",
+                "create",
+                "--title",
+                f"Promote {source} → {tgt}",
+                "--body",
+                f"Automated promotion of `{source}` → `{tgt}`.",
+                "--base",
+                tgt,
+                "--head",
+                sync_branch,
                 "--no-maintainer-edit",
             ],
             capture_output=True,
