@@ -673,6 +673,10 @@ class ScaffoldRenderer:
         # PostgreSQL logging config (one per unique environment with a database)
         rendered_files.extend(self._collect_pg_logging(dry_run))
 
+        # Remove stale deploy socket/service files left by previous scaffold runs
+        if not dry_run:
+            self._remove_stale_deploy_units(rendered_files)
+
         # Per-fraise systemd service templates
         project = self.context["project_name"]
         for fraise in self.context["local_fraises"]:
@@ -1094,6 +1098,29 @@ class ScaffoldRenderer:
             )
 
         self._write_output(out_name, content)
+
+    def _remove_stale_deploy_units(self, rendered_files: list[str]) -> None:
+        """Remove deploy socket/service files not in the current render set.
+
+        Cleans up legacy files left by older scaffold runs (e.g. pre-0.7.1
+        generic ``fraisier-{env}.socket`` files replaced by fraise-specific
+        ``fraisier-{fraise}-{env}.socket`` names).
+        """
+        systemd_dir = self.output_dir / "systemd"
+        if not systemd_dir.exists():
+            return
+        rendered_set = set(rendered_files)
+        for path in systemd_dir.iterdir():
+            if not path.is_file():
+                continue
+            rel = f"systemd/{path.name}"
+            if rel in rendered_set:
+                continue
+            name = path.name
+            if (name.startswith("fraisier-") and name.endswith(".socket")) or (
+                name.startswith("fraisier-") and name.endswith("@.service")
+            ):
+                path.unlink()
 
     def _write_output(self, rel_path: str, content: str) -> None:
         """Write rendered content to output_dir/rel_path."""

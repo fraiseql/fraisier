@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-04-09
+
+### Fixed
+
+- **Issue #149: stale deploy socket/service files not cleaned up on re-scaffold** — `ScaffoldRenderer` now removes `fraisier-*.socket` and `fraisier-*@.service` files from the `systemd/` output directory that are no longer part of the current render set (e.g. after a fraise rename or the 0.7.1 socket naming change).
+- **Issue #150: install.sh migrates pre-0.7.1 generic deploy socket units** — `install.sh` now detects and removes stale `fraisier-{env}.socket` / `fraisier-{env}@.service` / `fraisier-{env}.service` units left by older scaffold versions before installing the new fraise-specific units, preventing duplicate or conflicting unit names on the server.
+
+---
+
 ## [0.7.1] - 2026-04-09
 
 ### Fixed
