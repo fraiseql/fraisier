@@ -425,8 +425,10 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="version.json\npyproject.toml\n"),  # diff --filter=U (first)
+                _mk(returncode=0),  # cat-file origin/dev:version.json (exists)
                 _mk(),  # checkout origin/dev -- version.json
                 _mk(),  # git add version.json
+                _mk(returncode=0),  # cat-file origin/dev:pyproject.toml (exists)
                 _mk(),  # checkout origin/dev -- pyproject.toml
                 _mk(),  # git add pyproject.toml
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
@@ -439,6 +441,32 @@ class TestSyncConflicts:
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 0
         assert self.PR_URL in result.output
+
+    def test_source_deletion_auto_resolved(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="main\n"),
+                _mk(),
+                _mk(stdout=self.SHA + "\n"),
+                _mk(stdout=self.MERGE_BASE + "\n"),
+                _mk(returncode=0, stdout='{"version": "1.1.0"}'),
+                _mk(returncode=0, stdout='{"version": "1.0.0"}'),
+                _mk(),  # git checkout -b
+                _mk(returncode=1),  # git merge (conflict)
+                _mk(stdout="old_script.py\n"),  # diff --filter=U (first)
+                _mk(returncode=1),  # cat-file origin/dev:old_script.py (not in source → deleted)
+                _mk(),  # git rm old_script.py
+                _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _mk(),  # git commit
+                _mk(),  # git push
+                _mk(stdout=self.PR_URL + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
+            ]
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0
+        assert "Auto-resolved source deletion: old_script.py" in result.output
 
     def test_non_owned_conflicts_exit_1(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -453,7 +481,8 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
-                # src/routes.py is not auto-resolved → no checkout/add
+                _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists in source)
+                # src/routes.py exists in source and is not auto-resolved → no checkout/add
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (remaining)
                 _mk(),  # git checkout main (cleanup)
                 _mk(),  # git branch -D (cleanup)
@@ -475,6 +504,7 @@ class TestSyncConflicts:
                 _mk(),
                 _mk(returncode=1),
                 _mk(stdout="src/routes.py\n"),
+                _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists in source)
                 _mk(stdout="src/routes.py\n"),
                 _mk(),  # git checkout main
                 _mk(),  # git branch -D

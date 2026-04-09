@@ -254,7 +254,18 @@ def sync_cmd(
                 f = raw_f.strip()
                 if not f:
                     continue
-                if _is_auto_resolved(f):
+                exists_in_source = (
+                    subprocess.run(
+                        ["git", "cat-file", "-e", f"origin/{source}:{f}"],
+                        capture_output=True,
+                        check=False,
+                    ).returncode
+                    == 0
+                )
+                if not exists_in_source:
+                    subprocess.run(["git", "rm", f], capture_output=True, check=False)
+                    console.print(f"  Auto-resolved source deletion: {f}")
+                elif _is_auto_resolved(f):
                     subprocess.run(
                         ["git", "checkout", f"origin/{source}", "--", f],
                         capture_output=True,

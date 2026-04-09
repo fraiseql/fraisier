@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-04-10
+
+### Fixed
+
+- **Issue #151: `fraisier sync` auto-resolves file deletions from the source branch** — When the source branch has deleted a file that still exists in the target branch, the sync now detects the deletion (via `git cat-file -e origin/{source}:{file}`) and accepts it with `git rm`, instead of halting with an unresolved conflict error. A log line is printed for each auto-resolved deletion. Conflicts where both sides modified the same file are still surfaced to the user.
+
+---
+
 ## [0.7.2] - 2026-04-09
 
 ### Fixed
