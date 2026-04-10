@@ -225,9 +225,9 @@ class ServerBootstrapper:
         )
 
     def _restart_webhook_if_running(self) -> StepResult:
-        """Restart the webhook service if it is active, so the new fraisier takes effect.
+        """Restart the webhook service after a fraisier upgrade.
 
-        On a fresh install the service does not exist yet — that is not an error.
+        If the service is not yet running (fresh install), this is a no-op.
         """
         name = "Restart webhook service"
         webhook_svc = f"fraisier-{self.project_name}-webhook.service"
@@ -236,7 +236,10 @@ class ServerBootstrapper:
             return StepResult(
                 name=name,
                 success=True,
-                command=f"systemctl is-active {webhook_svc} && systemctl restart {webhook_svc}",
+                command=(
+                    f"systemctl is-active {webhook_svc}"
+                    f" && systemctl restart {webhook_svc}"
+                ),
             )
 
         try:
