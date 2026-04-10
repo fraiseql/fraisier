@@ -219,6 +219,70 @@ fraises:
         config = FraisierConfig(config_file)
         assert config.get_fraise("my_api") is not None
 
+    def test_rejects_rebuild_without_admin_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          strategy: rebuild
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+""",
+        )
+        with pytest.raises(
+            ValidationError,
+            match=r"strategy 'rebuild' requires database\.admin_url",
+        ):
+            FraisierConfig(config_file)
+
+    def test_rejects_restore_migrate_without_admin_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          restore:
+            backup_dir: /var/backups/fraisier
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+""",
+        )
+        with pytest.raises(
+            ValidationError,
+            match=r"strategy 'restore_migrate' requires database\.admin_url",
+        ):
+            FraisierConfig(config_file)
+
+    def test_accepts_rebuild_with_admin_url(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          strategy: rebuild
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
     def test_rejects_unknown_strategy(self, tmp_path):
         config_file = _write_config(
             tmp_path,

@@ -40,6 +40,7 @@ fraises:
         database:
           tool: confiture
           strategy: rebuild
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
       production:
         worker_count: 4
         memory_max: "8G"

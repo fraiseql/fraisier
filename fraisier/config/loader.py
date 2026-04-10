@@ -32,6 +32,7 @@ from fraisier.config.schema import (
     SystemdScaffoldConfig,
     _config_search_locations,
 )
+from fraisier.dbops._strategies import ADMIN_STRATEGIES
 from fraisier.errors import ConfigurationError, ValidationError
 
 # Local constants that aren't in schema yet
@@ -275,6 +276,12 @@ class FraisierConfig:
                 )
             if strategy == "restore_migrate":
                 errors.extend(self._validate_restore_migrate(fraise_name, db))
+            if strategy in ADMIN_STRATEGIES and not db.get("admin_url"):
+                errors.append(
+                    f"{fraise_name}: strategy '{strategy}' requires "
+                    "database.admin_url. Fix: add admin_url, e.g. "
+                    "postgresql:///postgres?host=/var/run/postgresql"
+                )
             errors.extend(self._validate_database_url(fraise_name, db))
 
         if errors:

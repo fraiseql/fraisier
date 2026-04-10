@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from fraisier.config import FraisierConfig
-from fraisier.dbops._strategies import ADMIN_STRATEGIES
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +62,6 @@ class ValidationRunner:
             self._check_required_fields,
             self._check_health_check_urls,
             self._check_database_strategies,
-            self._check_admin_url_required,
             self._check_missing_health_checks,
         ]
         for check in basic_checks:
@@ -246,39 +244,6 @@ class ValidationRunner:
                     )
         if not results:
             results.append(ValidationCheckResult(name="database_strategy", passed=True))
-        return results
-
-    def _check_admin_url_required(self) -> list[ValidationCheckResult]:
-        """Require admin_url for strategies that perform superuser DB ops."""
-        results: list[ValidationCheckResult] = []
-        for name in self.config.list_fraises():
-            for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
-                db = env.get("database")
-                if not db:
-                    continue
-                strategy = db.get("strategy", "")
-                if strategy not in ADMIN_STRATEGIES:
-                    continue
-                admin_url = db.get("admin_url")
-                if not admin_url:
-                    results.append(
-                        ValidationCheckResult(
-                            name="admin_url_required",
-                            passed=False,
-                            message=(
-                                f"Fraise '{name}' environment '{env_name}': "
-                                f"strategy '{strategy}' requires database.admin_url. "
-                                "Fix: add admin_url, e.g. "
-                                "postgresql:///postgres?host=/var/run/postgresql"
-                            ),
-                            severity="error",
-                        )
-                    )
-        if not results:
-            results.append(
-                ValidationCheckResult(name="admin_url_required", passed=True)
-            )
         return results
 
     def run_operational(

@@ -269,6 +269,7 @@ class TestDatabaseConfigCheck:
             "dbname": "my_db",
             "user": "my_user",
             "strategy": "rebuild",
+            "admin_url": "postgresql:///postgres?host=/var/run/postgresql",
         }
         config_file = _make_config(tmp_path, config)
         runner = CliRunner()

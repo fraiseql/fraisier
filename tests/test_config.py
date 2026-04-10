@@ -641,6 +641,7 @@ fraises:
         database:
           name: staging_db
           strategy: restore_migrate
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
           restore:
             backup_dir: /backup/production
             backup_pattern: "*.dump"

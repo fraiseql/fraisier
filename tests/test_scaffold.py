@@ -2288,11 +2288,13 @@ fraises:
         database:
           name: myapp_dev
           strategy: rebuild
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
       staging:
         app_path: /var/www/staging
         database:
           name: myapp_staging
           strategy: restore_migrate
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
           restore:
             backup_dir: /backup/prod
             backup_pattern: "*.dump"
@@ -2329,6 +2331,7 @@ fraises:
         database:
           name: myapp_dev
           strategy: rebuild
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
 """
         )
         config = FraisierConfig(p)
@@ -2627,6 +2630,7 @@ fraises:
         database:
           name: myapp_dev
           strategy: rebuild
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
       production:
         app_path: /var/www/prod
         database:
@@ -2954,6 +2958,7 @@ fraises:
         database:
           name: myapp_dev
           strategy: rebuild
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
 """,
         )
         renderer = ScaffoldRenderer(config)
@@ -3073,6 +3078,7 @@ fraises:
         database:
           name: myapp_dev
           strategy: rebuild
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
       production:
         database:
           name: myapp_prod
@@ -4212,6 +4218,7 @@ fraises:
         database:
           name: myapp_staging
           strategy: restore_migrate
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
           restore:
             backup_dir: /backup/prod
             backup_pattern: "*.dump"
@@ -4303,6 +4310,7 @@ fraises:
         database:
           name: myapp_staging
           strategy: restore_migrate
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
           restore:
             backup_dir: /backup/prod
             backup_pattern: "*.dump"
@@ -4314,6 +4322,7 @@ fraises:
         database:
           name: myapp_staging
           strategy: rebuild
+          admin_url: postgresql:///postgres?host=/var/run/postgresql
 """
 
     def _render(self, tmp_path):
