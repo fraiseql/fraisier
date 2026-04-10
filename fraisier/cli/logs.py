@@ -56,6 +56,8 @@ def _build_ssh_cmd(ssh_config: dict) -> list[str]:
     host_key_policy = "accept-new" if ssh_config.get("strict_host_key", True) else "no"
     cmd = [
         "ssh",
+        "-n",  # do not read from stdin — prevents SSH stdin channel setup which causes
+        #        multi-minute hangs when run from background/non-interactive contexts
         "-o",
         f"StrictHostKeyChecking={host_key_policy}",
         "-o",
