@@ -173,6 +173,14 @@ class TestValidationRunner:
         assert failed[0].message is not None
         assert "admin_url" in failed[0].message
 
+    def test_admin_url_not_required_for_migrate(self):
+        """migrate strategy does not need admin_url."""
+        config = self._make_config(fraises=["my_app"], envs={"my_app": ["production"]})
+        self._set_env_database(config, {"strategy": "migrate", "name": "db"})
+        runner = ValidationRunner(config)
+        results = runner._check_admin_url_required()
+        assert all(r.passed for r in results)
+
     def test_admin_url_required_for_rebuild(self):
         """rebuild without admin_url fails validation."""
         config = self._make_config(fraises=["my_app"], envs={"my_app": ["staging"]})
