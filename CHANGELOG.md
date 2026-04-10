@@ -27,7 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     admin_url: "${PG_ADMIN_URL}"
   ```
 
-  After upgrading, re-run `fraisier scaffold` and `fraisier scaffold-install` to install the smaller sudoers fragment and stripped-down service units. Any existing `/usr/local/libexec/fraisier/pgadmin-{project}` wrapper and its sudoers rule can be removed manually — nothing reads them anymore.
+  **Backups are unaffected.** Backups now run `pg_dump` against the fraise's own `database_url` instead of `sudo -u postgres`. `pg_dump` only needs SELECT on the app's own tables, which `database_url` already provides. No action required if `database_url` is already set — and it is, for every fraise with a database.
+
+  **Post-upgrade cleanup.** After re-running `fraisier scaffold` and `fraisier scaffold-install`, the `pg-wrapper` script and its sudoers rule are no longer generated, but the old files remain on disk. Remove them to close the residual privilege:
+
+  ```bash
+  sudo rm -f /usr/local/libexec/fraisier/pgadmin-<project>
+  sudo rm -f /etc/sudoers.d/<project>-pg-wrapper
+  ```
+
+  (Substitute `<project>` with your scaffold `project_name`.)
 
 ---
 
