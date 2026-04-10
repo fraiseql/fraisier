@@ -198,4 +198,4 @@ class TestTriggerDeployWait:
         args, _kwargs = mock_execvp.call_args
         assert args[0] == "journalctl"
         assert "-f" in args[1]  # follow flag
-        assert "fraisier-myproject-api-prod-deploy@*.service" in args[1]
+        assert "fraisier-api-prod@*.service" in args[1]

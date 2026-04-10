@@ -655,12 +655,9 @@ def trigger_deploy(
 
         # Handle wait/follow modes
         if follow:
-            # Exec into journalctl to follow logs
-            from fraisier.cli.logs import _resolve_deploy_unit_pattern
-
-            unit_pattern = _resolve_deploy_unit_pattern(config, fraise, environment)
-            import os
-
+            # Exec into journalctl to follow logs.
+            # socket_stem was derived from deploy_socket_name() above.
+            unit_pattern = f"{socket_stem}@*.service"
             os.execvp("journalctl", ["journalctl", "-u", unit_pattern, "-f"])
         elif wait and response_data:
             # Parse and display result
