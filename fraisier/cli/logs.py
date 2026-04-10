@@ -123,7 +123,9 @@ def logs(
     )
 
     # Build journalctl argument list
-    jctl_args = ["journalctl", "-u", unit_pattern, "-n", str(lines)]
+    # --no-pager is required even on non-TTY stdout: some systemd versions
+    # still try to invoke a pager and block until stdin closes.
+    jctl_args = ["journalctl", "--no-pager", "-u", unit_pattern, "-n", str(lines)]
     if not no_follow:
         jctl_args.append("-f")
     if since:
