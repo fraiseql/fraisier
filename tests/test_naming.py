@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fraisier.naming import deploy_socket_name
+from fraisier.naming import app_service_name, deploy_socket_name
 
 
 class TestDeploySocketName:
@@ -47,3 +47,33 @@ class TestDeploySocketName:
     )
     def test_various_name_formats(self, name, expected):
         assert deploy_socket_name({"name": name}) == expected
+
+
+class TestAppServiceName:
+    def test_default_pattern(self):
+        assert (
+            app_service_name("proj", "api", "production", {})
+            == "proj_api_production.service"
+        )
+
+    def test_systemd_service_override(self):
+        env = {"systemd_service": "api.myapp.dev.service"}
+        assert (
+            app_service_name("proj", "api", "development", env)
+            == "api.myapp.dev.service"
+        )
+
+    def test_systemd_service_without_suffix(self):
+        env = {"systemd_service": "api.myapp.dev"}
+        assert (
+            app_service_name("proj", "api", "development", env)
+            == "api.myapp.dev.service"
+        )
+
+    def test_service_name_nested_override(self):
+        env = {"service": {"service_name": "myapp-api"}}
+        assert app_service_name("proj", "api", "production", env) == "myapp-api.service"
+
+    def test_systemd_service_takes_precedence_over_service_name(self):
+        env = {"systemd_service": "top.service", "service": {"service_name": "nested"}}
+        assert app_service_name("proj", "api", "production", env) == "top.service"

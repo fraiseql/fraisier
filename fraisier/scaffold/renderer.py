@@ -22,7 +22,7 @@ from fraisier.config import (
     ValidationError,
 )
 from fraisier.manifest import build_manifest
-from fraisier.naming import deploy_socket_name
+from fraisier.naming import app_service_name, deploy_socket_name
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -202,23 +202,10 @@ def _resolve_service_base(
     env_name: str,
     env_config: dict[str, Any],
 ) -> str:
-    """Return the systemd service unit base name (without .service suffix).
-
-    Resolution order:
-    1. ``systemd_service`` at the environment top level (validated at config load)
-    2. ``service.service_name`` (nested under the service: key)
-    3. Default: ``{project}_{fraise}_{env}``
-    """
-    systemd_service = env_config.get("systemd_service")
-    if systemd_service:
-        base = str(systemd_service)
-        return base.removesuffix(".service")
-
-    override = (env_config.get("service") or {}).get("service_name")
-    if override:
-        return override
-
-    return f"{project_name}_{fraise_name}_{env_name}"
+    """Return the systemd service unit base name (without .service suffix)."""
+    return app_service_name(
+        project_name, fraise_name, env_name, env_config
+    ).removesuffix(".service")
 
 
 def _collect_allowed_services(

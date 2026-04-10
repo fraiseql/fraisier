@@ -21,3 +21,28 @@ def deploy_socket_name(
     if fraise_name:
         return f"fraisier-{fraise_name}-{env_key}.socket"
     return f"fraisier-{env_key}.socket"
+
+
+def app_service_name(
+    project_name: str,
+    fraise_name: str,
+    env_name: str,
+    env_config: dict,
+) -> str:
+    """Return the systemd app service unit name (with .service suffix).
+
+    Resolution order:
+    1. ``systemd_service`` at the environment top level
+    2. ``service.service_name`` (nested under the service: key)
+    3. Default: ``{project_name}_{fraise_name}_{env_name}.service``
+    """
+    systemd_service = env_config.get("systemd_service")
+    if systemd_service:
+        base = str(systemd_service).removesuffix(".service")
+        return f"{base}.service"
+
+    override = (env_config.get("service") or {}).get("service_name")
+    if override:
+        return f"{override}.service"
+
+    return f"{project_name}_{fraise_name}_{env_name}.service"

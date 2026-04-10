@@ -210,6 +210,36 @@ class FraisierConfig:
                     f"characters: {systemd_deploy_socket!r}"
                 )
 
+        # ssh: block validation
+        ssh = env.get("ssh")
+        if ssh is not None:
+            if not isinstance(ssh, dict):
+                errors.append(
+                    f"{fraise_name}: 'ssh' must be a mapping, got {type(ssh).__name__}"
+                )
+            else:
+                if not ssh.get("host"):
+                    errors.append(f"{fraise_name}: ssh.host is required")
+                for str_field in ("host", "user", "key_path"):
+                    val = ssh.get(str_field)
+                    if val is not None and not isinstance(val, str):
+                        errors.append(
+                            f"{fraise_name}: ssh.{str_field} must be a string, "
+                            f"got {type(val).__name__}"
+                        )
+                port = ssh.get("port")
+                if port is not None and not isinstance(port, int):
+                    errors.append(
+                        f"{fraise_name}: ssh.port must be an integer, "
+                        f"got {type(port).__name__}"
+                    )
+                strict = ssh.get("strict_host_key")
+                if strict is not None and not isinstance(strict, bool):
+                    errors.append(
+                        f"{fraise_name}: ssh.strict_host_key must be a boolean, "
+                        f"got {type(strict).__name__}"
+                    )
+
         # clone_url format validation
         clone_url = env.get("clone_url")
         if clone_url and not _GIT_URL_RE.match(str(clone_url)):
