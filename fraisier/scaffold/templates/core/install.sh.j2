@@ -254,15 +254,6 @@ _run sudo apt-get install -y -qq --no-install-recommends \
     certbot \
     python3-certbot-nginx
 
-# Install PostgreSQL admin wrapper (if generated)
-PG_WRAPPER_SRC="${SCAFFOLD_DIR}/pg-wrapper.sh"
-PG_WRAPPER_DST="/usr/local/libexec/fraisier/pgadmin-{{ project_name }}"
-if [ -f "${PG_WRAPPER_SRC}" ]; then
-    echo "  Installing PostgreSQL admin wrapper"
-    _run sudo mkdir -p /usr/local/libexec/fraisier
-    _run sudo install -m 0755 "${PG_WRAPPER_SRC}" "${PG_WRAPPER_DST}"
-fi
-
 # Install webhook service unit
 # The bootstrap renderer is always called with --server, so the webhook file has
 # the generic name (no server slug) but content filtered for this server.

@@ -2535,6 +2535,19 @@ fraises:
         assert "#!/" in content
         assert "my_app" in content
 
+    def test_install_sh_does_not_install_pg_wrapper(self, tmp_path):
+        """install.sh no longer copies pg-wrapper.sh into /usr/local/libexec."""
+        config = _make_full_config(tmp_path)
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        assert "pg-wrapper" not in content
+        assert "PG_WRAPPER_SRC" not in content
+        assert "pgadmin-" not in content
+
     def test_install_sh_creates_app_users(self, tmp_path):
         """install.sh creates app users when service.user is set (#28)."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
