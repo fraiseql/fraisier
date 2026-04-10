@@ -68,4 +68,21 @@ class TestSyncFraisesYaml:
         deployer.runner = mock_runner
 
         deployer._sync_fraises_yaml(source_path=source, dest_path=dest)
-        mock_runner.run.assert_called_once()
+        assert mock_runner.run.call_count == 2
+        calls = mock_runner.run.call_args_list
+        assert calls[0][0][0] == ["mkdir", "-p", str(tmp_path)]
+        assert calls[1][0][0] == ["cp", str(source), str(dest)]
+
+    def test_creates_dest_directory_if_missing(self, tmp_path):
+        source = tmp_path / "fraises.yaml"
+        source.write_text("fraises: []")
+        dest = tmp_path / "subdir" / "fraises.yaml"
+
+        deployer = APIDeployer({})
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = MagicMock(ok=True)
+        deployer.runner = mock_runner
+
+        deployer._sync_fraises_yaml(source_path=source, dest_path=dest)
+        calls = mock_runner.run.call_args_list
+        assert calls[0][0][0] == ["mkdir", "-p", str(tmp_path / "subdir")]

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.11] - 2026-04-10
+
+### Fixed
+
+- **Issue #153: deploy daemon no longer errors on config sync when `/opt/fraisier/` is absent** — `_sync_fraises_yaml` now runs `mkdir -p` on the destination directory before `cp`, so the first deployment on a freshly bootstrapped server succeeds silently instead of logging a recurring "Config sync failed" warning.
+
+---
+
 ## [0.7.5] - 2026-04-10
 
 ### Fixed

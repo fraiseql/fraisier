@@ -178,6 +178,9 @@ class BaseDeployer(ABC):
                 "Ensure it's committed to git and checked out."
             )
 
+        # Ensure destination directory exists before copying
+        self.runner.run(["mkdir", "-p", str(dest_path.parent)])
+
         # Copy file
         self.runner.run(["cp", str(source_path), str(dest_path)])
 
