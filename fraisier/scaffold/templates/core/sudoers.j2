@@ -2,9 +2,6 @@
 # Sudoers fragment for deployment users
 # Install to /etc/sudoers.d/{{ project_name }}
 
-{% set _admin_strategies = ['rebuild', 'restore_migrate'] %}
-{% set _pg_wrapper_path = '/usr/local/libexec/fraisier/pgadmin-' ~ project_name %}
-
 {% if sudoers_rules %}
 # Dependency install rules (deduplicated)
 {% for rule in sudoers_rules %}
@@ -14,20 +11,3 @@
 
 {% endfor %}
 {% endif %}
-
-{% set _seen_pg_rules = [] %}
-{% for fraise in local_fraises %}
-{% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set deploy_user = env_config.get('deploy_user', scaffold.deploy_user) %}
-{% set db = env_config.get('database', {}) or {} %}
-{% set strategy = db.get('strategy', '') %}
-{% if strategy in _admin_strategies %}
-{% set rule_key = deploy_user ~ ':' ~ _pg_wrapper_path %}
-{% if rule_key not in _seen_pg_rules %}
-{% if _seen_pg_rules.append(rule_key) %}{% endif %}
-# Database admin via wrapper
-{{ deploy_user }} ALL=(postgres) NOPASSWD: {{ _pg_wrapper_path }} *
-{% endif %}
-{% endif %}
-{% endfor %}
-{% endfor %}

@@ -2236,69 +2236,6 @@ fraises:
         assert "myproj_my_api_production.service" in wrapper_content
         assert "myproj_my_api_development.service" in wrapper_content
 
-    def test_sudoers_includes_wrapper_for_rebuild_strategy(self, tmp_path):
-        """Sudoers grants wrapper access for rebuild database strategy (#41)."""
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        p = tmp_path / "fraises.yaml"
-        p.write_text(
-            f"""
-name: myproj
-scaffold:
-  deploy_user: deployer
-  output_dir: {tmp_path / "output"}
-fraises:
-  my_api:
-    type: api
-    environments:
-      development:
-        app_path: /var/www/dev
-        database:
-          name: myapp_dev
-          strategy: rebuild
-"""
-        )
-        config = FraisierConfig(p)
-        renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        content = (tmp_path / "output" / "sudoers").read_text()
-        assert "ALL=(postgres)" in content
-        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
-
-    def test_sudoers_includes_wrapper_for_restore_migrate(self, tmp_path):
-        """Sudoers grants wrapper access for restore_migrate strategy (#41)."""
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        p = tmp_path / "fraises.yaml"
-        p.write_text(
-            f"""
-name: myproj
-scaffold:
-  deploy_user: deployer
-  output_dir: {tmp_path / "output"}
-fraises:
-  my_api:
-    type: api
-    environments:
-      staging:
-        app_path: /var/www/staging
-        database:
-          name: myapp_staging
-          strategy: restore_migrate
-          restore:
-            backup_dir: /backup/prod
-            backup_pattern: "*.dump"
-"""
-        )
-        config = FraisierConfig(p)
-        renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        content = (tmp_path / "output" / "sudoers").read_text()
-        assert "ALL=(postgres)" in content
-        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
-
     def test_sudoers_no_db_admin_for_migrate_strategy(self, tmp_path):
         """Sudoers omits DB admin commands for migrate/apply strategies (#41)."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
@@ -2330,48 +2267,6 @@ fraises:
         assert "dropdb" not in content
         assert "pg_restore" not in content
         assert "pgadmin" not in content
-
-    def test_sudoers_wrapper_scoped_to_deploy_user(self, tmp_path):
-        """Wrapper rules use the correct deploy_user per environment (#41)."""
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        p = tmp_path / "fraises.yaml"
-        p.write_text(
-            f"""
-name: myproj
-scaffold:
-  deploy_user: default-deployer
-  output_dir: {tmp_path / "output"}
-fraises:
-  my_api:
-    type: api
-    environments:
-      development:
-        app_path: /var/www/dev
-        deploy_user: dev-deployer
-        database:
-          name: myapp_dev
-          strategy: rebuild
-      production:
-        app_path: /var/www/prod
-        database:
-          name: myapp_prod
-          strategy: migrate
-"""
-        )
-        config = FraisierConfig(p)
-        renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        content = (tmp_path / "output" / "sudoers").read_text()
-        # dev-deployer gets wrapper access (rebuild strategy)
-        wrapper_lines = [line for line in content.splitlines() if "pgadmin" in line]
-        assert any("dev-deployer" in line for line in wrapper_lines)
-        # default-deployer (production) does NOT get wrapper (migrate strategy)
-        assert not any(
-            "default-deployer" in line and "pgadmin" in line
-            for line in content.splitlines()
-        )
 
     def test_pg_wrapper_never_generated(self, tmp_path):
         """pg-wrapper.sh is never generated: admin DB ops use admin_url directly."""
@@ -2414,8 +2309,8 @@ fraises:
         assert "pg-wrapper.sh" not in files
         assert not (tmp_path / "output" / "pg-wrapper.sh").exists()
 
-    def test_sudoers_references_wrapper_for_db_admin(self, tmp_path):
-        """Sudoers uses wrapper path instead of raw pg commands (#41)."""
+    def test_sudoers_has_no_pg_wrapper_rule(self, tmp_path):
+        """Sudoers no longer grants sudo-to-postgres via pg-wrapper: admin_url-only."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -2441,9 +2336,11 @@ fraises:
         renderer.render()
 
         content = (tmp_path / "output" / "sudoers").read_text()
-        # Should reference the wrapper, not raw psql/createdb/dropdb
-        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
-        # Raw commands should NOT appear in sudoers
+        # No pg-wrapper / pgadmin rule of any kind
+        assert "pgadmin-myproj" not in content
+        assert "pg-wrapper" not in content
+        assert "(postgres)" not in content
+        # Raw pg commands should also be absent
         assert "NOPASSWD: /usr/bin/psql" not in content
         assert "NOPASSWD: /usr/bin/createdb" not in content
         assert "NOPASSWD: /usr/bin/dropdb" not in content
@@ -4460,14 +4357,13 @@ fraises:
         staging_lines = [line for line in rw_lines if "/var/www/staging" in line]
         assert len(staging_lines) == 1
 
-    def test_sudoers_no_duplicate_pg_wrapper_rules(self, tmp_path):
-        """Sudoers emits the pg-wrapper rule once per user."""
+    def test_sudoers_has_no_pg_wrapper_rules(self, tmp_path):
+        """Sudoers does not emit any pg-wrapper / pgadmin rules (admin_url-only)."""
         out = self._render(tmp_path)
         content = (out / "sudoers").read_text()
-        pg_lines = [line for line in content.splitlines() if "pgadmin-myproj" in line]
-        # Filter to actual rules (not comments)
-        rule_lines = [line for line in pg_lines if not line.startswith("#")]
-        assert len(rule_lines) == 1
+        assert "pgadmin-myproj" not in content
+        assert "pg-wrapper" not in content
+        assert "(postgres)" not in content
 
 
 class TestStaleSocketCleanup:
