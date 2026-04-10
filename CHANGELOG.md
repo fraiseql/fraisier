@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-04-10
+
+### Added
+
+- **Issue #154: `fraisier logs` fetches logs from remote servers** — `fraisier logs <fraise> <env>` now detects whether the target environment is remote (has an `ssh:` block in its config) and SSHs to the target server to run `journalctl` there instead of querying the local machine. `os.execvp` is used so the TTY is inherited and `--follow` / Ctrl-C work correctly over SSH. A new `--service [app|deploy]` option (default: `deploy`) lets operators switch between the deploy-daemon template instances and the main app service. Unit pattern generation now uses the same naming logic as the scaffold (`deploy_socket_name` / `app_service_name`), so patterns always match installed units. `app_service_name()` is extracted to `fraisier.naming` as the single source of truth; the scaffold renderer delegates to it. The `ssh:` block is now validated by the config loader (`host` required, typed fields enforced).
+
+---
+
 ## [0.7.3] - 2026-04-10
 
 ### Fixed
