@@ -455,7 +455,9 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="old_script.py\n"),  # diff --filter=U (first)
-                _mk(returncode=1),  # cat-file origin/dev:old_script.py (not in source → deleted)
+                _mk(
+                    returncode=1
+                ),  # cat-file origin/dev:old_script.py (not in source → deleted)
                 _mk(),  # git rm old_script.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(),  # git commit
@@ -481,7 +483,9 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
-                _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists in source)
+                _mk(
+                    returncode=0
+                ),  # cat-file origin/dev:src/routes.py (exists in source)
                 # src/routes.py exists in source and is not auto-resolved → no checkout/add
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (remaining)
                 _mk(),  # git checkout main (cleanup)
@@ -504,7 +508,9 @@ class TestSyncConflicts:
                 _mk(),
                 _mk(returncode=1),
                 _mk(stdout="src/routes.py\n"),
-                _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists in source)
+                _mk(
+                    returncode=0
+                ),  # cat-file origin/dev:src/routes.py (exists in source)
                 _mk(stdout="src/routes.py\n"),
                 _mk(),  # git checkout main
                 _mk(),  # git branch -D
