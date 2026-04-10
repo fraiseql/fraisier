@@ -144,6 +144,35 @@ class TestValidationRunner:
         assert "my_app" in failed[0].message
         assert "production" in failed[0].message
 
+    def test_admin_url_valid_passes(self):
+        """restore_migrate with a non-empty admin_url passes."""
+        config = self._make_config(fraises=["my_app"], envs={"my_app": ["production"]})
+        self._set_env_database(
+            config,
+            {
+                "strategy": "restore_migrate",
+                "name": "db",
+                "admin_url": "postgresql:///postgres?host=/var/run/postgresql",
+            },
+        )
+        runner = ValidationRunner(config)
+        results = runner._check_admin_url_required()
+        assert all(r.passed for r in results)
+
+    def test_admin_url_empty_string_fails(self):
+        """Empty admin_url is treated the same as missing."""
+        config = self._make_config(fraises=["my_app"], envs={"my_app": ["production"]})
+        self._set_env_database(
+            config,
+            {"strategy": "restore_migrate", "name": "db", "admin_url": ""},
+        )
+        runner = ValidationRunner(config)
+        results = runner._check_admin_url_required()
+        failed = [r for r in results if not r.passed]
+        assert len(failed) == 1
+        assert failed[0].message is not None
+        assert "admin_url" in failed[0].message
+
     def test_admin_url_required_for_rebuild(self):
         """rebuild without admin_url fails validation."""
         config = self._make_config(fraises=["my_app"], envs={"my_app": ["staging"]})
