@@ -271,7 +271,12 @@ class TestRestartWebhookIfRunning:
         step = bootstrapper._restart_webhook_if_running()
         assert step.success is True
         calls = [c[0][0] for c in mock_runner.run.call_args_list]
-        assert ["systemctl", "is-active", "--quiet", "fraisier-myapp-webhook.service"] in calls
+        assert [
+            "systemctl",
+            "is-active",
+            "--quiet",
+            "fraisier-myapp-webhook.service",
+        ] in calls
         assert ["systemctl", "restart", "fraisier-myapp-webhook.service"] in calls
 
     def test_skips_when_not_running(self, bootstrapper, mock_runner):
@@ -285,6 +290,7 @@ class TestRestartWebhookIfRunning:
 
     def test_fails_if_restart_fails(self, bootstrapper, mock_runner):
         """Returns a failed step if systemctl restart exits non-zero."""
+
         def side_effect(cmd):
             if "is-active" in cmd:
                 return _OK
