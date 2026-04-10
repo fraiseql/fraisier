@@ -389,7 +389,7 @@ class TestWrapperScripts:
                 ["-c", config_file, "validate-remote", "my_api", "production"],
             )
         assert "systemctl_wrapper" in result.output
-        assert "pg_wrapper" in result.output
+        assert "pg_wrapper" not in result.output
 
 
 class TestSudoers:

@@ -40,12 +40,9 @@ def _minimal_config() -> dict:
 def _with_wrappers(tmp_path: Path) -> dict:
     """Create wrapper files and return env dict pointing to them."""
     systemctl_wrapper = tmp_path / "systemctl-wrapper"
-    pg_wrapper = tmp_path / "pg-wrapper"
     systemctl_wrapper.touch(mode=0o755)
-    pg_wrapper.touch(mode=0o755)
     return {
         "FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper),
-        "FRAISIER_PG_WRAPPER": str(pg_wrapper),
     }
 
 
@@ -335,15 +332,12 @@ class TestWrapperScriptsCheck:
     """Test wrapper_scripts_valid check."""
 
     def test_wrapper_scripts_present(self, tmp_path):
-        """Both wrappers present and executable."""
+        """systemctl wrapper present and executable."""
         config = _minimal_config()
         app_path = tmp_path / "app"
         app_path.mkdir()
-        # Create actual wrapper scripts
         systemctl_wrapper = tmp_path / "systemctl-wrapper"
-        pg_wrapper = tmp_path / "pg-wrapper"
         systemctl_wrapper.touch(mode=0o755)
-        pg_wrapper.touch(mode=0o755)
         config["fraises"]["my_api"]["environments"]["production"]["app_path"] = str(
             app_path
         )
@@ -352,10 +346,7 @@ class TestWrapperScriptsCheck:
 
         with patch.dict(
             os.environ,
-            {
-                "FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper),
-                "FRAISIER_PG_WRAPPER": str(pg_wrapper),
-            },
+            {"FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper)},
         ):
             result = runner.invoke(
                 main, ["-c", config_file, "validate-deployment", "my_api", "production"]
@@ -390,28 +381,16 @@ class TestSudoersCheck:
         app_path = tmp_path / "app"
         app_path.mkdir()
         systemctl_wrapper = tmp_path / "systemctl-wrapper"
-        pg_wrapper = tmp_path / "pg-wrapper"
         systemctl_wrapper.touch(mode=0o755)
-        pg_wrapper.touch(mode=0o755)
         config["fraises"]["my_api"]["environments"]["production"]["app_path"] = str(
             app_path
         )
         config_file = _make_config(tmp_path, config)
         runner = CliRunner()
 
-        # Don't create sudoers file, mock Path.exists to return False for it
-        def mock_exists_impl(path_self):
-            path_str = str(path_self)
-            if "sudoers" in path_str:
-                return False
-            return path_self.exists.__wrapped__(path_self)
-
         with patch.dict(
             os.environ,
-            {
-                "FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper),
-                "FRAISIER_PG_WRAPPER": str(pg_wrapper),
-            },
+            {"FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper)},
         ):
             result = runner.invoke(
                 main, ["-c", config_file, "validate-deployment", "my_api", "production"]
@@ -597,9 +576,7 @@ class TestExitCode:
         app_path = tmp_path / "app"
         app_path.mkdir()
         systemctl_wrapper = tmp_path / "systemctl-wrapper"
-        pg_wrapper = tmp_path / "pg-wrapper"
         systemctl_wrapper.touch(mode=0o755)
-        pg_wrapper.touch(mode=0o755)
         config["fraises"]["my_api"]["environments"]["production"]["app_path"] = str(
             app_path
         )
@@ -608,10 +585,7 @@ class TestExitCode:
 
         with patch.dict(
             os.environ,
-            {
-                "FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper),
-                "FRAISIER_PG_WRAPPER": str(pg_wrapper),
-            },
+            {"FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper)},
         ):
             result = runner.invoke(
                 main, ["-c", config_file, "validate-deployment", "my_api", "production"]
@@ -627,18 +601,13 @@ class TestExitCode:
         config_file = _make_config(tmp_path, config)
         runner = CliRunner()
 
-        # Create wrapper files to avoid wrapper check failure
+        # Create wrapper file to avoid wrapper check failure
         systemctl_wrapper = tmp_path / "systemctl-wrapper"
-        pg_wrapper = tmp_path / "pg-wrapper"
         systemctl_wrapper.touch(mode=0o755)
-        pg_wrapper.touch(mode=0o755)
 
         with patch.dict(
             os.environ,
-            {
-                "FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper),
-                "FRAISIER_PG_WRAPPER": str(pg_wrapper),
-            },
+            {"FRAISIER_SYSTEMCTL_WRAPPER": str(systemctl_wrapper)},
         ):
             result = runner.invoke(
                 main, ["-c", config_file, "validate-deployment", "my_api", "production"]

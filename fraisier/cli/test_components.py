@@ -32,8 +32,6 @@ def _get_wrapper_path(wrapper_type: str) -> str:
     """Get wrapper script path from environment variable."""
     wrapper_env_map = {
         "systemctl": "FRAISIER_SYSTEMCTL_WRAPPER",
-        "pg": "FRAISIER_PG_WRAPPER",
-        "psql": "FRAISIER_PG_WRAPPER",  # Allow both pg and psql
     }
 
     if wrapper_type not in wrapper_env_map:
@@ -66,13 +64,11 @@ def test_wrapper(
 ) -> None:
     """Test wrapper script execution.
 
-    Validates and runs a wrapper script with the given arguments.
-    Wrapper type is determined from the first argument (systemctl or pg).
+    Validates and runs the systemctl wrapper script with the given arguments.
 
     \b
     Examples:
         fraisier test-wrapper api development systemctl restart api.service
-        fraisier test-wrapper api development pg version
     """
     config = require_config(ctx)
     fraise_config = config.get_fraise_environment(fraise, environment)

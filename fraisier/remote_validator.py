@@ -354,7 +354,6 @@ class RemoteDeploymentValidator:
         libexec = "/usr/local/libexec/fraisier"
         wrappers = [
             ("systemctl_wrapper", f"{libexec}/systemctl-{self.project_name}"),
-            ("pg_wrapper", f"{libexec}/pgadmin-{self.project_name}"),
         ]
         for label, path in wrappers:
             if self._remote(["test", "-x", path]).returncode == 0:

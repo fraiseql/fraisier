@@ -85,29 +85,6 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     }
                 )
 
-        # Check PostgreSQL wrapper
-        pg_wrapper = os.environ.get("FRAISIER_PG_WRAPPER")
-        if pg_wrapper:
-            wrapper_path = Path(pg_wrapper)
-            if not wrapper_path.exists():
-                errors.append(
-                    {
-                        "wrapper": "pgadmin",
-                        "path": pg_wrapper,
-                        "issue": "File not found",
-                        "fix": f"sudo cp scripts/generated/pg-wrapper.sh {pg_wrapper}",
-                    }
-                )
-            elif not os.access(pg_wrapper, os.X_OK):
-                errors.append(
-                    {
-                        "wrapper": "pgadmin",
-                        "path": pg_wrapper,
-                        "issue": "Not executable",
-                        "fix": f"sudo chmod 755 {pg_wrapper}",
-                    }
-                )
-
         if errors:
             error_details = {
                 f"wrapper_{i + 1}": {

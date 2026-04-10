@@ -361,21 +361,17 @@ class TestAPIDeployer:
         """Test validation passes when no wrapper env vars are set."""
         deployer = APIDeployer({"app_path": "/var/www/api"})
         monkeypatch.delenv("FRAISIER_SYSTEMCTL_WRAPPER", raising=False)
-        monkeypatch.delenv("FRAISIER_PG_WRAPPER", raising=False)
 
         # Should not raise
         deployer._validate_wrapper_scripts()
 
-    def test_validate_wrapper_scripts_all_exist(self, monkeypatch, tmp_path):
-        """Test validation passes when all wrapper scripts exist and are executable."""
+    def test_validate_wrapper_scripts_systemctl_exists(self, monkeypatch, tmp_path):
+        """Test validation passes when systemctl wrapper exists and is executable."""
         systemctl_wrapper = tmp_path / "systemctl-wrapper"
-        pg_wrapper = tmp_path / "pgadmin-wrapper"
         systemctl_wrapper.touch(mode=0o755)
-        pg_wrapper.touch(mode=0o755)
 
         deployer = APIDeployer({"app_path": "/var/www/api"})
         monkeypatch.setenv("FRAISIER_SYSTEMCTL_WRAPPER", str(systemctl_wrapper))
-        monkeypatch.setenv("FRAISIER_PG_WRAPPER", str(pg_wrapper))
 
         # Should not raise
         deployer._validate_wrapper_scripts()
@@ -386,7 +382,6 @@ class TestAPIDeployer:
 
         deployer = APIDeployer({"app_path": "/var/www/api"})
         monkeypatch.setenv("FRAISIER_SYSTEMCTL_WRAPPER", "/nonexistent/systemctl")
-        monkeypatch.delenv("FRAISIER_PG_WRAPPER", raising=False)
 
         with patch.object(
             deployer, "_write_status"
@@ -400,22 +395,6 @@ class TestAPIDeployer:
         assert "not found" in str(exc_info.value).lower()
         assert exc_info.value.context["wrapper_1"]["remediation"].startswith("sudo cp")
 
-    def test_validate_wrapper_scripts_pg_missing(self, monkeypatch):
-        """Test validation fails when PostgreSQL wrapper is missing."""
-        from fraisier.errors import DeploymentError
-
-        deployer = APIDeployer({"app_path": "/var/www/api"})
-        monkeypatch.delenv("FRAISIER_SYSTEMCTL_WRAPPER", raising=False)
-        monkeypatch.setenv("FRAISIER_PG_WRAPPER", "/nonexistent/pgadmin")
-
-        import pytest
-
-        with pytest.raises(DeploymentError) as exc_info:
-            deployer._validate_wrapper_scripts()
-
-        assert "pgadmin" in str(exc_info.value).lower()
-        assert "not found" in str(exc_info.value).lower()
-
     def test_validate_wrapper_scripts_not_executable(self, monkeypatch, tmp_path):
         """Test validation fails when wrapper script is not executable."""
         from fraisier.errors import DeploymentError
@@ -425,7 +404,6 @@ class TestAPIDeployer:
 
         deployer = APIDeployer({"app_path": "/var/www/api"})
         monkeypatch.setenv("FRAISIER_SYSTEMCTL_WRAPPER", str(systemctl_wrapper))
-        monkeypatch.delenv("FRAISIER_PG_WRAPPER", raising=False)
 
         import pytest
 
@@ -435,24 +413,6 @@ class TestAPIDeployer:
         assert "not executable" in str(exc_info.value).lower()
         remediation = exc_info.value.context["wrapper_1"]["remediation"]
         assert remediation.startswith("sudo chmod")
-
-    def test_validate_wrapper_scripts_both_missing(self, monkeypatch):
-        """Test validation reports both missing wrappers in single error."""
-        from fraisier.errors import DeploymentError
-
-        deployer = APIDeployer({"app_path": "/var/www/api"})
-        monkeypatch.setenv("FRAISIER_SYSTEMCTL_WRAPPER", "/nonexistent/systemctl")
-        monkeypatch.setenv("FRAISIER_PG_WRAPPER", "/nonexistent/pgadmin")
-
-        import pytest
-
-        with pytest.raises(DeploymentError) as exc_info:
-            deployer._validate_wrapper_scripts()
-
-        error_context = exc_info.value.context
-        assert len(error_context) == 2
-        assert "wrapper_1" in error_context
-        assert "wrapper_2" in error_context
 
     def test_install_dependencies_failure_includes_stderr(self, mock_subprocess):
         """Test install failure includes stderr in context."""

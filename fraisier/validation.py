@@ -722,9 +722,8 @@ class DeploymentReadinessValidator:
             )
 
     def _check_wrapper_scripts_valid(self) -> ValidationCheckResult:
-        """Check wrapper scripts (systemctl, pg) are present and executable."""
+        """Check the systemctl wrapper script is present and executable."""
         systemctl_wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
-        pg_wrapper = os.environ.get("FRAISIER_PG_WRAPPER")
 
         issues: list[str] = []
 
@@ -741,19 +740,6 @@ class DeploymentReadinessValidator:
             issues.append(
                 f"FRAISIER_SYSTEMCTL_WRAPPER not executable: {systemctl_wrapper}. "
                 f"Fix: chmod 755 {systemctl_wrapper}"
-            )
-
-        if not pg_wrapper:
-            issues.append(
-                "FRAISIER_PG_WRAPPER env var not set. "
-                "Fix: export FRAISIER_PG_WRAPPER=/path/to/pg-wrapper"
-            )
-        elif not Path(pg_wrapper).exists():
-            issues.append(f"FRAISIER_PG_WRAPPER file not found: {pg_wrapper}")
-        elif not os.access(pg_wrapper, os.X_OK):
-            issues.append(
-                f"FRAISIER_PG_WRAPPER not executable: {pg_wrapper}. "
-                f"Fix: chmod 755 {pg_wrapper}"
             )
 
         if issues:

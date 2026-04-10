@@ -2594,8 +2594,8 @@ fraises:
         assert "fraisier-my_api-production.socket" in content
         assert "fraisier-my_api-production@.service" in content
 
-    def test_webhook_service_sets_pg_wrapper_env(self, tmp_path):
-        """Webhook service sets FRAISIER_PG_WRAPPER when wrapper exists."""
+    def test_webhook_service_never_sets_pg_wrapper_env(self, tmp_path):
+        """Webhook service no longer injects FRAISIER_PG_WRAPPER (admin_url-only)."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -2614,31 +2614,6 @@ fraises:
         database:
           name: myapp_dev
           strategy: rebuild
-"""
-        )
-        config = FraisierConfig(p)
-        renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
-        assert "FRAISIER_PG_WRAPPER=" in content
-        assert "/usr/local/libexec/fraisier/pgadmin-myproj" in content
-
-    def test_webhook_service_no_pg_wrapper_without_admin_strategies(self, tmp_path):
-        """Webhook service omits FRAISIER_PG_WRAPPER when no admin strategies."""
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        p = tmp_path / "fraises.yaml"
-        p.write_text(
-            f"""
-name: myproj
-scaffold:
-  deploy_user: deployer
-  output_dir: {tmp_path / "output"}
-fraises:
-  my_api:
-    type: api
-    environments:
       production:
         app_path: /var/www/prod
         database:
@@ -2652,6 +2627,7 @@ fraises:
 
         content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
         assert "FRAISIER_PG_WRAPPER" not in content
+        assert "pgadmin-myproj" not in content
 
 
 class TestWebhookServerFiltering:
