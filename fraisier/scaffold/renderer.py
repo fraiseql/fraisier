@@ -629,13 +629,6 @@ class ScaffoldRenderer:
             if not dry_run:
                 self._render_template(template_path, out_name)
 
-        # PostgreSQL admin wrapper (only when admin strategies are configured)
-        if self.context["pg_allowed_databases"]:
-            pg_out = "pg-wrapper.sh"
-            rendered_files.append(pg_out)
-            if not dry_run:
-                self._render_template("core/pg-wrapper.sh.j2", pg_out)
-
         # systemd service wrapper (always when there are services)
         if self.context["allowed_services"]:
             systemctl_out = "systemctl-wrapper.sh"

@@ -2373,8 +2373,8 @@ fraises:
             for line in content.splitlines()
         )
 
-    def test_pg_wrapper_generated_with_allowlist(self, tmp_path):
-        """pg-wrapper.sh embeds allowed database names from config (#41)."""
+    def test_pg_wrapper_never_generated(self, tmp_path):
+        """pg-wrapper.sh is never generated: admin DB ops use admin_url directly."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -2410,81 +2410,9 @@ fraises:
         )
         config = FraisierConfig(p)
         renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        wrapper_path = tmp_path / "output" / "pg-wrapper.sh"
-        assert wrapper_path.exists()
-        content = wrapper_path.read_text()
-        # Allowlist includes only databases with admin strategies
-        assert "myapp_dev" in content
-        assert "myapp_staging" in content
-        # Production (migrate) must NOT be in the allowlist
-        assert "myapp_prod" not in content
-        # Template databases are also allowed
-        assert "template_myapp_dev" in content
-        assert "template_myapp_staging" in content
-        # Script is executable-ready
-        assert content.startswith("#!/")
-
-    def test_pg_wrapper_includes_custom_template_names(self, tmp_path):
-        """pg-wrapper.sh includes custom template_name from config (#41)."""
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        p = tmp_path / "fraises.yaml"
-        p.write_text(
-            f"""
-name: myproj
-scaffold:
-  deploy_user: deployer
-  output_dir: {tmp_path / "output"}
-fraises:
-  my_api:
-    type: api
-    environments:
-      staging:
-        app_path: /var/www/staging
-        database:
-          name: myapp_staging
-          strategy: restore_migrate
-          restore:
-            backup_dir: /backup/prod
-            backup_pattern: "*.dump"
-            template_name: myapp_staging_tpl
-"""
-        )
-        config = FraisierConfig(p)
-        renderer = ScaffoldRenderer(config)
-        renderer.render()
-
-        content = (tmp_path / "output" / "pg-wrapper.sh").read_text()
-        assert "myapp_staging_tpl" in content
-
-    def test_pg_wrapper_not_generated_without_admin_strategies(self, tmp_path):
-        """pg-wrapper.sh is not generated when no env needs DB admin (#41)."""
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        p = tmp_path / "fraises.yaml"
-        p.write_text(
-            f"""
-name: myproj
-scaffold:
-  deploy_user: deployer
-  output_dir: {tmp_path / "output"}
-fraises:
-  my_api:
-    type: api
-    environments:
-      production:
-        app_path: /var/www/prod
-        database:
-          name: myapp_prod
-          strategy: migrate
-"""
-        )
-        config = FraisierConfig(p)
-        renderer = ScaffoldRenderer(config)
         files = renderer.render()
         assert "pg-wrapper.sh" not in files
+        assert not (tmp_path / "output" / "pg-wrapper.sh").exists()
 
     def test_sudoers_references_wrapper_for_db_admin(self, tmp_path):
         """Sudoers uses wrapper path instead of raw pg commands (#41)."""
@@ -4417,18 +4345,6 @@ fraises:
         renderer = ScaffoldRenderer(config, server=server)
         renderer.render()
         return tmp_path / "output"
-
-    def test_pg_wrapper_scoped_to_server(self, tmp_path):
-        """pg-wrapper on server-a includes only staging DB, not production."""
-        out = self._render(tmp_path, "server-a")
-        content = (out / "pg-wrapper.sh").read_text()
-        assert "myapp_staging" in content
-        assert "myapp_prod" not in content
-
-    def test_pg_wrapper_not_generated_for_server_without_admin_db(self, tmp_path):
-        """pg-wrapper is not generated for server-b (production uses migrate)."""
-        out = self._render(tmp_path, "server-b")
-        assert not (out / "pg-wrapper.sh").exists()
 
     def test_systemctl_wrapper_scoped_to_server(self, tmp_path):
         """systemctl wrapper on server-a lists only staging service."""
