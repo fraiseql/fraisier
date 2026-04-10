@@ -21,6 +21,7 @@ from fraisier.config import (
     ServiceConfig,
     ValidationError,
 )
+from fraisier.dbops._strategies import ADMIN_STRATEGIES
 from fraisier.manifest import build_manifest
 from fraisier.naming import app_service_name, deploy_socket_name
 
@@ -82,8 +83,6 @@ def _resolve_fraise_port(fraise: dict[str, Any]) -> int:
                     return port
     return 8000
 
-
-_ADMIN_STRATEGIES = {"rebuild", "restore_migrate"}
 
 # Mapping of command names to their absolute paths
 _COMMAND_PATH_MAP = {
@@ -181,7 +180,7 @@ def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[st
             if not isinstance(db, dict):
                 continue
             strategy = db.get("strategy", "")
-            if strategy not in _ADMIN_STRATEGIES:
+            if strategy not in ADMIN_STRATEGIES:
                 continue
             db_name = db.get("name", "")
             if not db_name:
