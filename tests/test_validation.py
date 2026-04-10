@@ -144,6 +144,19 @@ class TestValidationRunner:
         assert "my_app" in failed[0].message
         assert "production" in failed[0].message
 
+    def test_admin_url_required_for_rebuild(self):
+        """rebuild without admin_url fails validation."""
+        config = self._make_config(fraises=["my_app"], envs={"my_app": ["staging"]})
+        self._set_env_database(config, {"strategy": "rebuild", "name": "db"})
+        runner = ValidationRunner(config)
+        results = runner._check_admin_url_required()
+        failed = [r for r in results if not r.passed]
+        assert len(failed) == 1
+        assert failed[0].message is not None
+        assert "my_app" in failed[0].message
+        assert "staging" in failed[0].message
+        assert "rebuild" in failed[0].message
+
     @patch("fraisier.validation.pwd")
     def test_run_all_returns_all_checks(self, mock_pwd):
         """run_all returns results from all registered checks."""
