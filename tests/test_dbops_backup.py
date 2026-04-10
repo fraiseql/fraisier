@@ -13,6 +13,8 @@ from fraisier.dbops.backup import (
     run_backup,
 )
 
+_TEST_URL = "postgresql://app:pass@localhost:5432/proddb"
+
 
 class TestRunBackup:
     """Test run_backup pg_dump wrapper."""
@@ -20,7 +22,9 @@ class TestRunBackup:
     def test_backup_full_success(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            result = run_backup(db_name="proddb", output_dir="/backups")
+            result = run_backup(
+                db_name="proddb", output_dir="/backups", database_url=_TEST_URL
+            )
 
         assert result.success is True
         assert "proddb" in result.backup_path
@@ -30,10 +34,16 @@ class TestRunBackup:
         assert result.error == ""
 
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "sudo"
-        assert "pg_dump" in cmd
+        assert cmd[0] == "pg_dump"
+        assert "sudo" not in cmd
         assert "-Fc" in cmd
         assert "proddb" in cmd
+
+    def test_backup_requires_database_url(self):
+        with pytest.raises(TypeError):
+            run_backup(  # ty: ignore[missing-argument]
+                db_name="proddb", output_dir="/backups"
+            )
 
     def test_backup_slim_with_exclusions(self):
         excluded = ["large_logs", "audit_trail"]
@@ -42,6 +52,7 @@ class TestRunBackup:
             result = run_backup(
                 db_name="proddb",
                 output_dir="/backups",
+                database_url=_TEST_URL,
                 mode="slim",
                 excluded_tables=excluded,
             )
@@ -60,14 +71,20 @@ class TestRunBackup:
             mock_run.return_value = MagicMock(
                 returncode=1, stdout="", stderr="pg_dump: connection refused"
             )
-            result = run_backup(db_name="proddb", output_dir="/backups")
+            result = run_backup(
+                db_name="proddb", output_dir="/backups", database_url=_TEST_URL
+            )
 
         assert result.success is False
         assert "connection refused" in result.error
 
     def test_backup_rejects_bad_db_name(self):
         with pytest.raises(ValueError, match="Invalid database name"):
-            run_backup(db_name="db; rm -rf /", output_dir="/backups")
+            run_backup(
+                db_name="db; rm -rf /",
+                output_dir="/backups",
+                database_url=_TEST_URL,
+            )
 
 
 class TestCheckDiskSpace:

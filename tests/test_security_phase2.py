@@ -14,6 +14,8 @@ from fraisier.git.bitbucket import Bitbucket
 from fraisier.status import DeploymentStatusFile, read_status, write_status
 from fraisier.webhook_rate_limit import check_rate_limit, reset
 
+_TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
+
 # ---------------------------------------------------------------------------
 # Cycle 1: dbops input validation
 # ---------------------------------------------------------------------------
@@ -28,6 +30,7 @@ class TestBackupInputValidation:
             run_backup(
                 db_name="proddb",
                 output_dir="/backups",
+                database_url=_TEST_URL,
                 mode="slim",
                 excluded_tables=["--file=/etc/passwd"],
             )
@@ -38,6 +41,7 @@ class TestBackupInputValidation:
             run_backup(
                 db_name="proddb",
                 output_dir="../../etc/shadow",
+                database_url=_TEST_URL,
             )
 
     def test_compression_with_shell_injection(self):
@@ -46,6 +50,7 @@ class TestBackupInputValidation:
             run_backup(
                 db_name="proddb",
                 output_dir="/backups",
+                database_url=_TEST_URL,
                 compression="; rm -rf /",
             )
 
@@ -57,7 +62,10 @@ class TestBackupInputValidation:
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(returncode=0)
                 result = run_backup(
-                    db_name="proddb", output_dir="/backups", compression=comp
+                    db_name="proddb",
+                    output_dir="/backups",
+                    database_url=_TEST_URL,
+                    compression=comp,
                 )
             assert result.success is True
 
@@ -71,6 +79,7 @@ class TestRestoreInputValidation:
             restore_backup(
                 backup_path="../../etc/shadow",
                 db_name="staging",
+                connection_url=_TEST_URL,
             )
 
     def test_restore_uses_psql_variable_binding(self):
@@ -83,6 +92,7 @@ class TestRestoreInputValidation:
                 backup_path="/backups/prod.dump",
                 db_name="staging",
                 db_owner="appuser",
+                connection_url=_TEST_URL,
             )
 
         # The REASSIGN OWNED call should use psql -v variable binding,

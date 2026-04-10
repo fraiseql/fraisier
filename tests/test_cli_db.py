@@ -13,6 +13,10 @@ def runner():
     return CliRunner()
 
 
+_ADMIN_URL = "postgresql://postgres@localhost:5432/postgres"
+_APP_URL = "postgresql://app@localhost:5432/mydb"
+
+
 @pytest.fixture
 def mock_config():
     """Mock get_config to return a config with database settings."""
@@ -24,6 +28,8 @@ def mock_config():
         "database": {
             "name": "mydb",
             "strategy": "migrate",
+            "admin_url": _ADMIN_URL,
+            "database_url": _APP_URL,
             "confiture_config": "confiture.yaml",
             "template_prefix": "template_",
         },
@@ -51,7 +57,9 @@ class TestDbReset:
             result = runner.invoke(main, ["db", "reset", "my_api", "-e", "production"])
 
         assert result.exit_code == 0
-        mock_reset.assert_called_once_with("mydb", prefix="template_")
+        mock_reset.assert_called_once_with(
+            "mydb", prefix="template_", connection_url=_ADMIN_URL
+        )
 
     def test_db_reset_failure_exits_1(self, runner, mock_config):
         """db reset failure exits with error."""
@@ -220,6 +228,7 @@ class TestBackup:
         mock_backup.assert_called_once_with(
             db_name="mydb",
             output_dir="/backup",
+            database_url=_APP_URL,
             compression="zstd:9",
             mode="full",
             excluded_tables=[],
@@ -272,6 +281,7 @@ class TestBackup:
         mock_backup.assert_called_once_with(
             db_name="mydb",
             output_dir="/backup",
+            database_url=_APP_URL,
             compression="zstd:9",
             mode="slim",
             excluded_tables=["logs", "events"],
@@ -293,6 +303,7 @@ class TestDbRestore:
             "database": {
                 "name": "mydb_staging",
                 "strategy": "restore_migrate",
+                "admin_url": _ADMIN_URL,
                 "confiture_config": "confiture.yaml",
                 "restore": {
                     "backup_dir": "/backup/production",

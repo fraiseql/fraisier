@@ -601,6 +601,7 @@ class TestBackupRunner:
             result = run_backup(
                 db_name="mydb",
                 output_dir="/backup/myproject",
+                database_url=_TEST_URL,
                 compression="zstd:9",
                 mode="full",
             )
@@ -619,6 +620,7 @@ class TestBackupRunner:
             result = run_backup(
                 db_name="mydb",
                 output_dir="/backup/myproject",
+                database_url=_TEST_URL,
                 compression="zstd:9",
                 mode="slim",
                 excluded_tables=["big_logs", "audit_trail"],
@@ -639,6 +641,7 @@ class TestBackupRunner:
             result = run_backup(
                 db_name="mydb",
                 output_dir="/backup/myproject",
+                database_url=_TEST_URL,
                 compression="zstd:9",
                 mode="full",
             )
@@ -654,6 +657,7 @@ class TestBackupRunner:
             run_backup(
                 db_name="mydb",
                 output_dir="/backup",
+                database_url=_TEST_URL,
                 compression="zstd:9",
                 mode="full",
             )
@@ -940,6 +944,7 @@ fraises:
         database:
           name: my_project_management
           strategy: migrate
+          database_url: postgresql://app@localhost:5432/my_project_management
   external_svc:
     type: api
     external_db: true

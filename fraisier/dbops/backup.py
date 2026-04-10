@@ -40,20 +40,22 @@ def run_backup(
     *,
     db_name: str,
     output_dir: str,
+    database_url: str,
     compression: str = "zstd:9",
     mode: str = "full",
     excluded_tables: list[str] | None = None,
-    sudo_user: str = "postgres",
 ) -> BackupResult:
     """Run pg_dump with custom-format compression.
 
     Args:
         db_name: Database name to back up.
         output_dir: Directory for the backup file.
+        database_url: App connection URL — `pg_dump` only needs SELECT
+            on the app's own tables, so the regular database_url is
+            sufficient. No admin privileges required.
         compression: Compression spec (e.g. "zstd:9").
         mode: "full" or "slim" (slim excludes tables).
         excluded_tables: Tables to exclude in slim mode.
-        sudo_user: OS user to run pg_dump as.
     """
     validate_pg_identifier(db_name, "database name")
     _validate_compression(compression)
@@ -78,7 +80,7 @@ def run_backup(
 
     cmd.append(db_name)
 
-    code, _, stderr = _pg_cmd(cmd, sudo_user=sudo_user)
+    code, _, stderr = _pg_cmd(cmd, connection_url=database_url)
 
     if code != 0:
         return BackupResult(

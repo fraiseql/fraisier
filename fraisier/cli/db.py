@@ -399,6 +399,13 @@ def backup_cmd(ctx: click.Context, fraise: str, env: str, mode: str) -> None:
     backup_cfg = config._config.get("backup", {}) or {}
     db_cfg = env_config.get("database", {})
     db_name = db_cfg.get("name", fraise)
+    database_url = db_cfg.get("database_url")
+    if not database_url:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' env '{env}' has no "
+            "database_url; set database.database_url in fraise/env/*.yaml"
+        )
+        raise SystemExit(1)
 
     compression = backup_cfg.get("compression", "zstd:9")
     required_gb = backup_cfg.get("disk_space_required_gb", 2)
@@ -426,6 +433,7 @@ def backup_cmd(ctx: click.Context, fraise: str, env: str, mode: str) -> None:
     result = run_backup(
         db_name=db_name,
         output_dir=output_dir,
+        database_url=database_url,
         compression=compression,
         mode=mode,
         excluded_tables=excluded_tables,

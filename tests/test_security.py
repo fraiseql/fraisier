@@ -15,6 +15,8 @@ from fraisier.dbops.operations import (
 )
 from fraisier.health_check import ExecHealthChecker
 
+_TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
+
 
 class TestValidatePgIdentifier:
     """Tests for PostgreSQL identifier validation."""
@@ -114,27 +116,27 @@ class TestDbopsValidation:
 
     def test_check_db_exists_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid"):
-            check_db_exists("'; DROP TABLE --")
+            check_db_exists("'; DROP TABLE --", connection_url=_TEST_URL)
 
     def test_terminate_backends_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid"):
-            terminate_backends("$(whoami)")
+            terminate_backends("$(whoami)", connection_url=_TEST_URL)
 
     def test_drop_db_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid"):
-            drop_db("db; rm -rf /")
+            drop_db("db; rm -rf /", connection_url=_TEST_URL)
 
     def test_create_db_rejects_bad_name(self):
         with pytest.raises(ValueError, match="Invalid"):
-            create_db("bad;name")
+            create_db("bad;name", connection_url=_TEST_URL)
 
     def test_create_db_rejects_bad_template(self):
         with pytest.raises(ValueError, match="Invalid"):
-            create_db("good_db", template="bad;template")
+            create_db("good_db", template="bad;template", connection_url=_TEST_URL)
 
     def test_create_db_rejects_bad_owner(self):
         with pytest.raises(ValueError, match="Invalid"):
-            create_db("good_db", owner="$(whoami)")
+            create_db("good_db", owner="$(whoami)", connection_url=_TEST_URL)
 
 
 class TestExecHealthChecker:

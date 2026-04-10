@@ -13,6 +13,8 @@ from click.testing import CliRunner
 from fraisier.config import FraisierConfig
 from fraisier.scaffold.renderer import ScaffoldRenderer
 
+_TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
+
 _SINGLE_FRAISE_YAML = """\
 git:
   provider: github
@@ -274,6 +276,7 @@ class TestBackupRestoreCycle:
             result = run_backup(
                 db_name="test_db",
                 output_dir="/tmp/backups",
+                database_url=_TEST_URL,
                 mode="full",
             )
 
@@ -294,6 +297,7 @@ class TestBackupRestoreCycle:
             result = run_backup(
                 db_name="test_db",
                 output_dir="/tmp/backups",
+                database_url=_TEST_URL,
                 mode="slim",
                 excluded_tables=["large_logs", "audit_trail"],
             )
@@ -317,6 +321,7 @@ class TestBackupRestoreCycle:
             result = restore_backup(
                 backup_path="/backups/test.dump",
                 db_name="staging_db",
+                connection_url=_TEST_URL,
             )
 
             assert result.success is True
@@ -336,6 +341,7 @@ class TestBackupRestoreCycle:
                 backup_path="/backups/test.dump",
                 db_name="staging_db",
                 db_owner="app_user",
+                connection_url=_TEST_URL,
             )
 
             assert result.success is True
@@ -353,7 +359,11 @@ class TestBackupRestoreCycle:
 
             from fraisier.dbops.backup import run_backup
 
-            result = run_backup(db_name="test_db", output_dir="/tmp/backups")
+            result = run_backup(
+                db_name="test_db",
+                output_dir="/tmp/backups",
+                database_url=_TEST_URL,
+            )
 
             assert result.success is False
             assert "disk full" in result.error
@@ -365,7 +375,9 @@ class TestBackupRestoreCycle:
 
             from fraisier.dbops.restore import validate_table_count
 
-            ok, count = validate_table_count("staging_db", min_threshold=50)
+            ok, count = validate_table_count(
+                "staging_db", min_threshold=50, connection_url=_TEST_URL
+            )
             assert ok is True
             assert count == 75
 
@@ -376,7 +388,9 @@ class TestBackupRestoreCycle:
 
             from fraisier.dbops.restore import validate_table_count
 
-            ok, count = validate_table_count("staging_db", min_threshold=50)
+            ok, count = validate_table_count(
+                "staging_db", min_threshold=50, connection_url=_TEST_URL
+            )
             assert ok is False
             assert count == 10
 

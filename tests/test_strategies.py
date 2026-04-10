@@ -22,6 +22,7 @@ from fraisier.strategies import (
 
 CONFIG = Path("confiture.yaml")
 MDIR = Path("db/migrations")
+_ADMIN_URL = "postgresql://postgres:pass@localhost:5432/postgres"
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +212,18 @@ def _make_config(**overrides) -> RestoreConfig:
     return RestoreConfig(**defaults)  # ty: ignore[invalid-argument-type]
 
 
+def _make_strategy(
+    config: RestoreConfig | None = None,
+    *,
+    admin_url: str = _ADMIN_URL,
+    **config_overrides,
+) -> RestoreMigrateStrategy:
+    """Build a RestoreMigrateStrategy with a default admin_url for tests."""
+    if config is None:
+        config = _make_config(**config_overrides)
+    return RestoreMigrateStrategy(config, admin_url=admin_url)
+
+
 class TestRestoreMigrateStrategy:
     """Staging strategy: full backup restore lifecycle."""
 
@@ -218,18 +231,18 @@ class TestRestoreMigrateStrategy:
 
     def test_init_validates_db_name(self):
         with pytest.raises(ValueError, match="database name"):
-            RestoreMigrateStrategy(_make_config(db_name="bad;name"))
+            _make_strategy(db_name="bad;name")
 
     def test_init_validates_target_owner(self):
         with pytest.raises(ValueError, match="target owner"):
-            RestoreMigrateStrategy(_make_config(target_owner="bad;owner"))
+            _make_strategy(target_owner="bad;owner")
 
     def test_init_validates_template_name(self):
         with pytest.raises(ValueError, match="template name"):
-            RestoreMigrateStrategy(_make_config(template_name="bad;tmpl"))
+            _make_strategy(template_name="bad;tmpl")
 
     def test_init_accepts_valid_config(self):
-        strategy = RestoreMigrateStrategy(_make_config(target_owner="app_user"))
+        strategy = _make_strategy(target_owner="app_user")
         assert strategy._config.db_name == "staging_db"
 
     # -- Execute lifecycle --
@@ -264,7 +277,7 @@ class TestRestoreMigrateStrategy:
             target_owner="app_user",
             min_tables=300,
         )
-        strategy = RestoreMigrateStrategy(cfg)
+        strategy = _make_strategy(cfg)
         result = strategy.execute(CONFIG, migrations_dir=MDIR)
 
         assert result.success
@@ -272,22 +285,25 @@ class TestRestoreMigrateStrategy:
 
         mock_find.assert_called_once_with(cfg.backup_dir, pattern=cfg.backup_pattern)
         mock_age.assert_called_once_with(backup, max_age_hours=48.0)
-        mock_term.assert_called_once_with("staging_db", connection_url=None)
-        mock_drop.assert_called_once_with("staging_db", connection_url=None)
-        mock_create.assert_called_once_with("staging_db", connection_url=None)
+        mock_term.assert_called_once_with("staging_db", connection_url=_ADMIN_URL)
+        mock_drop.assert_called_once_with("staging_db", connection_url=_ADMIN_URL)
+        mock_create.assert_called_once_with("staging_db", connection_url=_ADMIN_URL)
         mock_restore.assert_called_once_with(
             backup_path=str(backup),
             db_name="staging_db",
             db_owner="app_user",
+            connection_url=_ADMIN_URL,
         )
-        mock_table.assert_called_once_with("staging_db", min_threshold=300)
+        mock_table.assert_called_once_with(
+            "staging_db", min_threshold=300, connection_url=_ADMIN_URL
+        )
         mock_up.assert_called_once()
 
     @patch("fraisier.dbops.restore.find_latest_backup", return_value=None)
     def test_execute_no_backup_found_raises(self, mock_find):
         from fraisier.errors import DatabaseError
 
-        strategy = RestoreMigrateStrategy(_make_config())
+        strategy = _make_strategy()
         with pytest.raises(DatabaseError, match="No backup"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
@@ -297,7 +313,7 @@ class TestRestoreMigrateStrategy:
         from fraisier.errors import DatabaseError
 
         mock_find.return_value = Path("/backup/old.dump")
-        strategy = RestoreMigrateStrategy(_make_config())
+        strategy = _make_strategy()
         with pytest.raises(DatabaseError, match="older than"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
@@ -315,7 +331,7 @@ class TestRestoreMigrateStrategy:
         mock_find.return_value = Path("/backup/db.dump")
         mock_restore.return_value = RestoreResult(success=False, error="corrupt file")
 
-        strategy = RestoreMigrateStrategy(_make_config())
+        strategy = _make_strategy()
         with pytest.raises(DatabaseError, match="pg_restore failed"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
@@ -344,7 +360,7 @@ class TestRestoreMigrateStrategy:
         mock_restore.return_value = RestoreResult(success=True)
         mock_up.return_value = MigrationResult(success=True, steps_applied=0)
 
-        strategy = RestoreMigrateStrategy(_make_config(min_tables=300))
+        strategy = _make_strategy(min_tables=300)
         with pytest.raises(DatabaseError, match="Table count validation failed"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
@@ -371,7 +387,7 @@ class TestRestoreMigrateStrategy:
         mock_restore.return_value = RestoreResult(success=True)
         mock_up.return_value = MigrationResult(success=True, steps_applied=0)
 
-        strategy = RestoreMigrateStrategy(_make_config(min_tables=0))
+        strategy = _make_strategy(min_tables=0)
         result = strategy.execute(CONFIG, migrations_dir=MDIR)
 
         assert result.success
@@ -399,9 +415,7 @@ class TestRestoreMigrateStrategy:
         mock_create.return_value = (0, "", "")
         mock_up.return_value = MigrationResult(success=True, steps_applied=1)
 
-        strategy = RestoreMigrateStrategy(
-            _make_config(create_template=True, template_name="staging_tmpl")
-        )
+        strategy = _make_strategy(create_template=True, template_name="staging_tmpl")
         result = strategy.execute(CONFIG, migrations_dir=MDIR)
 
         assert result.success
@@ -411,7 +425,7 @@ class TestRestoreMigrateStrategy:
         assert template_call[0] == ("staging_tmpl",)
         assert template_call[1] == {
             "template": "staging_db",
-            "connection_url": None,
+            "connection_url": _ADMIN_URL,
         }
 
     # -- Rollback --
@@ -438,7 +452,7 @@ class TestRestoreMigrateStrategy:
         mock_up.return_value = MigrationResult(success=True, steps_applied=1)
         url = "postgresql:///staging?host=/var/run/postgresql"
 
-        strategy = RestoreMigrateStrategy(_make_config())
+        strategy = _make_strategy()
         result = strategy.execute(CONFIG, migrations_dir=MDIR, database_url=url)
 
         assert result.success
@@ -451,7 +465,7 @@ class TestRestoreMigrateStrategy:
         mock_down.return_value = MigrationResult(success=True, steps_applied=1)
         url = "postgresql:///staging?host=/var/run/postgresql"
 
-        strategy = RestoreMigrateStrategy(_make_config())
+        strategy = _make_strategy()
         result = strategy.rollback(
             CONFIG, migrations_dir=MDIR, steps=1, database_url=url
         )
@@ -465,7 +479,7 @@ class TestRestoreMigrateStrategy:
     def test_rollback_without_template_calls_migrate_down(self, mock_down):
         mock_down.return_value = MigrationResult(success=True, steps_applied=2)
 
-        strategy = RestoreMigrateStrategy(_make_config())
+        strategy = _make_strategy()
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
 
         assert result.success
@@ -477,15 +491,13 @@ class TestRestoreMigrateStrategy:
     def test_rollback_with_template_uses_template(
         self, mock_term, mock_drop, mock_create
     ):
-        strategy = RestoreMigrateStrategy(
-            _make_config(create_template=True, template_name="staging_tmpl")
-        )
+        strategy = _make_strategy(create_template=True, template_name="staging_tmpl")
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
 
         assert result.success
         # Should drop staging_db then create from template
         mock_create.assert_called_once_with(
-            "staging_db", template="staging_tmpl", connection_url=None
+            "staging_db", template="staging_tmpl", connection_url=_ADMIN_URL
         )
 
     @patch("fraisier.dbops.templates.reset_from_template")
@@ -493,11 +505,13 @@ class TestRestoreMigrateStrategy:
         mock_reset.return_value = TemplateResult(
             success=True, template_name="template_staging_db"
         )
-        strategy = RestoreMigrateStrategy(_make_config(create_template=True))
+        strategy = _make_strategy(create_template=True)
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
 
         assert result.success
-        mock_reset.assert_called_once_with("staging_db", prefix="template_")
+        mock_reset.assert_called_once_with(
+            "staging_db", prefix="template_", connection_url=_ADMIN_URL
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +546,7 @@ class TestGetStrategy:
             "restore_migrate",
             db_name="staging_db",
             restore_config=_SAMPLE_RESTORE_CONFIG,
+            admin_url=_ADMIN_URL,
         )
         assert isinstance(s, RestoreMigrateStrategy)
 
