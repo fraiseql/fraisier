@@ -58,18 +58,27 @@ def _build_ssh_cmd(ssh_config: dict) -> list[str]:
     connect_timeout = ssh_config.get("connect_timeout", 30)
     cmd = [
         "ssh",
-        "-n",  # do not read from stdin — prevents SSH stdin channel setup which causes
-        #        multi-minute hangs when run from background/non-interactive contexts
+        # Why: commit da5c119 — without -n, SSH still allocates a stdin
+        # channel even when the parent never writes to it, causing
+        # multi-minute hangs in background/non-interactive contexts.
+        "-n",
         "-o",
         f"StrictHostKeyChecking={host_key_policy}",
+        # Why: BatchMode=yes — never prompt for passphrase/password; fail
+        # fast instead of blocking forever on a closed TTY.
         "-o",
         "BatchMode=yes",
+        # Why: commit 4dd1927 — on dual-stack hosts SSH tries AAAA first;
+        # with no ConnectTimeout it waits ~2 min for the kernel TCP timeout
+        # before falling back to A. Configurable since commit 64f8d30.
         "-o",
-        f"ConnectTimeout={connect_timeout}",  # prevents multi-minute hang when IPv6
-        #        is tried first but not reachable — SSH falls back to IPv4 after timeout
+        f"ConnectTimeout={connect_timeout}",
         "-p",
         str(ssh_config.get("port", 22)),
     ]
+    # Why: commit 64f8d30 — AddressFamily lets operators pin IPv4/IPv6
+    # on hosts where the other family is unreachable; complements the
+    # ConnectTimeout above for the IPv6-fallback failure mode.
     if address_family := ssh_config.get("address_family"):
         cmd.extend(["-o", f"AddressFamily={address_family}"])
     if key_path := ssh_config.get("key_path"):
@@ -131,9 +140,10 @@ def logs(
         config, fraise, environment, fraise_config, service
     )
 
-    # Build journalctl argument list
-    # --no-pager is required even on non-TTY stdout: some systemd versions
-    # still try to invoke a pager and block until stdin closes.
+    # Build journalctl argument list.
+    # Why: commit c9f64e7 — --no-pager is required even on non-TTY stdout:
+    # some systemd versions still try to invoke a pager and block until
+    # stdin closes.
     jctl_args = ["journalctl", "--no-pager", "-u", unit_pattern, "-n", str(lines)]
     if not no_follow:
         jctl_args.append("-f")
@@ -148,11 +158,13 @@ def logs(
         ssh_prefix = _build_ssh_cmd(ssh_config)
         cmd = [*ssh_prefix, shlex.join(jctl_args)]
 
-    # Run via subprocess.Popen so the Python process stays alive.
-    # stdin=DEVNULL prevents SSH from holding the connection open waiting for
-    # stdin to close — critical for background/non-interactive callers where
-    # stdin is a pipe that never closes. stdout/stderr are inherited so TTY
-    # behaviour (colours, terminal size, Ctrl-C) still works in interactive use.
+    # Why: commit 8fc8fec — use subprocess.Popen instead of os.execvp so
+    # the parent stays alive and can wait/signal the child.
+    # Why: commit 08265c9 — stdin=DEVNULL prevents SSH from holding the
+    # connection open waiting for stdin to close. Background callers pass
+    # an open pipe that never closes; SSH then waits forever.
+    # stdout/stderr are inherited so TTY behaviour (colours, terminal
+    # size, Ctrl-C) still works in interactive use.
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
     try:
         proc.wait()
