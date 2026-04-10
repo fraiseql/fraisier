@@ -138,10 +138,11 @@ def logs(
         cmd = [*ssh_prefix, shlex.join(jctl_args)]
 
     # Run via subprocess.Popen so the Python process stays alive.
-    # Inherited stdin/stdout/stderr give identical TTY behaviour to execvp
-    # (colours, terminal size, Ctrl-C), while keeping a trackable PID for
-    # background runners and scripts.
-    proc = subprocess.Popen(cmd)
+    # stdin=DEVNULL prevents SSH from holding the connection open waiting for
+    # stdin to close — critical for background/non-interactive callers where
+    # stdin is a pipe that never closes. stdout/stderr are inherited so TTY
+    # behaviour (colours, terminal size, Ctrl-C) still works in interactive use.
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
     try:
         proc.wait()
     except KeyboardInterrupt:
