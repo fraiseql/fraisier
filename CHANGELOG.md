@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-04-10
+
+### Fixed
+
+- **`fraisier logs` works correctly from background processes and scripts** — Replaced `os.execvp` with `subprocess.Popen` (inherited stdin/stdout/stderr). TTY behaviour is identical for interactive use (colours, terminal size, Ctrl-C), but the Python process now stays alive so background runners and scripts can track the PID properly.
+- **`fraisier trigger-deploy --follow` was silently broken** — The `--follow` path imported `_resolve_deploy_unit_pattern` by its old name after the #154 refactor, causing a silent `ImportError` and never exec-ing into journalctl. Fixed by reusing the `socket_stem` already computed just above the call site.
+
+---
+
 ## [0.7.4] - 2026-04-10
 
 ### Added
