@@ -145,6 +145,59 @@ class TestBuildSshCmd:
         opts = " ".join(cmd)
         assert "AddressFamily=inet6" in opts
 
+    # --- exact-shape characterization tests ---
+    #
+    # These lock in the full command list as-emitted. Any future change to the
+    # flag set (adding, removing, or reordering) must update these tests
+    # explicitly — so flags that were added to fix real production hangs
+    # (see .phases/2026-04-10-ssh-io-contract/) can't be quietly dropped.
+
+    def test_exact_shape_minimal_config(self):
+        cmd = _build_ssh_cmd({"host": "example.com"})
+        assert cmd == [
+            "ssh",
+            "-n",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=30",
+            "-p",
+            "22",
+            "root@example.com",
+        ]
+
+    def test_exact_shape_full_config(self):
+        cmd = _build_ssh_cmd(
+            {
+                "host": "prod.example.com",
+                "user": "deploy",
+                "port": 2222,
+                "strict_host_key": False,
+                "connect_timeout": 15,
+                "address_family": "inet",
+                "key_path": "/home/deploy/.ssh/id_ed25519",
+            }
+        )
+        assert cmd == [
+            "ssh",
+            "-n",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
+            "-p",
+            "2222",
+            "-o",
+            "AddressFamily=inet",
+            "-i",
+            "/home/deploy/.ssh/id_ed25519",
+            "deploy@prod.example.com",
+        ]
+
 
 class TestLogsCommand:
     """Integration tests for the logs CLI command."""
