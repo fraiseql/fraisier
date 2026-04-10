@@ -70,15 +70,13 @@ class TemplateManager:
         *,
         project_dir: Path,
         confiture_config: Path,
-        connection_url: str | None = None,
-        sudo_user: str = "postgres",
+        connection_url: str,
         template_prefix: str = "tpl_test_",
     ) -> None:
         self._env = env
         self._project_dir = project_dir
         self._confiture_config = confiture_config
         self._connection_url = connection_url
-        self._sudo_user = sudo_user
         self._template_prefix = template_prefix
 
     @property
@@ -94,22 +92,15 @@ class TemplateManager:
 
     def _db_name_from_url(self) -> str:  # pragma: no cover
         """Extract database name from connection URL."""
-        if not self._connection_url:
-            msg = "connection_url required to derive database name"
-            raise ValueError(msg)
         parsed = urlparse(self._connection_url)
         return parsed.path.lstrip("/")
 
-    def _admin_url(self) -> str | None:
+    def _admin_url(self) -> str:
         """Derive admin URL (pointing to 'postgres' db) from connection URL."""
-        if not self._connection_url:
-            return None
         return replace_db_name(self._connection_url, "postgres")
 
-    def _template_url(self) -> str | None:
+    def _template_url(self) -> str:
         """Connection URL pointing to the template database."""
-        if not self._connection_url:
-            return None
         return replace_db_name(self._connection_url, self.template_name)
 
     def ensure_template(self) -> TemplateInfo:
@@ -127,7 +118,6 @@ class TemplateManager:
         with timed_phase("template_check", log) as elapsed:
             exists = check_db_exists(
                 self.template_name,
-                sudo_user=self._sudo_user,
                 connection_url=self._admin_url(),
             )
         report.record("template_check", elapsed.ms)
@@ -136,7 +126,6 @@ class TemplateManager:
             meta = read_meta(
                 self.template_name,
                 connection_url=self._template_url(),
-                sudo_user=self._sudo_user,
             )
             if meta and meta.schema_hash == current_hash:
                 log.info(
@@ -188,7 +177,6 @@ class TemplateManager:
             result = create_template(
                 db_name,
                 prefix=self._template_prefix,
-                sudo_user=self._sudo_user,
                 connection_url=self._admin_url(),
             )
             if not result.success:
@@ -202,7 +190,6 @@ class TemplateManager:
             ensure_meta_table(
                 self.template_name,
                 connection_url=self._template_url(),
-                sudo_user=self._sudo_user,
             )
 
             from datetime import UTC, datetime
@@ -219,7 +206,6 @@ class TemplateManager:
                 self.template_name,
                 meta,
                 connection_url=self._template_url(),
-                sudo_user=self._sudo_user,
             )
         report.record("metadata_write", elapsed.ms)
 
@@ -241,23 +227,19 @@ class TemplateManager:
 
         terminate_backends(
             self.template_name,
-            sudo_user=self._sudo_user,
             connection_url=admin_url,
         )
 
         code, _, stderr = create_db(
             test_db_name,
             template=self.template_name,
-            sudo_user=self._sudo_user,
             connection_url=admin_url,
         )
         if code != 0:
             msg = f"Failed to clone template: {stderr.strip()}"
             raise RuntimeError(msg)
 
-        if self._connection_url:
-            return replace_db_name(self._connection_url, test_db_name)
-        return test_db_name
+        return replace_db_name(self._connection_url, test_db_name)
 
     def cleanup(self) -> int:
         """Remove template databases."""
@@ -265,7 +247,6 @@ class TemplateManager:
             self._env,
             prefix=self._template_prefix,
             max_templates=0,
-            sudo_user=self._sudo_user,
             connection_url=self._admin_url(),
         )
 
@@ -275,7 +256,6 @@ class TemplateManager:
 
         exists = check_db_exists(
             self.template_name,
-            sudo_user=self._sudo_user,
             connection_url=self._admin_url(),
         )
 
@@ -287,7 +267,6 @@ class TemplateManager:
             meta = read_meta(
                 self.template_name,
                 connection_url=self._template_url(),
-                sudo_user=self._sudo_user,
             )
             if meta:
                 stored_hash = meta.schema_hash

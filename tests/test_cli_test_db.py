@@ -62,7 +62,14 @@ class TestTestDbStatus:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["test-db", "status", "-d", str(tmp_path)],
+            [
+                "test-db",
+                "status",
+                "-d",
+                str(tmp_path),
+                "--connection-url",
+                "postgresql://localhost/test",
+            ],
         )
         assert result.exit_code == 0
         assert "needs rebuild" in result.output
@@ -120,7 +127,14 @@ class TestTestDbClean:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["test-db", "clean", "-d", str(tmp_path)],
+            [
+                "test-db",
+                "clean",
+                "-d",
+                str(tmp_path),
+                "--connection-url",
+                "postgresql://localhost/test",
+            ],
         )
         assert result.exit_code == 0
         assert "Dropped 2 template(s)" in result.output
@@ -133,7 +147,14 @@ class TestTestDbClean:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["test-db", "clean", "-d", str(tmp_path)],
+            [
+                "test-db",
+                "clean",
+                "-d",
+                str(tmp_path),
+                "--connection-url",
+                "postgresql://localhost/test",
+            ],
         )
         assert result.exit_code == 0
         assert "No templates to clean up" in result.output

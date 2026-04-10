@@ -36,14 +36,12 @@ class TemplateMeta:
 def ensure_meta_table(
     db_name: str,
     *,
-    connection_url: str | None = None,
-    sudo_user: str = "postgres",
+    connection_url: str,
 ) -> None:
     """Create the metadata table if it doesn't exist."""
     code, _, stderr = run_psql(
         _CREATE_DDL,
         db_name=db_name,
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:
@@ -54,8 +52,7 @@ def ensure_meta_table(
 def read_meta(
     db_name: str,
     *,
-    connection_url: str | None = None,
-    sudo_user: str = "postgres",
+    connection_url: str,
 ) -> TemplateMeta | None:
     """Read metadata from the template database.
 
@@ -68,7 +65,6 @@ def read_meta(
     code, stdout, _ = run_sql(
         sql,
         db_name=db_name,
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:
@@ -94,8 +90,7 @@ def write_meta(
     db_name: str,
     meta: TemplateMeta,
     *,
-    connection_url: str | None = None,
-    sudo_user: str = "postgres",
+    connection_url: str,
 ) -> None:
     """Write metadata to the template database (replaces any existing row)."""
     built_at_iso = meta.built_at.isoformat()
@@ -109,7 +104,6 @@ def write_meta(
     code, _, stderr = run_psql(
         sql,
         db_name=db_name,
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:

@@ -2,21 +2,29 @@
 
 from fraisier.testing import TemplateInfo, TemplateManager, database_fixture
 
+_TEST_URL = "postgresql://postgres@localhost:5432/test"
+
 
 class TestDatabaseFixture:
     def test_returns_callable(self):
-        fixture = database_fixture(env="test")
+        fixture = database_fixture(env="test", connection_url=_TEST_URL)
         assert callable(fixture)
 
     def test_is_pytest_fixture(self):
-        fixture = database_fixture(env="test", scope="session")
+        fixture = database_fixture(
+            env="test", connection_url=_TEST_URL, scope="session"
+        )
         # pytest.fixture wraps functions; the wrapper is still callable
         # and pytest recognizes it during collection
         assert callable(fixture)
 
     def test_custom_scope_is_applied(self):
-        fixture_session = database_fixture(env="test", scope="session")
-        fixture_func = database_fixture(env="test", scope="function")
+        fixture_session = database_fixture(
+            env="test", connection_url=_TEST_URL, scope="session"
+        )
+        fixture_func = database_fixture(
+            env="test", connection_url=_TEST_URL, scope="function"
+        )
         # Both return valid fixtures (different scope, same API)
         assert callable(fixture_session)
         assert callable(fixture_func)

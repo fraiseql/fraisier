@@ -250,7 +250,7 @@ class RebuildStrategy(Strategy):
         db_name: str,
         db_owner: str | None,
         *,
-        connection_url: str | None = None,
+        connection_url: str,
     ) -> None:
         """Ensure required roles exist and are granted to the db owner."""
         for role in self._required_roles:

@@ -31,9 +31,9 @@ __all__ = [
 def database_fixture(
     env: str = "test",
     *,
+    connection_url: str,
     project_dir: Path | None = None,
     confiture_config: Path | str | None = None,
-    connection_url: str | None = None,
     scope: Literal["session", "package", "module", "class", "function"] = "session",
 ) -> Any:
     """Create a pytest fixture that provides a test database template.
@@ -47,11 +47,10 @@ def database_fixture(
 
     Args:
         env: Confiture environment name (default: "test").
+        connection_url: PostgreSQL connection URL.
         project_dir: Project root directory. Defaults to cwd.
         confiture_config: Path to confiture.yaml. Defaults to
             ``project_dir / "confiture.yaml"``.
-        connection_url: PostgreSQL connection URL. When ``None``,
-            falls back to sudo-based access.
         scope: Pytest fixture scope (default: "session").
 
     Returns:

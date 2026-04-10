@@ -40,6 +40,11 @@ def test_db_status(env: str, project_dir: str, connection_url: str | None) -> No
     """Show template database status."""
     from fraisier.testing._manager import TemplateManager
 
+    if not connection_url:
+        raise click.UsageError(
+            "connection_url is required — pass --connection-url or set DATABASE_URL",
+        )
+
     project = Path(project_dir).resolve()
     manager = TemplateManager(
         env=env,
@@ -87,6 +92,11 @@ def test_db_rebuild(env: str, project_dir: str, connection_url: str | None) -> N
     """Force rebuild the template database."""
     from fraisier.testing._manager import TemplateManager
 
+    if not connection_url:
+        raise click.UsageError(
+            "connection_url is required — pass --connection-url or set DATABASE_URL",
+        )
+
     project = Path(project_dir).resolve()
     manager = TemplateManager(
         env=env,
@@ -122,6 +132,11 @@ def test_db_rebuild(env: str, project_dir: str, connection_url: str | None) -> N
 def test_db_clean(env: str, project_dir: str, connection_url: str | None) -> None:
     """Drop test database templates."""
     from fraisier.testing._manager import TemplateManager
+
+    if not connection_url:
+        raise click.UsageError(
+            "connection_url is required — pass --connection-url or set DATABASE_URL",
+        )
 
     project = Path(project_dir).resolve()
     manager = TemplateManager(
