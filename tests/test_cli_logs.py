@@ -135,155 +135,114 @@ class TestLogsCommand:
         config.get_fraise_environment.return_value = fraise_env
         return config
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_local_follow_calls_journalctl(self, mock_execvp):
+    def _mock_popen(self):
+        """Return a Popen mock whose .wait() returns 0."""
+        proc = MagicMock()
+        proc.wait.return_value = 0
+        proc.returncode = 0
+        mock = MagicMock(return_value=proc)
+        return mock
+
+    def _invoke(self, config, args):
         runner = CliRunner()
+        mock_popen = self._mock_popen()
+        with (
+            patch("fraisier.cli.main.get_config", return_value=config),
+            patch("fraisier.cli.logs.subprocess.Popen", mock_popen),
+            patch("fraisier.cli.logs.sys.exit"),
+        ):
+            runner.invoke(main, args, obj={"config": config, "skip_health": False})
+        return mock_popen
+
+    def test_local_follow_calls_journalctl(self):
         # env has name: → socket fraisier-api.myapp.dev.socket → service fraisier-api.myapp.dev@*.service
         config = self._make_config(env_name="api.myapp.dev")
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production"],
-                obj={"config": config, "skip_health": False},
-            )
-        prog, args = mock_execvp.call_args[0]
-        assert prog == "journalctl"
-        assert "-f" in args
-        assert "fraisier-api.myapp.dev@*.service" in args
+        mock_popen = self._invoke(config, ["logs", "api", "production"])
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[0] == "journalctl"
+        assert "-f" in cmd
+        assert "fraisier-api.myapp.dev@*.service" in cmd
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_local_follow_fallback_pattern(self, mock_execvp):
+    def test_local_follow_fallback_pattern(self):
         # no name: in env_config → fraisier-{fraise}-{env}@*.service
-        runner = CliRunner()
         config = self._make_config()
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production"],
-                obj={"config": config, "skip_health": False},
-            )
-        _, args = mock_execvp.call_args[0]
-        assert "fraisier-api-production@*.service" in args
+        mock_popen = self._invoke(config, ["logs", "api", "production"])
+        cmd = mock_popen.call_args[0][0]
+        assert "fraisier-api-production@*.service" in cmd
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_local_no_follow(self, mock_execvp):
-        runner = CliRunner()
+    def test_local_no_follow(self):
         config = self._make_config()
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production", "--no-follow", "--lines", "100"],
-                obj={"config": config, "skip_health": False},
-            )
-        prog, args = mock_execvp.call_args[0]
-        assert prog == "journalctl"
-        assert "-f" not in args
-        assert "100" in args
+        mock_popen = self._invoke(
+            config, ["logs", "api", "production", "--no-follow", "--lines", "100"]
+        )
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[0] == "journalctl"
+        assert "-f" not in cmd
+        assert "100" in cmd
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_local_since_flag(self, mock_execvp):
-        runner = CliRunner()
+    def test_local_since_flag(self):
         config = self._make_config()
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production", "--no-follow", "--since", "1 hour ago"],
-                obj={"config": config, "skip_health": False},
-            )
-        _, args = mock_execvp.call_args[0]
-        assert "--since" in args
-        assert "1 hour ago" in args
+        mock_popen = self._invoke(
+            config,
+            ["logs", "api", "production", "--no-follow", "--since", "1 hour ago"],
+        )
+        cmd = mock_popen.call_args[0][0]
+        assert "--since" in cmd
+        assert "1 hour ago" in cmd
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_local_app_service_pattern(self, mock_execvp):
-        runner = CliRunner()
+    def test_local_app_service_pattern(self):
         config = self._make_config(project_name="proj")
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production", "--service", "app"],
-                obj={"config": config, "skip_health": False},
-            )
-        _, args = mock_execvp.call_args[0]
-        assert "proj_api_production.service" in args
-        assert "@" not in " ".join(args)
+        mock_popen = self._invoke(
+            config, ["logs", "api", "production", "--service", "app"]
+        )
+        cmd = mock_popen.call_args[0][0]
+        assert "proj_api_production.service" in cmd
+        assert "@" not in " ".join(cmd)
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_remote_calls_ssh_not_journalctl(self, mock_execvp):
-        runner = CliRunner()
+    def test_remote_calls_ssh_not_journalctl(self):
         config = self._make_config(ssh_config={"host": "prod.example.com"})
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production"],
-                obj={"config": config, "skip_health": False},
-            )
-        prog, args = mock_execvp.call_args[0]
-        assert prog == "ssh"
-        assert args[0] == "ssh"
+        mock_popen = self._invoke(config, ["logs", "api", "production"])
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[0] == "ssh"
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_remote_targets_correct_host(self, mock_execvp):
-        runner = CliRunner()
+    def test_remote_targets_correct_host(self):
         config = self._make_config(
             ssh_config={"host": "prod.example.com", "user": "deploy"}
         )
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production"],
-                obj={"config": config, "skip_health": False},
-            )
-        _, args = mock_execvp.call_args[0]
-        assert "deploy@prod.example.com" in args
+        mock_popen = self._invoke(config, ["logs", "api", "production"])
+        cmd = mock_popen.call_args[0][0]
+        assert "deploy@prod.example.com" in cmd
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_remote_journalctl_args_in_ssh_command(self, mock_execvp):
-        runner = CliRunner()
+    def test_remote_journalctl_args_in_ssh_command(self):
         config = self._make_config(
             env_name="api.myapp.io", ssh_config={"host": "prod.example.com"}
         )
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production", "--no-follow", "--lines", "20"],
-                obj={"config": config, "skip_health": False},
-            )
-        _, args = mock_execvp.call_args[0]
-        remote_cmd = args[-1]
+        mock_popen = self._invoke(
+            config, ["logs", "api", "production", "--no-follow", "--lines", "20"]
+        )
+        cmd = mock_popen.call_args[0][0]
+        remote_cmd = cmd[-1]  # last element is the remote command string
         assert "journalctl" in remote_cmd
         assert "fraisier-api.myapp.io@*.service" in remote_cmd
         assert "-f" not in remote_cmd
         assert "20" in remote_cmd
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_remote_follow_mode_includes_follow_flag(self, mock_execvp):
-        runner = CliRunner()
+    def test_remote_follow_mode_includes_follow_flag(self):
         config = self._make_config(ssh_config={"host": "prod.example.com"})
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production"],
-                obj={"config": config, "skip_health": False},
-            )
-        _, args = mock_execvp.call_args[0]
-        remote_cmd = args[-1]
+        mock_popen = self._invoke(config, ["logs", "api", "production"])
+        cmd = mock_popen.call_args[0][0]
+        remote_cmd = cmd[-1]
         assert "-f" in remote_cmd
 
-    @patch("fraisier.cli.logs.os.execvp")
-    def test_remote_app_service(self, mock_execvp):
-        runner = CliRunner()
+    def test_remote_app_service(self):
         config = self._make_config(
             project_name="proj", ssh_config={"host": "prod.example.com"}
         )
-        with patch("fraisier.cli.main.get_config", return_value=config):
-            runner.invoke(
-                main,
-                ["logs", "api", "production", "--service", "app"],
-                obj={"config": config, "skip_health": False},
-            )
-        _, args = mock_execvp.call_args[0]
-        remote_cmd = args[-1]
+        mock_popen = self._invoke(
+            config, ["logs", "api", "production", "--service", "app"]
+        )
+        cmd = mock_popen.call_args[0][0]
+        remote_cmd = cmd[-1]
         assert "proj_api_production.service" in remote_cmd
 
     def test_invalid_fraise_shows_error(self):

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import shlex
+import subprocess
+import sys
 
 import click
 
@@ -128,15 +129,22 @@ def logs(
     if since:
         jctl_args.extend(["--since", since])
 
-    # Detect remote vs local
+    # Detect remote vs local and build the final command
     ssh_config = fraise_config.get("ssh")
     if not ssh_config:
-        # Local: replace this process with journalctl
-        os.execvp("journalctl", jctl_args)
+        cmd = jctl_args
     else:
-        # Remote: SSH to the target server and run journalctl there.
-        # os.execvp replaces this process so the TTY is inherited — colour
-        # output, Ctrl-C propagation, and --follow all work correctly.
         ssh_prefix = _build_ssh_cmd(ssh_config)
-        full_cmd = [*ssh_prefix, shlex.join(jctl_args)]
-        os.execvp("ssh", full_cmd)
+        cmd = [*ssh_prefix, shlex.join(jctl_args)]
+
+    # Run via subprocess.Popen so the Python process stays alive.
+    # Inherited stdin/stdout/stderr give identical TTY behaviour to execvp
+    # (colours, terminal size, Ctrl-C), while keeping a trackable PID for
+    # background runners and scripts.
+    proc = subprocess.Popen(cmd)
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        proc.wait()
+    sys.exit(proc.returncode)
