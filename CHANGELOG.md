@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.12] - 2026-04-10
+
+### Fixed
+
+- **Issue #156: bootstrap restarts the webhook service after a fraisier self-upgrade** — `fraisier bootstrap` now runs a `systemctl restart fraisier-{project}-webhook.service` step immediately after upgrading fraisier, so the new binary takes effect without manual intervention. If the service is not yet running (fresh install), the step is a no-op.
+
+---
+
 ## [0.7.11] - 2026-04-10
 
 ### Fixed

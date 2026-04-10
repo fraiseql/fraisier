@@ -74,17 +74,18 @@ class BootstrapResult:
 class ServerBootstrapper:
     """Provision a virgin server end-to-end via SSH.
 
-    Runs 10 ordered, idempotent steps:
+    Runs 11 ordered, idempotent steps:
       1  Create deploy user
       2  Add deploy user to www-data
       3  Install uv for deploy user
       4  Install fraisier for deploy user
-      5  Create project directories
-      6  Upload fraises.yaml
-      7  Upload scaffold files
-      8  Run install.sh --standalone
-      9  Enable and start deploy socket
-      10 Validate setup
+      5  Restart webhook service (if running, so new fraisier takes effect)
+      6  Create project directories
+      7  Upload fraises.yaml
+      8  Upload scaffold files
+      9  Run install.sh --standalone
+      10 Enable and start deploy socket
+      11 Validate setup
 
     Every step is idempotent: re-running bootstrap on a partially-set-up
     server is safe.  Steps that find the work already done report
@@ -130,6 +131,7 @@ class ServerBootstrapper:
             self._add_to_www_data,
             self._install_uv,
             self._install_fraisier,
+            self._restart_webhook_if_running,
             self._create_directories,
         ):
             step = step_fn()
@@ -221,6 +223,33 @@ class ServerBootstrapper:
                 ),
             ],
         )
+
+    def _restart_webhook_if_running(self) -> StepResult:
+        """Restart the webhook service if it is active, so the new fraisier takes effect.
+
+        On a fresh install the service does not exist yet — that is not an error.
+        """
+        name = "Restart webhook service"
+        webhook_svc = f"fraisier-{self.project_name}-webhook.service"
+
+        if self.dry_run:
+            return StepResult(
+                name=name,
+                success=True,
+                command=f"systemctl is-active {webhook_svc} && systemctl restart {webhook_svc}",
+            )
+
+        try:
+            self.runner.run(["systemctl", "is-active", "--quiet", webhook_svc])
+        except subprocess.CalledProcessError:
+            # Service not running (fresh install or stopped) — nothing to do.
+            return StepResult(name=name, success=True, already_done=True)
+
+        try:
+            self.runner.run(["systemctl", "restart", webhook_svc])
+            return StepResult(name=name, success=True)
+        except subprocess.CalledProcessError as e:
+            return StepResult(name=name, success=False, error=e.stderr or str(e))
 
     def _create_directories(self) -> StepResult:
         project_dir = f"/opt/{self.project_name}"

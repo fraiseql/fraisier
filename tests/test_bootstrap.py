@@ -265,6 +265,43 @@ class TestInstallFraisier:
         assert step.success is False
 
 
+class TestRestartWebhookIfRunning:
+    def test_restarts_when_active(self, bootstrapper, mock_runner):
+        """Restarts the webhook service when it is already running."""
+        step = bootstrapper._restart_webhook_if_running()
+        assert step.success is True
+        calls = [c[0][0] for c in mock_runner.run.call_args_list]
+        assert ["systemctl", "is-active", "--quiet", "fraisier-myapp-webhook.service"] in calls
+        assert ["systemctl", "restart", "fraisier-myapp-webhook.service"] in calls
+
+    def test_skips_when_not_running(self, bootstrapper, mock_runner):
+        """Does not restart when service is not active (fresh install)."""
+        mock_runner.run.side_effect = _err("inactive")
+        step = bootstrapper._restart_webhook_if_running()
+        assert step.success is True
+        assert step.already_done is True
+        # Only is-active was called, not restart
+        assert mock_runner.run.call_count == 1
+
+    def test_fails_if_restart_fails(self, bootstrapper, mock_runner):
+        """Returns a failed step if systemctl restart exits non-zero."""
+        def side_effect(cmd):
+            if "is-active" in cmd:
+                return _OK
+            raise _err("Failed to restart")
+
+        mock_runner.run.side_effect = side_effect
+        step = bootstrapper._restart_webhook_if_running()
+        assert step.success is False
+        assert "Failed to restart" in step.error
+
+    def test_dry_run_returns_success(self, dry_bootstrapper, mock_runner):
+        """Dry-run mode returns success without calling runner."""
+        step = dry_bootstrapper._restart_webhook_if_running()
+        assert step.success is True
+        mock_runner.run.assert_not_called()
+
+
 class TestCreateDirectories:
     def test_creates_expected_dirs(self, bootstrapper, mock_runner):
         step = bootstrapper._create_directories()
@@ -492,10 +529,10 @@ class TestBootstrapFlow:
         mock_runner.upload.assert_not_called()
         mock_runner.upload_tree.assert_not_called()
 
-    def test_dry_run_produces_ten_steps(self, dry_bootstrapper):
+    def test_dry_run_produces_eleven_steps(self, dry_bootstrapper):
         with patch("fraisier.bootstrap.importlib_version", return_value="0.4.14"):
             result = dry_bootstrapper.bootstrap()
-        assert len(result.steps) == 10
+        assert len(result.steps) == 11
 
     def test_aborts_after_first_failure(self, bootstrapper, mock_runner):
         # Make _add_to_www_data fail (step 2); steps after it must not run.
