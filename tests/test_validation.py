@@ -173,6 +173,22 @@ class TestValidationRunner:
         assert failed[0].message is not None
         assert "admin_url" in failed[0].message
 
+    def test_admin_url_error_message_quality(self):
+        """Error message names fraise, env, strategy, field, and has example."""
+        config = self._make_config(fraises=["billing"], envs={"billing": ["prod"]})
+        self._set_env_database(config, {"strategy": "restore_migrate", "name": "db"})
+        runner = ValidationRunner(config)
+        results = runner._check_admin_url_required()
+        failed = [r for r in results if not r.passed]
+        assert len(failed) == 1
+        msg = failed[0].message
+        assert msg is not None
+        assert "billing" in msg
+        assert "prod" in msg
+        assert "restore_migrate" in msg
+        assert "admin_url" in msg
+        assert "postgresql://" in msg
+
     def test_admin_url_not_required_for_migrate(self):
         """migrate strategy does not need admin_url."""
         config = self._make_config(fraises=["my_app"], envs={"my_app": ["production"]})
