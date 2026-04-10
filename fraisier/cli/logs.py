@@ -49,7 +49,7 @@ def _build_ssh_cmd(ssh_config: dict) -> list[str]:
 
     Args:
         ssh_config: Dict with host, user, port, key_path, strict_host_key,
-            connect_timeout.
+            connect_timeout, address_family.
 
     Returns:
         List starting with "ssh" and ending with "user@host".
@@ -70,6 +70,8 @@ def _build_ssh_cmd(ssh_config: dict) -> list[str]:
         "-p",
         str(ssh_config.get("port", 22)),
     ]
+    if address_family := ssh_config.get("address_family"):
+        cmd.extend(["-o", f"AddressFamily={address_family}"])
     if key_path := ssh_config.get("key_path"):
         cmd.extend(["-i", key_path])
     cmd.append(f"{ssh_config.get('user', 'root')}@{ssh_config['host']}")

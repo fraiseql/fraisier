@@ -120,6 +120,31 @@ class TestBuildSshCmd:
         opts = " ".join(cmd)
         assert "BatchMode=yes" in opts
 
+    def test_connect_timeout_default(self):
+        cmd = _build_ssh_cmd({"host": "example.com"})
+        opts = " ".join(cmd)
+        assert "ConnectTimeout=30" in opts
+
+    def test_connect_timeout_custom(self):
+        cmd = _build_ssh_cmd({"host": "example.com", "connect_timeout": 10})
+        opts = " ".join(cmd)
+        assert "ConnectTimeout=10" in opts
+
+    def test_address_family_not_set_by_default(self):
+        cmd = _build_ssh_cmd({"host": "example.com"})
+        opts = " ".join(cmd)
+        assert "AddressFamily" not in opts
+
+    def test_address_family_inet(self):
+        cmd = _build_ssh_cmd({"host": "example.com", "address_family": "inet"})
+        opts = " ".join(cmd)
+        assert "AddressFamily=inet" in opts
+
+    def test_address_family_inet6(self):
+        cmd = _build_ssh_cmd({"host": "example.com", "address_family": "inet6"})
+        opts = " ".join(cmd)
+        assert "AddressFamily=inet6" in opts
+
 
 class TestLogsCommand:
     """Integration tests for the logs CLI command."""
@@ -329,3 +354,44 @@ fraises:
                 tmp_path,
                 "          host: prod.example.com\n          strict_host_key: 'yes'\n",
             )
+
+    def test_invalid_connect_timeout_type_raises(self, tmp_path):
+        from fraisier.errors import ValidationError
+
+        with pytest.raises(
+            ValidationError, match=r"ssh\.connect_timeout must be an integer"
+        ):
+            self._load(
+                tmp_path,
+                "          host: prod.example.com\n          connect_timeout: '30'\n",
+            )
+
+    def test_valid_connect_timeout_passes(self, tmp_path):
+        self._load(
+            tmp_path,
+            "          host: prod.example.com\n          connect_timeout: 10\n",
+        )  # no exception
+
+    def test_invalid_address_family_raises(self, tmp_path):
+        from fraisier.errors import ValidationError
+
+        with pytest.raises(
+            ValidationError,
+            match=r"ssh\.address_family must be 'inet', 'inet6', or 'any'",
+        ):
+            self._load(
+                tmp_path,
+                "          host: prod.example.com\n          address_family: ipv4\n",
+            )
+
+    def test_valid_address_family_inet_passes(self, tmp_path):
+        self._load(
+            tmp_path,
+            "          host: prod.example.com\n          address_family: inet\n",
+        )  # no exception
+
+    def test_valid_address_family_any_passes(self, tmp_path):
+        self._load(
+            tmp_path,
+            "          host: prod.example.com\n          address_family: any\n",
+        )  # no exception

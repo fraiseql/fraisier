@@ -239,6 +239,22 @@ class FraisierConfig:
                         f"{fraise_name}: ssh.strict_host_key must be a boolean, "
                         f"got {type(strict).__name__}"
                     )
+                connect_timeout = ssh.get("connect_timeout")
+                if connect_timeout is not None and not isinstance(connect_timeout, int):
+                    errors.append(
+                        f"{fraise_name}: ssh.connect_timeout must be an integer, "
+                        f"got {type(connect_timeout).__name__}"
+                    )
+                address_family = ssh.get("address_family")
+                if address_family is not None and address_family not in (
+                    "inet",
+                    "inet6",
+                    "any",
+                ):
+                    errors.append(
+                        f"{fraise_name}: ssh.address_family must be 'inet', 'inet6', "
+                        f"or 'any', got {address_family!r}"
+                    )
 
         # clone_url format validation
         clone_url = env.get("clone_url")
