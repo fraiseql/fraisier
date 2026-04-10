@@ -11,6 +11,8 @@ from fraisier.dbops.restore import (
     validate_table_count,
 )
 
+_TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
+
 
 class TestRestoreBackup:
     """Test restore_backup."""
@@ -18,7 +20,11 @@ class TestRestoreBackup:
     def test_restore_success(self):
         with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
             mock_cmd.return_value = (0, "", "")
-            result = restore_backup(backup_path="/backups/prod.dump", db_name="staging")
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
 
         assert result.success is True
         assert result.error == ""
@@ -29,11 +35,22 @@ class TestRestoreBackup:
         assert "/backups/prod.dump" in cmd
         assert "--no-owner" in cmd
         assert "--no-acl" in cmd
+        assert mock_cmd.call_args.kwargs["connection_url"] == _TEST_URL
+
+    def test_restore_requires_connection_url(self):
+        with pytest.raises(TypeError):
+            restore_backup(  # ty: ignore[missing-argument]
+                backup_path="/backups/prod.dump", db_name="staging"
+            )
 
     def test_restore_failure(self):
         with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
             mock_cmd.return_value = (1, "", "pg_restore: error")
-            result = restore_backup(backup_path="/backups/prod.dump", db_name="staging")
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
 
         assert result.success is False
         assert "pg_restore: error" in result.error
@@ -45,6 +62,7 @@ class TestRestoreBackup:
                 backup_path="/backups/prod.dump",
                 db_name="staging",
                 db_owner="appuser",
+                connection_url=_TEST_URL,
             )
 
         assert result.success is True
@@ -67,6 +85,7 @@ class TestRestoreBackup:
                 backup_path="/backups/prod.dump",
                 db_name="staging",
                 db_owner="baduser",
+                connection_url=_TEST_URL,
             )
 
         assert result.success is False
@@ -74,7 +93,11 @@ class TestRestoreBackup:
 
     def test_restore_rejects_bad_db_name(self):
         with pytest.raises(ValueError, match="Invalid database name"):
-            restore_backup(backup_path="/backups/prod.dump", db_name="bad name!")
+            restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="bad name!",
+                connection_url=_TEST_URL,
+            )
 
     def test_restore_rejects_bad_owner(self):
         with pytest.raises(ValueError, match="Invalid database owner"):
@@ -82,6 +105,7 @@ class TestRestoreBackup:
                 backup_path="/backups/prod.dump",
                 db_name="staging",
                 db_owner="bad;owner",
+                connection_url=_TEST_URL,
             )
 
 
@@ -91,7 +115,9 @@ class TestValidateTableCount:
     def test_validate_table_count_pass(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="75\n", stderr="")
-            ok, count = validate_table_count("staging", min_threshold=50)
+            ok, count = validate_table_count(
+                "staging", min_threshold=50, connection_url=_TEST_URL
+            )
 
         assert ok is True
         assert count == 75
@@ -99,7 +125,9 @@ class TestValidateTableCount:
     def test_validate_table_count_fail(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="10\n", stderr="")
-            ok, count = validate_table_count("staging", min_threshold=50)
+            ok, count = validate_table_count(
+                "staging", min_threshold=50, connection_url=_TEST_URL
+            )
 
         assert ok is False
         assert count == 10

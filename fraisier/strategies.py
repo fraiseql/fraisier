@@ -308,12 +308,18 @@ class RebuildStrategy(Strategy):
         db_owner = parsed.username
 
         # Admin URL for privileged operations (DROP/CREATE DATABASE).
-        # Priority: explicit admin_url > derived from database_url > sudo.
+        # Priority: explicit admin_url > derived from database_url.
         from fraisier.dbops._url import replace_db_name
 
         admin_url: str | None = self._admin_url
-        if not admin_url and database_url:
+        if not admin_url:
             admin_url = replace_db_name(env.database_url, "postgres")
+        if not admin_url:  # pragma: no cover - defensive
+            msg = (
+                "RebuildStrategy requires admin_url (or a database_url from "
+                "which one can be derived)"
+            )
+            raise ValueError(msg)
 
         # Build SQL split into superuser and app phases.
         # project_dir must be the app root so SchemaBuilder can find
@@ -347,12 +353,11 @@ class RebuildStrategy(Strategy):
             # Phase 1: Apply superuser SQL (roles, extensions) via admin_url.
             # Compute the admin connection URL targeting the app database.
             # Superuser SQL must land in the app db, not postgres.
-            admin_app_conn = replace_db_name(admin_url, db_name) if admin_url else None
+            admin_app_conn = replace_db_name(admin_url, db_name)
 
             # Phase 1: Apply superuser pre-schema SQL (roles, extensions).
             if split.superuser_pre_files > 0:
-                su_conn = admin_app_conn or env.database_url
-                self._apply_sql(su_conn, superuser_pre_path)
+                self._apply_sql(admin_app_conn, superuser_pre_path)
 
             # Phase 2: Apply app SQL (schemas, tables, views, data).
             self._apply_sql(env.database_url, app_path)
@@ -360,8 +365,7 @@ class RebuildStrategy(Strategy):
             # Phase 3: Apply superuser post-schema SQL (grants on tables,
             # role settings) — requires tables to exist, hence after app.
             if split.superuser_post_files > 0:
-                su_post_conn = admin_app_conn or env.database_url
-                self._apply_sql(su_post_conn, Path(split.superuser_post_path))
+                self._apply_sql(admin_app_conn, Path(split.superuser_post_path))
         finally:
             import shutil
 
@@ -419,7 +423,7 @@ class RestoreMigrateStrategy(Strategy):
     Rollback: template-based (instant) or migrate_down.
     """
 
-    def __init__(self, config: RestoreConfig, *, admin_url: str | None = None) -> None:
+    def __init__(self, config: RestoreConfig, *, admin_url: str) -> None:
         from fraisier.dbops._validation import validate_pg_identifier
 
         validate_pg_identifier(config.db_name, "database name")
@@ -491,6 +495,7 @@ class RestoreMigrateStrategy(Strategy):
             backup_path=str(backup_file),
             db_name=cfg.db_name,
             db_owner=cfg.target_owner,
+            connection_url=self._admin_url,
         )
         if not restore_result.success:
             raise DatabaseError(
@@ -525,7 +530,11 @@ class RestoreMigrateStrategy(Strategy):
 
         # Step 9: Validate table count
         if cfg.min_tables > 0:
-            ok, count = validate_table_count(cfg.db_name, min_threshold=cfg.min_tables)
+            ok, count = validate_table_count(
+                cfg.db_name,
+                min_threshold=cfg.min_tables,
+                connection_url=self._admin_url,
+            )
             if not ok:
                 raise DatabaseError(
                     f"Table count validation failed: {count} < {cfg.min_tables}",
@@ -573,7 +582,11 @@ class RestoreMigrateStrategy(Strategy):
                     )
                 return StrategyResult(success=True)
 
-            tmpl_result = reset_from_template(self._config.db_name, prefix=prefix)
+            tmpl_result = reset_from_template(
+                self._config.db_name,
+                prefix=prefix,
+                connection_url=self._admin_url,
+            )
             if not tmpl_result.success:  # pragma: no cover
                 return StrategyResult(
                     success=False,
@@ -619,6 +632,9 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         db_name = kwargs.get("db_name", "")
         if not db_name:
             raise ValueError("restore_migrate strategy requires db_name")
+        admin_url = kwargs.get("admin_url")
+        if not admin_url:
+            raise ValueError("restore_migrate strategy requires admin_url")
         backup_path = Path(kwargs["backup_path"]) if kwargs.get("backup_path") else None
         config = RestoreConfig(
             db_name=db_name,
@@ -631,7 +647,6 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             min_tables=int(restore_cfg.get("min_tables", 0)),
             backup_path=backup_path,
         )
-        admin_url = kwargs.get("admin_url")
         return RestoreMigrateStrategy(config, admin_url=admin_url)
     valid = "migrate, rebuild, restore_migrate"
     raise ValueError(f"Unknown strategy '{name}'. Valid: {valid}")

@@ -25,8 +25,8 @@ def restore_backup(
     *,
     backup_path: str,
     db_name: str,
+    connection_url: str,
     db_owner: str | None = None,
-    sudo_user: str = "postgres",
 ) -> RestoreResult:
     """Restore a pg_dump backup into *db_name*.
 
@@ -40,7 +40,7 @@ def restore_backup(
     # Run pg_restore
     code, _, stderr = _pg_cmd(
         ["pg_restore", "-d", db_name, "--no-owner", "--no-acl", backup_path],
-        sudo_user=sudo_user,
+        connection_url=connection_url,
     )
     if code != 0:
         return RestoreResult(success=False, error=stderr.strip())
@@ -57,7 +57,7 @@ def restore_backup(
                 "-c",
                 'REASSIGN OWNED BY CURRENT_USER TO :"owner"',
             ],
-            sudo_user=sudo_user,
+            connection_url=connection_url,
         )
         if rc != 0:
             return RestoreResult(
@@ -71,8 +71,8 @@ def restore_backup(
 def validate_table_count(
     db_name: str,
     *,
+    connection_url: str,
     min_threshold: int = 50,
-    sudo_user: str = "postgres",
 ) -> tuple[bool, int]:
     """Check that *db_name* has at least *min_threshold* tables.
 
@@ -81,7 +81,7 @@ def validate_table_count(
     sql = "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
     code, stdout, _ = _pg_cmd(
         ["psql", "-d", db_name, "-t", "-A", "-c", sql],
-        sudo_user=sudo_user,
+        connection_url=connection_url,
     )
     if code != 0:
         return False, 0

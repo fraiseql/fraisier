@@ -32,8 +32,7 @@ def create_template(
     db_name: str,
     *,
     prefix: str = "template_",
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> TemplateResult:
     """Create a template database from *db_name*.
 
@@ -43,19 +42,16 @@ def create_template(
     template_name = f"{prefix}{db_name}"
 
     # Drop existing template (ignore errors — may not exist)
-    terminate_backends(
-        template_name, sudo_user=sudo_user, connection_url=connection_url
-    )
-    drop_db(template_name, sudo_user=sudo_user, connection_url=connection_url)
+    terminate_backends(template_name, connection_url=connection_url)
+    drop_db(template_name, connection_url=connection_url)
 
     # Disconnect from source before templating
-    terminate_backends(db_name, sudo_user=sudo_user, connection_url=connection_url)
+    terminate_backends(db_name, connection_url=connection_url)
 
     # Create new template
     code, _, stderr = create_db(
         template_name,
         template=db_name,
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:
@@ -72,8 +68,7 @@ def reset_from_template(
     db_name: str,
     *,
     prefix: str = "template_",
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> TemplateResult:
     """Reset *db_name* by dropping and recreating from its template."""
     template_name = f"{prefix}{db_name}"
@@ -82,7 +77,6 @@ def reset_from_template(
     code, _, stderr = drop_db(
         db_name,
         force_disconnect=True,
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:
@@ -93,15 +87,12 @@ def reset_from_template(
         )
 
     # Disconnect from template before using it
-    terminate_backends(
-        template_name, sudo_user=sudo_user, connection_url=connection_url
-    )
+    terminate_backends(template_name, connection_url=connection_url)
 
     # Recreate from template
     code, _, stderr = create_db(
         db_name,
         template=template_name,
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:
@@ -119,8 +110,7 @@ def cleanup_templates(
     *,
     prefix: str = "template_",
     max_templates: int = 3,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> int:
     """Remove old template databases, keeping at most *max_templates*.
 
@@ -146,7 +136,6 @@ def cleanup_templates(
             "WHERE datname LIKE :'pattern' "
             "ORDER BY oid DESC",
         ],
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:
@@ -155,7 +144,7 @@ def cleanup_templates(
     templates = [line.strip() for line in stdout.strip().splitlines() if line.strip()]
     to_drop = templates[max_templates:]
     for tmpl in to_drop:
-        terminate_backends(tmpl, sudo_user=sudo_user, connection_url=connection_url)
-        drop_db(tmpl, sudo_user=sudo_user, connection_url=connection_url)
+        terminate_backends(tmpl, connection_url=connection_url)
+        drop_db(tmpl, connection_url=connection_url)
 
     return len(to_drop)

@@ -73,8 +73,15 @@ def db_reset(
     db_cfg = env_config.get("database", {})
     db_name = db_cfg.get("name", fraise)
     prefix = db_cfg.get("template_prefix", "template_")
+    admin_url = db_cfg.get("admin_url")
+    if not admin_url:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' env '{env}' has no admin_url; "
+            "set database.admin_url in fraise/env/*.yaml"
+        )
+        raise SystemExit(1)
 
-    result = reset_from_template(db_name, prefix=prefix)
+    result = reset_from_template(db_name, prefix=prefix, connection_url=admin_url)
 
     if result.success:
         console.print(f"[green]Reset '{db_name}' from {result.template_name}[/green]")
@@ -263,6 +270,12 @@ def db_restore(
     )
     systemd_service = env_config.get("systemd_service")
     admin_url = db_cfg.get("admin_url")
+    if not admin_url:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' env '{environment}' has no "
+            "admin_url; set database.admin_url in fraise/env/*.yaml"
+        )
+        raise SystemExit(1)
 
     # --- dry-run: resolve backup and print plan, then exit ---
     if dry_run:

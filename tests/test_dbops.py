@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
+_TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
+
 
 class TestCreateTemplate:
     """Test template creation from an existing database."""
@@ -14,7 +16,9 @@ class TestCreateTemplate:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            result = create_template("mydb", prefix="template_")
+            result = create_template(
+                "mydb", prefix="template_", connection_url=_TEST_URL
+            )
 
         assert result.success is True
         assert result.template_name == "template_mydb"
@@ -24,7 +28,7 @@ class TestCreateTemplate:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            create_template("mydb", prefix="template_")
+            create_template("mydb", prefix="template_", connection_url=_TEST_URL)
 
         # Should call: terminate backends, dropdb template, terminate backends,
         # createdb with -T
@@ -44,7 +48,9 @@ class TestCreateTemplate:
                 return MagicMock(returncode=0, stdout="", stderr="")
 
             mock_run.side_effect = side_effect
-            result = create_template("mydb", prefix="template_")
+            result = create_template(
+                "mydb", prefix="template_", connection_url=_TEST_URL
+            )
 
         assert result.success is False
         assert "no space" in result.error
@@ -58,7 +64,9 @@ class TestResetFromTemplate:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            result = reset_from_template("mydb", prefix="template_")
+            result = reset_from_template(
+                "mydb", prefix="template_", connection_url=_TEST_URL
+            )
 
         assert result.success is True
         calls = mock_run.call_args_list
@@ -71,7 +79,7 @@ class TestResetFromTemplate:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            reset_from_template("mydb", prefix="template_")
+            reset_from_template("mydb", prefix="template_", connection_url=_TEST_URL)
 
         calls = mock_run.call_args_list
         cmds = [" ".join(c[0][0]) for c in calls]
@@ -89,7 +97,9 @@ class TestResetFromTemplate:
             mock_run.return_value = MagicMock(
                 returncode=1, stdout="", stderr="template does not exist"
             )
-            result = reset_from_template("mydb", prefix="template_")
+            result = reset_from_template(
+                "mydb", prefix="template_", connection_url=_TEST_URL
+            )
 
         assert result.success is False
 
@@ -745,6 +755,7 @@ class TestStagingRestore:
                 backup_path="/backup/prod/latest.dump",
                 db_name="staging_db",
                 db_owner="appuser",
+                connection_url=_TEST_URL,
             )
 
         assert result.success is True
@@ -761,6 +772,7 @@ class TestStagingRestore:
                 backup_path="/backup/prod/latest.dump",
                 db_name="staging_db",
                 db_owner="appuser",
+                connection_url=_TEST_URL,
             )
 
         calls = mock_run.call_args_list
@@ -777,6 +789,7 @@ class TestStagingRestore:
             result = restore_backup(
                 backup_path="/nonexistent.dump",
                 db_name="staging_db",
+                connection_url=_TEST_URL,
             )
 
         assert result.success is False
@@ -791,7 +804,9 @@ class TestValidateTableCount:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="75\n", stderr="")
-            ok, count = validate_table_count("staging_db", min_threshold=50)
+            ok, count = validate_table_count(
+                "staging_db", min_threshold=50, connection_url=_TEST_URL
+            )
 
         assert ok is True
         assert count == 75
@@ -801,7 +816,9 @@ class TestValidateTableCount:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="10\n", stderr="")
-            ok, count = validate_table_count("staging_db", min_threshold=50)
+            ok, count = validate_table_count(
+                "staging_db", min_threshold=50, connection_url=_TEST_URL
+            )
 
         assert ok is False
         assert count == 10
@@ -811,7 +828,9 @@ class TestValidateTableCount:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
-            ok, count = validate_table_count("staging_db", min_threshold=50)
+            ok, count = validate_table_count(
+                "staging_db", min_threshold=50, connection_url=_TEST_URL
+            )
 
         assert ok is False
         assert count == 0
@@ -912,6 +931,7 @@ fraises:
         database:
           name: my_project_management
           strategy: rebuild
+          admin_url: postgresql://postgres@localhost:5432/postgres
           confiture_config: confiture.yaml
           template_prefix: template_
       production:
