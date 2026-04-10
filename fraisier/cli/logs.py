@@ -48,12 +48,14 @@ def _build_ssh_cmd(ssh_config: dict) -> list[str]:
     """Build the SSH command prefix from a fraise ssh: config block.
 
     Args:
-        ssh_config: Dict with host, user, port, key_path, strict_host_key.
+        ssh_config: Dict with host, user, port, key_path, strict_host_key,
+            connect_timeout.
 
     Returns:
         List starting with "ssh" and ending with "user@host".
     """
     host_key_policy = "accept-new" if ssh_config.get("strict_host_key", True) else "no"
+    connect_timeout = ssh_config.get("connect_timeout", 30)
     cmd = [
         "ssh",
         "-n",  # do not read from stdin — prevents SSH stdin channel setup which causes
@@ -62,6 +64,9 @@ def _build_ssh_cmd(ssh_config: dict) -> list[str]:
         f"StrictHostKeyChecking={host_key_policy}",
         "-o",
         "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={connect_timeout}",  # prevents multi-minute hang when IPv6
+        #        is tried first but not reachable — SSH falls back to IPv4 after timeout
         "-p",
         str(ssh_config.get("port", 22)),
     ]
