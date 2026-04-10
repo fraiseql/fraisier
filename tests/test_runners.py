@@ -163,6 +163,49 @@ class TestSSHRunner:
         idx = prefix.index("-p")
         assert prefix[idx + 1] == "2222"
 
+    # --- exact-shape characterization tests ---
+    #
+    # These lock in the full _build_ssh_prefix output as-emitted today. They
+    # document what SSHRunner currently does — including the defensive flags
+    # it is *missing* relative to fraisier/cli/logs.py (no -n, no
+    # ConnectTimeout, no AddressFamily). See
+    # .phases/2026-04-10-ssh-io-contract/latent-bugs.md for the gap analysis.
+    # Any intentional change must update these tests explicitly.
+
+    def test_exact_shape_minimal_config(self):
+        runner = SSHRunner(host="example.com")
+        assert runner._build_ssh_prefix() == [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "BatchMode=yes",
+            "-p",
+            "22",
+            "root@example.com",
+        ]
+
+    def test_exact_shape_full_config(self):
+        runner = SSHRunner(
+            host="prod.example.com",
+            user="deploy",
+            port=2222,
+            key_path="/home/deploy/.ssh/id_ed25519",
+            strict_host_key=False,
+        )
+        assert runner._build_ssh_prefix() == [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "BatchMode=yes",
+            "-i",
+            "/home/deploy/.ssh/id_ed25519",
+            "-p",
+            "2222",
+            "deploy@prod.example.com",
+        ]
+
     def test_ssh_options_shared_with_scp(self):
         runner = SSHRunner(host="h", user="u", key_path="/id_ed25519")
         opts = runner._build_ssh_options()
