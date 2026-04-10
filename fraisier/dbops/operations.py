@@ -1,14 +1,12 @@
 """Low-level PostgreSQL helpers.
 
-All functions shell out via subprocess to psql/createdb/dropdb as the
-postgres system user (sudo -u postgres).  This matches the production
-deployment model where fraisier runs as a deploy user with sudo rights
-to the postgres account.
+Every function shells out to psql/createdb/dropdb using a caller-supplied
+``connection_url``.  Host, port, user and password are extracted from the
+URL; no sudo wrapper and no peer-auth fallback.
 
-When *connection_url* is provided, the sudo wrapper is bypassed and
-connection parameters (host, port, user, password) are extracted from
-the URL.  This is used by integration tests that run against a
-containerised PostgreSQL instance.
+The requirement that strategies provide an ``admin_url`` (and therefore a
+``connection_url`` at this layer) is enforced at config-load time by
+``fraisier.validation``.
 """
 
 import os
@@ -41,29 +39,18 @@ def _parse_connection_flags(connection_url: str) -> tuple[list[str], dict[str, s
 def _pg_cmd(
     cmd: list[str],
     *,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> tuple[int, str, str]:
-    """Run a PostgreSQL CLI command as *sudo_user*.
+    """Run a PostgreSQL CLI command against *connection_url*.
 
-    When *connection_url* is set, bypass sudo and use the URL's
-    host/port/user/password instead.
+    Host, port, user and password are taken from the URL and injected
+    into the command (``-h -p -U``) and environment (``PGPASSWORD``).
 
     Returns (exit_code, stdout, stderr).
     """
-    run_env = None
-    if connection_url:
-        conn_flags, extra_env = _parse_connection_flags(connection_url)
-        # Insert connection flags right after the binary name.
-        full_cmd = [cmd[0], *conn_flags, *cmd[1:]]
-        if extra_env:
-            run_env = {**os.environ, **extra_env}
-    else:
-        wrapper = os.environ.get("FRAISIER_PG_WRAPPER")
-        if wrapper:
-            full_cmd = ["sudo", "-u", sudo_user, wrapper, *cmd]
-        else:
-            full_cmd = ["sudo", "-u", sudo_user, *cmd]
+    conn_flags, extra_env = _parse_connection_flags(connection_url)
+    full_cmd = [cmd[0], *conn_flags, *cmd[1:]]
+    run_env = {**os.environ, **extra_env} if extra_env else None
 
     result = subprocess.run(
         full_cmd,
@@ -79,34 +66,31 @@ def run_psql(
     sql_or_file: str,
     *,
     db_name: str,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> tuple[int, str, str]:
     """Execute a psql command against *db_name*.
 
     *sql_or_file* is passed via ``-c`` (inline SQL).
     """
     cmd = ["psql", "-d", db_name, "-c", sql_or_file]
-    return _pg_cmd(cmd, sudo_user=sudo_user, connection_url=connection_url)
+    return _pg_cmd(cmd, connection_url=connection_url)
 
 
 def run_sql(
     sql: str,
     *,
     db_name: str,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> tuple[int, str, str]:
     """Execute inline SQL with tuples-only output (``-t -A``)."""
     cmd = ["psql", "-d", db_name, "-t", "-A", "-c", sql]
-    return _pg_cmd(cmd, sudo_user=sudo_user, connection_url=connection_url)
+    return _pg_cmd(cmd, connection_url=connection_url)
 
 
 def check_db_exists(
     db_name: str,
     *,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> bool:
     """Return True if the database *db_name* exists."""
     validate_pg_identifier(db_name, "database name")
@@ -120,7 +104,6 @@ def check_db_exists(
             "-c",
             f"SELECT count(*) FROM pg_database WHERE datname='{db_name}'",
         ],
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
     if code != 0:
@@ -131,8 +114,7 @@ def check_db_exists(
 def terminate_backends(
     db_name: str,
     *,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> tuple[int, str, str]:
     """Terminate all connections to *db_name*."""
     validate_pg_identifier(db_name, "database name")
@@ -146,7 +128,6 @@ def terminate_backends(
             "FROM pg_stat_activity "
             f"WHERE datname='{db_name}' AND pid <> pg_backend_pid()",
         ],
-        sudo_user=sudo_user,
         connection_url=connection_url,
     )
 
@@ -155,8 +136,7 @@ def drop_db(
     db_name: str,
     *,
     force_disconnect: bool = False,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> tuple[int, str, str]:
     """Drop database *db_name*.
 
@@ -164,10 +144,8 @@ def drop_db(
     """
     validate_pg_identifier(db_name, "database name")
     if force_disconnect:
-        terminate_backends(db_name, sudo_user=sudo_user, connection_url=connection_url)
-    return _pg_cmd(
-        ["dropdb", db_name], sudo_user=sudo_user, connection_url=connection_url
-    )
+        terminate_backends(db_name, connection_url=connection_url)
+    return _pg_cmd(["dropdb", db_name], connection_url=connection_url)
 
 
 def create_db(
@@ -175,8 +153,7 @@ def create_db(
     *,
     template: str | None = None,
     owner: str | None = None,
-    sudo_user: str = "postgres",
-    connection_url: str | None = None,
+    connection_url: str,
 ) -> tuple[int, str, str]:
     """Create database *db_name*, optionally from *template*."""
     validate_pg_identifier(db_name, "database name")
@@ -190,4 +167,4 @@ def create_db(
     if owner:
         cmd.extend(["-O", owner])
     cmd.append(db_name)
-    return _pg_cmd(cmd, sudo_user=sudo_user, connection_url=connection_url)
+    return _pg_cmd(cmd, connection_url=connection_url)
