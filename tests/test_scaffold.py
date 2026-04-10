@@ -4191,7 +4191,7 @@ fraises:
 
 
 class TestServerScopedCollectors:
-    """Collectors (pg_allowed_databases, allowed_services) are filtered by server."""
+    """Collectors (allowed_services) are filtered by server."""
 
     _YAML = """\
 name: myproj

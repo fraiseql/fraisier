@@ -21,7 +21,6 @@ from fraisier.config import (
     ServiceConfig,
     ValidationError,
 )
-from fraisier.dbops._strategies import ADMIN_STRATEGIES
 from fraisier.manifest import build_manifest
 from fraisier.naming import app_service_name, deploy_socket_name
 
@@ -166,33 +165,6 @@ def _collect_install_helper_sockets(
                 }
             )
     return result
-
-
-def _collect_pg_allowed_databases(fraises_list: list[dict[str, Any]]) -> list[str]:
-    """Collect database names that need admin access (rebuild/restore_migrate).
-
-    Returns the allowlist including template-prefixed variants.
-    """
-    allowed: dict[str, None] = {}
-    for fraise in fraises_list:
-        for env_config in fraise.get("environments", {}).values():
-            db = env_config.get("database") or {}
-            if not isinstance(db, dict):
-                continue
-            strategy = db.get("strategy", "")
-            if strategy not in ADMIN_STRATEGIES:
-                continue
-            db_name = db.get("name", "")
-            if not db_name:
-                continue
-            allowed[db_name] = None
-            # Default template name
-            allowed[f"template_{db_name}"] = None
-            # Custom template name from restore config
-            restore = db.get("restore") or {}
-            if isinstance(restore, dict) and restore.get("template_name"):
-                allowed[restore["template_name"]] = None
-    return list(allowed)
 
 
 def _resolve_service_base(
@@ -405,7 +377,6 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "fraise_names": config.list_fraises(),
         "project_name": project_name,
         "multi_fraise": len(config.list_fraises()) > 1,
-        "pg_allowed_databases": _collect_pg_allowed_databases(local_fraises),
         "has_database": _any_fraise_has_database(local_fraises),
         "allowed_services": _collect_allowed_services(project_name, local_fraises),
         "deploy_users": _collect_deploy_users(config, fraises_list),
