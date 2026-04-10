@@ -592,7 +592,7 @@ fraisier scaffold --server prod.myserver.com
 
 ### fraisier scaffold-install
 
-Install generated scaffold files to system locations (sudoers, systemd units, nginx configs, wrapper scripts, system dependencies).
+Install generated scaffold files to system locations (sudoers, systemd units, nginx configs, the systemctl wrapper script, system dependencies).
 
 Must run `fraisier scaffold` first to generate the files. Requires sudo access or root privileges.
 
@@ -655,8 +655,8 @@ systemctl status <service-name>
 ### fraisier validate-deployment
 
 Run a comprehensive readiness check for a specific fraise/environment before deploying.
-Checks config validity, bare repo reachability, required env vars, wrapper scripts, systemd
-service registration, and database credentials.
+Checks config validity, bare repo reachability, required env vars, the systemctl wrapper
+script, systemd service registration, and database credentials.
 
 ```bash
 fraisier validate-deployment FRAISE ENVIRONMENT [--json]
@@ -1032,8 +1032,8 @@ fraisier test-database my_api production
 
 ### fraisier test-wrapper
 
-Verify that a wrapper script is present, executable, and that the sudoers rule allows the
-deploy user to invoke it.
+Verify that the systemctl wrapper script is present, executable, and that the sudoers rule
+allows the deploy user to invoke it.
 
 ```bash
 fraisier test-wrapper FRAISE ENVIRONMENT WRAPPER_TYPE COMMAND [ARGS...]
@@ -1043,17 +1043,14 @@ fraisier test-wrapper FRAISE ENVIRONMENT WRAPPER_TYPE COMMAND [ARGS...]
 
 - `FRAISE` (required) -- Name of the fraise.
 - `ENVIRONMENT` (required) -- Target environment.
-- `WRAPPER_TYPE` (required) -- `systemctl` or `pg`.
-- `COMMAND` (required) -- Command to test (e.g. `restart`, `psql`).
+- `WRAPPER_TYPE` (required) -- `systemctl` (the only supported type).
+- `COMMAND` (required) -- Command to test (e.g. `restart`).
 
 **Examples:**
 
 ```bash
 # Test that the deploy user can restart the service via wrapper
 fraisier test-wrapper my_api production systemctl restart
-
-# Test that the pg wrapper can connect to the database
-fraisier test-wrapper my_api production pg psql
 ```
 
 ---

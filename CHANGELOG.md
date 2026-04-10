@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-04-11
+
+### Changed — Breaking
+
+- **Privilege model collapsed to `admin_url` only.** Strategies that perform privileged database operations (`rebuild`, `restore_migrate`) now require a superuser connection string in `database.admin_url`. Fraisier no longer falls back to `sudo -u postgres`, generates a `pg-wrapper.sh` script, emits a `(postgres) NOPASSWD:` sudoers rule, or injects `FRAISIER_PG_WRAPPER` into the generated systemd units. The runtime probes that previously tried to detect a broken sudo+`NoNewPrivileges=true` combination are gone — there is no sudo path left to probe. `validate-deployment` / `validate-remote` check only the systemctl wrapper. `fraisier test-wrapper` only accepts `systemctl` as its wrapper type.
+
+  **Migration.** Set `database.admin_url` on every environment using `rebuild` or `restore_migrate`. The recommended form is peer-auth over the Unix socket:
+
+  ```yaml
+  database:
+    strategy: rebuild
+    admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+  ```
+
+  Or via environment variable:
+
+  ```yaml
+  database:
+    strategy: rebuild
+    admin_url: "${PG_ADMIN_URL}"
+  ```
+
+  After upgrading, re-run `fraisier scaffold` and `fraisier scaffold-install` to install the smaller sudoers fragment and stripped-down service units. Any existing `/usr/local/libexec/fraisier/pgadmin-{project}` wrapper and its sudoers rule can be removed manually — nothing reads them anymore.
+
+---
+
 ## [0.7.12] - 2026-04-10
 
 ### Fixed

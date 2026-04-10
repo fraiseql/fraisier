@@ -192,7 +192,7 @@ This automatically:
 - Generates and installs systemd service files
 - Configures nginx (if multi-fraise setup)
 - Installs sudoers rules with minimal required permissions
-- Installs wrapper scripts for systemctl and PostgreSQL
+- Installs the systemctl wrapper script
 - Validates all configurations before installing
 - Installs system dependencies (uv, git, postgresql-client, nginx, certbot)
 

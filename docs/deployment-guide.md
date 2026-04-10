@@ -374,7 +374,7 @@ Fraisier separates deployment and application concerns into two system users:
 
 | User | Purpose | Has access to |
 |---|---|---|
-| `deploy_user` (e.g. `fraisier`) | Runs fraisier, the webhook, git operations | `app_path` (write), systemctl wrapper, pg wrapper |
+| `deploy_user` (e.g. `fraisier`) | Runs fraisier, the webhook, git operations | `app_path` (write), systemctl wrapper |
 | `service.user` / `install.user` (e.g. `myapp`) | Runs the application process and install command | `app_path` (read/exec), database |
 
 The deploy user never runs the application. The application user never touches deployment
@@ -385,34 +385,42 @@ When `install.user` differs from `deploy_user`, fraisier runs `chown -R <install
 `.venv` directory (gitignored, so not recreated by checkout) was previously owned by the deploy
 user.
 
-### Wrapper scripts
+### Service restart wrapper
 
-Fraisier generates two restricted wrapper scripts and installs them via sudoers:
+Fraisier generates one restricted wrapper script and installs it via sudoers:
 
 **`systemctl-wrapper.sh`** — `deploy_user` can only restart the specific services listed in
 `fraises.yaml`. It cannot stop, start, or touch any other service.
 
-**`pg-wrapper.sh`** — `deploy_user` can only run `psql`/`pg_dump` against the specific
-database names in `fraises.yaml`. Required for `rebuild` and `restore_migrate` strategies.
-
-These wrappers are referenced via environment variables:
+It is referenced via an environment variable:
 
 ```bash
 FRAISIER_SYSTEMCTL_WRAPPER=/path/to/systemctl-wrapper.sh
-FRAISIER_PG_WRAPPER=/path/to/pg-wrapper.sh
 ```
 
-Check that wrapper scripts are in place before deploying:
+### PostgreSQL admin operations
+
+Strategies that perform privileged DB operations (`rebuild`, `restore_migrate`) require a
+superuser `admin_url` in the environment's `database.admin_url` field. No sudo or wrapper
+script is involved — `dbops` connects directly via libpq.
+
+The recommended form is peer-auth over the Unix socket:
+
+```yaml
+database:
+  admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+```
+
+Check that the systemctl wrapper is in place before deploying:
 
 ```bash
 fraisier validate-deployment my_api production
 ```
 
-Or test them individually:
+Or test it directly:
 
 ```bash
 fraisier test-wrapper my_api production systemctl restart
-fraisier test-wrapper my_api production pg psql
 ```
 
 ### Webhook security
@@ -591,11 +599,10 @@ fraisier test-database my_api production
 Opens a connection using `database_url` and verifies the database is reachable and the
 schema is in the expected state.
 
-### Test wrapper scripts
+### Test the systemctl wrapper
 
 ```bash
 fraisier test-wrapper my_api production systemctl restart
-fraisier test-wrapper my_api production pg psql
 ```
 
 Verifies that the wrapper script is in place, executable, and that the sudo rule allows
