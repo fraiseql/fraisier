@@ -21,7 +21,13 @@ from unittest.mock import patch
 
 import pytest
 
-from fraisier.ssh import SshTarget, data_pipe, long_stream, short_cmd
+from fraisier.ssh import (
+    SshTarget,
+    cmd_with_input,
+    data_pipe,
+    long_stream,
+    short_cmd,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -426,6 +432,76 @@ class TestDataPipe:
         assert result.returncode == 0
         assert (dest / "hello.txt").read_text() == "hi\n"
         assert (dest / "sub" / "nested.txt").read_text() == "nested\n"
+
+
+# ---------------------------------------------------------------------------
+# cmd_with_input — short_cmd shape with caller-supplied stdin payload
+# ---------------------------------------------------------------------------
+
+
+class TestCmdWithInput:
+    """``cmd_with_input`` is the small fourth pattern: same defensive flag
+    set as ``short_cmd`` (BatchMode, ConnectTimeout, etc.) but the caller
+    feeds a small text payload on stdin via ``subprocess.run(input=...)``.
+    The motivating use case is ``sudo -S`` — SSHRunner needs to pipe a
+    sudo password to the remote sudo while still capturing stdout/stderr
+    as text.
+
+    Crucially, this pattern MUST omit ``-n``: ``-n`` would close ssh's
+    own stdin and the remote ``sudo -S`` would never see the password.
+    """
+
+    _target = SshTarget.from_config({"host": "h", "user": "u"})
+
+    def test_argv_omits_dash_n_but_keeps_full_defensive_set(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            cmd_with_input(self._target, ["sudo", "-S", "true"], input="pw\n")
+        argv = mock_run.call_args.args[0]
+        assert argv[0] == "ssh"
+        assert "-n" not in argv
+        assert ("-o", "BatchMode=yes") in _pairs(argv)
+        assert ("-o", "ConnectTimeout=30") in _pairs(argv)
+        assert ("-o", "StrictHostKeyChecking=accept-new") in _pairs(argv)
+
+    def test_input_is_passed_through_in_text_mode(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="active\n", stderr=""
+            )
+            result = cmd_with_input(
+                self._target, ["sudo", "-S", "systemctl", "is-active", "x"],
+                input="secret\n",
+            )
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["input"] == "secret\n"
+        assert kwargs["text"] is True
+        assert kwargs["capture_output"] is True
+        # input= and stdin= are mutually exclusive in subprocess.run.
+        assert "stdin" not in kwargs or kwargs["stdin"] is None
+        assert result.stdout == "active\n"
+
+    def test_remote_argv_is_shell_joined(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            cmd_with_input(self._target, ["echo", "a b"], input="x")
+        assert mock_run.call_args.args[0][-1] == "echo 'a b'"
+
+    def test_check_and_timeout_forwarded(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            cmd_with_input(
+                self._target, ["true"], input="x", timeout=12, check=False,
+            )
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["timeout"] == 12
+        assert kwargs["check"] is False
 
 
 # ---------------------------------------------------------------------------

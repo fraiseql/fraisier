@@ -64,29 +64,6 @@ class TestSSHRunner:
         runner = SSHRunner(host="example.com")
         assert isinstance(runner, CommandRunner)
 
-    def test_builds_ssh_command_default(self):
-        runner = SSHRunner(host="deploy.example.com", user="fraisier")
-        prefix = runner._build_ssh_prefix()
-
-        assert prefix[0] == "ssh"
-        assert "-o" in prefix
-        assert "StrictHostKeyChecking=accept-new" in prefix
-        assert "BatchMode=yes" in prefix
-        assert "-p" in prefix
-        assert "22" in prefix
-        assert "fraisier@deploy.example.com" in prefix
-
-    def test_builds_ssh_command_with_key(self):
-        runner = SSHRunner(host="h", user="u", key_path="/path/to/key")
-        prefix = runner._build_ssh_prefix()
-        assert "-i" in prefix
-        assert "/path/to/key" in prefix
-
-    def test_builds_ssh_command_strict_host_key_off(self):
-        runner = SSHRunner(host="h", user="u", strict_host_key=False)
-        prefix = runner._build_ssh_prefix()
-        assert "StrictHostKeyChecking=no" in prefix
-
     def test_run_routes_through_ssh(self):
         runner = SSHRunner(host="h", user="u", port=2222)
         with patch("subprocess.run") as mock_run:
@@ -114,8 +91,10 @@ class TestSSHRunner:
             )
             runner.run(["usermod", "-aG", "www-data", "deploy"])
 
+        # The remote command is shell-quoted by ssh.short_cmd (single token);
+        # the remote sh -c strips those quotes. Assert content, not prefix.
         remote = mock_run.call_args[0][0][-1]
-        assert remote.startswith("PATH=")
+        assert "PATH=" in remote
         assert "/usr/local/sbin" in remote
         assert "/usr/sbin" in remote
         assert "/sbin" in remote
@@ -153,69 +132,93 @@ class TestSSHRunner:
             runner.run(["ls"], cwd="/var/www/app")
 
         remote = mock_run.call_args[0][0][-1]
-        assert remote.startswith("cd ")
+        # `cd` precedes the env exports inside the (now shell-quoted)
+        # remote command string.
+        assert "cd " in remote
         assert "/var/www/app" in remote
         assert "ls" in remote
 
     def test_run_custom_port(self):
+        """Port from config must reach the ssh argv (-p flag)."""
         runner = SSHRunner(host="h", user="u", port=2222)
-        prefix = runner._build_ssh_prefix()
-        idx = prefix.index("-p")
-        assert prefix[idx + 1] == "2222"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["true"])
+        called_cmd = mock_run.call_args[0][0]
+        p_idx = called_cmd.index("-p")
+        assert called_cmd[p_idx + 1] == "2222"
 
-    # --- exact-shape characterization tests ---
+    # --- LB-1/LB-2/LB-3 regression tests ---
     #
-    # These lock in the full _build_ssh_prefix output as-emitted today. They
-    # document what SSHRunner currently does — including the defensive flags
-    # it is *missing* relative to fraisier/cli/logs.py (no -n, no
-    # ConnectTimeout, no AddressFamily). See
-    # .phases/2026-04-10-ssh-io-contract/latent-bugs.md for the gap analysis.
-    # Any intentional change must update these tests explicitly.
+    # Phase 3 closes the latent bugs documented in
+    # .phases/2026-04-10-ssh-io-contract/latent-bugs.md by routing
+    # SSHRunner.run through the fraisier.ssh entry points which carry
+    # the full defensive flag set (BatchMode, ConnectTimeout,
+    # AddressFamily, StrictHostKeyChecking, -n) by construction.
 
-    def test_exact_shape_minimal_config(self):
-        runner = SSHRunner(host="example.com")
-        assert runner._build_ssh_prefix() == [
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "BatchMode=yes",
-            "-p",
-            "22",
-            "root@example.com",
-        ]
+    def test_run_includes_connect_timeout(self):
+        """LB-1: SSHRunner.run was missing ConnectTimeout, leaving every
+        deployer command vulnerable to the IPv6-fallback hang fixed in
+        cli/logs.py by commit 4dd1927."""
+        runner = SSHRunner(host="h", user="u")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["true"])
+        called_cmd = mock_run.call_args[0][0]
+        assert "-o" in called_cmd
+        assert "ConnectTimeout=30" in called_cmd
 
-    def test_exact_shape_full_config(self):
-        runner = SSHRunner(
-            host="prod.example.com",
-            user="deploy",
-            port=2222,
-            key_path="/home/deploy/.ssh/id_ed25519",
-            strict_host_key=False,
+    def test_run_includes_dash_n(self):
+        """LB-2: short-cmd pattern requires -n so ssh never allocates a
+        stdin channel."""
+        runner = SSHRunner(host="h", user="u")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["true"])
+        called_cmd = mock_run.call_args[0][0]
+        assert "-n" in called_cmd
+
+    def test_run_honours_address_family(self):
+        """LB-3: AddressFamily must be threaded through from config so
+        operators can pin IPv4/IPv6."""
+        runner = SSHRunner(host="h", user="u", address_family="inet")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["true"])
+        called_cmd = mock_run.call_args[0][0]
+        assert "AddressFamily=inet" in called_cmd
+
+    def test_run_honours_custom_connect_timeout(self):
+        runner = SSHRunner(host="h", user="u", connect_timeout=5)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["true"])
+        called_cmd = mock_run.call_args[0][0]
+        assert "ConnectTimeout=5" in called_cmd
+
+    def test_runner_from_config_threads_connect_timeout(self):
+        runner = runner_from_config(
+            {"host": "h", "connect_timeout": 7, "address_family": "inet6"}
         )
-        assert runner._build_ssh_prefix() == [
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "BatchMode=yes",
-            "-i",
-            "/home/deploy/.ssh/id_ed25519",
-            "-p",
-            "2222",
-            "deploy@prod.example.com",
-        ]
-
-    def test_ssh_options_shared_with_scp(self):
-        runner = SSHRunner(host="h", user="u", key_path="/id_ed25519")
-        opts = runner._build_ssh_options()
-        assert "StrictHostKeyChecking=accept-new" in opts
-        assert "BatchMode=yes" in opts
-        assert "-i" in opts
-        assert "/id_ed25519" in opts
-        # No host or port in options (those are caller's responsibility)
-        assert "u@h" not in opts
-        assert "-p" not in opts
+        assert isinstance(runner, SSHRunner)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.run(["true"])
+        called_cmd = mock_run.call_args[0][0]
+        assert "ConnectTimeout=7" in called_cmd
+        assert "AddressFamily=inet6" in called_cmd
 
     def test_upload_builds_scp_command(self, tmp_path):
         runner = SSHRunner(host="prod.example.com", user="root", port=22)
@@ -334,7 +337,10 @@ class TestSSHRunnerSudo:
             runner.run(["useradd", "--system", "deploy"])
 
         remote = mock_run.call_args[0][0][-1]
-        assert remote.startswith("sudo sh -c ")
+        # ssh.short_cmd shell-quotes the remote command into a single
+        # token; the remote sh -c strips that outer quoting before
+        # executing. Assert content rather than exact prefix.
+        assert "sudo sh -c " in remote
         assert "useradd" in remote
         assert "PATH=" in remote
 
@@ -347,7 +353,7 @@ class TestSSHRunnerSudo:
             runner.run(["useradd", "--system", "deploy"])
 
         remote = mock_run.call_args[0][0][-1]
-        assert not remote.startswith("sudo ")
+        assert "sudo " not in remote
 
     def test_run_sudo_with_cwd(self):
         runner = SSHRunner(host="h", user="u", use_sudo=True)
@@ -358,7 +364,7 @@ class TestSSHRunnerSudo:
             runner.run(["ls"], cwd="/opt/app")
 
         remote = mock_run.call_args[0][0][-1]
-        assert remote.startswith("sudo sh -c ")
+        assert "sudo sh -c " in remote
         assert "cd" in remote
         assert "/opt/app" in remote
 

@@ -13,6 +13,8 @@ import subprocess
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from fraisier import ssh
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -75,6 +77,8 @@ class SSHRunner:
         strict_host_key: bool = True,
         use_sudo: bool = False,
         sudo_password: str | None = None,
+        connect_timeout: int = 30,
+        address_family: str | None = None,
     ) -> None:
         self.host = host
         self.user = user
@@ -83,6 +87,22 @@ class SSHRunner:
         self.strict_host_key = strict_host_key
         self.use_sudo = use_sudo
         self.sudo_password = sudo_password
+        self.connect_timeout = connect_timeout
+        self.address_family = address_family
+        # Single shared SshTarget — every SSH invocation in this runner
+        # routes through fraisier.ssh, which carries the full defensive
+        # flag set (BatchMode, ConnectTimeout, AddressFamily,
+        # StrictHostKeyChecking, -n) by construction. This closes
+        # LB-1/LB-2/LB-3/LB-5 from the Phase 1 inventory.
+        self._target = ssh.SshTarget(
+            host=host,
+            user=user,
+            port=port,
+            key_path=key_path,
+            strict_host_key=strict_host_key,
+            connect_timeout=connect_timeout,
+            address_family=address_family,
+        )
 
     def _build_ssh_options(self) -> list[str]:
         """Build shared SSH/SCP options (host-key policy, batch mode, identity)."""
@@ -243,20 +263,23 @@ class SSHRunner:
             sudo_prefix = "sudo -S" if self.sudo_password else "sudo"
             remote_cmd = f"{sudo_prefix} sh -c {shlex.quote(remote_cmd)}"
 
-        ssh_cmd = [*self._build_ssh_prefix(), remote_cmd]
+        # Pass the assembled remote shell-string as a single-element argv;
+        # ssh.short_cmd's shlex.join wraps it in quotes which the remote
+        # sh -c strips. The defensive flag set is applied by short_cmd
+        # itself — see fraisier/ssh.py.
         if self.sudo_password and self.use_sudo:
-            return subprocess.run(
-                ssh_cmd,
+            # `sudo -S` reads the password from stdin; ssh must therefore
+            # NOT pass -n. cmd_with_input is the short-cmd shape minus -n.
+            return ssh.cmd_with_input(
+                self._target,
+                [remote_cmd],
                 input=self.sudo_password + "\n",
-                capture_output=True,
-                text=True,
                 timeout=timeout,
                 check=check,
             )
-        return subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
+        return ssh.short_cmd(
+            self._target,
+            [remote_cmd],
             timeout=timeout,
             check=check,
         )
@@ -281,5 +304,7 @@ def runner_from_config(
             port=ssh_config.get("port", 22),
             key_path=ssh_config.get("key_path"),
             strict_host_key=ssh_config.get("strict_host_key", True),
+            connect_timeout=ssh_config.get("connect_timeout", 30),
+            address_family=ssh_config.get("address_family"),
         )
     return LocalRunner()

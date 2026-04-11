@@ -195,6 +195,52 @@ def long_stream(
     return subprocess.Popen(ssh_argv, stdin=subprocess.DEVNULL)
 
 
+def cmd_with_input(
+    target: SshTarget,
+    remote_argv: list[str],
+    *,
+    input: str,
+    timeout: int = 60,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run a remote command and pipe a small text payload to its stdin.
+
+    Same shape as :func:`short_cmd` (text-mode capture, defensive flag
+    set, exit-code semantics) except that the parent feeds ``input`` to
+    SSH's stdin via ``subprocess.run(input=...)``. The motivating use
+    case is ``sudo -S`` — SSHRunner needs to pipe the sudo password to
+    the remote sudo while still capturing stdout/stderr as text.
+
+    ``-n`` MUST be omitted here: ``-n`` redirects ssh's own stdin from
+    /dev/null, so the password would never reach the remote process.
+    Every other defensive flag (``BatchMode``, ``ConnectTimeout``,
+    ``StrictHostKeyChecking``, ``AddressFamily``) still applies — the
+    only difference from ``short_cmd`` is the missing ``-n``.
+
+    Args:
+        target: Destination.
+        remote_argv: The remote command as an argv list. Shell-joined
+            before being passed to SSH.
+        input: Text payload written to the SSH stdin (and forwarded to
+            the remote process). Pass-through to ``subprocess.run``.
+        timeout: Wall-clock timeout in seconds.
+        check: Raise ``CalledProcessError`` on non-zero exit.
+
+    Raises:
+        subprocess.TimeoutExpired: when the command outlives ``timeout``.
+        subprocess.CalledProcessError: on non-zero exit when ``check``.
+    """
+    ssh_argv = [*target._ssh_argv(include_dash_n=False), shlex.join(remote_argv)]
+    return subprocess.run(
+        ssh_argv,
+        input=input,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=check,
+    )
+
+
 def data_pipe(
     target: SshTarget,
     remote_argv: list[str],
