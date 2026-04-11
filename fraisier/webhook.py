@@ -10,13 +10,17 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ._env import get_int_env
 from .config import get_config
+
+if TYPE_CHECKING:
+    from .config.loader import FraisierConfig
+    from .database import FraisierDB
 from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
 from .locking import deployment_lock, is_deployment_locked
@@ -174,7 +178,7 @@ async def _run_deployment(
     webhook_id: int | None,
     git_branch: str | None,
     git_commit: str | None,
-    db: Any,
+    db: "FraisierDB",
 ) -> None:
     """Run the actual deployment within a lock."""
     try:
@@ -266,7 +270,7 @@ async def _run_deployment(
         )
 
 
-def _get_lock_dir(config: Any) -> Path | None:
+def _get_lock_dir(config: "FraisierConfig") -> Path | None:
     """Extract lock directory from config."""
     try:
         return Path(config.deployment.lock_dir)
@@ -278,9 +282,10 @@ def _dispatch_deployment(
     event: WebhookEvent,
     background_tasks: BackgroundTasks,
     webhook_id: int,
-    config: Any,
+    config: "FraisierConfig",
 ) -> dict[str, Any]:
     """Find matching fraises for a push event and trigger deployments."""
+    assert event.branch is not None  # caller guards on event.branch before dispatch
     fraise_configs = config.get_fraises_for_branch(event.branch)
 
     if not fraise_configs:

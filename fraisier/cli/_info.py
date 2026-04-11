@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.table import Table
@@ -13,6 +14,10 @@ from fraisier.status import elapsed_seconds, read_status
 
 from ._helpers import _get_deployer, console
 from .main import main
+
+if TYPE_CHECKING:
+    from fraisier.config.loader import FraisierConfig
+    from fraisier.deployers.base import BaseDeployer
 
 
 @main.command()
@@ -205,7 +210,7 @@ def _compute_deployment_state(
     return "[yellow]out-of-date[/yellow]"
 
 
-def _compute_health_string(fraise_config: dict, deployer) -> str:
+def _compute_health_string(fraise_config: dict, deployer: BaseDeployer) -> str:
     """Compute health status string based on config and deployer health check."""
     health_check_cfg = fraise_config.get("health_check", {})
     has_health = health_check_cfg.get("url") is not None
@@ -218,7 +223,9 @@ def _compute_health_string(fraise_config: dict, deployer) -> str:
     return "[green]healthy ✓[/green]" if health_ok else "[red]unhealthy[/red]"
 
 
-def _show_global_status(config, server_filter: str | None = None) -> None:
+def _show_global_status(
+    config: FraisierConfig | None, server_filter: str | None = None
+) -> None:
     """Display deployment status table for all fraises/environments.
 
     When *server_filter* is set, only environments whose ``server`` field
@@ -345,7 +352,7 @@ def _show_global_status(config, server_filter: str | None = None) -> None:
     console.print(table)
 
 
-def _show_single_status(config, fraise: str, environment: str) -> None:
+def _show_single_status(config: FraisierConfig, fraise: str, environment: str) -> None:
     """Display deployment status for a single fraise/environment."""
     fraise_config = config.get_fraise_environment(fraise, environment)
 
