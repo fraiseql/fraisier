@@ -5,12 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- **Unified SSH invocation path.** `runners.py` SSH commands now include the same `ConnectTimeout` and `BatchMode` defaults as `fraisier logs`, fixing a latent hang on IPv6-only networks. All subprocess-based SSH calls now route through `fraisier.ssh`, which applies the full defensive flag set (`BatchMode=yes`, `ConnectTimeout=30`, `StrictHostKeyChecking=accept-new`, `-n` where appropriate) by construction.
-
 ## [0.8.0] - 2026-04-11
 
 ### Changed — Breaking
@@ -43,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   (Substitute `<project>` with your scaffold `project_name`.)
+
+### Fixed
+
+- **Unified SSH invocation path.** `runners.py` SSH commands now include the same `ConnectTimeout` and `BatchMode` defaults as `fraisier logs`, fixing a latent hang on IPv6-only networks. All subprocess-based SSH calls now route through `fraisier.ssh`, which applies the full defensive flag set (`BatchMode=yes`, `ConnectTimeout=30`, `StrictHostKeyChecking=accept-new`, `-n` where appropriate) by construction.
 
 ---
 
