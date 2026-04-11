@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- SQL identifier validation in `strategies._provision_roles` — role and database names are now validated against an allowlist before being interpolated into SQL.
+- Webhook replay protection via `X-GitHub-Delivery` deduplication — duplicate delivery IDs within a sliding window are rejected.
+
+### Improved
+- Replaced 10 unnamed `except Exception:` clauses with named, narrowed handlers across CLI, config, and strategies modules.
+- Health check failures now include the check name in log output for easier diagnosis.
+- Type annotations in refactored modules (`cli/`, `config/`, `strategies/`) and `webhook.py` — `Any` usage reduced from 52 to ≤20 files.
+
+### Refactored
+- `cli/main.py`, `strategies.py`, and `config/loader.py` split into focused sub-modules.
+- Timeout constants centralized in `fraisier/constants.py`.
+
+### Tests
+- Coverage extended to the CLI module; unjustified `# pragma: no cover` markers removed.
+
+### Known follow-up
+- ~100 `except Exception as e:` broad handlers across `strategies/`, `providers/`, `deployers/`, and `health_check.py` still need a focused audit. Deferred to a future remediation round.
+
 ## [0.8.0] - 2026-04-11
 
 ### Changed — Breaking
