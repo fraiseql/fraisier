@@ -48,6 +48,12 @@ class DjangoMigrateStrategy(MigrationStrategy):  # pragma: no cover
 
                 django.setup()
             except Exception as e:
+                # Bound-broad: ``django.setup()`` can raise
+                # ``ImproperlyConfigured`` (subclass of Exception) plus
+                # arbitrary errors raised inside the user's settings
+                # module. This block is the *validation* safety net —
+                # its job is to convert any setup failure into a
+                # collected error string, not to crash the validator.
                 errors.append(
                     f"Cannot setup Django with settings module "
                     f"'{self.settings_module}': {e}"
@@ -97,7 +103,14 @@ class DjangoMigrateStrategy(MigrationStrategy):  # pragma: no cover
             finally:
                 sys.stdout = old_stdout
 
-        except Exception as e:
+        except (ImportError, AttributeError, OSError) as e:
+            # Expected modes when probing migration state: Django not
+            # installed (ImportError), showmigrations API drift
+            # (AttributeError), or I/O failures spawning ``manage.py``
+            # (OSError). Anything else — Django ``CommandError``,
+            # ``ImproperlyConfigured`` from a project that skipped
+            # ``validate_setup`` — propagates so a real misuse or
+            # adapter bug isn't silently masked.
             log.warning(f"Failed to get Django migration version: {e}")
 
         return None
@@ -144,6 +157,11 @@ class DjangoMigrateStrategy(MigrationStrategy):  # pragma: no cover
                 return latest_migration
 
         except Exception as e:
+            # Outer safety net: this catches *anything* the inner loop
+            # didn't handle. The inner loop deliberately narrows to
+            # (ImportError, AttributeError, OSError) so that real bugs
+            # (e.g. a TypeError from a refactor) propagate here and
+            # surface as a warning instead of being silently skipped.
             log.warning(f"Failed to get latest Django migration: {e}")
 
         return None
@@ -258,6 +276,10 @@ class DjangoMigrateStrategy(MigrationStrategy):  # pragma: no cover
 
             return history[:limit]
 
-        except Exception as e:
+        except (ImportError, AttributeError, OSError) as e:
+            # History is derived from get_current_version /
+            # get_latest_version (which already swallow their own
+            # narrow set of errors); the residual surface here is
+            # framework imports / API drift / filesystem failures.
             log.warning(f"Failed to get Django migration history: {e}")
             return []
