@@ -6,10 +6,10 @@ with systemd service management and TCP health checks.
 
 import asyncio
 import logging
-import shlex
 import subprocess
 from typing import Any
 
+from fraisier import ssh
 from fraisier.dbops._validation import validate_service_name
 
 from .base import DeploymentProvider, HealthCheck, HealthCheckType, ProviderType
@@ -51,6 +51,8 @@ class BareMetalProvider(DeploymentProvider):
         self.key_path = self.config.get("key_path")
         self.known_hosts_path = self.config.get("known_hosts_path")
         self.strict_host_key = self.config.get("strict_host_key", True)
+        self.connect_timeout = self.config.get("connect_timeout", 30)
+        self.address_family = self.config.get("address_family")
         self.ssh_client = None
         self._connection_timeout = 10
 
@@ -60,37 +62,32 @@ class BareMetalProvider(DeploymentProvider):
         if not self.host:
             raise ValueError("Bare Metal provider requires 'host' configuration")
 
+        # Single shared SshTarget — every subprocess SSH invocation in this
+        # provider routes through fraisier.ssh, which carries the full
+        # defensive flag set (BatchMode, ConnectTimeout, AddressFamily,
+        # StrictHostKeyChecking, -n) by construction. This closes LB-4 from
+        # the Phase 1 inventory.
+        self._target = ssh.SshTarget(
+            host=self.host,
+            user=self.username,
+            port=self.port,
+            key_path=self.key_path,
+            strict_host_key=self.strict_host_key,
+            connect_timeout=self.connect_timeout,
+            address_family=self.address_family,
+        )
+
     def _get_provider_type(self) -> ProviderType:
         """Return provider type."""
         return ProviderType.BARE_METAL
 
-    def _build_ssh_command(self, command: str) -> list[str]:
-        """Build an SSH command as a list suitable for subprocess.run.
-
-        Args:
-            command: Remote command to execute
-
-        Returns:
-            List of command arguments for subprocess.run
-        """
-        host_key_policy = "accept-new" if self.strict_host_key else "no"
-        cmd = [
-            "ssh",
-            "-o",
-            f"StrictHostKeyChecking={host_key_policy}",
-            "-o",
-            "BatchMode=yes",
-            "-p",
-            str(self.port),
-        ]
-        if self.key_path:
-            cmd.extend(["-i", self.key_path])
-        cmd.append(f"{self.username}@{self.host}")
-        cmd.append(shlex.quote(command))
-        return cmd
-
     def run_command(self, command: str, timeout: int = 300) -> tuple[int, str, str]:
         """Execute a command on the remote server via subprocess SSH.
+
+        Routes through ``fraisier.ssh.short_cmd`` so the defensive flag set
+        (BatchMode, ConnectTimeout, AddressFamily, StrictHostKeyChecking,
+        ``-n``) is applied by construction — closing LB-4 from the Phase 1
+        inventory.
 
         Args:
             command: Command to execute on the remote host
@@ -102,12 +99,10 @@ class BareMetalProvider(DeploymentProvider):
         Raises:
             RuntimeError: If the command times out
         """
-        ssh_cmd = self._build_ssh_command(command)
         try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
+            result = ssh.short_cmd(
+                self._target,
+                [command],
                 timeout=timeout,
                 check=False,
             )

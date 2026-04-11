@@ -270,8 +270,14 @@ class TestServiceManagement:
             provider.start_service("myapp")
 
 
-class TestBuildSshCommand:
-    """Test SSH command construction helper."""
+class TestRunCommandDefensiveFlags:
+    """LB-4 regression: run_command() must carry the full defensive flag set.
+
+    Phase 1 inventory item LB-4 — bare_metal previously hand-built its own
+    ssh argv with only ``BatchMode`` and ``StrictHostKeyChecking``, missing
+    ``ConnectTimeout``, ``AddressFamily``, and ``-n``. After migrating onto
+    ``fraisier.ssh.short_cmd`` every flag must be present by construction.
+    """
 
     def _make_provider(self, **overrides):
         config = {
@@ -283,49 +289,56 @@ class TestBuildSshCommand:
         }
         return BareMetalProvider(config)
 
-    def test_build_ssh_command_basic(self):
-        """_build_ssh_command() returns list-form command with quoted remote cmd."""
-        import shlex
+    def _capture_ssh_argv(self, provider, command="true"):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = ""
+            provider.run_command(command)
+        return mock_run.call_args[0][0]
 
-        provider = self._make_provider(
-            host="server.example.com", username="deploy", port=22
-        )
-        cmd = provider._build_ssh_command("ls /var/app")
-
-        assert cmd[0] == "ssh"
-        assert "deploy@server.example.com" in cmd
-        assert cmd[-1] == shlex.quote("ls /var/app")
-
-    def test_build_ssh_command_quotes_command_for_remote_shell(self):
-        """_build_ssh_command() must shell-quote the command to prevent injection."""
-        import shlex
-
+    def test_run_command_includes_connect_timeout(self):
+        """LB-4/LB-1: defensive ConnectTimeout must be present."""
         provider = self._make_provider()
-        cmd = provider._build_ssh_command("systemctl restart $(evil)")
-        # The command passed to SSH must be shell-quoted
-        remote_cmd = cmd[-1]
-        assert remote_cmd == shlex.quote("systemctl restart $(evil)")
+        argv = self._capture_ssh_argv(provider)
+        assert "ConnectTimeout=30" in argv
 
-    def test_build_ssh_command_safe_commands_unquoted(self):
-        """Safe commands with no metacharacters pass through correctly."""
+    def test_run_command_includes_dash_n(self):
+        """LB-4/LB-2: -n must be set on the short-cmd pattern."""
         provider = self._make_provider()
-        cmd = provider._build_ssh_command("systemctl restart myapp.service")
-        remote_cmd = cmd[-1]
-        # Safe command — shlex.quote just returns the same string
-        assert "systemctl restart myapp.service" in remote_cmd
+        argv = self._capture_ssh_argv(provider)
+        assert "-n" in argv
 
-    def test_build_ssh_command_uses_accept_new_by_default(self):
-        """_build_ssh_command() uses accept-new host key policy."""
+    def test_run_command_includes_batch_mode(self):
+        """BatchMode=yes must remain present after migration."""
         provider = self._make_provider()
-        cmd = provider._build_ssh_command("date")
+        argv = self._capture_ssh_argv(provider)
+        assert "BatchMode=yes" in argv
 
-        assert "-o" in cmd
-        idx = cmd.index("StrictHostKeyChecking=accept-new")
-        assert cmd[idx - 1] == "-o"
+    def test_run_command_honours_address_family(self):
+        """LB-4/LB-3: AddressFamily must be threaded through when configured."""
+        provider = self._make_provider(address_family="inet")
+        argv = self._capture_ssh_argv(provider)
+        assert "AddressFamily=inet" in argv
 
-    def test_build_ssh_command_strict_host_key_off(self):
-        """strict_host_key=False falls back to StrictHostKeyChecking=no."""
+    def test_run_command_honours_custom_connect_timeout(self):
+        """connect_timeout config knob must reach the ssh argv."""
+        provider = self._make_provider(connect_timeout=10)
+        argv = self._capture_ssh_argv(provider)
+        assert "ConnectTimeout=10" in argv
+
+    def test_run_command_omits_address_family_when_unset(self):
+        """Default config should not pin AddressFamily."""
+        provider = self._make_provider()
+        argv = self._capture_ssh_argv(provider)
+        assert not any("AddressFamily" in token for token in argv)
+
+    def test_run_command_uses_accept_new_by_default(self):
+        provider = self._make_provider()
+        argv = self._capture_ssh_argv(provider)
+        assert "StrictHostKeyChecking=accept-new" in argv
+
+    def test_run_command_strict_host_key_off(self):
         provider = self._make_provider(strict_host_key=False)
-        cmd = provider._build_ssh_command("date")
-
-        assert "StrictHostKeyChecking=no" in cmd
+        argv = self._capture_ssh_argv(provider)
+        assert "StrictHostKeyChecking=no" in argv
