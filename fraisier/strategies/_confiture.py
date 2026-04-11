@@ -6,7 +6,21 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import psycopg
+import yaml
+
 from ._base import MigrationResult, MigrationStrategy, ValidationResult
+
+# Tuple used to narrow status-probe ``except`` blocks below.  See the
+# justification on each call site for why each member is on the list.
+_PROBE_ERRORS = (
+    ImportError,
+    AttributeError,
+    OSError,
+    ValueError,
+    yaml.YAMLError,
+    psycopg.Error,
+)
 
 # Import Migrator (optional dependency)
 try:
@@ -63,7 +77,14 @@ class ConfitureMigrateStrategy(MigrationStrategy):
                 applied_versions = status.applied
                 return applied_versions[-1] if applied_versions else None
 
-        except Exception as e:
+        except _PROBE_ERRORS as e:
+            # Status probe walks yaml -> pydantic -> confiture ->
+            # psycopg.  Expected modes: missing/unreadable config
+            # (OSError), bad YAML (yaml.YAMLError), pydantic
+            # validation failure (ValueError), missing optional dep
+            # (ImportError), API drift (AttributeError) and
+            # database connection failure (psycopg.Error).  Anything
+            # else propagates so genuine bugs aren't masked.
             log.warning(f"Failed to get current Confiture version: {e}")
             return None
 
@@ -86,7 +107,10 @@ class ConfitureMigrateStrategy(MigrationStrategy):
                 applied_versions = status.applied
                 return applied_versions[-1] if applied_versions else None
 
-        except Exception as e:
+        except _PROBE_ERRORS as e:
+            # Same expected modes as get_current_version: yaml /
+            # pydantic / confiture / psycopg surface plus the usual
+            # import / attribute / OS errors.
             log.warning(f"Failed to get latest Confiture version: {e}")
             return None
 
@@ -190,6 +214,9 @@ class ConfitureMigrateStrategy(MigrationStrategy):
                 ]
                 return history
 
-        except Exception as e:
+        except _PROBE_ERRORS as e:
+            # Same expected modes as get_current_version: yaml /
+            # pydantic / confiture / psycopg surface plus the usual
+            # import / attribute / OS errors.
             log.warning(f"Failed to get Confiture migration history: {e}")
             return []
