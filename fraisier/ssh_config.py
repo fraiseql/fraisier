@@ -1,4 +1,13 @@
-"""Resolve SSH connection parameters from ~/.ssh/config via OpenSSH."""
+"""Resolve SSH connection parameters from ~/.ssh/config via OpenSSH.
+
+This module is intentionally NOT routed through ``fraisier.ssh``: ``ssh -G``
+runs locally to *parse* the user's SSH configuration and never opens a
+network connection. The defensive flag set in ``fraisier.ssh`` (BatchMode,
+ConnectTimeout, AddressFamily, ``-n``) exists to harden network-bound
+invocations and would be meaningless here. See
+``.phases/2026-04-10-ssh-io-contract/latent-bugs.md`` ("Out-of-scope
+reminders") for the rationale.
+"""
 
 from __future__ import annotations
 
