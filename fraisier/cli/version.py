@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,8 @@ from .main import main
 
 if TYPE_CHECKING:
     from fraisier.config import ShipConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _get_systemd_version() -> str:
@@ -542,8 +545,14 @@ def _resolve_bare_repo_skip() -> Path | None:
         deployer = _get_deployer(fraise_config.get("type"), fraise_config)
         if isinstance(deployer, GitDeployMixin) and not deployer.bare_repo.exists():
             return deployer.bare_repo
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort dry-run helper: any failure (not in a git repo, no
+        # config, deployer build error, …) means "can't tell" — degrade
+        # silently so dry-run still completes. Log at debug level so the
+        # cause is recoverable from verbose logs without polluting normal
+        # output. The broad catch is intentional; ``exc`` is bound for
+        # observability.
+        logger.debug("bare-repo skip probe failed: %s", exc, exc_info=True)
     return None
 
 

@@ -344,3 +344,43 @@ class TestAllowlistIntegration:
                 frozenset({"api.dev.example.com.service"}),
             )
         assert result["ok"] is True
+
+
+class TestMainConnectionErrorLogging:
+    """The main() loop must catch handler crashes and log them with the
+    exception object bound, not silently swallow them. logger.exception
+    captures the traceback automatically, but the exception must also be
+    bound to a name and embedded in the message so the type/repr appears
+    in the formatted log line (grep-friendly post-mortem).
+    """
+
+    def test_handler_crash_is_logged_with_exception_object(self):
+        from fraisier import systemctl_helper
+
+        boom = RuntimeError("simulated handler crash")
+        fake_conn = MagicMock()
+        fake_sock = MagicMock()
+        # First accept() returns a connection; second raises OSError to break
+        # the while-True loop cleanly.
+        fake_sock.accept.side_effect = [
+            (fake_conn, "/tmp/x"),
+            OSError("loop exit"),
+        ]
+
+        with (
+            patch.object(
+                systemctl_helper, "_build_server_socket", return_value=fake_sock
+            ),
+            patch.object(systemctl_helper, "_handle_connection", side_effect=boom),
+            patch.object(systemctl_helper, "logger") as mock_logger,
+            patch.object(systemctl_helper.sys, "argv", ["fraisier-systemctl-helper"]),
+        ):
+            systemctl_helper.main()
+
+        mock_logger.exception.assert_called_once()
+        call_args = mock_logger.exception.call_args
+        # The exception object must be passed as a format argument so it
+        # appears in the rendered message line.
+        assert boom in call_args.args, (
+            f"Expected {boom!r} in logger.exception args, got {call_args.args!r}"
+        )

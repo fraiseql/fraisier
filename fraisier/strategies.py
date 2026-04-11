@@ -253,7 +253,17 @@ class RebuildStrategy(Strategy):
         connection_url: str,
     ) -> None:
         """Ensure required roles exist and are granted to the db owner."""
+        # Defense-in-depth: re-validate every identifier interpolated into the
+        # SQL strings below. ``run_psql`` shells out to ``psql -c`` so we cannot
+        # use parameter binding for identifiers; the regex in
+        # ``validate_pg_identifier`` rejects single quotes, semicolons,
+        # whitespace, and shell metacharacters, which covers both the
+        # bare-identifier vector (``CREATE ROLE {role}``) and the
+        # single-quoted-literal vector (``rolname = '{role}'``) below.
+        if db_owner is not None:
+            validate_pg_identifier(db_owner, "database owner")
         for role in self._required_roles:
+            validate_pg_identifier(role, "required role")
             sql = (
                 "DO $$ BEGIN "
                 f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{role}') "
@@ -779,7 +789,11 @@ class DjangoMigrateStrategy(MigrationStrategy):  # pragma: no cover
                                 or app_latest > latest_migration
                             ):
                                 latest_migration = app_latest
-                    except Exception:
+                    except (ImportError, AttributeError, OSError):
+                        # Expected failure modes for an app whose migrations
+                        # module is missing, broken, or on an unreadable path.
+                        # Anything else (e.g. a real bug) propagates to the
+                        # outer warning handler so it isn't silently masked.
                         continue
                 return latest_migration
 

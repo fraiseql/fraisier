@@ -62,7 +62,10 @@ class TestServiceNameValidation:
 
         monkeypatch.setattr(compose_provider, "execute_command", fake_exec)
 
-        # These should not raise ValueError
+        # These should not raise ValueError. Other failures (parse errors,
+        # missing data in the mocked docker response, attribute lookups in
+        # the unmocked downstream code) are unrelated to the validation
+        # layer under test and are tolerated.
         try:
             if method_name == "scale_service":
                 await method("valid-web_service.1", 2)
@@ -70,5 +73,5 @@ class TestServiceNameValidation:
                 await method("valid-web_service.1")
         except ValueError:
             pytest.fail(f"{method_name} raised ValueError for valid service name")  # ty: ignore[invalid-argument-type]
-        except Exception:
-            pass  # Other errors (json parse, etc.) are fine
+        except (KeyError, AttributeError, TypeError, RuntimeError, OSError):
+            pass

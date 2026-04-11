@@ -13,6 +13,7 @@ from fraisier.dbops.confiture import (
 from fraisier.dbops.restore import RestoreResult
 from fraisier.dbops.templates import TemplateResult
 from fraisier.strategies import (
+    DjangoMigrateStrategy,
     MigrateStrategy,
     RebuildStrategy,
     RestoreConfig,
@@ -195,6 +196,141 @@ class TestRebuildStrategyValidation:
     def test_init_defaults_to_empty_roles(self):
         strategy = RebuildStrategy()
         assert strategy._required_roles == []
+
+
+class TestProvisionRolesIdentifierValidation:
+    """Defense-in-depth: ``_provision_roles`` must validate every identifier
+    it interpolates into raw SQL, even when callers have already validated
+    earlier (e.g. ``__init__``).  The constructor path covers ``role`` only;
+    ``db_owner`` flows in directly from caller arguments and is otherwise
+    unchecked before reaching the f-string at strategies.py:270.
+    """
+
+    _ADVERSARIAL_NAMES = (
+        "ro'le; DROP TABLE pg_roles;--",
+        "my-role",
+        "role with space",
+        "$(whoami)",
+        "`id`",
+        "",
+        "1starts_with_digit",
+    )
+
+    @pytest.mark.parametrize("bad_owner", _ADVERSARIAL_NAMES)
+    @patch("fraisier.strategies.run_psql")
+    def test_provision_roles_rejects_unsafe_owner(self, mock_run_psql, bad_owner):
+        mock_run_psql.return_value = (0, "", "")
+        strategy = RebuildStrategy(required_roles=["app_core"])
+        with pytest.raises(ValueError):
+            strategy._provision_roles(
+                db_name="appdb",
+                db_owner=bad_owner,
+                connection_url=_ADMIN_URL,
+            )
+        mock_run_psql.assert_not_called()
+
+    @pytest.mark.parametrize("bad_role", _ADVERSARIAL_NAMES)
+    @patch("fraisier.strategies.run_psql")
+    def test_provision_roles_rejects_unsafe_role_defense_in_depth(
+        self, mock_run_psql, bad_role
+    ):
+        # Bypass __init__ validation to simulate a regression elsewhere; the
+        # method itself must still refuse to build SQL with a tainted role.
+        mock_run_psql.return_value = (0, "", "")
+        strategy = RebuildStrategy()
+        strategy._required_roles = [bad_role]
+        with pytest.raises(ValueError):
+            strategy._provision_roles(
+                db_name="appdb",
+                db_owner="app_owner",
+                connection_url=_ADMIN_URL,
+            )
+        mock_run_psql.assert_not_called()
+
+    @patch("fraisier.strategies.run_psql")
+    def test_provision_roles_accepts_safe_names(self, mock_run_psql):
+        mock_run_psql.return_value = (0, "", "")
+        strategy = RebuildStrategy(required_roles=["readonly", "app_user"])
+        strategy._provision_roles(
+            db_name="appdb",
+            db_owner="app_owner",
+            connection_url=_ADMIN_URL,
+        )
+        # 2 roles x (CREATE ROLE + GRANT) = 4 psql invocations
+        assert mock_run_psql.call_count == 4
+
+    @patch("fraisier.strategies.run_psql")
+    def test_provision_roles_accepts_safe_names_no_owner(self, mock_run_psql):
+        mock_run_psql.return_value = (0, "", "")
+        strategy = RebuildStrategy(required_roles=["readonly"])
+        strategy._provision_roles(
+            db_name="appdb",
+            db_owner=None,
+            connection_url=_ADMIN_URL,
+        )
+        # No owner → only CREATE ROLE, no GRANT
+        assert mock_run_psql.call_count == 1
+
+
+class TestDjangoGetLatestVersionExceptionNarrowing:
+    """``DjangoMigrateStrategy.get_latest_version`` iterates over Django app
+    configs. The inner loop must skip apps whose migration discovery raises
+    *expected* errors (missing module → ImportError) but propagate
+    *unexpected* errors so the outer warning handler can record them — the
+    current bare ``except Exception: continue`` silently masks real bugs.
+
+    These tests use ``sys.modules`` patching so they run without Django
+    installed (the package is an optional framework integration).
+    """
+
+    @staticmethod
+    def _patch_django(get_module_side_effect, *, n_apps=1):
+        from unittest.mock import MagicMock as _MM
+
+        fake_apps_attr = _MM()
+        fake_apps_attr.get_app_configs.return_value = [_MM() for _ in range(n_apps)]
+        fake_django_apps = _MM()
+        fake_django_apps.apps = fake_apps_attr
+
+        fake_migrations_attr = _MM()
+        fake_migrations_attr.get_migration_module.side_effect = get_module_side_effect
+        fake_django_db = _MM()
+        fake_django_db.migrations = fake_migrations_attr
+
+        return patch.dict(
+            "sys.modules",
+            {
+                "django": _MM(),
+                "django.apps": fake_django_apps,
+                "django.db": fake_django_db,
+            },
+        )
+
+    def test_unexpected_exception_in_inner_loop_reaches_outer_warning(self):
+        strategy = DjangoMigrateStrategy("settings")
+        strategy.app_label = None  # force the multi-app branch
+
+        with (
+            self._patch_django(ValueError("real bug")),
+            patch("fraisier.strategies.log") as mock_log,
+        ):
+            result = strategy.get_latest_version(Path("/fake"))
+
+        assert result is None
+        mock_log.warning.assert_called()
+
+    def test_import_error_in_inner_loop_is_skipped_silently(self):
+        strategy = DjangoMigrateStrategy("settings")
+        strategy.app_label = None
+
+        with (
+            self._patch_django(ImportError("no migrations")),
+            patch("fraisier.strategies.log") as mock_log,
+        ):
+            result = strategy.get_latest_version(Path("/fake"))
+
+        assert result is None
+        mock_log.warning.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

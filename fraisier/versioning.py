@@ -5,10 +5,13 @@ and database version derivation.
 """
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 _SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
@@ -202,11 +205,12 @@ def bump_version(
 
         # Atomic rename — commits pyproject.toml only after all targets succeed.
         tmp_path.rename(pyproject_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
     finally:
+        # Idempotent cleanup: after a successful rename the temp file no
+        # longer exists, so ``missing_ok=True`` makes this a no-op on the
+        # happy path while still cleaning up after any exception.
         os.close(tmp_fd)
+        tmp_path.unlink(missing_ok=True)
 
     return VersionInfo(version=new_version)
 
@@ -251,8 +255,12 @@ def sync_version_to_targets(version: str, sync_config: VersionSyncConfig) -> Non
             content = target.path.read_text()
             new_content = target._compiled_regex.sub(rf"\g<1>{version}\g<3>", content)
             target.path.write_text(new_content)
-    except Exception:
-        # Rollback all targets to backups
+    except Exception as exc:
+        # Rollback must run for *any* failure (not just I/O), so the broad
+        # catch is intentional. The original exception is re-raised below
+        # with its traceback intact via a bare ``raise``; binding ``exc``
+        # lets us log what triggered the rollback before unwinding.
+        log.exception("Version sync failed, rolling back targets: %s", exc)
         for original_path, backup_path in backups:
             if backup_path.exists():
                 original_path.write_text(backup_path.read_text())

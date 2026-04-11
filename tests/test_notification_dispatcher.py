@@ -1,6 +1,6 @@
 """Tests for NotificationDispatcher config parsing and dispatch."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from fraisier.notifications.base import DeployEvent
 from fraisier.notifications.dispatcher import NotificationDispatcher
@@ -106,6 +106,25 @@ class TestDispatcherNotify:
         dispatcher = NotificationDispatcher(on_failure=[bad, good])
         dispatcher.notify(_event("failure"))
         good.notify.assert_called_once()
+
+    def test_failing_notifier_logs_via_logger_exception_with_bound_exc(self):
+        """The dispatcher must call ``logger.exception`` (not ``logger.warning``)
+        and pass the exception object as a format arg, so the rendered log
+        line carries the exception type/repr in addition to the traceback.
+        """
+        bad = MagicMock()
+        boom = RuntimeError("notifier crash")
+        bad.notify.side_effect = boom
+        dispatcher = NotificationDispatcher(on_failure=[bad])
+
+        with patch("fraisier.notifications.dispatcher.logger") as mock_logger:
+            dispatcher.notify(_event("failure"))
+
+        mock_logger.exception.assert_called_once()
+        call_args = mock_logger.exception.call_args
+        assert boom in call_args.args, (
+            f"Expected {boom!r} in logger.exception args, got {call_args.args!r}"
+        )
 
 
 class TestEnvVarExpansion:

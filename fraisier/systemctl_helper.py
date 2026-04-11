@@ -206,7 +206,11 @@ def main() -> None:
                 break
             try:
                 _handle_connection(conn, allowed_services)
-            except Exception:
-                logger.exception("Unhandled error in connection handler")
+            except Exception as exc:
+                # Bare-except is intentional here: any handler crash must
+                # not bring down the systemd-supervised socket server.
+                # logger.exception captures the traceback; binding `exc`
+                # surfaces the type/repr in the rendered log line.
+                logger.exception("Unhandled error in connection handler: %s", exc)
     finally:
         server_sock.close()

@@ -218,3 +218,35 @@ class TestMain:
             from fraisier.install_helper import main
 
             main()
+
+
+class TestMainConnectionErrorLogging:
+    """The main() loop must catch handler crashes and log them with the
+    exception object bound to a name and passed as a format arg, so the
+    type/repr appears in the rendered log line.
+    """
+
+    def test_handler_crash_is_logged_with_exception_object(self):
+        from fraisier import install_helper
+
+        boom = RuntimeError("simulated install handler crash")
+        fake_conn = MagicMock()
+        fake_sock = MagicMock()
+        fake_sock.accept.side_effect = [
+            (fake_conn, "/tmp/x"),
+            OSError("loop exit"),
+        ]
+
+        with (
+            patch.dict("os.environ", {"LISTEN_FDS": "1"}, clear=False),
+            patch.object(install_helper.socket, "fromfd", return_value=fake_sock),
+            patch.object(install_helper, "_handle_connection", side_effect=boom),
+            patch.object(install_helper, "logger") as mock_logger,
+        ):
+            install_helper.main()
+
+        mock_logger.exception.assert_called_once()
+        call_args = mock_logger.exception.call_args
+        assert boom in call_args.args, (
+            f"Expected {boom!r} in logger.exception args, got {call_args.args!r}"
+        )

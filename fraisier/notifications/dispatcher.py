@@ -127,12 +127,16 @@ class NotificationDispatcher:
         for notifier in notifiers:
             try:
                 notifier.notify(event)
-            except Exception:
-                logger.warning(
-                    "Notification failed for %s (%s)",
+            except Exception as exc:
+                # Bare-except is intentional: a single failing notifier must
+                # never block delivery to the rest of the chain. The exception
+                # is bound and surfaced via logger.exception so post-mortem
+                # logs carry both traceback and the exception type/repr.
+                logger.exception(
+                    "Notification failed for %s (%s): %s",
                     type(notifier).__name__,
                     event.event_type,
-                    exc_info=True,
+                    exc,
                 )
 
     @property

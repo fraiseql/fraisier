@@ -186,8 +186,13 @@ def _register_migration_hooks(
             hook = hook_cls(config)
             migrator.register_hook(phase, hook)
             log.info("Registered %s hook", hook_key)
-        except Exception:
-            log.warning("Failed to register %s hook", hook_key, exc_info=True)
+        except Exception as exc:
+            # Hook registration is best-effort: a misconfigured hook (bad
+            # kwargs, missing transport, …) must not abort migrator setup.
+            # The catch is intentionally broad — anything from TypeError
+            # to a vendor-specific error from the hook constructor is
+            # acceptable to log-and-skip.
+            log.warning("Failed to register %s hook: %s", hook_key, exc, exc_info=True)
 
 
 def preflight(

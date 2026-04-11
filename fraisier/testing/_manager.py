@@ -286,9 +286,12 @@ class TemplateManager:
 
 def _confiture_version() -> str:
     """Get installed confiture version."""
-    try:
-        from importlib.metadata import version
+    from importlib.metadata import PackageNotFoundError, version
 
+    try:
         return version("fraiseql-confiture")
-    except Exception:
+    except PackageNotFoundError:
+        # Optional dependency not installed; "unknown" is the documented
+        # fallback. Any other exception (e.g. corrupt metadata cache) is a
+        # real bug and is allowed to propagate.
         return "unknown"

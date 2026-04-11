@@ -160,3 +160,34 @@ class TestStatus:
         assert status.needs_rebuild is True
         assert status.template_exists is False
         assert status.stored_hash is None
+
+
+class TestConfitureVersionProbe:
+    """``_confiture_version`` calls ``importlib.metadata.version`` to read
+    the installed package version. The only *expected* failure is the
+    package being absent (PackageNotFoundError); anything else indicates
+    a real bug and must propagate, not be silently downgraded to "unknown".
+    """
+
+    def test_returns_unknown_when_package_missing(self):
+        from importlib.metadata import PackageNotFoundError
+
+        from fraisier.testing._manager import _confiture_version
+
+        with patch(
+            "importlib.metadata.version",
+            side_effect=PackageNotFoundError("fraiseql-confiture"),
+        ):
+            assert _confiture_version() == "unknown"
+
+    def test_unexpected_exception_propagates(self):
+        from fraisier.testing._manager import _confiture_version
+
+        with (
+            patch(
+                "importlib.metadata.version",
+                side_effect=RuntimeError("metadata cache corrupt"),
+            ),
+            pytest.raises(RuntimeError, match="metadata cache corrupt"),
+        ):
+            _confiture_version()
