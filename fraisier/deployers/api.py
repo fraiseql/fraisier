@@ -250,6 +250,13 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 old_sha, new_sha = self._git_pull()
                 old_version = old_sha[:8] if old_sha else None
 
+                # Step 1.5: Re-sync after checkout so a new fraises.yaml in this
+                # commit is always picked up before install/migrate (issue #158).
+                try:
+                    self._sync_config_if_needed()
+                except Exception as e:
+                    logger.warning(f"Post-pull config sync failed: {e}")
+
                 # Step 2: Install dependencies
                 self._install_dependencies()
 

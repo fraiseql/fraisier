@@ -569,6 +569,47 @@ class TestAPIDeployer:
         default = Path("/opt/fraisier/fraises.yaml")
         assert mock_sync.call_args.kwargs["dest_path"] == default
 
+    def test_sync_config_called_after_git_pull(self, mock_subprocess):
+        """_sync_config_if_needed is called after _git_pull to pick up new fraises.yaml.
+
+        Regression test for issue #158: bootstrap ordering problem where the
+        deploy ran with stale cached config when fraises.yaml changed in the
+        incoming commit.
+        """
+        call_order = []
+
+        config = {
+            "app_path": "/var/www/api",
+            "fraise_name": "api",
+        }
+        deployer = APIDeployer(config)
+
+        def record_sync(*_args, **_kwargs):
+            call_order.append("sync")
+
+        def record_pull(*_args, **_kwargs):
+            call_order.append("pull")
+            return ("abc", "def")
+
+        with (
+            patch.object(deployer, "_sync_config_if_needed", side_effect=record_sync),
+            patch.object(deployer, "_git_pull", side_effect=record_pull),
+            patch.object(deployer, "_check_service_file_staleness"),
+            patch.object(deployer, "_validate_wrapper_scripts"),
+            patch.object(deployer, "_install_dependencies"),
+            patch.object(deployer, "_generate_version_json"),
+            patch.object(deployer, "_write_status"),
+            patch.object(deployer, "_start_db_record", return_value=None),
+            patch.object(deployer, "_complete_db_record"),
+            patch.object(deployer, "_notify"),
+        ):
+            deployer.execute()
+
+        pull_index = call_order.index("pull")
+        assert any(v == "sync" for v in call_order[pull_index + 1:]), (
+            "_sync_config_if_needed was never called after _git_pull"
+        )
+
     def test_install_dependencies_with_different_users(self, tmp_path, mock_subprocess):
         """_install_dependencies uses sudo -u when install_user differs."""
         venv = tmp_path / ".venv"
