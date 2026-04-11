@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from fraisier.cli.logs import _build_ssh_cmd, _resolve_unit_pattern
+from fraisier.cli.logs import _resolve_unit_pattern
 from fraisier.cli.main import main
 
 
@@ -79,126 +79,6 @@ class TestResolveUnitPattern:
         assert "@" not in app
 
 
-class TestBuildSshCmd:
-    """Tests for _build_ssh_cmd helper."""
-
-    def test_minimal_config(self):
-        cmd = _build_ssh_cmd({"host": "example.com"})
-        assert cmd[0] == "ssh"
-        assert "root@example.com" in cmd
-        assert "-p" in cmd
-        assert cmd[cmd.index("-p") + 1] == "22"
-
-    def test_custom_user_port(self):
-        cmd = _build_ssh_cmd({"host": "example.com", "user": "deploy", "port": 2222})
-        assert "deploy@example.com" in cmd
-        assert cmd[cmd.index("-p") + 1] == "2222"
-
-    def test_key_path_included(self):
-        cmd = _build_ssh_cmd(
-            {"host": "example.com", "key_path": "/home/user/.ssh/id_rsa"}
-        )
-        assert "-i" in cmd
-        assert cmd[cmd.index("-i") + 1] == "/home/user/.ssh/id_rsa"
-
-    def test_no_key_path_when_absent(self):
-        cmd = _build_ssh_cmd({"host": "example.com"})
-        assert "-i" not in cmd
-
-    def test_strict_host_key_default(self):
-        cmd = _build_ssh_cmd({"host": "example.com"})
-        opts = " ".join(cmd)
-        assert "StrictHostKeyChecking=accept-new" in opts
-
-    def test_strict_host_key_disabled(self):
-        cmd = _build_ssh_cmd({"host": "example.com", "strict_host_key": False})
-        opts = " ".join(cmd)
-        assert "StrictHostKeyChecking=no" in opts
-
-    def test_batch_mode_always_set(self):
-        cmd = _build_ssh_cmd({"host": "example.com"})
-        opts = " ".join(cmd)
-        assert "BatchMode=yes" in opts
-
-    def test_connect_timeout_default(self):
-        cmd = _build_ssh_cmd({"host": "example.com"})
-        opts = " ".join(cmd)
-        assert "ConnectTimeout=30" in opts
-
-    def test_connect_timeout_custom(self):
-        cmd = _build_ssh_cmd({"host": "example.com", "connect_timeout": 10})
-        opts = " ".join(cmd)
-        assert "ConnectTimeout=10" in opts
-
-    def test_address_family_not_set_by_default(self):
-        cmd = _build_ssh_cmd({"host": "example.com"})
-        opts = " ".join(cmd)
-        assert "AddressFamily" not in opts
-
-    def test_address_family_inet(self):
-        cmd = _build_ssh_cmd({"host": "example.com", "address_family": "inet"})
-        opts = " ".join(cmd)
-        assert "AddressFamily=inet" in opts
-
-    def test_address_family_inet6(self):
-        cmd = _build_ssh_cmd({"host": "example.com", "address_family": "inet6"})
-        opts = " ".join(cmd)
-        assert "AddressFamily=inet6" in opts
-
-    # --- exact-shape characterization tests ---
-    #
-    # These lock in the full command list as-emitted. Any future change to the
-    # flag set (adding, removing, or reordering) must update these tests
-    # explicitly — so flags that were added to fix real production hangs
-    # (see .phases/2026-04-10-ssh-io-contract/) can't be quietly dropped.
-
-    def test_exact_shape_minimal_config(self):
-        cmd = _build_ssh_cmd({"host": "example.com"})
-        assert cmd == [
-            "ssh",
-            "-n",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=30",
-            "-p",
-            "22",
-            "root@example.com",
-        ]
-
-    def test_exact_shape_full_config(self):
-        cmd = _build_ssh_cmd(
-            {
-                "host": "prod.example.com",
-                "user": "deploy",
-                "port": 2222,
-                "strict_host_key": False,
-                "connect_timeout": 15,
-                "address_family": "inet",
-                "key_path": "/home/deploy/.ssh/id_ed25519",
-            }
-        )
-        assert cmd == [
-            "ssh",
-            "-n",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=15",
-            "-p",
-            "2222",
-            "-o",
-            "AddressFamily=inet",
-            "-i",
-            "/home/deploy/.ssh/id_ed25519",
-            "deploy@prod.example.com",
-        ]
-
-
 class TestLogsCommand:
     """Integration tests for the logs CLI command."""
 
@@ -224,9 +104,13 @@ class TestLogsCommand:
     def _invoke(self, config, args):
         runner = CliRunner()
         mock_popen = self._mock_popen()
+        # Local journalctl spawns Popen directly from cli.logs; remote
+        # routes through fraisier.ssh.long_stream which spawns from
+        # fraisier.ssh. Patch both so the test mock catches either path.
         with (
             patch("fraisier.cli.main.get_config", return_value=config),
             patch("fraisier.cli.logs.subprocess.Popen", mock_popen),
+            patch("fraisier.ssh.subprocess.Popen", mock_popen),
             patch("fraisier.cli.logs.sys.exit"),
         ):
             runner.invoke(main, args, obj={"config": config, "skip_health": False})

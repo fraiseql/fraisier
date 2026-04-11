@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 import sys
 
 import click
 
+from fraisier import ssh
 from fraisier.cli._helpers import console, require_config
 from fraisier.cli.main import main
 
@@ -42,49 +42,6 @@ def _resolve_unit_pattern(
         return f"{stem}@*.service"
 
     return app_service_name(config.project_name, fraise, environment, env_config)
-
-
-def _build_ssh_cmd(ssh_config: dict) -> list[str]:
-    """Build the SSH command prefix from a fraise ssh: config block.
-
-    Args:
-        ssh_config: Dict with host, user, port, key_path, strict_host_key,
-            connect_timeout, address_family.
-
-    Returns:
-        List starting with "ssh" and ending with "user@host".
-    """
-    host_key_policy = "accept-new" if ssh_config.get("strict_host_key", True) else "no"
-    connect_timeout = ssh_config.get("connect_timeout", 30)
-    cmd = [
-        "ssh",
-        # Why: commit da5c119 — without -n, SSH still allocates a stdin
-        # channel even when the parent never writes to it, causing
-        # multi-minute hangs in background/non-interactive contexts.
-        "-n",
-        "-o",
-        f"StrictHostKeyChecking={host_key_policy}",
-        # Why: BatchMode=yes — never prompt for passphrase/password; fail
-        # fast instead of blocking forever on a closed TTY.
-        "-o",
-        "BatchMode=yes",
-        # Why: commit 4dd1927 — on dual-stack hosts SSH tries AAAA first;
-        # with no ConnectTimeout it waits ~2 min for the kernel TCP timeout
-        # before falling back to A. Configurable since commit 64f8d30.
-        "-o",
-        f"ConnectTimeout={connect_timeout}",
-        "-p",
-        str(ssh_config.get("port", 22)),
-    ]
-    # Why: commit 64f8d30 — AddressFamily lets operators pin IPv4/IPv6
-    # on hosts where the other family is unreachable; complements the
-    # ConnectTimeout above for the IPv6-fallback failure mode.
-    if address_family := ssh_config.get("address_family"):
-        cmd.extend(["-o", f"AddressFamily={address_family}"])
-    if key_path := ssh_config.get("key_path"):
-        cmd.extend(["-i", key_path])
-    cmd.append(f"{ssh_config.get('user', 'root')}@{ssh_config['host']}")
-    return cmd
 
 
 @main.command()
@@ -150,22 +107,19 @@ def logs(
     if since:
         jctl_args.extend(["--since", since])
 
-    # Detect remote vs local and build the final command
+    # Detect remote vs local. Remote routes through fraisier.ssh.long_stream,
+    # which carries the full defensive flag set (BatchMode, ConnectTimeout,
+    # StrictHostKeyChecking, AddressFamily, -n, stdin=DEVNULL) by construction
+    # — see fraisier/ssh.py and the inventory in
+    # .phases/2026-04-10-ssh-io-contract/. Local journalctl needs the same
+    # stdin=DEVNULL discipline so background callers don't inherit a pipe
+    # that prevents the child from exiting (commits 8fc8fec, 08265c9).
     ssh_config = fraise_config.get("ssh")
-    if not ssh_config:
-        cmd = jctl_args
+    if ssh_config:
+        target = ssh.SshTarget.from_config(ssh_config)
+        proc = ssh.long_stream(target, jctl_args)
     else:
-        ssh_prefix = _build_ssh_cmd(ssh_config)
-        cmd = [*ssh_prefix, shlex.join(jctl_args)]
-
-    # Why: commit 8fc8fec — use subprocess.Popen instead of os.execvp so
-    # the parent stays alive and can wait/signal the child.
-    # Why: commit 08265c9 — stdin=DEVNULL prevents SSH from holding the
-    # connection open waiting for stdin to close. Background callers pass
-    # an open pipe that never closes; SSH then waits forever.
-    # stdout/stderr are inherited so TTY behaviour (colours, terminal
-    # size, Ctrl-C) still works in interactive use.
-    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
+        proc = subprocess.Popen(jctl_args, stdin=subprocess.DEVNULL)
     try:
         proc.wait()
     except KeyboardInterrupt:
