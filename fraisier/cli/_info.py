@@ -313,7 +313,21 @@ def _show_global_status(config, server_filter: str | None = None) -> None:
                 health_str,
             )
 
-        except Exception as e:
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            AttributeError,
+            TypeError,
+            RuntimeError,
+        ) as e:
+            # Best-effort row: skip a single broken fraise without aborting
+            # the table. Expected modes are I/O / network failures (OSError
+            # covers ConnectionError + TimeoutError), malformed config
+            # (KeyError, AttributeError, TypeError), parsing errors
+            # (ValueError, including JSONDecodeError), and runtime errors
+            # raised by deployer probes. Anything else (e.g. a real bug
+            # in a deployer) propagates so it isn't silently masked.
             console.print(
                 f"[yellow]Warning:[/yellow] Error checking "
                 f"{fraise_name}/{environment_name}: {e}"
@@ -393,5 +407,17 @@ def _show_single_status(config, fraise: str, environment: str) -> None:
                         f"at {d['started_at'][:10]}"
                     )
 
-        except Exception as e:
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            AttributeError,
+            TypeError,
+            RuntimeError,
+        ) as e:
+            # Single-fraise status probe: same expected modes as the
+            # global status loop above (I/O, malformed config, parsing,
+            # runtime probe errors). Unexpected exceptions propagate so
+            # genuine bugs surface instead of being printed as a
+            # one-line warning.
             console.print(f"\n[red]Error checking status:[/red] {e}")
