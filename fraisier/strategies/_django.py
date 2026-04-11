@@ -11,7 +11,7 @@ from ._base import MigrationResult, MigrationStrategy, ValidationResult
 log = logging.getLogger(__name__)
 
 
-class DjangoMigrateStrategy(MigrationStrategy):  # pragma: no cover
+class DjangoMigrateStrategy(MigrationStrategy):
     """Django migration strategy."""
 
     def __init__(self, settings_module: str, app_label: str | None = None):

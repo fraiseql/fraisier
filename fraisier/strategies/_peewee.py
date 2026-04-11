@@ -11,7 +11,7 @@ from ._base import MigrationResult, MigrationStrategy, ValidationResult
 log = logging.getLogger(__name__)
 
 
-class PeeweeMigrateStrategy(MigrationStrategy):  # pragma: no cover
+class PeeweeMigrateStrategy(MigrationStrategy):
     """Peewee ORM migration strategy."""
 
     def __init__(self, models_module: str, migrations_dir: str | Path):

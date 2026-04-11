@@ -11,7 +11,7 @@ from ._base import MigrationResult, MigrationStrategy, ValidationResult
 log = logging.getLogger(__name__)
 
 
-class AlembicMigrateStrategy(MigrationStrategy):  # pragma: no cover
+class AlembicMigrateStrategy(MigrationStrategy):
     """Alembic migration strategy for SQLAlchemy."""
 
     def __init__(
