@@ -14,11 +14,13 @@ Phase 2 only adds the module; Phase 3 migrates call sites onto it.
 
 from __future__ import annotations
 
+import subprocess
 from itertools import pairwise
+from unittest.mock import patch
 
 import pytest
 
-from fraisier.ssh import SshTarget
+from fraisier.ssh import SshTarget, short_cmd
 
 # ---------------------------------------------------------------------------
 # Cycle 1 — SshTarget + _options()
@@ -128,3 +130,86 @@ def _pairs(seq: list[str]) -> list[tuple[str, str]]:
     ``-o`` flag and its argument sit next to each other, not just both
     present somewhere in the list."""
     return list(pairwise(seq))
+
+
+# ---------------------------------------------------------------------------
+# Cycle 2 — short_cmd happy path
+# ---------------------------------------------------------------------------
+
+
+class TestShortCmd:
+    """``short_cmd`` is the default pattern: run a remote command, capture
+    output, return a ``CompletedProcess``. Flags correspond to the
+    ``short-cmd`` row in ``inventory.md``: ``-n`` is required here (parent
+    never writes to stdin), along with the full defensive ``-o`` block.
+    """
+
+    _target = SshTarget.from_config(
+        {"host": "deploy.example.com", "user": "fraisier", "port": 2222}
+    )
+
+    def _fake_completed(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=argv, returncode=0, stdout="ok\n", stderr=""
+        )
+
+    def test_builds_ssh_argv_with_dash_n_and_port(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = self._fake_completed([])
+            short_cmd(self._target, ["systemctl", "is-active", "api.service"])
+
+        argv = mock_run.call_args.args[0]
+        # First token is the binary.
+        assert argv[0] == "ssh"
+        # -n must be present for the short-cmd pattern — see LB-2 and
+        # commit da5c119. Must come before the host.
+        assert "-n" in argv
+        host_idx = argv.index("fraisier@deploy.example.com")
+        assert argv.index("-n") < host_idx
+        # Port is set via -p (ssh), not -P (scp), and sits next to its value.
+        p_idx = argv.index("-p")
+        assert argv[p_idx + 1] == "2222"
+        # Remote argv is appended at the very end, joined shell-safe.
+        assert argv[-1] == "systemctl is-active api.service"
+
+    def test_captures_stdout_and_returns_completed_process(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="active\n", stderr=""
+            )
+            result = short_cmd(self._target, ["systemctl", "is-active", "api"])
+
+        assert result.returncode == 0
+        assert result.stdout == "active\n"
+        # subprocess.run must be called with capture_output=True and
+        # text=True so callers get str back, not bytes.
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        assert kwargs["check"] is True
+        assert kwargs["timeout"] == 60
+
+    def test_check_false_is_forwarded(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = self._fake_completed([])
+            short_cmd(self._target, ["false"], check=False)
+        assert mock_run.call_args.kwargs["check"] is False
+
+    def test_does_not_allocate_stdin(self):
+        """Guard against future edits that accidentally wire a stdin=
+        kwarg into short_cmd — that would defeat -n and re-introduce the
+        LB-2 hang (see ``latent-bugs.md``)."""
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = self._fake_completed([])
+            short_cmd(self._target, ["true"])
+        kwargs = mock_run.call_args.kwargs
+        assert "stdin" not in kwargs or kwargs["stdin"] is None
+
+    def test_remote_argv_is_shell_joined_not_list(self):
+        """ssh takes a single remote-command string, not an argv list.
+        short_cmd must shell-quote so e.g. ``["echo", "a b"]`` survives."""
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = self._fake_completed([])
+            short_cmd(self._target, ["echo", "a b", "c;d"])
+        argv = mock_run.call_args.args[0]
+        assert argv[-1] == "echo 'a b' 'c;d'"

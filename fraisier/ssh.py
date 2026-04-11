@@ -17,11 +17,10 @@ flags exist because of specific production failures; the history is in
 
 from __future__ import annotations
 
+import shlex
+import subprocess
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    import subprocess
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -106,9 +105,25 @@ class SshTarget:
             opts.extend(["-i", self.key_path])
         return opts
 
+    def _ssh_argv(self, *, include_dash_n: bool) -> list[str]:
+        """Build the full ``ssh ... user@host`` prefix for a given stdin
+        pattern. ``include_dash_n=True`` is the right default for every
+        pattern except :func:`data_pipe`, which legitimately feeds stdin.
+        """
+        argv: list[str] = ["ssh"]
+        if include_dash_n:
+            # Why: commit da5c119 — without -n, SSH still allocates a
+            # stdin channel and hangs for minutes in non-interactive
+            # contexts. Must NOT be set by data_pipe (stdin is the data).
+            argv.append("-n")
+        argv.extend(self._options())
+        argv.extend(["-p", str(self.port)])
+        argv.append(f"{self.user}@{self.host}")
+        return argv
+
 
 # ---------------------------------------------------------------------------
-# Entry points (implemented in later cycles of Phase 2)
+# Entry points
 # ---------------------------------------------------------------------------
 
 
@@ -119,8 +134,31 @@ def short_cmd(
     timeout: int = 60,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a short remote command and capture output. (Cycle 2.)"""
-    raise NotImplementedError
+    """Run a short remote command and capture output.
+
+    This is the default pattern — the parent never writes to SSH stdin,
+    so ``-n`` is always set. Output is captured as text.
+
+    Args:
+        target: Destination.
+        remote_argv: The remote command as an argv list. It is
+            shell-joined (``shlex.join``) before being passed to SSH,
+            which takes a single remote-command string.
+        timeout: Wall-clock timeout in seconds (default 60).
+        check: Raise ``CalledProcessError`` on non-zero exit (default True).
+
+    Raises:
+        subprocess.TimeoutExpired: when the command outlives ``timeout``.
+        subprocess.CalledProcessError: on non-zero exit when ``check``.
+    """
+    ssh_argv = [*target._ssh_argv(include_dash_n=True), shlex.join(remote_argv)]
+    return subprocess.run(
+        ssh_argv,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=check,
+    )
 
 
 def long_stream(
