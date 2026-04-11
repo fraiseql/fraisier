@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from fraisier.ssh import SshTarget, short_cmd
+from fraisier.ssh import SshTarget, long_stream, short_cmd
 
 # ---------------------------------------------------------------------------
 # Cycle 1 — SshTarget + _options()
@@ -240,3 +240,83 @@ class TestShortCmdTimeout:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=1)
             with pytest.raises(subprocess.TimeoutExpired):
                 short_cmd(self._target, ["sleep", "60"], timeout=1)
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4 — long_stream (Popen + SIGINT forwarding)
+# ---------------------------------------------------------------------------
+
+
+class TestLongStream:
+    """``long_stream`` is the pattern used by ``fraisier logs …``: spawn a
+    Popen, inherit stdout/stderr to the terminal, and let the caller
+    wait + forward SIGINT (Ctrl-C) via ``terminate()``.
+
+    The critical defensive flags (baked in by fix commits 8fc8fec,
+    08265c9, da5c119 — see inventory ``Per-flag rationale`` table):
+
+    - ``subprocess.Popen`` (not ``os.execvp``), so the parent stays
+      alive to signal the child.
+    - ``stdin=DEVNULL``, so SSH doesn't wait forever on an inherited
+      never-closing pipe.
+    - ``-n`` on the ssh argv itself, so SSH doesn't allocate a stdin
+      channel even if something slips past ``DEVNULL``.
+    - ``stdout``/``stderr`` NOT set, so the TTY is inherited and
+      colour/size/interactive behaviour still work.
+    """
+
+    _target = SshTarget.from_config({"host": "h", "user": "u"})
+
+    def test_returns_popen_with_devnull_stdin(self):
+        with patch("fraisier.ssh.subprocess.Popen") as mock_popen:
+            fake = object()
+            mock_popen.return_value = fake
+            result = long_stream(self._target, ["journalctl", "-f", "-u", "x"])
+
+        assert result is fake
+        kwargs = mock_popen.call_args.kwargs
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        # stdout/stderr must inherit — do NOT set them to PIPE.
+        assert "stdout" not in kwargs or kwargs["stdout"] is None
+        assert "stderr" not in kwargs or kwargs["stderr"] is None
+
+    def test_argv_includes_dash_n_and_shell_joined_remote(self):
+        with patch("fraisier.ssh.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = object()
+            long_stream(self._target, ["journalctl", "--no-pager", "-u", "a b"])
+
+        argv = mock_popen.call_args.args[0]
+        assert argv[0] == "ssh"
+        assert "-n" in argv
+        assert argv[-1] == "journalctl --no-pager -u 'a b'"
+
+    def test_sigint_forwarding_terminates_child(self):
+        """Integration test: spawn a real long-running child via
+        :func:`long_stream`-style primitives and prove that
+        ``terminate()`` (what the caller calls on KeyboardInterrupt)
+        actually shuts it down. We can't hit a real SSH server in the
+        unit suite, so we patch ``subprocess.Popen`` to swap ``ssh``
+        for ``sleep`` — this exercises the *same* caller-owned lifecycle
+        the real code will use.
+        """
+        real_popen = subprocess.Popen
+
+        def fake_popen(_argv, **kwargs):
+            # Ignore the ssh argv; run a harmless long sleep with the
+            # same stdin/stdout/stderr discipline the real call would.
+            return real_popen(["sleep", "30"], **kwargs)
+
+        with patch("fraisier.ssh.subprocess.Popen", side_effect=fake_popen):
+            proc = long_stream(self._target, ["journalctl", "-f"])
+
+        try:
+            # The caller's SIGINT handler: terminate + wait.
+            proc.terminate()
+            rc = proc.wait(timeout=5)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)
+
+        # SIGTERM → exit code is -SIGTERM under POSIX.
+        assert rc != 0

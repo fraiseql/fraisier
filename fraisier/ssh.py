@@ -165,8 +165,34 @@ def long_stream(
     target: SshTarget,
     remote_argv: list[str],
 ) -> subprocess.Popen[bytes]:
-    """Start a long-running remote stream. (Cycle 4.)"""
-    raise NotImplementedError
+    """Start a long-running remote stream.
+
+    The returned ``Popen`` is owned by the caller — typical usage is to
+    wait on it and forward SIGINT::
+
+        proc = long_stream(target, ["journalctl", "--no-pager", "-f"])
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            proc.wait()
+
+    The discipline here is historically brittle; each knob below maps to
+    a specific production incident (see
+    ``.phases/2026-04-10-ssh-io-contract/inventory.md`` → "Per-flag
+    rationale"):
+
+    - Popen (not ``os.execvp``), so the parent can wait/signal. Commit
+      ``8fc8fec``.
+    - ``stdin=DEVNULL`` at the Popen call, so SSH doesn't hold the
+      connection open waiting for an inherited pipe's EOF. Commit
+      ``08265c9``.
+    - ``-n`` on the ssh argv, as a belt-and-braces guard that SSH never
+      allocates a stdin channel. Commit ``da5c119``.
+    - stdout/stderr inherited (unset), so TTY behaviour survives.
+    """
+    ssh_argv = [*target._ssh_argv(include_dash_n=True), shlex.join(remote_argv)]
+    return subprocess.Popen(ssh_argv, stdin=subprocess.DEVNULL)
 
 
 def data_pipe(
