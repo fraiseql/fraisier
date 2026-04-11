@@ -169,75 +169,63 @@ class SSHRunner:
         if self.use_sudo and self.sudo_password:
             return self._upload_tree_with_password(local_dir, remote_dir)
 
-        tar = subprocess.Popen(
-            ["tar", "czf", "-", "-C", str(local_dir), "."],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
         remote_cmd = (
             f"mkdir -p {shlex.quote(remote_dir)}"
             f" && tar xzf - -C {shlex.quote(remote_dir)}"
         )
         if self.use_sudo:
             remote_cmd = f"sudo sh -c {shlex.quote(remote_cmd)}"
-        ssh_cmd = [*self._build_ssh_prefix(), remote_cmd]
-        ssh_result = subprocess.run(
-            ssh_cmd,
-            stdin=tar.stdout,
-            capture_output=True,
-            check=False,
-        )
-        if tar.stdout:
-            tar.stdout.close()
-        _, tar_stderr = tar.communicate()
-
-        if tar.returncode != 0:
-            raise subprocess.CalledProcessError(
-                tar.returncode, "tar", stderr=tar_stderr
-            )
-        if ssh_result.returncode != 0:
-            raise subprocess.CalledProcessError(
-                ssh_result.returncode, ssh_cmd, stderr=ssh_result.stderr
-            )
+        self._tar_pipe_to_remote(local_dir, remote_cmd)
 
     def _upload_tree_with_password(self, local_dir: Path, remote_dir: str) -> None:
         """Upload tree via temp dir + sudo -S mv when password is needed."""
         tmp_dir = "/tmp/.fraisier-upload-tree"
-        # Upload to temp dir without sudo
-        tar = subprocess.Popen(
-            ["tar", "czf", "-", "-C", str(local_dir), "."],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        # Step 1: tar -> remote temp dir, no sudo (stdin is the tar stream).
         remote_cmd = (
             f"mkdir -p {shlex.quote(tmp_dir)} && tar xzf - -C {shlex.quote(tmp_dir)}"
         )
-        ssh_cmd = [*self._build_ssh_prefix(), remote_cmd]
-        ssh_result = subprocess.run(
-            ssh_cmd,
-            stdin=tar.stdout,
-            capture_output=True,
-            check=False,
-        )
-        if tar.stdout:
-            tar.stdout.close()
-        _, tar_stderr = tar.communicate()
-
-        if tar.returncode != 0:
-            raise subprocess.CalledProcessError(
-                tar.returncode, "tar", stderr=tar_stderr
-            )
-        if ssh_result.returncode != 0:
-            raise subprocess.CalledProcessError(
-                ssh_result.returncode, ssh_cmd, stderr=ssh_result.stderr
-            )
-        # Move into place with sudo -S
+        self._tar_pipe_to_remote(local_dir, remote_cmd)
+        # Step 2: sudo -S mv into place via the regular run() path.
         move_cmd = (
             f"mkdir -p {shlex.quote(remote_dir)}"
             f" && cp -a {shlex.quote(tmp_dir)}/. {shlex.quote(remote_dir)}/"
             f" && rm -rf {shlex.quote(tmp_dir)}"
         )
         self.run(["sh", "-c", move_cmd])
+
+    def _tar_pipe_to_remote(self, local_dir: Path, remote_cmd: str) -> None:
+        """Run ``tar czf - | ssh remote_cmd`` and raise on either failure.
+
+        Routes the SSH leg through ``ssh.data_pipe`` so the defensive flag
+        set (BatchMode, ConnectTimeout, AddressFamily, StrictHostKeyChecking)
+        is applied — closing LB-5 from the Phase 1 inventory. ``-n`` is
+        deliberately omitted by ``data_pipe`` because the tar stream rides
+        on ssh's stdin.
+        """
+        tar = subprocess.Popen(
+            ["tar", "czf", "-", "-C", str(local_dir), "."],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        ssh_result = ssh.data_pipe(
+            self._target,
+            [remote_cmd],
+            stdin=tar.stdout,
+        )
+        if tar.stdout:
+            tar.stdout.close()
+        _, tar_stderr = tar.communicate()
+
+        if tar.returncode != 0:
+            raise subprocess.CalledProcessError(
+                tar.returncode, "tar", stderr=tar_stderr
+            )
+        if ssh_result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                ssh_result.returncode,
+                ssh_result.args,
+                stderr=ssh_result.stderr,
+            )
 
     def run(
         self,

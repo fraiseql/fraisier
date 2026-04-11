@@ -303,6 +303,39 @@ class TestSSHRunner:
             with pytest.raises(subprocess.CalledProcessError):
                 runner.upload_tree(src, "/tmp/remote")
 
+    def test_upload_tree_includes_connect_timeout_and_address_family(
+        self, tmp_path
+    ):
+        """LB-5: the upload_tree path was missing ConnectTimeout and
+        AddressFamily, so an IPv6-broken host hung the very first
+        deploy step (scaffold upload). Routing through ssh.data_pipe
+        carries the defensive flag set by construction."""
+        runner = SSHRunner(host="h", user="u", address_family="inet")
+        src = tmp_path / "src"
+        src.mkdir()
+
+        with (
+            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = mock_proc
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b""
+            )
+
+            runner.upload_tree(src, "/tmp/remote")
+
+        ssh_cmd = mock_run.call_args[0][0]
+        assert ssh_cmd[0] == "ssh"
+        assert "ConnectTimeout=30" in ssh_cmd
+        assert "AddressFamily=inet" in ssh_cmd
+        # data_pipe must NOT pass -n: tar stream is on stdin.
+        assert "-n" not in ssh_cmd
+
     def test_upload_tree_raises_on_ssh_failure(self, tmp_path):
         runner = SSHRunner(host="h", user="u")
         src = tmp_path / "src"
@@ -432,7 +465,9 @@ class TestSSHRunnerSudo:
 
         ssh_cmd = mock_run.call_args[0][0]
         remote_cmd = ssh_cmd[-1]
-        assert remote_cmd.startswith("sudo sh -c ")
+        # ssh.data_pipe shell-joins the remote command into a single token;
+        # the remote sh -c strips the outer quoting before executing.
+        assert "sudo sh -c " in remote_cmd
         assert "mkdir -p" in remote_cmd
         assert "tar xzf" in remote_cmd
 
