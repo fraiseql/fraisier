@@ -192,13 +192,12 @@ async def _run_deployment(
             "deploy_user": deploy_user,
         }
 
-        # Get deployer
-        from .runners import runner_from_config
+        # Get deployer — always use a local runner: the webhook process is
+        # already running on the target host, so the ssh: block (intended for
+        # client-side CLI commands) must not be applied here.
+        from .runners import LocalRunner
 
-        ssh_config = deploy_config.get("ssh")
-        runner = runner_from_config(
-            ssh_config if isinstance(ssh_config, dict) else None
-        )
+        runner = LocalRunner()
 
         if fraise_type == "api":
             from .deployers.api import APIDeployer

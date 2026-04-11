@@ -379,9 +379,12 @@ def _get_deployer(fraise_type: str, fraise_config: dict):
 
     Extracted from cli/_helpers.py for reuse in daemon.
     """
-    from fraisier.runners import runner_from_config
+    # Always use a local runner: the daemon process runs on the target host,
+    # so the ssh: block (intended for client-side CLI commands) must not be
+    # applied here.
+    from fraisier.runners import LocalRunner
 
-    runner = runner_from_config(fraise_config.get("ssh"))
+    runner = LocalRunner()
 
     if fraise_type == "api":
         from fraisier.deployers.api import APIDeployer

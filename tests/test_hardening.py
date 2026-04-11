@@ -562,7 +562,7 @@ class TestErrorPropagationGaps:
 
         with (
             patch(
-                "fraisier.runners.runner_from_config",
+                "fraisier.runners.LocalRunner",
                 side_effect=RuntimeError("bad runner config"),
             ),
             caplog.at_level("ERROR"),
