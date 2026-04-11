@@ -356,9 +356,7 @@ class TestDataPipe:
             )
 
         with patch("fraisier.ssh.subprocess.run", side_effect=capture):
-            data_pipe(
-                self._target, ["tar", "xzf", "-", "-C", "/dest"], stdin=0
-            )
+            data_pipe(self._target, ["tar", "xzf", "-", "-C", "/dest"], stdin=0)
 
         argv = captured["argv"]
         assert isinstance(argv, list)
@@ -428,3 +426,78 @@ class TestDataPipe:
         assert result.returncode == 0
         assert (dest / "hello.txt").read_text() == "hi\n"
         assert (dest / "sub" / "nested.txt").read_text() == "nested\n"
+
+
+# ---------------------------------------------------------------------------
+# Cycle 6 — default flag-set review (cross-cutting)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultDefensiveFlags:
+    """Cross-cutting guarantee: every public entry point includes the
+    core three-flag defensive set by default — ``BatchMode=yes``,
+    ``StrictHostKeyChecking=accept-new``, ``ConnectTimeout=30``.
+
+    These three together close LB-1, LB-5, LB-7 and the prompt-hang
+    failure mode. A future refactor that removes the shared
+    ``_options()`` helper must still satisfy this test.
+    """
+
+    _target = SshTarget.from_config({"host": "h"})
+    _expected = (
+        ("-o", "BatchMode=yes"),
+        ("-o", "StrictHostKeyChecking=accept-new"),
+        ("-o", "ConnectTimeout=30"),
+    )
+
+    def _capture_argv(self, invoke) -> list[str]:
+        captured: list[list[str]] = []
+
+        def capture(argv, **_kwargs):
+            captured.append(argv)
+            return subprocess.CompletedProcess(
+                args=argv,
+                returncode=0,
+                stdout="" if _kwargs.get("text") else b"",
+                stderr="" if _kwargs.get("text") else b"",
+            )
+
+        with (
+            patch("fraisier.ssh.subprocess.run", side_effect=capture),
+            patch("fraisier.ssh.subprocess.Popen", side_effect=capture),
+        ):
+            invoke()
+        return captured[0]
+
+    def test_short_cmd_has_all_three(self):
+        argv = self._capture_argv(lambda: short_cmd(self._target, ["true"]))
+        for pair in self._expected:
+            assert pair in _pairs(argv)
+
+    def test_long_stream_has_all_three(self):
+        argv = self._capture_argv(
+            lambda: long_stream(self._target, ["journalctl", "-f"])
+        )
+        for pair in self._expected:
+            assert pair in _pairs(argv)
+
+    def test_data_pipe_has_all_three(self):
+        argv = self._capture_argv(
+            lambda: data_pipe(self._target, ["tar", "xzf", "-"], stdin=0)
+        )
+        for pair in self._expected:
+            assert pair in _pairs(argv)
+
+    def test_only_data_pipe_omits_dash_n(self):
+        """-n is the one flag that legitimately differs between
+        patterns: short_cmd/long_stream require it, data_pipe forbids it."""
+        short = self._capture_argv(lambda: short_cmd(self._target, ["true"]))
+        stream = self._capture_argv(
+            lambda: long_stream(self._target, ["journalctl", "-f"])
+        )
+        pipe = self._capture_argv(
+            lambda: data_pipe(self._target, ["tar", "xzf", "-"], stdin=0)
+        )
+        assert "-n" in short
+        assert "-n" in stream
+        assert "-n" not in pipe
