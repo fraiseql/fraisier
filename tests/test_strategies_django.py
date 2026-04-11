@@ -60,7 +60,9 @@ class TestDjangoMigrateStrategyMigrateUp:
         with (
             patch("os.chdir"),
             patch("pathlib.Path.cwd", return_value=tmp_path),
-            patch("fraisier.strategies.execute_from_command_line") as mock_execute,
+            patch(
+                "fraisier.strategies._django.execute_from_command_line"
+            ) as mock_execute,
         ):
             result = strategy.migrate_up(tmp_path)
 
@@ -72,7 +74,7 @@ class TestDjangoMigrateStrategyMigrateUp:
         strategy = DjangoMigrateStrategy("settings")
 
         with patch(
-            "fraisier.strategies.execute_from_command_line",
+            "fraisier.strategies._django.execute_from_command_line",
             side_effect=Exception("migrate failed"),
         ):
             result = strategy.migrate_up(tmp_path)
@@ -91,7 +93,9 @@ class TestDjangoMigrateStrategyMigrateDown:
         with (
             patch("os.chdir"),
             patch("pathlib.Path.cwd", return_value=tmp_path),
-            patch("fraisier.strategies.execute_from_command_line") as mock_execute,
+            patch(
+                "fraisier.strategies._django.execute_from_command_line"
+            ) as mock_execute,
         ):
             result = strategy.migrate_down(tmp_path, "0001")
 
@@ -107,7 +111,7 @@ class TestDjangoMigrateStrategyGetCurrentVersion:
         strategy = DjangoMigrateStrategy("settings")
 
         with patch(
-            "fraisier.strategies.execute_from_command_line",
+            "fraisier.strategies._django.execute_from_command_line",
             side_effect=Exception("showmigrations failed"),
         ):
             result = strategy.get_current_version(tmp_path)

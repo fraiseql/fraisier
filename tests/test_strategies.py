@@ -34,8 +34,8 @@ _ADMIN_URL = "postgresql://postgres:pass@localhost:5432/postgres"
 class TestMigrateStrategy:
     """Production strategy: preflight → migrate up."""
 
-    @patch("fraisier.strategies.migrate_up")
-    @patch("fraisier.strategies.preflight")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
     def test_execute_success(self, mock_preflight, mock_up):
         mock_up.return_value = MigrationResult(
             success=True, steps_applied=3, execution_time_ms=120
@@ -61,7 +61,7 @@ class TestMigrateStrategy:
             hooks_config=None,
         )
 
-    @patch("fraisier.strategies.preflight")
+    @patch("fraisier.strategies._core.preflight")
     def test_execute_preflight_blocks_irreversible(self, mock_preflight):
         mock_preflight.side_effect = IrreversibleMigrationError("V003 has no down")
 
@@ -69,8 +69,8 @@ class TestMigrateStrategy:
         with pytest.raises(IrreversibleMigrationError):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
-    @patch("fraisier.strategies.migrate_up")
-    @patch("fraisier.strategies.preflight")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
     def test_execute_allows_irreversible(self, mock_preflight, mock_up):
         mock_up.return_value = MigrationResult(success=True, steps_applied=1)
 
@@ -85,8 +85,8 @@ class TestMigrateStrategy:
             database_url=None,
         )
 
-    @patch("fraisier.strategies.migrate_up")
-    @patch("fraisier.strategies.preflight")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
     def test_execute_migration_failure_raises(self, mock_preflight, mock_up):
         mock_up.side_effect = MigrationError("syntax error")
 
@@ -94,7 +94,7 @@ class TestMigrateStrategy:
         with pytest.raises(MigrationError):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
-    @patch("fraisier.strategies.migrate_down")
+    @patch("fraisier.strategies._core.migrate_down")
     def test_rollback_success(self, mock_down):
         mock_down.return_value = MigrationResult(success=True, steps_applied=2)
 
@@ -107,7 +107,7 @@ class TestMigrateStrategy:
             CONFIG, migrations_dir=MDIR, steps=2, database_url=None, hooks_config=None
         )
 
-    @patch("fraisier.strategies.migrate_down")
+    @patch("fraisier.strategies._core.migrate_down")
     def test_rollback_failure(self, mock_down):
         mock_down.return_value = MigrationResult(
             success=False, errors=["constraint violation"]
@@ -119,8 +119,8 @@ class TestMigrateStrategy:
         assert not result.success
         assert "constraint violation" in result.errors
 
-    @patch("fraisier.strategies.migrate_up")
-    @patch("fraisier.strategies.preflight")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
     def test_execute_passes_database_url_override(self, mock_preflight, mock_up):
         mock_up.return_value = MigrationResult(success=True, steps_applied=1)
         url = "postgresql:///mydb?host=/var/run/postgresql"
@@ -144,7 +144,7 @@ class TestMigrateStrategy:
             hooks_config=None,
         )
 
-    @patch("fraisier.strategies.migrate_down")
+    @patch("fraisier.strategies._core.migrate_down")
     def test_rollback_passes_database_url_override(self, mock_down):
         mock_down.return_value = MigrationResult(success=True, steps_applied=1)
         url = "postgresql:///mydb?host=/var/run/postgresql"
@@ -159,8 +159,8 @@ class TestMigrateStrategy:
             CONFIG, migrations_dir=MDIR, steps=1, database_url=url, hooks_config=None
         )
 
-    @patch("fraisier.strategies.migrate_up")
-    @patch("fraisier.strategies.preflight")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
     def test_execute_with_pre_migrate_verify(self, mock_preflight, mock_up):
         mock_up.return_value = MigrationResult(success=True, steps_applied=1)
 
@@ -217,7 +217,7 @@ class TestProvisionRolesIdentifierValidation:
     )
 
     @pytest.mark.parametrize("bad_owner", _ADVERSARIAL_NAMES)
-    @patch("fraisier.strategies.run_psql")
+    @patch("fraisier.strategies._core.run_psql")
     def test_provision_roles_rejects_unsafe_owner(self, mock_run_psql, bad_owner):
         mock_run_psql.return_value = (0, "", "")
         strategy = RebuildStrategy(required_roles=["app_core"])
@@ -230,7 +230,7 @@ class TestProvisionRolesIdentifierValidation:
         mock_run_psql.assert_not_called()
 
     @pytest.mark.parametrize("bad_role", _ADVERSARIAL_NAMES)
-    @patch("fraisier.strategies.run_psql")
+    @patch("fraisier.strategies._core.run_psql")
     def test_provision_roles_rejects_unsafe_role_defense_in_depth(
         self, mock_run_psql, bad_role
     ):
@@ -247,7 +247,7 @@ class TestProvisionRolesIdentifierValidation:
             )
         mock_run_psql.assert_not_called()
 
-    @patch("fraisier.strategies.run_psql")
+    @patch("fraisier.strategies._core.run_psql")
     def test_provision_roles_accepts_safe_names(self, mock_run_psql):
         mock_run_psql.return_value = (0, "", "")
         strategy = RebuildStrategy(required_roles=["readonly", "app_user"])
@@ -259,7 +259,7 @@ class TestProvisionRolesIdentifierValidation:
         # 2 roles x (CREATE ROLE + GRANT) = 4 psql invocations
         assert mock_run_psql.call_count == 4
 
-    @patch("fraisier.strategies.run_psql")
+    @patch("fraisier.strategies._core.run_psql")
     def test_provision_roles_accepts_safe_names_no_owner(self, mock_run_psql):
         mock_run_psql.return_value = (0, "", "")
         strategy = RebuildStrategy(required_roles=["readonly"])
@@ -312,7 +312,7 @@ class TestDjangoGetLatestVersionExceptionNarrowing:
 
         with (
             self._patch_django(ValueError("real bug")),
-            patch("fraisier.strategies.log") as mock_log,
+            patch("fraisier.strategies._django.log") as mock_log,
         ):
             result = strategy.get_latest_version(Path("/fake"))
 
@@ -325,7 +325,7 @@ class TestDjangoGetLatestVersionExceptionNarrowing:
 
         with (
             self._patch_django(ImportError("no migrations")),
-            patch("fraisier.strategies.log") as mock_log,
+            patch("fraisier.strategies._django.log") as mock_log,
         ):
             result = strategy.get_latest_version(Path("/fake"))
 
@@ -383,7 +383,7 @@ class TestRestoreMigrateStrategy:
 
     # -- Execute lifecycle --
 
-    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies._restore.migrate_up")
     @patch("fraisier.dbops.restore.validate_table_count")
     @patch("fraisier.dbops.restore.restore_backup")
     @patch("fraisier.dbops.operations.create_db")
@@ -471,7 +471,7 @@ class TestRestoreMigrateStrategy:
         with pytest.raises(DatabaseError, match="pg_restore failed"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
-    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies._restore.migrate_up")
     @patch("fraisier.dbops.restore.validate_table_count", return_value=(False, 10))
     @patch("fraisier.dbops.restore.restore_backup")
     @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
@@ -500,7 +500,7 @@ class TestRestoreMigrateStrategy:
         with pytest.raises(DatabaseError, match="Table count validation failed"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
-    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies._restore.migrate_up")
     @patch("fraisier.dbops.restore.validate_table_count")
     @patch("fraisier.dbops.restore.restore_backup")
     @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
@@ -529,7 +529,7 @@ class TestRestoreMigrateStrategy:
         assert result.success
         mock_table.assert_not_called()
 
-    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies._restore.migrate_up")
     @patch("fraisier.dbops.operations.create_db")
     @patch("fraisier.dbops.operations.drop_db")
     @patch("fraisier.dbops.operations.terminate_backends")
@@ -566,7 +566,7 @@ class TestRestoreMigrateStrategy:
 
     # -- Rollback --
 
-    @patch("fraisier.strategies.migrate_up")
+    @patch("fraisier.strategies._restore.migrate_up")
     @patch("fraisier.dbops.restore.restore_backup")
     @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
     @patch("fraisier.dbops.operations.drop_db")
@@ -596,7 +596,7 @@ class TestRestoreMigrateStrategy:
             CONFIG, migrations_dir=MDIR, database_url=url, hooks_config=None
         )
 
-    @patch("fraisier.strategies.migrate_down")
+    @patch("fraisier.strategies._restore.migrate_down")
     def test_rollback_passes_database_url_to_migrate_down(self, mock_down):
         mock_down.return_value = MigrationResult(success=True, steps_applied=1)
         url = "postgresql:///staging?host=/var/run/postgresql"
@@ -611,7 +611,7 @@ class TestRestoreMigrateStrategy:
             CONFIG, migrations_dir=MDIR, steps=1, database_url=url, hooks_config=None
         )
 
-    @patch("fraisier.strategies.migrate_down")
+    @patch("fraisier.strategies._restore.migrate_down")
     def test_rollback_without_template_calls_migrate_down(self, mock_down):
         mock_down.return_value = MigrationResult(success=True, steps_applied=2)
 
