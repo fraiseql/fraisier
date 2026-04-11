@@ -56,15 +56,11 @@ class PeeweeMigrateStrategy(MigrationStrategy):  # pragma: no cover
 
     def get_current_version(self, project_dir: Path) -> str | None:
         """Get current Peewee migration version."""
-        try:
-            # Peewee doesn't have a simple way to get current version
-            # We'd need to track this in a separate table or file
-            # For now, return None (not implemented)
-            return None
-
-        except Exception as e:
-            log.warning(f"Failed to get Peewee current version: {e}")
-            return None
+        # Peewee doesn't have a simple way to get current version: we'd
+        # need to track this in a separate table or file. The body is
+        # a placeholder return; there's no work that can raise, so the
+        # bare try/except has been removed.
+        return None
 
     def get_latest_version(self, project_dir: Path) -> str | None:
         """Get latest available Peewee migration."""
@@ -87,7 +83,12 @@ class PeeweeMigrateStrategy(MigrationStrategy):  # pragma: no cover
 
             return None
 
-        except Exception as e:
+        except (AttributeError, OSError) as e:
+            # Expected modes: ``Path.glob`` raises OSError on
+            # unreadable directories; pathlib API drift surfaces as
+            # AttributeError. ``int(version)`` is already guarded by
+            # an inner try/except. Anything else (e.g. a bug in our
+            # filename parsing) propagates so it isn't masked.
             log.warning(f"Failed to get Peewee latest version: {e}")
             return None
 
@@ -152,6 +153,8 @@ class PeeweeMigrateStrategy(MigrationStrategy):  # pragma: no cover
 
             return history
 
-        except Exception as e:
+        except (AttributeError, OSError) as e:
+            # Same expected modes as get_latest_version: filesystem
+            # failures from ``Path.glob`` plus pathlib API drift.
             log.warning(f"Failed to get Peewee migration history: {e}")
             return []
