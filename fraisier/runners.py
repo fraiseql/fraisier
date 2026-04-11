@@ -104,29 +104,6 @@ class SSHRunner:
             address_family=address_family,
         )
 
-    def _build_ssh_options(self) -> list[str]:
-        """Build shared SSH/SCP options (host-key policy, batch mode, identity)."""
-        host_key_policy = "accept-new" if self.strict_host_key else "no"
-        opts = [
-            "-o",
-            f"StrictHostKeyChecking={host_key_policy}",
-            "-o",
-            "BatchMode=yes",
-        ]
-        if self.key_path:
-            opts.extend(["-i", self.key_path])
-        return opts
-
-    def _build_ssh_prefix(self) -> list[str]:
-        """Build the SSH command prefix (everything before the remote cmd)."""
-        return [
-            "ssh",
-            *self._build_ssh_options(),
-            "-p",
-            str(self.port),
-            f"{self.user}@{self.host}",
-        ]
-
     def upload(
         self, local_path: Path, remote_path: str
     ) -> subprocess.CompletedProcess[str]:
@@ -140,11 +117,10 @@ class SSHRunner:
         if self.use_sudo:
             dest = f"/tmp/.fraisier-upload-{PurePosixPath(remote_path).name}"
 
+        # Defensive flag set comes from ssh.scp_options — closes LB-7.
         scp_cmd = [
             "scp",
-            *self._build_ssh_options(),
-            "-P",
-            str(self.port),
+            *ssh.scp_options(self._target),
             str(local_path),
             f"{self.user}@{self.host}:{dest}",
         ]

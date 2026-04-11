@@ -237,6 +237,33 @@ class TestSSHRunner:
         assert str(local_file) in called
         assert "root@prod.example.com:/opt/fraisier/fraises.yaml" in called
 
+    def test_upload_includes_full_defensive_flag_set(self, tmp_path):
+        """LB-7: scp accepts the same -o flags as ssh and was missing
+        ConnectTimeout/AddressFamily, leaving uploads vulnerable to the
+        same IPv6-fallback hang as ssh. The shared scp_options helper
+        carries the full defensive flag set."""
+        runner = SSHRunner(
+            host="h", user="u", port=2222, address_family="inet"
+        )
+        local_file = tmp_path / "f.txt"
+        local_file.write_text("")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            runner.upload(local_file, "/tmp/f.txt")
+
+        called = mock_run.call_args[0][0]
+        assert called[0] == "scp"
+        assert "ConnectTimeout=30" in called
+        assert "BatchMode=yes" in called
+        assert "AddressFamily=inet" in called
+        assert "StrictHostKeyChecking=accept-new" in called
+        # scp uses -P (capital) not -p
+        assert "-P" in called
+        assert "-p" not in called
+        assert "-n" not in called
+
     def test_upload_uses_port_capital_P(self, tmp_path):
         runner = SSHRunner(host="h", user="u", port=2222)
         local_file = tmp_path / "f.txt"

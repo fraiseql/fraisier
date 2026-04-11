@@ -195,6 +195,25 @@ def long_stream(
     return subprocess.Popen(ssh_argv, stdin=subprocess.DEVNULL)
 
 
+def scp_options(target: SshTarget) -> list[str]:
+    """Return the shared flag block for an ``scp`` invocation.
+
+    ``scp`` accepts the same ``-o`` flags as ``ssh`` (it *is* ssh under
+    the hood); the only difference is ``-P`` (capital) instead of ``-p``
+    for the port. This helper returns the defensive ``-o`` block from
+    :meth:`SshTarget._options` followed by ``-P <port>`` so the caller
+    only has to prepend ``"scp"`` and append ``src``/``dest``.
+
+    Closes LB-7 in ``.phases/2026-04-10-ssh-io-contract/latent-bugs.md``:
+    every scp upload now carries ``ConnectTimeout``/``AddressFamily`` and
+    is no longer vulnerable to the IPv6-fallback hang.
+
+    The ``-n`` flag is deliberately omitted: scp does not accept it, and
+    scp's stdin is unused anyway.
+    """
+    return [*target._options(), "-P", str(target.port)]
+
+
 def cmd_with_input(
     target: SshTarget,
     remote_argv: list[str],

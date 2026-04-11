@@ -26,6 +26,7 @@ from fraisier.ssh import (
     cmd_with_input,
     data_pipe,
     long_stream,
+    scp_options,
     short_cmd,
 )
 
@@ -502,6 +503,55 @@ class TestCmdWithInput:
         kwargs = mock_run.call_args.kwargs
         assert kwargs["timeout"] == 12
         assert kwargs["check"] is False
+
+
+# ---------------------------------------------------------------------------
+# scp_options — shared flag set for the scp upload path
+# ---------------------------------------------------------------------------
+
+
+class TestScpOptions:
+    """``scp_options`` returns the shared defensive flag set with ``-P``
+    (capital, scp's port flag) instead of ``-p``. SSHRunner.upload uses
+    it so the scp invocation gets the same defensive flags as the ssh
+    paths — closing LB-7 from ``latent-bugs.md``.
+
+    Note: ``scp_options`` does NOT include ``"scp"`` itself or src/dest;
+    that's the caller's responsibility.
+    """
+
+    def _opts(self, **overrides) -> list[str]:
+        target = SshTarget.from_config({"host": "h", **overrides})
+        return scp_options(target)
+
+    def test_includes_full_defensive_flag_set(self):
+        opts = self._opts()
+        assert ("-o", "BatchMode=yes") in _pairs(opts)
+        assert ("-o", "ConnectTimeout=30") in _pairs(opts)
+        assert ("-o", "StrictHostKeyChecking=accept-new") in _pairs(opts)
+
+    def test_uses_capital_P_for_port_not_lowercase(self):
+        opts = self._opts(port=2222)
+        assert "-P" in opts
+        assert opts[opts.index("-P") + 1] == "2222"
+        assert "-p" not in opts
+
+    def test_omits_dash_n(self):
+        """``-n`` is an ssh-only flag (rejected by scp); never include it."""
+        assert "-n" not in self._opts()
+
+    def test_address_family_threaded_through(self):
+        opts = self._opts(address_family="inet")
+        assert ("-o", "AddressFamily=inet") in _pairs(opts)
+
+    def test_key_path_threaded_through(self):
+        opts = self._opts(key_path="/etc/keys/id_ed25519")
+        assert "-i" in opts
+        assert opts[opts.index("-i") + 1] == "/etc/keys/id_ed25519"
+
+    def test_does_not_include_scp_binary(self):
+        """Caller prepends 'scp' itself; scp_options is the flag block only."""
+        assert "scp" not in self._opts()
 
 
 # ---------------------------------------------------------------------------
