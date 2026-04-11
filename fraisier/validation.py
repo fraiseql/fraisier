@@ -348,8 +348,7 @@ class ValidationRunner:
                             name="ssh_connectivity",
                             passed=False,
                             message=(
-                                f"Cannot SSH to {label}. "
-                                "Check host, key, and firewall."
+                                f"Cannot SSH to {label}. Check host, key, and firewall."
                             ),
                         )
                     )

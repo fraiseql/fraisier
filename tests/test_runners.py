@@ -242,9 +242,7 @@ class TestSSHRunner:
         ConnectTimeout/AddressFamily, leaving uploads vulnerable to the
         same IPv6-fallback hang as ssh. The shared scp_options helper
         carries the full defensive flag set."""
-        runner = SSHRunner(
-            host="h", user="u", port=2222, address_family="inet"
-        )
+        runner = SSHRunner(host="h", user="u", port=2222, address_family="inet")
         local_file = tmp_path / "f.txt"
         local_file.write_text("")
         with patch("subprocess.run") as mock_run:
@@ -330,9 +328,7 @@ class TestSSHRunner:
             with pytest.raises(subprocess.CalledProcessError):
                 runner.upload_tree(src, "/tmp/remote")
 
-    def test_upload_tree_includes_connect_timeout_and_address_family(
-        self, tmp_path
-    ):
+    def test_upload_tree_includes_connect_timeout_and_address_family(self, tmp_path):
         """LB-5: the upload_tree path was missing ConnectTimeout and
         AddressFamily, so an IPv6-broken host hung the very first
         deploy step (scaffold upload). Routing through ssh.data_pipe

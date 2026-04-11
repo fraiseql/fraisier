@@ -471,7 +471,8 @@ class TestCmdWithInput:
                 args=[], returncode=0, stdout="active\n", stderr=""
             )
             result = cmd_with_input(
-                self._target, ["sudo", "-S", "systemctl", "is-active", "x"],
+                self._target,
+                ["sudo", "-S", "systemctl", "is-active", "x"],
                 input="secret\n",
             )
         kwargs = mock_run.call_args.kwargs
@@ -496,7 +497,11 @@ class TestCmdWithInput:
                 args=[], returncode=0, stdout="", stderr=""
             )
             cmd_with_input(
-                self._target, ["true"], input="x", timeout=12, check=False,
+                self._target,
+                ["true"],
+                input="x",
+                timeout=12,
+                check=False,
             )
         kwargs = mock_run.call_args.kwargs
         assert kwargs["timeout"] == 12

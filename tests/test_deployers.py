@@ -606,7 +606,7 @@ class TestAPIDeployer:
             deployer.execute()
 
         pull_index = call_order.index("pull")
-        assert any(v == "sync" for v in call_order[pull_index + 1:]), (
+        assert any(v == "sync" for v in call_order[pull_index + 1 :]), (
             "_sync_config_if_needed was never called after _git_pull"
         )
 
