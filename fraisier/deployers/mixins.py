@@ -145,14 +145,17 @@ class GitDeployMixin:
                 env_key,
             )
             # Verify manifest ownership and delete paths owned by wrong user
-            if hasattr(self, "config_object") and self.config_object:
+            _co = getattr(self, "config_object", None)
+            if _co is not None:
+                from fraisier.config.loader import FraisierConfig
                 from fraisier.deployers.preflight_ownership import (
                     _verify_manifest_ownership,
                 )
                 from fraisier.manifest import build_manifest
 
-                manifest = build_manifest(self.config_object)
-                _verify_manifest_ownership(manifest)
+                if isinstance(_co, FraisierConfig):
+                    manifest = build_manifest(_co)
+                    _verify_manifest_ownership(manifest)
             cmd = ["sudo", "-u", self.install_user, *cmd]
         logger.info("Installing dependencies: %s", cmd)
         try:

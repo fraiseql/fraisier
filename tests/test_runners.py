@@ -152,11 +152,11 @@ class TestSSHRunner:
 
     # --- LB-1/LB-2/LB-3 regression tests ---
     #
-    # Phase 3 closes the latent bugs documented in
-    # .phases/2026-04-10-ssh-io-contract/latent-bugs.md by routing
-    # SSHRunner.run through the fraisier.ssh entry points which carry
-    # the full defensive flag set (BatchMode, ConnectTimeout,
-    # AddressFamily, StrictHostKeyChecking, -n) by construction.
+    # These tests guard against the latent bugs documented in
+    # .phases/2026-04-10-ssh-io-contract/latent-bugs.md. SSHRunner.run
+    # routes through the fraisier.ssh entry points which carry the full
+    # defensive flag set (BatchMode, ConnectTimeout, AddressFamily,
+    # StrictHostKeyChecking, -n) by construction.
 
     def test_run_includes_connect_timeout(self):
         """LB-1: SSHRunner.run was missing ConnectTimeout, leaving every

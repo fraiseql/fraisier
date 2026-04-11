@@ -8,15 +8,13 @@ applied by construction to every pattern:
 - ``short_cmd``  — run a remote command and capture output
 - ``long_stream`` — tail a remote process, caller owns the Popen
 - ``data_pipe``  — feed a local stream (e.g. tar) into SSH stdin
-
-Phase 2 only adds the module; Phase 3 migrates call sites onto it.
 """
 
 from __future__ import annotations
 
 import subprocess
 from itertools import pairwise
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
@@ -76,7 +74,7 @@ class TestSshTargetFromConfig:
     def test_instance_is_frozen(self):
         target = SshTarget.from_config({"host": "h"})
         with pytest.raises((AttributeError, TypeError)):
-            target.host = "other"  # type: ignore[misc]
+            target.host = "other"  # ty: ignore[invalid-assignment]
 
     def test_missing_host_raises(self):
         with pytest.raises((KeyError, TypeError, ValueError)):
@@ -353,7 +351,7 @@ class TestDataPipe:
     _target = SshTarget.from_config({"host": "h", "user": "u"})
 
     def test_no_dash_n_but_keeps_connect_timeout_et_al(self):
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def capture(argv, **kwargs):
             captured["argv"] = argv

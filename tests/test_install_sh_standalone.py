@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -106,7 +107,7 @@ class TestInstallShStandaloneMode:
         fake_hostname.write_text(f"#!/bin/bash\necho {hostname}\n")
         fake_hostname.chmod(0o755)
 
-        env = subprocess.os.environ.copy()
+        env = os.environ.copy()
         env["PATH"] = f"{tmp_dir}:{env.get('PATH', '')}"
 
         cmd = ["bash", str(install_sh)]
@@ -196,7 +197,7 @@ class TestInstallShGitRepoOwnership:
         fake_hostname.write_text(f"#!/bin/bash\necho {hostname}\n")
         fake_hostname.chmod(0o755)
 
-        env = subprocess.os.environ.copy()
+        env = os.environ.copy()
         env["PATH"] = f"{tmp_dir}:{env.get('PATH', '')}"
 
         cmd = ["bash", str(install_sh)]
@@ -270,7 +271,7 @@ class TestInstallShServerDetection:
         fake_hostname.chmod(0o755)
 
         # Prepend the temp bin dir to PATH so our fake hostname is used
-        env = subprocess.os.environ.copy()
+        env = os.environ.copy()
         env["PATH"] = f"{tmp_dir}:{env.get('PATH', '')}"
 
         cmd = ["bash", str(install_sh), "--standalone", "--dry-run"]

@@ -51,7 +51,7 @@ class TestManagedPath:
             read_write_units=(),
         )
         with pytest.raises(FrozenInstanceError):
-            path.owner = "root"
+            path.owner = "root"  # ty: ignore[invalid-assignment]
 
     def test_equality_on_identical_fields(self):
         """Two ManagedPath with identical fields compare equal."""
@@ -240,7 +240,7 @@ class TestPathManifest:
             env_paths=(),
         )
         with pytest.raises(FrozenInstanceError):
-            manifest.global_paths = ()
+            manifest.global_paths = ()  # ty: ignore[invalid-assignment]
 
 
 class TestBuildManifest:

@@ -268,7 +268,8 @@ def db_restore(
         if confiture_config_rel.is_absolute()
         else app_path / confiture_config_rel
     )
-    systemd_service = env_config.get("systemd_service")
+    _raw_svc = env_config.get("systemd_service")
+    systemd_service: str | None = str(_raw_svc) if _raw_svc else None
     admin_url = db_cfg.get("admin_url")
     if not admin_url:
         console.print(
@@ -317,7 +318,7 @@ def db_restore(
         else None
     )
 
-    if svc_mgr:
+    if svc_mgr and systemd_service:
         console.print(f"[cyan]Stopping {systemd_service}...[/cyan]")
         svc_mgr.stop(systemd_service)
 
@@ -342,14 +343,14 @@ def db_restore(
             migrations_dir=app_path / "db" / "migrations",
         )
     except DatabaseError as exc:
-        if svc_mgr:
+        if svc_mgr and systemd_service:
             msg = f"[yellow]Restarting {systemd_service} after error...[/yellow]"
             console.print(msg)
             svc_mgr.restart(systemd_service)
         console.print(f"[red]Restore failed:[/red] {exc}")
         raise SystemExit(1) from exc
 
-    if svc_mgr:
+    if svc_mgr and systemd_service:
         console.print(f"[cyan]Restarting {systemd_service}...[/cyan]")
         svc_mgr.restart(systemd_service)
 

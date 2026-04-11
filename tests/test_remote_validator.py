@@ -25,6 +25,7 @@ class TestCheckManifestPaths:
 
         config = FraisierConfig(config_file)
         fraise_config = config.get_fraise_environment("api", "prod")
+        assert fraise_config is not None
         runner = mock_runner or MagicMock()
         return RemoteDeploymentValidator(fraise_config, runner, config)
 

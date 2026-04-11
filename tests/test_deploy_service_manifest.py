@@ -47,7 +47,7 @@ fraises:
         # Read the rendered output
         output_path = renderer.output_dir / socket_rel.replace(".socket", "@.service")
         if not output_path.parent.exists():
-            pytest.skip("Could not verify output (renderer not fully initialized)")
+            pytest.skip("Could not verify output (renderer not fully initialized)")  # ty: ignore[too-many-positional-arguments]
             return
 
         # Instead, test the template directly

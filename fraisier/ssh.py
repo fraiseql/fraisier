@@ -1,18 +1,38 @@
 """Centralised SSH invocation abstraction.
 
 Every direct subprocess-based SSH call in fraisier should go through this
-module. The three top-level entry points encode the patterns identified in
-Phase 1 of the SSH I/O contract refactor
-(see ``.phases/2026-04-10-ssh-io-contract/inventory.md``):
+module. Each entry point applies the full defensive flag set by construction —
+the flags exist because of specific production failures documented in the
+``# Why:`` comments on :meth:`SshTarget._options`.
 
-- :func:`short_cmd`   — run a remote command and capture output
-- :func:`long_stream` — tail a remote process; caller owns the ``Popen``
-- :func:`data_pipe`   — feed a local byte stream into SSH stdin
+Three usage patterns, each mapping to an entry point:
 
-Each entry point applies the full defensive flag set by construction. The
-flags exist because of specific production failures; the history is in
-``cli/logs.py:_build_ssh_cmd`` and in
-``.phases/2026-04-10-ssh-io-contract/inventory.md`` ("Per-flag rationale").
+**short_cmd** — :func:`short_cmd`
+    Run a remote command and capture its output as text. Use this for
+    any single-shot command where the parent does not write to stdin.
+    ``-n`` is always set; output is captured; a timeout is enforced.
+
+**long_stream** — :func:`long_stream`
+    Start a long-running remote process (e.g. ``journalctl -f``) and
+    return the ``Popen`` to the caller. stdout/stderr are inherited so
+    TTY behaviour survives. ``-n`` and ``stdin=DEVNULL`` prevent the
+    parent from inadvertently feeding the remote process.
+
+**data_pipe** — :func:`data_pipe`
+    Feed a local byte stream (typically a ``tar`` subprocess stdout)
+    into SSH stdin. ``-n`` MUST be omitted here so SSH reads stdin;
+    all other defensive flags still apply.
+
+Two auxiliary helpers:
+
+**scp_options** — :func:`scp_options`
+    Build the ``-o``/``-P`` flag block for an ``scp`` invocation.
+    ``scp`` accepts the same options as ``ssh`` with ``-P`` for port.
+
+**cmd_with_input** — :func:`cmd_with_input`
+    Run a remote command while piping a small text payload to stdin
+    (e.g. a ``sudo -S`` password). ``-n`` is omitted; all other flags
+    apply.
 """
 
 from __future__ import annotations
@@ -59,9 +79,9 @@ class SshTarget:
     def from_config(cls, cfg: dict[str, Any]) -> SshTarget:
         """Build an ``SshTarget`` from a fraise ``ssh:`` config dict.
 
-        The dict shape matches what every existing call site already
+        The dict shape is compatible with what every existing call site
         consumes (``logs.py``, ``runners.py``, ``validation.py``,
-        ``bare_metal.py``) — keeps the migration in Phase 3 mechanical.
+        ``bare_metal.py``).
 
         Raises:
             KeyError: when ``host`` is missing from the dict.
