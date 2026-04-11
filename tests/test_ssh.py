@@ -16,11 +16,15 @@ from __future__ import annotations
 
 import subprocess
 from itertools import pairwise
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
-from fraisier.ssh import SshTarget, long_stream, short_cmd
+from fraisier.ssh import SshTarget, data_pipe, long_stream, short_cmd
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Cycle 1 — SshTarget + _options()
@@ -320,3 +324,107 @@ class TestLongStream:
 
         # SIGTERM → exit code is -SIGTERM under POSIX.
         assert rc != 0
+
+
+# ---------------------------------------------------------------------------
+# Cycle 5 — data_pipe (real tar round-trip)
+# ---------------------------------------------------------------------------
+
+
+class TestDataPipe:
+    """``data_pipe`` is the ``upload_tree`` shape: the parent opens a
+    subprocess (``tar czf -``) and hands its stdout to SSH as stdin.
+    Unlike ``short_cmd``/``long_stream``, this pattern MUST NOT pass
+    ``-n`` — SSH has to read stdin for the tar stream.
+
+    The rest of the defensive flag set (``BatchMode``, ``ConnectTimeout``,
+    ``StrictHostKeyChecking``, ``AddressFamily``) still applies. LB-5 in
+    ``latent-bugs.md`` is closed by this test: the upload path now has
+    the same IPv6-fallback protection as the short-cmd path.
+    """
+
+    _target = SshTarget.from_config({"host": "h", "user": "u"})
+
+    def test_no_dash_n_but_keeps_connect_timeout_et_al(self):
+        captured: dict[str, object] = {}
+
+        def capture(argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(
+                args=argv, returncode=0, stdout=b"", stderr=b""
+            )
+
+        with patch("fraisier.ssh.subprocess.run", side_effect=capture):
+            data_pipe(
+                self._target, ["tar", "xzf", "-", "-C", "/dest"], stdin=0
+            )
+
+        argv = captured["argv"]
+        assert isinstance(argv, list)
+        # -n MUST NOT be present on the data-pipe pattern.
+        assert "-n" not in argv
+        # But every other defensive flag is still present.
+        assert ("-o", "BatchMode=yes") in _pairs(argv)
+        assert ("-o", "ConnectTimeout=30") in _pairs(argv)
+        assert ("-o", "StrictHostKeyChecking=accept-new") in _pairs(argv)
+
+    def test_stdin_is_forwarded_and_not_captured_text(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b""
+            )
+            data_pipe(self._target, ["tar", "xzf", "-"], stdin=42, timeout=10)
+
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["stdin"] == 42
+        # Output is bytes (capture_output=True, no text=True).
+        assert kwargs["capture_output"] is True
+        assert kwargs.get("text") in (None, False)
+        assert kwargs["timeout"] == 10
+
+    def test_real_tar_round_trip(self, tmp_path: Path):
+        """End-to-end: tar a local tree, pipe through ``data_pipe``
+        (with ssh swapped for a local ``sh -c`` stand-in), and verify
+        the tree materialises on the destination side.
+        """
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "hello.txt").write_text("hi\n")
+        (src / "sub").mkdir()
+        (src / "sub" / "nested.txt").write_text("nested\n")
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        real_run = subprocess.run
+
+        def run_locally(argv, **kwargs):
+            # argv ends with the shell-joined remote command; run it
+            # under a local shell instead of shelling out via ssh.
+            # This validates that stdin is actually threaded through.
+            assert "-n" not in argv, "data_pipe must not pass -n"
+            remote = argv[-1]
+            return real_run(["sh", "-c", remote], **kwargs)
+
+        tar = subprocess.Popen(
+            ["tar", "czf", "-", "-C", str(src), "."],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            with patch("fraisier.ssh.subprocess.run", side_effect=run_locally):
+                result = data_pipe(
+                    self._target,
+                    ["tar", "xzf", "-", "-C", str(dest)],
+                    stdin=tar.stdout,
+                )
+        finally:
+            if tar.stdout:
+                tar.stdout.close()
+            tar.wait(timeout=5)
+
+        assert tar.returncode == 0
+        assert result.returncode == 0
+        assert (dest / "hello.txt").read_text() == "hi\n"
+        assert (dest / "sub" / "nested.txt").read_text() == "nested\n"

@@ -198,9 +198,29 @@ def long_stream(
 def data_pipe(
     target: SshTarget,
     remote_argv: list[str],
-    stdin: int,
+    stdin: Any,
     *,
     timeout: int = 300,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run a remote command with caller-supplied stdin. (Cycle 5.)"""
-    raise NotImplementedError
+    """Run a remote command with caller-supplied stdin.
+
+    This is the ``upload_tree`` shape: the parent opens a local producer
+    subprocess (typically ``tar czf -``) and hands its ``stdout`` to SSH
+    as ``stdin``. ``stdin`` is anything ``subprocess.run`` accepts in its
+    ``stdin=`` kwarg — a file descriptor, a file object, or a
+    ``Popen.stdout`` pipe.
+
+    Unlike :func:`short_cmd` / :func:`long_stream`, ``-n`` must NOT be
+    set — SSH must read stdin for the stream. Every other defensive
+    flag (``BatchMode``, ``ConnectTimeout``, ``StrictHostKeyChecking``,
+    ``AddressFamily``) still applies; LB-5 in ``latent-bugs.md`` is
+    closed by this.
+    """
+    ssh_argv = [*target._ssh_argv(include_dash_n=False), shlex.join(remote_argv)]
+    return subprocess.run(
+        ssh_argv,
+        stdin=stdin,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
