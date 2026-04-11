@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fraisier import ssh
 from fraisier.config import FraisierConfig
 
 logger = logging.getLogger(__name__)
@@ -304,40 +305,41 @@ class ValidationRunner:
         return results
 
     def _check_ssh_connectivity(self) -> list[ValidationCheckResult]:
-        """Check SSH connectivity to configured hosts."""
+        """Check SSH connectivity to configured hosts.
+
+        Reads each fraise's ``ssh:`` block (the same shape every other
+        call site uses) and routes the probe through
+        ``fraisier.ssh.short_cmd`` so the defensive flag set
+        (BatchMode, ConnectTimeout, AddressFamily, StrictHostKeyChecking,
+        ``-n``) and the per-fraise ``key_path`` / ``strict_host_key``
+        knobs are honoured. This closes LB-6 from the Phase 1 inventory.
+
+        The 5-second connect timeout is intentionally tighter than the
+        30-second default — a preflight should fail fast.
+        """
         results: list[ValidationCheckResult] = []
         seen_hosts: set[str] = set()
         for name in self.config.list_fraises():
             for env_name in self.config.list_environments(name):
                 env = self.config.get_environment(name, env_name) or {}
-                host = env.get("ssh_host")
-                if not host or host in seen_hosts:
+                ssh_cfg = env.get("ssh")
+                if not isinstance(ssh_cfg, dict) or not ssh_cfg.get("host"):
                     continue
-                seen_hosts.add(host)
-                user = env.get("ssh_user", "fraisier")
-                port = env.get("ssh_port", 22)
+                # Override the default 30s ConnectTimeout: a preflight
+                # probe should fail fast, not block the user for half a
+                # minute on each unreachable host.
+                target = ssh.SshTarget.from_config({**ssh_cfg, "connect_timeout": 5})
+                if target.host in seen_hosts:
+                    continue
+                seen_hosts.add(target.host)
+                label = f"{target.user}@{target.host}:{target.port}"
                 try:
-                    subprocess.run(
-                        [
-                            "ssh",
-                            "-o",
-                            "BatchMode=yes",
-                            "-o",
-                            "ConnectTimeout=5",
-                            "-p",
-                            str(port),
-                            f"{user}@{host}",
-                            "true",
-                        ],
-                        capture_output=True,
-                        timeout=10,
-                        check=True,
-                    )
+                    ssh.short_cmd(target, ["true"], timeout=10)
                     results.append(
                         ValidationCheckResult(
                             name="ssh_connectivity",
                             passed=True,
-                            message=f"SSH to {user}@{host}:{port} OK",
+                            message=f"SSH to {label} OK",
                         )
                     )
                 except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -346,7 +348,7 @@ class ValidationRunner:
                             name="ssh_connectivity",
                             passed=False,
                             message=(
-                                f"Cannot SSH to {user}@{host}:{port}. "
+                                f"Cannot SSH to {label}. "
                                 "Check host, key, and firewall."
                             ),
                         )
