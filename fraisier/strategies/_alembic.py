@@ -94,7 +94,13 @@ class AlembicMigrateStrategy(MigrationStrategy):  # pragma: no cover
             finally:
                 sys.stdout = old_stdout
 
-        except Exception as e:
+        except (ImportError, AttributeError, OSError) as e:
+            # Expected modes: alembic not installed (ImportError),
+            # alembic API drift (AttributeError), or filesystem
+            # failures reading alembic.ini / script_location
+            # (OSError). Anything else — e.g. an alembic CommandError
+            # for a misconfigured environment — propagates so the
+            # underlying problem isn't silently masked.
             log.warning(f"Failed to get Alembic current version: {e}")
 
         return None
@@ -113,7 +119,9 @@ class AlembicMigrateStrategy(MigrationStrategy):  # pragma: no cover
 
             return head_revision
 
-        except Exception as e:
+        except (ImportError, AttributeError, OSError) as e:
+            # Same expected modes as get_current_version: missing
+            # alembic, API drift, or unreadable script_location.
             log.warning(f"Failed to get Alembic latest version: {e}")
 
         return None
@@ -212,6 +220,9 @@ class AlembicMigrateStrategy(MigrationStrategy):  # pragma: no cover
 
             return history
 
-        except Exception as e:
+        except (ImportError, AttributeError, OSError) as e:
+            # Walking the script directory: failures here are missing
+            # alembic, API drift in walk_revisions, or unreadable
+            # script_location. Anything else propagates.
             log.warning(f"Failed to get Alembic migration history: {e}")
             return []
