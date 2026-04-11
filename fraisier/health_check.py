@@ -83,6 +83,7 @@ class HealthCheckResult:
         duration: float,
         message: str | None = None,
         transient: bool | None = None,
+        label: str | None = None,
     ):
         """Initialize health check result.
 
@@ -93,6 +94,7 @@ class HealthCheckResult:
             message: Details or error message
             transient: Whether failure is expected during startup (True), likely
                 a config problem (False), or unknown (None)
+            label: Name of the checker that produced this result
         """
         self.success = success
         self.check_type = check_type
@@ -100,6 +102,7 @@ class HealthCheckResult:
         self.message = message
         self.timestamp = time.time()
         self.transient = transient
+        self.label = label
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging/serialization."""
@@ -110,6 +113,7 @@ class HealthCheckResult:
             "message": self.message,
             "timestamp": self.timestamp,
             "transient": self.transient,
+            "label": self.label,
         }
 
 
@@ -117,6 +121,7 @@ class HealthChecker(ABC):
     """Base class for health check implementations."""
 
     check_type: str
+    name: str = ""
 
     @abstractmethod
     def check(self, timeout: float = 5.0) -> HealthCheckResult:
@@ -136,17 +141,19 @@ class HTTPHealthChecker(HealthChecker):
 
     check_type = "http"
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, *, name: str = ""):
         """Initialize HTTP health checker.
 
         Args:
             url: URL to check (e.g., 'http://localhost:8000/health')
+            name: Human-readable label for this check (defaults to url[:40])
 
         Raises:
             ValueError: If the URL targets a private or loopback address.
         """
         _validate_health_check_url(url)
         self.url = url
+        self.name = name or url[:40]
         self.logger = logging.getLogger(__name__)
 
     def check(self, timeout: float = 5.0) -> HealthCheckResult:
@@ -167,6 +174,7 @@ class HTTPHealthChecker(HealthChecker):
                 check_type=self.check_type,
                 duration=duration,
                 message=f"HTTP {response.status}",
+                label=self.name,
             )
         except urllib.error.HTTPError as e:
             duration = time.time() - start
@@ -181,6 +189,7 @@ class HTTPHealthChecker(HealthChecker):
                 duration=duration,
                 message=msg,
                 transient=is_transient,
+                label=self.name,
             )
         except urllib.error.URLError as e:
             duration = time.time() - start
@@ -190,6 +199,7 @@ class HTTPHealthChecker(HealthChecker):
                 duration=duration,
                 message=f"Service not yet reachable: {e.reason}",
                 transient=True,
+                label=self.name,
             )
         except Exception as e:
             duration = time.time() - start
@@ -198,6 +208,7 @@ class HTTPHealthChecker(HealthChecker):
                 check_type=self.check_type,
                 duration=duration,
                 message=f"Connection error: {e}",
+                label=self.name,
             )
 
 
@@ -206,15 +217,17 @@ class TCPHealthChecker(HealthChecker):
 
     check_type = "tcp"
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, *, name: str = ""):
         """Initialize TCP health checker.
 
         Args:
             host: Host to connect to
             port: Port to check
+            name: Human-readable label for this check (defaults to host:port)
         """
         self.host = host
         self.port = port
+        self.name = name or f"{host}:{port}"
         self.logger = logging.getLogger(__name__)
 
     def check(self, timeout: float = 5.0) -> HealthCheckResult:
@@ -244,6 +257,7 @@ class TCPHealthChecker(HealthChecker):
                 message="TCP connection successful"
                 if success
                 else f"TCP error: {result}",
+                label=self.name,
             )
         except Exception as e:
             duration = time.time() - start
@@ -252,6 +266,7 @@ class TCPHealthChecker(HealthChecker):
                 check_type=self.check_type,
                 duration=duration,
                 message=f"TCP check error: {e}",
+                label=self.name,
             )
         finally:
             sock.close()
@@ -262,12 +277,13 @@ class ExecHealthChecker(HealthChecker):
 
     check_type = "exec"
 
-    def __init__(self, command: str, *, shell: bool = False):
+    def __init__(self, command: str, *, shell: bool = False, name: str = ""):
         """Initialize exec health checker.
 
         Args:
             command: Command to execute (should return 0 on success)
             shell: If True, run via shell. Default False uses shlex.split().
+            name: Human-readable label for this check (defaults to command[:40])
 
         Raises:
             ValueError: If *shell* is False and *command* contains shell
@@ -279,6 +295,7 @@ class ExecHealthChecker(HealthChecker):
             validate_shell_command(command)
         self.command = command
         self.use_shell = shell
+        self.name = name or command[:40]
         self.logger = logging.getLogger(__name__)
 
     def check(self, timeout: float = 5.0) -> HealthCheckResult:
@@ -308,6 +325,7 @@ class ExecHealthChecker(HealthChecker):
                 check_type=self.check_type,
                 duration=duration,
                 message=(result.stdout.strip() or f"Exit code: {result.returncode}"),
+                label=self.name,
             )
         except subprocess.TimeoutExpired:
             duration = time.time() - start
@@ -316,6 +334,7 @@ class ExecHealthChecker(HealthChecker):
                 check_type=self.check_type,
                 duration=duration,
                 message=f"Command timeout after {timeout}s",
+                label=self.name,
             )
         except Exception as e:
             duration = time.time() - start
@@ -324,6 +343,7 @@ class ExecHealthChecker(HealthChecker):
                 check_type=self.check_type,
                 duration=duration,
                 message=f"Execution error: {e}",
+                label=self.name,
             )
 
 
@@ -416,8 +436,8 @@ class HealthCheckManager:
                         )
                     else:
                         self.logger.warning(
-                            f"Health check failed on attempt {attempt + 1}/"
-                            f"{max_retries}",
+                            f"Health check '{checker.name}' failed on attempt "
+                            f"{attempt + 1}/{max_retries}",
                             check_message=last_result.message,
                             duration=last_result.duration,
                         )
@@ -454,7 +474,8 @@ class HealthCheckManager:
             hint = "Check service logs for details."
 
         self.logger.error(
-            f"Health check failed after {max_retries} attempts. {hint}",
+            f"Health check '{checker.name}' failed after {max_retries} attempts."
+            f" {hint}",
             check_message=last_result.message,
         )
         return last_result

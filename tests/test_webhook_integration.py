@@ -21,10 +21,12 @@ WEBHOOK_SECRET = "test-webhook-secret-for-integration-tests"
 _PUSH_HEADERS = {
     "Content-Type": "application/json",
     "X-GitHub-Event": "push",
+    "X-GitHub-Delivery": "test-delivery-push-001",
 }
 _PING_HEADERS = {
     "Content-Type": "application/json",
     "X-GitHub-Event": "ping",
+    "X-GitHub-Delivery": "test-delivery-ping-001",
 }
 
 

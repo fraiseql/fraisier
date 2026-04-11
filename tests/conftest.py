@@ -24,6 +24,16 @@ def _reset_rate_limiter():
 
 
 @pytest.fixture(autouse=True)
+def _reset_delivery_dedupe():
+    """Clear webhook delivery-ID dedupe store between tests."""
+    from fraisier.git.github import _delivery_dedupe
+
+    _delivery_dedupe._store.clear()
+    yield
+    _delivery_dedupe._store.clear()
+
+
+@pytest.fixture(autouse=True)
 def _fast_strategy_time(monkeypatch, request):
     """Make asyncio.sleep advance time instantly for deployment strategy tests."""
     # Only apply to test files that test deployment strategies

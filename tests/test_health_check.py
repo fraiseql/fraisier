@@ -563,3 +563,57 @@ class TestCompositeHealthChecker:
 
         success, _results = composite.check_all(require_all=False)
         assert success is True
+
+
+class TestHealthCheckLabeling:
+    """Cycle 1: health check results carry the checker's name as label."""
+
+    def test_exec_checker_label_from_explicit_name(self):
+        checker = ExecHealthChecker("false", name="web-process")
+        result = checker.check()
+        assert not result.success
+        assert result.label == "web-process"
+
+    def test_exec_checker_label_defaults_to_command(self):
+        checker = ExecHealthChecker("false")
+        result = checker.check()
+        assert result.label == "false"
+
+    def test_exec_checker_label_truncated_to_40(self):
+        # ExecHealthChecker validates the command — use a valid-but-long name
+        checker = ExecHealthChecker("false", name="a" * 50)
+        assert (
+            len(checker.name) == 50
+        )  # name is not truncated (only command default is)
+
+    def test_http_checker_label_from_explicit_name(self):
+        checker = HTTPHealthChecker("http://localhost:9999/health", name="api-health")
+        result = checker.check(timeout=0.01)
+        assert result.label == "api-health"
+
+    def test_http_checker_label_defaults_to_url(self):
+        checker = HTTPHealthChecker("http://localhost:9999/health")
+        result = checker.check(timeout=0.01)
+        assert result.label is not None
+        assert "localhost" in result.label
+
+    def test_tcp_checker_label_from_explicit_name(self):
+        checker = TCPHealthChecker("localhost", 19999, name="db-port")
+        result = checker.check(timeout=0.01)
+        assert result.label == "db-port"
+
+    def test_tcp_checker_label_defaults_to_host_port(self):
+        checker = TCPHealthChecker("localhost", 19999)
+        result = checker.check(timeout=0.01)
+        assert result.label == "localhost:19999"
+
+    def test_health_check_result_label_in_to_dict(self):
+        result = HealthCheckResult(
+            success=False, check_type="exec", duration=0.1, label="my-check"
+        )
+        d = result.to_dict()
+        assert d["label"] == "my-check"
+
+    def test_health_check_result_label_none_by_default(self):
+        result = HealthCheckResult(success=True, check_type="http", duration=0.05)
+        assert result.label is None

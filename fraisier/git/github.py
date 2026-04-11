@@ -1,10 +1,63 @@
-"""GitHub provider implementation."""
+"""GitHub provider implementation.
+
+Replay protection
+-----------------
+Webhook deliveries are deduplicated using the ``X-GitHub-Delivery`` UUID header.
+After HMAC signature verification, every request is checked against a TTL'd
+in-memory LRU set (``_delivery_dedupe``).  Deliveries seen within
+``WEBHOOK_DEDUPE_WINDOW_SECONDS`` (10 min) are rejected with HTTP 409.
+
+**Single-process limitation**: the in-memory store is not shared across
+processes or across daemon restarts.  If fraisier ever runs multiple webhook
+workers (e.g. behind a load balancer), this MUST be replaced with a shared
+store (SQLite or similar).
+"""
 
 import hashlib
 import hmac
+import time
 from typing import Any
 
+from fraisier.constants import WEBHOOK_DEDUPE_MAX_ENTRIES, WEBHOOK_DEDUPE_WINDOW_SECONDS
+
 from .base import GitProvider, WebhookEvent
+
+
+class _DeliveryDedupe:
+    """TTL'd LRU set of recently-seen X-GitHub-Delivery UUIDs.
+
+    Single-process only.  If fraisier ever runs multiple webhook workers,
+    this MUST be replaced with a shared store (SQLite or similar).
+    """
+
+    def __init__(self, max_entries: int, ttl_seconds: int) -> None:
+        self._max = max_entries
+        self._ttl = ttl_seconds
+        self._store: dict[str, float] = {}  # {delivery_id: first_seen_at}
+
+    def seen(self, delivery_id: str) -> bool:
+        """Return True if *delivery_id* was already seen (replay), else record it."""
+        now = time.time()
+        self._prune(now)
+        if delivery_id in self._store:
+            return True
+        if len(self._store) >= self._max:
+            # Evict the entry with the oldest timestamp
+            oldest = min(self._store, key=self._store.__getitem__)
+            del self._store[oldest]
+        self._store[delivery_id] = now
+        return False
+
+    def _prune(self, now: float) -> None:
+        expired = [k for k, t in self._store.items() if now - t > self._ttl]
+        for k in expired:
+            del self._store[k]
+
+
+_delivery_dedupe = _DeliveryDedupe(
+    max_entries=WEBHOOK_DEDUPE_MAX_ENTRIES,
+    ttl_seconds=WEBHOOK_DEDUPE_WINDOW_SECONDS,
+)
 
 
 class GitHubProvider(GitProvider):

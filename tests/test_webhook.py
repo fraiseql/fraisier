@@ -798,7 +798,10 @@ class TestWebhookRoutes:
             response = webhook_client.post(
                 "/webhook",
                 json={"zen": "test"},
-                headers={"X-GitHub-Event": "ping"},
+                headers={
+                    "X-GitHub-Event": "ping",
+                    "X-GitHub-Delivery": "test-autodetect-001",
+                },
             )
 
             assert response.status_code == 200
@@ -855,7 +858,10 @@ class TestWebhookRoutes:
             response = webhook_client.post(
                 "/webhook",
                 json=payload,
-                headers={"X-GitHub-Event": "push"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-db-record-001",
+                },
             )
 
             assert response.status_code == 200
@@ -888,6 +894,7 @@ class TestWebhookRoutes:
             response = webhook_client.post(
                 "/webhook/github",
                 json={"zen": "test"},
+                headers={"X-GitHub-Delivery": "test-legacy-001"},
             )
 
             assert response.status_code == 200
@@ -1014,7 +1021,10 @@ class TestMultiProviderRouting:
             response = webhook_client.post(
                 "/webhook",
                 json={"ref": "refs/heads/main"},
-                headers={header_key: header_value},
+                headers={
+                    header_key: header_value,
+                    "X-GitHub-Delivery": "test-multi-provider-001",
+                },
             )
 
             assert response.status_code == 200
@@ -1267,7 +1277,10 @@ class TestWebhookIntegration:
             response = webhook_client.post(
                 "/webhook",
                 json=payload,
-                headers={"X-GitHub-Event": "push"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-full-flow-001",
+                },
             )
 
             # Should complete successfully

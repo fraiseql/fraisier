@@ -14,6 +14,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from fraisier import ssh
+from fraisier.constants import DEFAULT_EXEC_TIMEOUT, SSH_CONNECT_TIMEOUT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,7 +31,7 @@ class CommandRunner(Protocol):
         cmd: list[str],
         *,
         cwd: str | None = None,
-        timeout: int = 300,
+        timeout: int = DEFAULT_EXEC_TIMEOUT,
         check: bool = True,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]: ...
@@ -44,7 +45,7 @@ class LocalRunner:
         cmd: list[str],
         *,
         cwd: str | None = None,
-        timeout: int = 300,
+        timeout: int = DEFAULT_EXEC_TIMEOUT,
         check: bool = True,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
@@ -77,7 +78,7 @@ class SSHRunner:
         strict_host_key: bool = True,
         use_sudo: bool = False,
         sudo_password: str | None = None,
-        connect_timeout: int = 30,
+        connect_timeout: int = SSH_CONNECT_TIMEOUT,
         address_family: str | None = None,
     ) -> None:
         self.host = host
@@ -128,7 +129,7 @@ class SSHRunner:
             scp_cmd,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=DEFAULT_EXEC_TIMEOUT,
             check=True,
         )
         if self.use_sudo:
@@ -208,7 +209,7 @@ class SSHRunner:
         cmd: list[str],
         *,
         cwd: str | None = None,
-        timeout: int = 300,
+        timeout: int = DEFAULT_EXEC_TIMEOUT,
         check: bool = True,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
@@ -268,7 +269,7 @@ def runner_from_config(
             port=ssh_config.get("port", 22),
             key_path=ssh_config.get("key_path"),
             strict_host_key=ssh_config.get("strict_host_key", True),
-            connect_timeout=ssh_config.get("connect_timeout", 30),
+            connect_timeout=ssh_config.get("connect_timeout", SSH_CONNECT_TIMEOUT),
             address_family=ssh_config.get("address_family"),
         )
     return LocalRunner()

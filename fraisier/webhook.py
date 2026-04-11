@@ -534,6 +534,17 @@ async def generic_webhook(
 
     provider_name = _detect_git_provider(headers, request.query_params.get("provider"))
     provider, normalized_headers = _verify_signature(provider_name, body, headers)
+
+    if provider_name == "github":
+        delivery_id = normalized_headers.get("x-github-delivery", "").strip()
+        if not delivery_id:
+            raise _structured_error(400, "validation_error", "missing delivery id")
+        from .git.github import _delivery_dedupe
+
+        if _delivery_dedupe.seen(delivery_id):
+            logger.info("Replay rejected: delivery %s already processed", delivery_id)
+            raise _structured_error(409, "replay_rejected", "replay rejected")
+
     event = await _normalize_event(provider, request, normalized_headers)
 
     db = get_db()
