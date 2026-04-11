@@ -213,3 +213,30 @@ class TestShortCmd:
             short_cmd(self._target, ["echo", "a b", "c;d"])
         argv = mock_run.call_args.args[0]
         assert argv[-1] == "echo 'a b' 'c;d'"
+
+
+# ---------------------------------------------------------------------------
+# Cycle 3 — short_cmd timeout
+# ---------------------------------------------------------------------------
+
+
+class TestShortCmdTimeout:
+    """The 60s default is deliberate (matches logs.py's tolerance for
+    journalctl-shaped commands); callers can override it, and
+    ``TimeoutExpired`` must propagate so the caller can react."""
+
+    _target = SshTarget.from_config({"host": "h"})
+
+    def test_custom_timeout_is_passed_through(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            short_cmd(self._target, ["true"], timeout=7)
+        assert mock_run.call_args.kwargs["timeout"] == 7
+
+    def test_timeout_expired_propagates(self):
+        with patch("fraisier.ssh.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=1)
+            with pytest.raises(subprocess.TimeoutExpired):
+                short_cmd(self._target, ["sleep", "60"], timeout=1)
