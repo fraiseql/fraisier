@@ -62,7 +62,7 @@ class TestTriggerDeployWait:
             assert parsed["status"] == "success"
 
     @patch("socket.socket")
-    @patch("fraisier.cli.main.Path")
+    @patch("fraisier.cli._deploy.Path")
     @patch("fraisier.cli.main.get_config")
     def test_trigger_deploy_basic(
         self, mock_get_config, mock_path_class, mock_socket_class
@@ -103,7 +103,7 @@ class TestTriggerDeployWait:
         assert "Deployment triggered successfully" in result.output
 
     @patch("socket.socket")
-    @patch("fraisier.cli.main.Path")
+    @patch("fraisier.cli._deploy.Path")
     @patch("fraisier.cli.main.get_config")
     def test_trigger_deploy_wait_reads_response(
         self, mock_get_config, mock_path_class, mock_socket_class
@@ -156,7 +156,7 @@ class TestTriggerDeployWait:
 
     @patch("os.execvp")
     @patch("socket.socket")
-    @patch("fraisier.cli.main.Path")
+    @patch("fraisier.cli._deploy.Path")
     @patch("fraisier.cli.main.get_config")
     def test_trigger_deploy_follow_execs_journalctl(
         self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp

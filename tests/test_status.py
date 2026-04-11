@@ -319,8 +319,8 @@ class TestElapsedSeconds:
 class TestComputeDeploymentState:
     """Test _compute_deployment_state function from CLI."""
 
-    @patch("fraisier.cli.main.elapsed_seconds")
-    @patch("fraisier.cli.main.read_status")
+    @patch("fraisier.cli._info.elapsed_seconds")
+    @patch("fraisier.cli._info.read_status")
     def test_deploying_state_with_elapsed_time(self, mock_read_status, mock_elapsed):
         """Show deploying state with elapsed time."""
         # Mock status file with deploying state
@@ -333,12 +333,12 @@ class TestComputeDeploymentState:
         mock_read_status.return_value = mock_status
         mock_elapsed.return_value = 23.0
 
-        from fraisier.cli.main import _compute_deployment_state
+        from fraisier.cli._info import _compute_deployment_state
 
         result = _compute_deployment_state("myfraise", "current_ver", "latest_ver")
         assert result == "[blue]deploying (23s)[/blue]"
 
-    @patch("fraisier.cli.main.read_status")
+    @patch("fraisier.cli._info.read_status")
     def test_pending_state_display(self, mock_read_status):
         """Show pending state."""
         # Mock status file with pending state
@@ -349,12 +349,12 @@ class TestComputeDeploymentState:
         )
         mock_read_status.return_value = mock_status
 
-        from fraisier.cli.main import _compute_deployment_state
+        from fraisier.cli._info import _compute_deployment_state
 
         result = _compute_deployment_state("myfraise", "current_ver", "latest_ver")
         assert result == "[yellow]pending[/yellow]"
 
-    @patch("fraisier.cli.main.read_status")
+    @patch("fraisier.cli._info.read_status")
     def test_failed_state_display(self, mock_read_status):
         """Show failed state."""
         # Mock status file with failed state
@@ -369,7 +369,7 @@ class TestComputeDeploymentState:
         )
         mock_read_status.return_value = mock_status
 
-        from fraisier.cli.main import _compute_deployment_state
+        from fraisier.cli._info import _compute_deployment_state
 
         result = _compute_deployment_state("myfraise", "current_ver", "latest_ver")
         assert result == "[red]failed[/red]"

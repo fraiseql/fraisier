@@ -6,15 +6,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from fraisier.cli.main import (
-    _check_socket_directory,
-    _check_socket_file,
-    _check_systemd_version,
+from fraisier.cli._diagnose import (
     _diagnose_deployment_status,
     _diagnose_socket_connectivity,
     _diagnose_systemd_service,
-    main,
 )
+from fraisier.cli._validate import (
+    _check_socket_directory,
+    _check_socket_file,
+    _check_systemd_version,
+)
+from fraisier.cli.main import main
 
 
 class TestValidateSetup:
@@ -79,14 +81,20 @@ fraises:
         passing = {"ok": True, "message": "ok"}
         with (
             patch(
-                "fraisier.cli.main._check_systemd_version",
+                "fraisier.cli._validate._check_systemd_version",
                 return_value=(True, "248", "ok"),
             ),
-            patch("fraisier.cli.main._check_socket_directory", return_value=passing),
-            patch("fraisier.cli.main._check_socket_file", return_value=passing),
-            patch("fraisier.cli.main._check_socket_permissions", return_value=passing),
-            patch("fraisier.cli.main._check_systemd_units", return_value=passing),
-            patch("fraisier.cli.main._check_user_permissions", return_value=passing),
+            patch(
+                "fraisier.cli._validate._check_socket_directory", return_value=passing
+            ),
+            patch("fraisier.cli._validate._check_socket_file", return_value=passing),
+            patch(
+                "fraisier.cli._validate._check_socket_permissions", return_value=passing
+            ),
+            patch("fraisier.cli._validate._check_systemd_units", return_value=passing),
+            patch(
+                "fraisier.cli._validate._check_user_permissions", return_value=passing
+            ),
         ):
             result = runner.invoke(
                 main,
@@ -220,10 +228,10 @@ fraises:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
-    @patch("fraisier.cli.main._diagnose_socket_connectivity")
-    @patch("fraisier.cli.main._diagnose_deployment_status")
-    @patch("fraisier.cli.main._diagnose_systemd_service")
-    @patch("fraisier.cli.main._diagnose_systemd_socket_unit")
+    @patch("fraisier.cli._diagnose._diagnose_socket_connectivity")
+    @patch("fraisier.cli._diagnose._diagnose_deployment_status")
+    @patch("fraisier.cli._diagnose._diagnose_systemd_service")
+    @patch("fraisier.cli._diagnose._diagnose_systemd_socket_unit")
     def test_diagnose_no_issues_found(
         self,
         mock_socket_unit,
@@ -258,10 +266,10 @@ fraises:
         assert result.exit_code == 0
         assert "no deployment issues detected" in result.output.lower()
 
-    @patch("fraisier.cli.main._diagnose_socket_connectivity")
-    @patch("fraisier.cli.main._diagnose_deployment_status")
-    @patch("fraisier.cli.main._diagnose_systemd_service")
-    @patch("fraisier.cli.main._diagnose_systemd_socket_unit")
+    @patch("fraisier.cli._diagnose._diagnose_socket_connectivity")
+    @patch("fraisier.cli._diagnose._diagnose_deployment_status")
+    @patch("fraisier.cli._diagnose._diagnose_systemd_service")
+    @patch("fraisier.cli._diagnose._diagnose_systemd_socket_unit")
     def test_diagnose_issues_found(
         self,
         mock_socket_unit,
