@@ -273,7 +273,7 @@ Fraisier supports different deployment environments:
 
 ## Requirements
 
-- **Python**: 3.8+
+- **Python**: 3.11+
 - **PostgreSQL**: Database server (local or remote)
 - **Git**: Version control
 - **Systemd**: Service management (bare metal deployments)

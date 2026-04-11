@@ -529,6 +529,7 @@ postgres = [
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
 ]
 
 [package.metadata]
@@ -561,6 +562,7 @@ provides-extras = ["all-databases", "dev", "graphql", "postgres", "mcp"]
 dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=0.23.0" },
+    { name = "pytest-cov", specifier = ">=6.3.0" },
 ]
 
 [[package]]

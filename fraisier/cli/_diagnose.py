@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 @click.option("--json", is_flag=True, help="Output diagnostic results in JSON format")
 @click.pass_context
 def diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> None:
+    """Diagnose deployment issues for a fraise environment."""
     _diagnose(ctx, fraise, environment, json)
 
 
