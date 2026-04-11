@@ -23,7 +23,8 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_UNIX
+# AF_INET/AF_INET6 are required for uv to reach PyPI when the cache is cold.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 # Project directory + uv wheel cache (uv sync writes to both)
 ReadWritePaths={{ app_path }} /home/{{ install_user }}/.cache/uv
 
