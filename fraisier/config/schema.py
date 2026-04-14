@@ -101,7 +101,7 @@ class ServiceConfig:
     port: int | None = None
     workers: int = 1
     exec: str | None = None
-    type: str = "notify"
+    type: str = "exec"
     server_type: str = "uvicorn"  # "uvicorn" or "gunicorn"
     watchdog_sec: str | None = None  # e.g., "30s", "5m"
     exec_start_pre: list[str] = field(default_factory=list)
@@ -199,7 +199,7 @@ class ServiceConfig:
             port=_get("port"),
             workers=_get("workers", "worker_count", 1),
             exec=_get("exec", "exec_command"),
-            type=svc.get("type", "notify"),
+            type=svc.get("type", "exec"),
             server_type=svc.get("server_type", "uvicorn"),
             watchdog_sec=svc.get("watchdog_sec"),
             exec_start_pre=svc.get("exec_start_pre", []),

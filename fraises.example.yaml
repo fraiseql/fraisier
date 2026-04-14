@@ -108,7 +108,7 @@ fraises:
           url: https://api.myapp.io/health
           timeout: 30
         service:
-          type: exec               # systemd Type= (default: notify)
+          type: exec               # systemd Type= (default: exec)
           user: myapp              # app runs as myapp (least privilege)
           group: www-data
           port: 8000

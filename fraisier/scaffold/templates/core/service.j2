@@ -20,6 +20,8 @@ ExecStart={{ app_path }}/.venv/bin/uvicorn {{ fraise.name }}.main:app --host 0.0
 {% endif %}
 Restart=on-failure
 RestartSec=5
+KillMode=control-group
+TimeoutStopSec=10
 {% if service.watchdog_sec %}
 WatchdogSec={{ service.watchdog_sec }}
 {% else %}

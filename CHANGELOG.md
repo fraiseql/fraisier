@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-04-14
+
+### Fixed
+- **Zombie uvicorn workers surviving service restart** ([#165](https://github.com/evoludigit/fraisier/issues/165)). Generated systemd units now include `KillMode=control-group` and `TimeoutStopSec=10`, ensuring all worker processes are terminated on stop within a bounded window. Previously, orphaned workers could hold the listening port and cause `Address already in use` crash loops on fast restarts.
+- **Default `service.type` changed from `notify` to `exec`.** uvicorn does not implement `sd_notify`, so `Type=notify` confused systemd's lifecycle tracking during stop. `Type=exec` reflects actual server behavior. Existing configs that explicitly set `service.type` are unaffected; configs relying on the default will now get `Type=exec`.
+
+## [0.8.2] - 2026-04-11
+
+### Fixed
+- `install-helper` systemd template now allows `AF_INET`/`AF_INET6` so `uv sync` can reach PyPI when the local cache is cold.
+
 ## [0.8.1] - 2026-04-11
 
 ### Security

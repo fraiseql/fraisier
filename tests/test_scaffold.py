@@ -1582,7 +1582,7 @@ scaffold:
         assert "--port 8000" in content
 
     def test_service_type_configurable(self, tmp_path):
-        """service.type overrides default Type=notify."""
+        """service.type overrides default Type=exec."""
         content = self._render_service(
             tmp_path,
             """
@@ -1594,16 +1594,16 @@ fraises:
       production:
         app_path: /var/www/app
         service:
-          type: exec
+          type: notify
 scaffold:
   output_dir: {output}
 """.format(output=str(tmp_path / "output")),
         )
-        assert "Type=exec" in content
-        assert "Type=notify" not in content
+        assert "Type=notify" in content
+        assert "Type=exec" not in content
 
-    def test_service_type_defaults_to_notify(self, tmp_path):
-        """Without service.type, defaults to Type=notify."""
+    def test_service_type_defaults_to_exec(self, tmp_path):
+        """Without service.type, defaults to Type=exec."""
         content = self._render_service(
             tmp_path,
             """
@@ -1618,7 +1618,26 @@ scaffold:
   output_dir: {output}
 """.format(output=str(tmp_path / "output")),
         )
-        assert "Type=notify" in content
+        assert "Type=exec" in content
+
+    def test_stop_directives_present(self, tmp_path):
+        """KillMode and TimeoutStopSec are always rendered."""
+        content = self._render_service(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "KillMode=control-group" in content
+        assert "TimeoutStopSec=10" in content
 
     def test_service_type_invalid_raises(self, tmp_path):
         """Invalid service.type raises ValidationError."""
