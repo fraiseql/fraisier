@@ -145,7 +145,7 @@ def drop_db(
     validate_pg_identifier(db_name, "database name")
     if force_disconnect:
         terminate_backends(db_name, connection_url=connection_url)
-    return _pg_cmd(["dropdb", db_name], connection_url=connection_url)
+    return _pg_cmd(["dropdb", "--if-exists", db_name], connection_url=connection_url)
 
 
 def create_db(

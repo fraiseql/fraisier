@@ -404,6 +404,7 @@ class TestRestoreMigrateStrategy:
     ):
         backup = Path("/backup/production/db_2026.dump")
         mock_find.return_value = backup
+        mock_drop.return_value = (0, "", "")
         mock_create.return_value = (0, "", "")
         mock_restore.return_value = RestoreResult(success=True)
         mock_table.return_value = (True, 350)
@@ -453,6 +454,22 @@ class TestRestoreMigrateStrategy:
         with pytest.raises(DatabaseError, match="older than"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_execute_drop_failure_raises(
+        self, mock_find, mock_age, mock_term, mock_drop
+    ):
+        from fraisier.errors import DatabaseError
+
+        mock_find.return_value = Path("/backup/db.dump")
+        mock_drop.return_value = (1, "", 'database "staging_db" already exists')
+
+        strategy = _make_strategy()
+        with pytest.raises(DatabaseError, match="Failed to drop database staging_db"):
+            strategy.execute(CONFIG, migrations_dir=MDIR)
+
     @patch("fraisier.dbops.restore.restore_backup")
     @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
     @patch("fraisier.dbops.operations.drop_db")
@@ -464,6 +481,7 @@ class TestRestoreMigrateStrategy:
     ):
         from fraisier.errors import DatabaseError
 
+        mock_drop.return_value = (0, "", "")
         mock_find.return_value = Path("/backup/db.dump")
         mock_restore.return_value = RestoreResult(success=False, error="corrupt file")
 
@@ -492,6 +510,7 @@ class TestRestoreMigrateStrategy:
     ):
         from fraisier.errors import DatabaseError
 
+        mock_drop.return_value = (0, "", "")
         mock_find.return_value = Path("/backup/db.dump")
         mock_restore.return_value = RestoreResult(success=True)
         mock_up.return_value = MigrationResult(success=True, steps_applied=0)
@@ -519,6 +538,7 @@ class TestRestoreMigrateStrategy:
         mock_table,
         mock_up,
     ):
+        mock_drop.return_value = (0, "", "")
         mock_find.return_value = Path("/backup/db.dump")
         mock_restore.return_value = RestoreResult(success=True)
         mock_up.return_value = MigrationResult(success=True, steps_applied=0)
@@ -546,6 +566,7 @@ class TestRestoreMigrateStrategy:
         mock_create,
         mock_up,
     ):
+        mock_drop.return_value = (0, "", "")
         mock_find.return_value = Path("/backup/db.dump")
         mock_restore.return_value = RestoreResult(success=True)
         mock_create.return_value = (0, "", "")
@@ -583,6 +604,7 @@ class TestRestoreMigrateStrategy:
         mock_restore,
         mock_up,
     ):
+        mock_drop.return_value = (0, "", "")
         mock_find.return_value = Path("/backup/db.dump")
         mock_restore.return_value = RestoreResult(success=True)
         mock_up.return_value = MigrationResult(success=True, steps_applied=1)
@@ -627,6 +649,7 @@ class TestRestoreMigrateStrategy:
     def test_rollback_with_template_uses_template(
         self, mock_term, mock_drop, mock_create
     ):
+        mock_drop.return_value = (0, "", "")
         strategy = _make_strategy(create_template=True, template_name="staging_tmpl")
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
 

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-04-17
+
+### Fixed
+- **Restore strategy fails with "database already exists" on re-deploy** ([#166](https://github.com/evoludigit/fraisier/issues/166)). The `drop_db` return code was silently ignored: if `dropdb` failed (e.g. a connection reconnected in the window between `pg_terminate_backend` and the drop), execution continued to `createdb`, which then failed with a confusing "already exists" error. The return code is now checked and raises `DatabaseError` immediately. `dropdb` also uses `--if-exists` so a first deploy (database absent) is handled cleanly.
+
 ## [0.8.3] - 2026-04-14
 
 ### Fixed

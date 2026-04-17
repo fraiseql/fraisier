@@ -105,7 +105,11 @@ class RestoreMigrateStrategy(Strategy):
         log.info("Terminated connections to %s", cfg.db_name)
 
         # Step 4: Drop and recreate database
-        drop_db(cfg.db_name, connection_url=self._admin_url)
+        code, _, stderr = drop_db(cfg.db_name, connection_url=self._admin_url)
+        if code != 0:
+            raise DatabaseError(
+                f"Failed to drop database {cfg.db_name}: {stderr.strip()}",
+            )
         code, _, stderr = create_db(cfg.db_name, connection_url=self._admin_url)
         if code != 0:  # pragma: no cover
             raise DatabaseError(
@@ -191,7 +195,16 @@ class RestoreMigrateStrategy(Strategy):
                 )
 
                 terminate_backends(self._config.db_name, connection_url=self._admin_url)
-                drop_db(self._config.db_name, connection_url=self._admin_url)
+                code, _, stderr = drop_db(
+                    self._config.db_name, connection_url=self._admin_url
+                )
+                if code != 0:  # pragma: no cover
+                    return StrategyResult(
+                        success=False,
+                        errors=[
+                            f"Failed to drop database for rollback: {stderr.strip()}"
+                        ],
+                    )
                 terminate_backends(template_name, connection_url=self._admin_url)
                 code, _, stderr = create_db(
                     self._config.db_name,
