@@ -73,11 +73,12 @@ class TestDropDbIntegration:
             assert row is not None
             assert row[0] == 0
 
-    def test_drop_nonexistent_db_returns_error(self, pg_superuser_url):
+    def test_drop_nonexistent_db_is_idempotent(self, pg_superuser_url):
         from fraisier.dbops.operations import drop_db
 
+        # --if-exists makes dropping a nonexistent database a no-op (exit 0)
         code, _, _ = drop_db("nonexistent_db_xyz", connection_url=pg_superuser_url)
-        assert code != 0
+        assert code == 0
 
 
 class TestTerminateBackendsIntegration:
