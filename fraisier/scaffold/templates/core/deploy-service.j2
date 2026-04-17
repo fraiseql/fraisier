@@ -12,6 +12,7 @@ ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier deploy-daemon --p
 StandardInput=socket
 StandardOutput=journal
 StandardError=journal
+Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=FRAISIER_CONFIG={{ scaffold.config_path }}
 # Allow git fetch to succeed on first run without known_hosts pre-seeded.
 Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"

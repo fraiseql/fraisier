@@ -14,6 +14,7 @@ RestartSec=5
 # watchdog pings, so WatchdogSec would kill the process every N seconds.
 
 # Environment
+Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/etc/fraisier/{{ project_name }}.webhook.env
 {% if allowed_services %}
 Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock

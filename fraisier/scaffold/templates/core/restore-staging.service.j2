@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=oneshot
 User={{ scaffold.deploy_user }}
+Environment=PYTHONDONTWRITEBYTECODE=1
 {% if allowed_services %}
 Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock
 {% endif %}
