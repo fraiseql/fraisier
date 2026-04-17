@@ -27,6 +27,7 @@ class RestoreConfig:
     template_name: str | None = None
     min_tables: int = 0
     backup_path: Path | None = None
+    service_name: str | None = None
 
 
 class RestoreMigrateStrategy(Strategy):
@@ -35,13 +36,15 @@ class RestoreMigrateStrategy(Strategy):
     Steps:
     1. Find latest backup matching pattern in backup_dir
     2. Validate backup age (< max_age_hours)
-    3. Terminate all connections to target database
-    4. DROP DATABASE IF EXISTS + CREATE DATABASE
-    5. pg_restore --no-owner --no-acl
-    6. REASSIGN OWNED to target_owner (if configured)
-    7. CREATE DATABASE template (if create_template=true)
-    8. confiture migrate up
-    9. Validate table count >= min_tables (if configured)
+    3. Stop service (if service_name configured, prevents connection reconnect)
+    4. Terminate all connections to target database
+    5. DROP DATABASE IF EXISTS + CREATE DATABASE
+    6. pg_restore --no-owner --no-acl
+    7. REASSIGN OWNED to target_owner (if configured)
+    8. CREATE DATABASE template (if create_template=true)
+    9. confiture migrate up
+    10. Validate table count >= min_tables (if configured)
+    11. Start service (if service_name configured)
 
     Rollback: template-based (instant) or migrate_down.
     """
@@ -71,7 +74,13 @@ class RestoreMigrateStrategy(Strategy):
         database_url: str | None = None,
         hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
-        from fraisier.dbops.operations import create_db, drop_db, terminate_backends
+        from fraisier.dbops.operations import (
+            create_db,
+            drop_db,
+            start_service,
+            stop_service,
+            terminate_backends,
+        )
         from fraisier.dbops.restore import (
             find_latest_backup,
             restore_backup,
@@ -100,11 +109,20 @@ class RestoreMigrateStrategy(Strategy):
                     f"Backup {backup_file.name} is older than {cfg.max_age_hours}h",
                 )
 
-        # Step 3: Terminate connections
+        # Step 3: Stop service to prevent connection reconnect race
+        if cfg.service_name:
+            code, _, stderr = stop_service(cfg.service_name)
+            if code != 0:
+                raise DatabaseError(
+                    f"Failed to stop service {cfg.service_name}: {stderr.strip()}",
+                )
+            log.info("Stopped service %s", cfg.service_name)
+
+        # Step 4: Terminate connections
         terminate_backends(cfg.db_name, connection_url=self._admin_url)
         log.info("Terminated connections to %s", cfg.db_name)
 
-        # Step 4: Drop and recreate database
+        # Step 5: Drop and recreate database
         code, _, stderr = drop_db(cfg.db_name, connection_url=self._admin_url)
         if code != 0:
             raise DatabaseError(
@@ -117,7 +135,7 @@ class RestoreMigrateStrategy(Strategy):
             )
         log.info("Recreated database %s", cfg.db_name)
 
-        # Step 5 + 6: pg_restore (with optional ownership fix)
+        # Step 6 + 7: pg_restore (with optional ownership fix)
         restore_result = restore_backup(
             backup_path=str(backup_file),
             db_name=cfg.db_name,
@@ -130,7 +148,7 @@ class RestoreMigrateStrategy(Strategy):
             )
         log.info("Restored backup into %s", cfg.db_name)
 
-        # Step 7: Create rollback template
+        # Step 8: Create rollback template
         if cfg.create_template:
             template_name = self._resolved_template_name
             # Drop existing template if any, disconnect from source, create
@@ -146,7 +164,7 @@ class RestoreMigrateStrategy(Strategy):
                 )
             log.info("Created rollback template %s", template_name)
 
-        # Step 8: Migrate up
+        # Step 9: Migrate up
         result = migrate_up(
             confiture_config,
             migrations_dir=migrations_dir,
@@ -155,7 +173,7 @@ class RestoreMigrateStrategy(Strategy):
         )
         log.info("Applied %d migrations", result.steps_applied)
 
-        # Step 9: Validate table count
+        # Step 10: Validate table count
         if cfg.min_tables > 0:
             ok, count = validate_table_count(
                 cfg.db_name,
@@ -167,6 +185,15 @@ class RestoreMigrateStrategy(Strategy):
                     f"Table count validation failed: {count} < {cfg.min_tables}",
                 )
             log.info("Table count validation passed: %d >= %d", count, cfg.min_tables)
+
+        # Step 11: Start service
+        if cfg.service_name:
+            code, _, stderr = start_service(cfg.service_name)
+            if code != 0:
+                raise DatabaseError(
+                    f"Failed to start service {cfg.service_name}: {stderr.strip()}",
+                )
+            log.info("Started service %s", cfg.service_name)
 
         return StrategyResult(success=True, migrations_applied=result.steps_applied)
 
