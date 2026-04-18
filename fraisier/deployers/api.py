@@ -484,20 +484,22 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         return self.database_config.get("strategy") == "rebuild"
 
     def _stop_service(self) -> None:
-        """Stop systemd service."""
+        """Stop service."""
         if not self.systemd_service:
             return
-        from fraisier.systemd import SystemdServiceManager
+        from fraisier.service_managers import get_service_manager
 
-        SystemdServiceManager(self.runner).stop(self.systemd_service)
+        service_manager = get_service_manager(self.runner, None)
+        service_manager.stop(self.systemd_service)
 
     def _restart_service(self) -> None:
-        """Restart systemd service."""
+        """Restart service."""
         if not self.systemd_service:
             return
-        from fraisier.systemd import SystemdServiceManager
+        from fraisier.service_managers import get_service_manager
 
-        SystemdServiceManager(self.runner).restart(self.systemd_service)
+        service_manager = get_service_manager(self.runner, None)
+        service_manager.restart(self.systemd_service)
 
     def _build_rollback_result(
         self,

@@ -10,6 +10,7 @@ from fraisier.deployers.base import DeploymentResult, DeploymentStatus
 from fraisier.deployers.etl import ETLDeployer
 from fraisier.deployers.scheduled import ScheduledDeployer
 from fraisier.errors import DeploymentError
+from fraisier.service_managers import get_service_manager
 from fraisier.strategies import StrategyResult
 
 
@@ -163,6 +164,19 @@ class TestAPIDeployer:
         mock_subprocess.assert_called_once()
         args, _kwargs = mock_subprocess.call_args
         assert args[0] == ["sudo", "systemctl", "restart", "api.service"]
+
+    def test_restart_service_uses_service_manager(self):
+        """Test service restart uses ServiceManager abstraction."""
+        deployer = APIDeployer({"systemd_service": "api.service"})
+        mock_service_manager = MagicMock()
+
+        with patch("fraisier.service_managers.get_service_manager") as mock_get:
+            mock_get.return_value = mock_service_manager
+
+            deployer._restart_service()
+
+            mock_get.assert_called_once()
+            mock_service_manager.restart.assert_called_once_with("api.service")
 
     def test_wait_for_health_success(self):
         """Test health check succeeds via HealthCheckManager."""
