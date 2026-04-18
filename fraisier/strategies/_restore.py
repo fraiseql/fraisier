@@ -123,7 +123,9 @@ class RestoreMigrateStrategy(Strategy):
         log.info("Terminated connections to %s", cfg.db_name)
 
         # Step 5: Drop and recreate database
-        code, _, stderr = drop_db(cfg.db_name, connection_url=self._admin_url)
+        code, _, stderr = drop_db(
+            cfg.db_name, force=True, connection_url=self._admin_url
+        )
         if code != 0:
             raise DatabaseError(
                 f"Failed to drop database {cfg.db_name}: {stderr.strip()}",

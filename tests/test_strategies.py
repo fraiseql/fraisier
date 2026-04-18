@@ -423,7 +423,9 @@ class TestRestoreMigrateStrategy:
         mock_find.assert_called_once_with(cfg.backup_dir, pattern=cfg.backup_pattern)
         mock_age.assert_called_once_with(backup, max_age_hours=48.0)
         mock_term.assert_called_once_with("staging_db", connection_url=_ADMIN_URL)
-        mock_drop.assert_called_once_with("staging_db", connection_url=_ADMIN_URL)
+        mock_drop.assert_called_once_with(
+            "staging_db", force=True, connection_url=_ADMIN_URL
+        )
         mock_create.assert_called_once_with("staging_db", connection_url=_ADMIN_URL)
         mock_restore.assert_called_once_with(
             backup_path=str(backup),
