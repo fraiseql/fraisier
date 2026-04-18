@@ -352,12 +352,19 @@ def _make_strategy(
     config: RestoreConfig | None = None,
     *,
     admin_url: str = _ADMIN_URL,
+    service_manager=None,
+    service_name: str | None = None,
     **config_overrides,
 ) -> RestoreMigrateStrategy:
     """Build a RestoreMigrateStrategy with a default admin_url for tests."""
     if config is None:
         config = _make_config(**config_overrides)
-    return RestoreMigrateStrategy(config, admin_url=admin_url)
+    return RestoreMigrateStrategy(
+        config,
+        admin_url=admin_url,
+        service_manager=service_manager,
+        service_name=service_name,
+    )
 
 
 class TestRestoreMigrateStrategy:
@@ -437,6 +444,51 @@ class TestRestoreMigrateStrategy:
             "staging_db", min_threshold=300, connection_url=_ADMIN_URL
         )
         mock_up.assert_called_once()
+
+    @patch("fraisier.strategies._restore.migrate_up")
+    @patch("fraisier.dbops.restore.validate_table_count")
+    @patch("fraisier.dbops.restore.restore_backup")
+    @patch("fraisier.dbops.operations.create_db")
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_execute_with_service_manager(
+        self,
+        mock_find,
+        mock_age,
+        mock_term,
+        mock_drop,
+        mock_create,
+        mock_restore,
+        mock_table,
+        mock_up,
+    ):
+        from unittest.mock import MagicMock
+
+        backup = Path("/backup/production/db_2026.dump")
+        mock_find.return_value = backup
+        mock_drop.return_value = (0, "", "")
+        mock_create.return_value = (0, "", "")
+        mock_restore.return_value = RestoreResult(success=True)
+        mock_table.return_value = (True, 350)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=5)
+
+        # Mock ServiceManager
+        mock_svc_mgr = MagicMock()
+        cfg = _make_config(target_owner="app_user", min_tables=300)
+        strategy = _make_strategy(
+            cfg, service_manager=mock_svc_mgr, service_name="test_svc"
+        )
+        result = strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        assert result.migrations_applied == 5
+
+        # Verify service manager calls
+        mock_svc_mgr.stop.assert_called_once_with("test_svc")
+        mock_svc_mgr.wait_stopped.assert_called_once_with("test_svc")
+        mock_svc_mgr.start.assert_called_once_with("test_svc")
 
     @patch("fraisier.dbops.restore.find_latest_backup", return_value=None)
     def test_execute_no_backup_found_raises(self, mock_find):

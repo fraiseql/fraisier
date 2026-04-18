@@ -27,7 +27,6 @@ class RestoreConfig:
     template_name: str | None = None
     min_tables: int = 0
     backup_path: Path | None = None
-    service_name: str | None = None
 
 
 class RestoreMigrateStrategy(Strategy):
@@ -49,7 +48,14 @@ class RestoreMigrateStrategy(Strategy):
     Rollback: template-based (instant) or migrate_down.
     """
 
-    def __init__(self, config: RestoreConfig, *, admin_url: str) -> None:
+    def __init__(
+        self,
+        config: RestoreConfig,
+        *,
+        admin_url: str,
+        service_manager=None,
+        service_name: str | None = None,
+    ) -> None:
         from fraisier.dbops._validation import validate_pg_identifier
 
         validate_pg_identifier(config.db_name, "database name")
@@ -59,6 +65,8 @@ class RestoreMigrateStrategy(Strategy):
             validate_pg_identifier(config.template_name, "template name")
         self._config = config
         self._admin_url = admin_url
+        self._service_manager = service_manager
+        self._service_name = service_name
 
     @property
     def _resolved_template_name(self) -> str:
@@ -77,8 +85,6 @@ class RestoreMigrateStrategy(Strategy):
         from fraisier.dbops.operations import (
             create_db,
             drop_db,
-            start_service,
-            stop_service,
             terminate_backends,
         )
         from fraisier.dbops.restore import (
@@ -110,13 +116,10 @@ class RestoreMigrateStrategy(Strategy):
                 )
 
         # Step 3: Stop service to prevent connection reconnect race
-        if cfg.service_name:
-            code, _, stderr = stop_service(cfg.service_name)
-            if code != 0:
-                raise DatabaseError(
-                    f"Failed to stop service {cfg.service_name}: {stderr.strip()}",
-                )
-            log.info("Stopped service %s", cfg.service_name)
+        if self._service_manager and self._service_name:
+            self._service_manager.stop(self._service_name)
+            self._service_manager.wait_stopped(self._service_name)
+            log.info("Stopped service %s", self._service_name)
 
         # Step 4: Terminate connections
         terminate_backends(cfg.db_name, connection_url=self._admin_url)
@@ -189,13 +192,9 @@ class RestoreMigrateStrategy(Strategy):
             log.info("Table count validation passed: %d >= %d", count, cfg.min_tables)
 
         # Step 11: Start service
-        if cfg.service_name:
-            code, _, stderr = start_service(cfg.service_name)
-            if code != 0:
-                raise DatabaseError(
-                    f"Failed to start service {cfg.service_name}: {stderr.strip()}",
-                )
-            log.info("Started service %s", cfg.service_name)
+        if self._service_manager and self._service_name:
+            self._service_manager.start(self._service_name)
+            log.info("Started service %s", self._service_name)
 
         return StrategyResult(success=True, migrations_applied=result.steps_applied)
 
