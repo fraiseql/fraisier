@@ -31,6 +31,23 @@ class ZFSOperations:
         """
         self._cmd = ZFSCommand(runner)
 
+    def _validate_dataset_name(self, dataset: str) -> None:
+        """Validate dataset name format."""
+        if not dataset or not isinstance(dataset, str):
+            raise ZFSOperationFailedError(f"Invalid dataset name: {dataset!r}")
+        if '@' in dataset:
+            raise ZFSOperationFailedError(f"Dataset name cannot contain '@': {dataset!r}")
+
+    def _validate_snapshot_reference(self, snapshot: str) -> None:
+        """Validate snapshot reference format (dataset@snapshot)."""
+        if not snapshot or not isinstance(snapshot, str):
+            raise ZFSOperationFailedError(f"Invalid snapshot reference: {snapshot!r}")
+        if snapshot.count('@') != 1:
+            raise ZFSOperationFailedError(f"Snapshot reference must contain exactly one '@': {snapshot!r}")
+        dataset, snap_name = snapshot.split('@')
+        if not dataset or not snap_name:
+            raise ZFSOperationFailedError(f"Invalid snapshot reference format: {snapshot!r}")
+
     def create_snapshot(
         self,
         dataset: str,
@@ -52,6 +69,11 @@ class ZFSOperations:
         Raises:
             ZFSError: If snapshot creation fails
         """
+        self._validate_dataset_name(dataset)
+
+        if snapshot_name is not None and not snapshot_name:
+            raise ZFSOperationFailedError("Snapshot name cannot be empty")
+
         if snapshot_name is None:
             # Generate timestamped snapshot name
             timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
@@ -173,6 +195,9 @@ class ZFSOperations:
         Raises:
             ZFSError: If cloning fails
         """
+        self._validate_snapshot_reference(snapshot)
+        self._validate_dataset_name(clone_dataset)
+
         cmd = self._cmd._build_clone_cmd(snapshot, clone_dataset, properties)
         self._cmd._run_command(cmd)
         return clone_dataset
