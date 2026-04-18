@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-04-18
+
+### Added
+
+- **`fraisier db exec` — run read-only SQL on any fraise, locally or over SSH.** New CLI command and supporting `fraisier.dbops.exec` module providing:
+  - `is_readonly_sql()` — strips leading comments and validates the first keyword against a safe allowlist (`SELECT`, `EXPLAIN`, `SHOW`, `WITH`, `TABLE`). Rejects all DDL/DML (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, `CREATE`).
+  - `build_psql_argv()` — constructs a `psql --no-psqlrc` invocation with `SET statement_timeout` injected, supporting `table` (default), `--csv`, and `--json` output formats.
+  - Runs locally via `subprocess.run` when no `ssh` block is configured, or tunnels through `fraisier.ssh.short_cmd` when an SSH target is present — same code path, zero duplication.
+  - Production safety gate: prompts for confirmation when `--env production` is passed.
+  - `--timeout` (default 30 s) with validation (must be > 0).
+  - `--file` flag to read SQL from a file; mutually exclusive with the inline SQL argument.
+  - Accepts a plain database name or a full `postgresql://` URL from `database.admin_url`.
+
 ## [0.8.5] - 2026-04-17
 
 ### Fixed

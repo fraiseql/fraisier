@@ -38,6 +38,140 @@ def _get_db_config(
     return fraise, env_config
 
 
+@db.command(name="exec")
+@click.argument("fraise")
+@click.option("--env", "-e", required=True, help="Target environment")
+@click.argument("sql", required=False)
+@click.option(
+    "--file",
+    "-f",
+    "sql_file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Read SQL from a file",
+)
+@click.option(
+    "--json",
+    "output_format",
+    flag_value="json",
+    default=False,
+    help="Output as JSON",
+)
+@click.option(
+    "--csv",
+    "output_format",
+    flag_value="csv",
+    default=False,
+    help="Output as CSV",
+)
+@click.option(
+    "--timeout",
+    default=30,
+    show_default=True,
+    help="Statement timeout in seconds",
+)
+@click.pass_context
+def db_exec(
+    ctx: click.Context,
+    fraise: str,
+    env: str,
+    sql: str | None,
+    sql_file: str | None,
+    output_format: bool,
+    timeout: int,
+) -> None:
+    """Execute a read-only SQL statement on a remote or local database.
+
+    Connects using the database.admin_url from fraises.yaml.
+    Statements are always run with statement_timeout applied.
+    Only SELECT, EXPLAIN, SHOW, WITH, and TABLE are permitted.
+
+    \b
+    Examples:
+        fraisier db exec api -e production "SELECT count(*) FROM tb_user"
+        fraisier db exec api -e staging "EXPLAIN ANALYZE SELECT * FROM v_reading"
+        fraisier db exec api -e staging --csv "SELECT id FROM tb_org LIMIT 10"
+        fraisier db exec api -e staging --file query.sql
+    """
+    import subprocess
+
+    from fraisier import ssh
+    from fraisier.dbops.exec import build_psql_argv, is_readonly_sql
+
+    if sql and sql_file:
+        console.print("[red]Error:[/red] SQL arg and --file are mutually exclusive")
+        raise SystemExit(1)
+    if not sql and not sql_file:
+        console.print("[red]Error:[/red] Provide SQL or use --file")
+        raise SystemExit(1)
+
+    if sql_file:
+        sql = Path(sql_file).read_text()
+
+    assert sql is not None  # ensured by validation above
+
+    config = ctx.obj["config"]
+    fraise_cfg, env_config = _get_db_config(config, fraise, env)
+    if not fraise_cfg or not env_config:
+        console.print(f"[red]Error:[/red] Fraise '{fraise}' env '{env}' not found")
+        raise SystemExit(1)
+
+    db_cfg = env_config.get("database")
+    if not db_cfg:
+        console.print(
+            f"[red]Error:[/red] No database config for '{fraise}' env '{env}'"
+        )
+        raise SystemExit(1)
+
+    db_target = db_cfg.get("admin_url") or db_cfg.get("name") or fraise
+
+    if output_format == "json":
+        actual_format = "json"
+    elif output_format == "csv":
+        actual_format = "csv"
+    else:
+        actual_format = "table"
+
+    if not is_readonly_sql(sql):
+        console.print(
+            "[red]Error:[/red] Only read-only statements are permitted "
+            "(SELECT, EXPLAIN, SHOW, WITH, TABLE).\n"
+            "Write access is not supported by this command."
+        )
+        raise SystemExit(1)
+
+    if timeout <= 0:
+        console.print("[red]Error:[/red] --timeout must be a positive integer")
+        raise SystemExit(1)
+
+    if env.lower() == "production":
+        console.print(
+            "[yellow]Warning:[/yellow] You are about to run SQL on production."
+        )
+        click.confirm("Continue?", abort=True)
+
+    timeout_ms = timeout * 1000
+    argv = build_psql_argv(
+        db_target, sql, timeout_ms=timeout_ms, output_format=actual_format
+    )
+
+    ssh_config = env_config.get("ssh")
+    if ssh_config:
+        target = ssh.SshTarget.from_config(ssh_config)
+        try:
+            proc = ssh.short_cmd(target, argv, timeout=timeout + 10)
+        except subprocess.CalledProcessError as exc:
+            console.print(f"[red]Error:[/red] {exc.stderr or exc}")
+            raise SystemExit(1) from exc
+        console.print(proc.stdout, end="")
+    else:
+        proc = subprocess.run(argv, check=False, capture_output=True, text=True)
+        if proc.returncode != 0:
+            console.print(f"[red]Error:[/red] {proc.stderr or proc.stdout}")
+            raise SystemExit(proc.returncode)
+        console.print(proc.stdout, end="")
+
+
 @db.command(name="reset")
 @click.argument("fraise")
 @click.option("--env", "-e", required=True, help="Target environment")
