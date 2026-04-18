@@ -31,6 +31,11 @@ class ZFSOperations:
         """
         self._cmd = ZFSCommand(runner)
 
+    def _generate_snapshot_name(self, prefix: str) -> str:
+        """Generate a timestamped snapshot name."""
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        return f"{prefix}_{timestamp}"
+
     def _validate_dataset_name(self, dataset: str) -> None:
         """Validate dataset name format."""
         if not dataset or not isinstance(dataset, str):
@@ -81,9 +86,7 @@ class ZFSOperations:
             raise ZFSOperationFailedError("Snapshot name cannot be empty")
 
         if snapshot_name is None:
-            # Generate timestamped snapshot name
-            timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-            snapshot_name = f"{prefix}_{timestamp}"
+            snapshot_name = self._generate_snapshot_name(prefix)
 
         # Retry logic for transient failures (like "snapshot already exists"
         # race conditions)
@@ -96,11 +99,9 @@ class ZFSOperations:
             except ZFSOperationFailedError as e:
                 error_msg = str(e).lower()
                 if "already exists" in error_msg and attempt < max_retries - 1:
-                    # Exponential backoff: 0.1s, 0.2s, 0.4s
                     delay = 0.1 * (2**attempt)
                     time.sleep(delay)
-                    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-                    snapshot_name = f"{prefix}_{timestamp}"
+                    snapshot_name = self._generate_snapshot_name(prefix)
                     continue
                 raise
         # This should never be reached, but satisfies type checker

@@ -157,20 +157,11 @@ class TestZFSSnapshotOperations:
             MagicMock(returncode=0, stdout="", stderr=""),  # Second call succeeds
         ]
 
-        # Use a counter-based side_effect that won't raise StopIteration
-        # if logging or other code calls time.strftime unexpectedly
-        timestamps = iter(["20220101_120000", "20220101_120001"])
+        self.zfs_ops._generate_snapshot_name = MagicMock(
+            side_effect=["snap_20220101_120000", "snap_20220101_120001"]
+        )
 
-        def strftime_side_effect(*args, **kwargs):
-            return next(timestamps, "20220101_120099")
-
-        with (
-            patch(
-                "fraisier.zfs.operations.time.strftime",
-                side_effect=strftime_side_effect,
-            ),
-            patch("fraisier.zfs.operations.time.sleep") as mock_sleep,
-        ):
+        with patch("fraisier.zfs.operations.time.sleep") as mock_sleep:
             result = self.zfs_ops.create_snapshot("zroot/data")
 
             assert result == "zroot/data@snap_20220101_120001"
@@ -189,13 +180,11 @@ class TestZFSSnapshotOperations:
             stderr="cannot create snapshot 'zroot/data@snap_20220101_120000': dataset already exists",
         )
 
-        with (
-            patch(
-                "fraisier.zfs.operations.time.strftime",
-                return_value="20220101_120000",
-            ),
-            patch("fraisier.zfs.operations.time.sleep"),
-        ):
+        self.zfs_ops._generate_snapshot_name = MagicMock(
+            return_value="snap_20220101_120000"
+        )
+
+        with patch("fraisier.zfs.operations.time.sleep"):
             with pytest.raises(ZFSOperationFailedError):
                 self.zfs_ops.create_snapshot("zroot/data")
 
