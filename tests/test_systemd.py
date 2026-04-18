@@ -175,7 +175,7 @@ class TestSystemdManagerSocketPath:
         runner = MagicMock()
         mgr = SystemdServiceManager(runner)
 
-        with patch("fraisier.systemd._call_via_socket") as mock_socket:
+        with patch("fraisier.service_managers.systemd._call_via_socket") as mock_socket:
             mock_socket.return_value = types.SimpleNamespace(
                 stdout="", stderr="", returncode=0
             )
@@ -193,7 +193,7 @@ class TestSystemdManagerSocketPath:
         runner = MagicMock()
         mgr = SystemdServiceManager(runner)
 
-        with patch("fraisier.systemd._call_via_socket") as mock_socket:
+        with patch("fraisier.service_managers.systemd._call_via_socket") as mock_socket:
             mock_socket.return_value = types.SimpleNamespace(
                 stdout="active\n", stderr="", returncode=0
             )
@@ -216,7 +216,7 @@ class TestSystemdManagerSocketPath:
         runner = MagicMock()
         mgr = SystemdServiceManager(runner)
 
-        with patch("fraisier.systemd._call_via_socket") as mock_socket:
+        with patch("fraisier.service_managers.systemd._call_via_socket") as mock_socket:
             mock_socket.return_value = types.SimpleNamespace(
                 stdout="", stderr="", returncode=0
             )
@@ -234,13 +234,13 @@ class TestSystemdManagerSocketPath:
         runner = MagicMock()
         mgr = SystemdServiceManager(runner)
 
-        with patch("fraisier.systemd._call_via_socket") as mock_socket:
+        with patch("fraisier.service_managers.systemd._call_via_socket") as mock_socket:
             mock_socket.return_value = types.SimpleNamespace(
                 stdout="", stderr="", returncode=0
             )
             mgr.daemon_reload()
 
-        mock_socket.assert_called_once_with(sock, "daemon-reload")
+        mock_socket.assert_called_once_with(sock, "daemon-reload", "")
         runner.run.assert_not_called()
 
     def test_daemon_reload_falls_back_to_sudo(self, monkeypatch):
