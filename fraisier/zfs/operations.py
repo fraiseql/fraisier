@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from fraisier.zfs.dataclasses import Snapshot
@@ -76,6 +77,82 @@ class ZFSOperations:
                 raise
         # This should never be reached, but satisfies type checker
         raise ZFSOperationFailedError("Snapshot creation failed after all retries")
+
+    def create_snapshot_and_clone(
+        self,
+        dataset: str,
+        clone_dataset: str,
+        snapshot_name: str | None = None,
+        clone_properties: dict[str, str] | None = None,
+    ) -> tuple[str, str]:
+        """Atomically create snapshot and clone. Returns (snapshot_path, clone_path).
+
+        This provides transaction-like semantics: if clone creation fails,
+        the snapshot remains for manual cleanup or retention policies.
+
+        Args:
+            dataset: Dataset to snapshot
+            clone_dataset: Target clone dataset name
+            snapshot_name: Name for the snapshot. If None, generates timestamped name
+            clone_properties: Optional ZFS properties to set on clone
+
+        Returns:
+            Tuple of (snapshot_full_path, clone_path)
+
+        Raises:
+            ZFSError: If snapshot or clone creation fails
+        """
+        # Create snapshot first
+        snapshot_path = self.create_snapshot(
+            dataset,
+            snapshot_name=snapshot_name
+        )
+
+        try:
+            # Create clone from the snapshot
+            self.clone_snapshot(
+                snapshot_path,
+                clone_dataset,
+                properties=clone_properties
+            )
+            return snapshot_path, clone_dataset
+        except Exception:
+            # Clone failed - snapshot remains for cleanup by retention policies
+            logger.warning(f"Clone creation failed, snapshot {snapshot_path} left for cleanup")
+            raise
+
+    @contextmanager
+    def temporary_clone(
+        self,
+        snapshot: str,
+        clone_dataset: str,
+        properties: dict[str, str] | None = None,
+    ):
+        """Context manager for temporary clones that are automatically cleaned up.
+
+        Args:
+            snapshot: Snapshot to clone from
+            clone_dataset: Temporary clone dataset name
+            properties: Optional ZFS properties for the clone
+
+        Yields:
+            The clone dataset path
+
+        Raises:
+            ZFSError: If clone creation fails
+        """
+        # Create the temporary clone
+        self.clone_snapshot(snapshot, clone_dataset, properties=properties)
+
+        try:
+            yield clone_dataset
+        finally:
+            # Always attempt cleanup, even if an exception occurred
+            try:
+                self.destroy_clone(clone_dataset)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temporary clone {clone_dataset}: {e}")
+                # Don't re-raise cleanup errors
 
     def clone_snapshot(
         self,
