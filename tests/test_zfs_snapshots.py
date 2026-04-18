@@ -157,12 +157,20 @@ class TestZFSSnapshotOperations:
             MagicMock(returncode=0, stdout="", stderr=""),  # Second call succeeds
         ]
 
+        # Use a counter-based side_effect that won't raise StopIteration
+        # if logging or other code calls time.strftime unexpectedly
+        timestamps = iter(["20220101_120000", "20220101_120001"])
+
+        def strftime_side_effect(*args, **kwargs):
+            return next(timestamps, "20220101_120099")
+
         with (
-            patch("fraisier.zfs.operations.time.strftime") as mock_strftime,
+            patch(
+                "fraisier.zfs.operations.time.strftime",
+                side_effect=strftime_side_effect,
+            ),
             patch("fraisier.zfs.operations.time.sleep") as mock_sleep,
         ):
-            mock_strftime.side_effect = ["20220101_120000", "20220101_120001"]
-
             result = self.zfs_ops.create_snapshot("zroot/data")
 
             assert result == "zroot/data@snap_20220101_120001"
