@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from fraisier.zfs.exceptions import (
@@ -15,6 +16,65 @@ from fraisier.zfs.exceptions import (
 
 if TYPE_CHECKING:
     from fraisier.runners import CommandRunner
+
+
+class ZFSOperations:
+    """Manage ZFS snapshots and clones for deployment."""
+
+    def __init__(self, runner: CommandRunner) -> None:
+        """Initialize with a command runner.
+
+        Args:
+            runner: CommandRunner instance for executing ZFS commands
+        """
+        self._cmd = ZFSCommand(runner)
+
+    def create_snapshot(
+        self,
+        dataset: str,
+        snapshot_name: str | None = None,
+        recursive: bool = False,
+        prefix: str = "snap",
+    ) -> str:
+        """Create a ZFS snapshot. Returns snapshot full path.
+
+        Args:
+            dataset: Dataset to snapshot
+            snapshot_name: Name for the snapshot. If None, generates timestamped name
+            recursive: Whether to create recursive snapshot
+            prefix: Prefix for auto-generated snapshot names
+
+        Returns:
+            Full snapshot path (dataset@snapshot_name)
+
+        Raises:
+            ZFSError: If snapshot creation fails
+        """
+        if snapshot_name is None:
+            # Generate timestamped snapshot name
+            timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+            snapshot_name = f"{prefix}_{timestamp}"
+
+        # Retry logic for transient failures (like "snapshot already exists"
+        # race conditions)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                cmd = self._cmd._build_snapshot_cmd(dataset, snapshot_name, recursive)
+                self._cmd._run_command(cmd)
+                return f"{dataset}@{snapshot_name}"
+            except ZFSOperationFailedError as e:
+                error_msg = str(e).lower()
+                if "already exists" in error_msg and attempt < max_retries - 1:
+                    # Exponential backoff: 0.1s, 0.2s, 0.4s
+                    delay = 0.1 * (2 ** attempt)
+                    time.sleep(delay)
+                    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+                    snapshot_name = f"{prefix}_{timestamp}"
+                    continue
+                raise
+        # This should never be reached, but satisfies type checker
+        raise ZFSOperationFailedError("Snapshot creation failed after all retries")
 
 logger = logging.getLogger(__name__)
 
