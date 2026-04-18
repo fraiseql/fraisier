@@ -186,6 +186,69 @@ class ZFSOperations:
         cmd = self._cmd._build_destroy_cmd(clone_dataset, recursive=recursive, force=force)
         self._cmd._run_command(cmd)
 
+    def cleanup_old_snapshots(
+        self,
+        dataset: str,
+        keep_count: int = 10,
+        prefix: str | None = None,
+        max_age_days: float | None = None
+    ) -> list[str]:
+        """Remove old snapshots, keep N most recent.
+
+        Args:
+            dataset: Dataset to clean snapshots for
+            keep_count: Number of most recent snapshots to keep
+            prefix: Optional prefix to filter snapshots by
+            max_age_days: Optional maximum age in days for snapshots to keep
+
+        Returns:
+            List of deleted snapshot names
+
+        Raises:
+            ZFSError: If listing or deletion fails
+        """
+        # List snapshots matching criteria
+        snapshots = self.list_snapshots(dataset, prefix=prefix)
+
+        # Separate snapshots by age criteria
+        import time
+        current_time = int(time.time())
+        snapshots_to_delete = []
+
+        if max_age_days is not None:
+            # Delete snapshots older than max_age_days
+            max_age_seconds = max_age_days * 24 * 60 * 60
+            for snapshot in snapshots:
+                if current_time - snapshot.creation_time > max_age_seconds:
+                    snapshots_to_delete.append(snapshot)
+
+        # Remove age-filtered snapshots from consideration for count-based cleanup
+        remaining_snapshots = [s for s in snapshots if s not in snapshots_to_delete]
+
+        # Apply count-based cleanup to remaining snapshots
+        if len(remaining_snapshots) > keep_count or keep_count == 0:
+            sorted_remaining = sorted(remaining_snapshots, key=lambda s: s.creation_time)
+            if keep_count == 0:
+                count_based_deletions = sorted_remaining
+            else:
+                count_based_deletions = sorted_remaining[:-keep_count]
+            snapshots_to_delete.extend(count_based_deletions)
+
+        deleted_snapshots = []
+
+        # Delete snapshots in order (oldest first)
+        for snapshot in snapshots_to_delete:
+            try:
+                cmd = self._cmd._build_destroy_cmd(snapshot.name, recursive=False, force=False)
+                self._cmd._run_command(cmd)
+                deleted_snapshots.append(snapshot.name)
+            except Exception as e:
+                logger.warning(f"Failed to delete snapshot {snapshot.name}: {e}")
+                # Continue with other snapshots even if one fails
+                continue
+
+        return deleted_snapshots
+
 logger = logging.getLogger(__name__)
 
 
