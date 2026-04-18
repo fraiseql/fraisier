@@ -234,8 +234,8 @@ def db_restore(
     from fraisier.dbops.restore import find_latest_backup, validate_backup_age
     from fraisier.errors import DatabaseError
     from fraisier.runners import LocalRunner
+    from fraisier.service_managers import get_service_manager
     from fraisier.strategies import RestoreConfig, RestoreMigrateStrategy
-    from fraisier.systemd import SystemdServiceManager
 
     config = ctx.obj["config"]
     fraise_cfg, env_config = _get_db_config(config, fraise, environment)
@@ -313,14 +313,10 @@ def db_restore(
     # --- live run ---
     runner = LocalRunner()
     svc_mgr = (
-        SystemdServiceManager(runner)
+        get_service_manager(runner, config._config)
         if systemd_service and not no_service_restart
         else None
     )
-
-    if svc_mgr and systemd_service:
-        console.print(f"[cyan]Stopping {systemd_service}...[/cyan]")
-        svc_mgr.stop(systemd_service)
 
     strategy = RestoreMigrateStrategy(
         RestoreConfig(
@@ -335,6 +331,8 @@ def db_restore(
             backup_path=from_backup,
         ),
         admin_url=admin_url,
+        service_manager=svc_mgr,
+        service_name=systemd_service,
     )
 
     try:
@@ -349,10 +347,6 @@ def db_restore(
             svc_mgr.restart(systemd_service)
         console.print(f"[red]Restore failed:[/red] {exc}")
         raise SystemExit(1) from exc
-
-    if svc_mgr and systemd_service:
-        console.print(f"[cyan]Restarting {systemd_service}...[/cyan]")
-        svc_mgr.restart(systemd_service)
 
     if result.success:
         msg = f"{result.migrations_applied} migration(s) applied"

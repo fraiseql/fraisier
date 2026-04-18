@@ -347,7 +347,10 @@ class TestDbRestore:
                 "fraisier.strategies.RestoreMigrateStrategy.execute",
                 return_value=result_mock,
             ),
-            patch("fraisier.systemd.SystemdServiceManager"),
+            patch(
+                "fraisier.service_managers.get_service_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
 
@@ -364,15 +367,15 @@ class TestDbRestore:
                 "fraisier.strategies.RestoreMigrateStrategy.execute",
                 side_effect=DatabaseError("no backup found"),
             ),
-            patch("fraisier.systemd.SystemdServiceManager") as mock_svc_mgr_class,
+            patch("fraisier.service_managers.get_service_manager") as mock_get_svc_mgr,
         ):
             mock_svc_mgr = MagicMock()
-            mock_svc_mgr_class.return_value = mock_svc_mgr
+            mock_get_svc_mgr.return_value = mock_svc_mgr
 
             result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
 
         assert result.exit_code == 1
-        assert "failed" in result.output.lower()
+        assert "error" in result.output.lower()
         # Check that restart was called even on error
         mock_svc_mgr.restart.assert_called_once_with("api.staging.service")
 
@@ -388,7 +391,10 @@ class TestDbRestore:
             ),
             patch("fraisier.dbops.restore.validate_backup_age", return_value=True),
             patch("fraisier.strategies.RestoreMigrateStrategy.execute") as mock_execute,
-            patch("fraisier.systemd.SystemdServiceManager"),
+            patch(
+                "fraisier.service_managers.get_service_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = runner.invoke(
                 main, ["db", "restore", "my_api", "staging", "--dry-run"]
@@ -409,7 +415,10 @@ class TestDbRestore:
                 "fraisier.strategies.RestoreMigrateStrategy.execute",
                 return_value=result_mock,
             ),
-            patch("fraisier.systemd.SystemdServiceManager"),
+            patch(
+                "fraisier.service_managers.get_service_manager",
+                return_value=MagicMock(),
+            ),
             patch("fraisier.runners.LocalRunner"),
         ):
             # Create a temp backup file for testing
@@ -482,22 +491,17 @@ class TestDbRestore:
                 "fraisier.strategies.RestoreMigrateStrategy.execute",
                 return_value=result_mock,
             ),
-            patch("fraisier.systemd.SystemdServiceManager") as mock_svc_mgr_class,
+            patch("fraisier.service_managers.get_service_manager") as mock_get_svc_mgr,
             patch("fraisier.runners.LocalRunner"),
         ):
-            mock_svc_mgr = MagicMock()
-            mock_svc_mgr_class.return_value = mock_svc_mgr
-
             result = runner.invoke(
                 main,
                 ["db", "restore", "my_api", "staging", "--no-service-restart"],
             )
 
         assert result.exit_code == 0
-        # SystemdServiceManager should not be instantiated
-        mock_svc_mgr_class.assert_not_called()
-        mock_svc_mgr.stop.assert_not_called()
-        mock_svc_mgr.restart.assert_not_called()
+        # get_service_manager should not be called
+        mock_get_svc_mgr.assert_not_called()
 
     def test_db_restore_resolves_confiture_config_relative_to_app_path(
         self, runner, restore_config
