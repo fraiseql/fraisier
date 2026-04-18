@@ -1,6 +1,8 @@
+from unittest.mock import patch
+
 import pytest
 
-from fraisier.service_managers.base import ServiceManager
+from fraisier.service_managers.base import ServiceManager, ServiceManagerError
 
 
 class MockServiceManager(ServiceManager):
@@ -75,3 +77,39 @@ def test_service_manager_invalid_service_name():
         manager.restart("invalid service name")
     with pytest.raises(ValueError, match="Invalid service name"):
         manager.is_active("invalid service name")
+
+
+def test_wait_stopped_success():
+    manager = MockServiceManager()
+    manager.start("test_service")  # Make it active
+
+    with (
+        patch.object(
+            manager, "is_active", side_effect=[True, True, False]
+        ) as mock_is_active,
+        patch("time.sleep") as mock_sleep,
+        patch("time.monotonic", return_value=0.0),
+    ):
+        manager.wait_stopped("test_service", timeout=5)
+
+    assert mock_is_active.call_count == 3  # Initial check + two polls
+    assert mock_sleep.call_count == 2
+
+
+def test_wait_stopped_timeout():
+    manager = MockServiceManager()
+    manager.start("test_service")  # Make it active
+
+    with (
+        patch.object(manager, "is_active", return_value=True) as mock_is_active,
+        patch("time.sleep") as mock_sleep,
+        patch("time.monotonic", side_effect=[0.0, 1.0, 2.0, 6.0]),
+        pytest.raises(
+            ServiceManagerError, match="Service test_service still active after 5s"
+        ),
+    ):
+        manager.wait_stopped("test_service", timeout=5)
+
+    # Should have polled until timeout
+    assert mock_is_active.call_count >= 1
+    assert mock_sleep.call_count >= 1

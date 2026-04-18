@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
@@ -43,3 +44,15 @@ class ServiceManager(ABC):
     @abstractmethod
     def daemon_reload(self) -> None:
         """Reload the service daemon configuration."""
+
+    def wait_stopped(
+        self, service_name: str, timeout: int = 30, poll_interval: float = 0.5
+    ) -> None:
+        """Block until service is no longer active, or raise on timeout."""
+        deadline = time.monotonic() + timeout
+        while self.is_active(service_name):
+            if time.monotonic() > deadline:
+                raise ServiceManagerError(
+                    f"Service {service_name} still active after {timeout}s"
+                )
+            time.sleep(poll_interval)
