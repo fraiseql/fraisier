@@ -280,9 +280,8 @@ def _validate_zfs_config(fraise_name: str, zfs: Any) -> list[str]:
     # Check enabled flag
     enabled = zfs.get("enabled", False)
     if not isinstance(enabled, bool):
-        errors.append(
-            f"{fraise_name}: zfs.enabled must be a boolean, got {type(enabled).__name__}"
-        )
+        got = type(enabled).__name__
+        errors.append(f"{fraise_name}: zfs.enabled must be a boolean, got {got}")
 
     if enabled:
         # Required fields when enabled
@@ -293,22 +292,24 @@ def _validate_zfs_config(fraise_name: str, zfs: Any) -> list[str]:
                     f"{fraise_name}: zfs.{field} is required when ZFS is enabled"
                 )
             elif not isinstance(value, str):
-                errors.append(
-                    f"{fraise_name}: zfs.{field} must be a string, got {type(value).__name__}"
-                )
+                got = type(value).__name__
+                errors.append(f"{fraise_name}: zfs.{field} must be a string, got {got}")
 
         # Optional string fields
         for field in ["snapshot_prefix", "clone_prefix"]:
             value = zfs.get(field)
             if value is not None:
                 if not isinstance(value, str):
+                    got = type(value).__name__
                     errors.append(
-                        f"{fraise_name}: zfs.{field} must be a string, got {type(value).__name__}"
+                        f"{fraise_name}: zfs.{field} must be a string, got {got}"
                     )
                 elif not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", value):
                     errors.append(
-                        f"{fraise_name}: zfs.{field} '{value}' must contain only "
-                        "alphanumeric characters and underscores, and start with a letter or underscore"
+                        f"{fraise_name}: zfs.{field} '{value}'"
+                        " must contain only alphanumeric characters"
+                        " and underscores, and start with a letter"
+                        " or underscore"
                     )
 
         # Optional numeric fields
@@ -316,8 +317,9 @@ def _validate_zfs_config(fraise_name: str, zfs: Any) -> list[str]:
             value = zfs.get(field)
             if value is not None:
                 if not isinstance(value, int):
+                    got = type(value).__name__
                     errors.append(
-                        f"{fraise_name}: zfs.{field} must be an integer, got {type(value).__name__}"
+                        f"{fraise_name}: zfs.{field} must be an integer, got {got}"
                     )
                 elif value <= 0:
                     errors.append(f"{fraise_name}: zfs.{field} must be positive")

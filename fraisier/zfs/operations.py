@@ -270,8 +270,9 @@ class ZFSOperations:
             )
             dataset_type = self._cmd._parse_get_output(result.stdout, ["type"])
             if dataset_type.get("type") != "clone":
+                actual = dataset_type.get("type")
                 raise ZFSOperationFailedError(
-                    f"Dataset '{clone_dataset}' is not a clone (type: {dataset_type.get('type')})"
+                    f"Dataset '{clone_dataset}' is not a clone (type: {actual})"
                 )
         except ZFSDatasetNotFoundError:
             raise  # Re-raise dataset not found
@@ -320,9 +321,9 @@ class ZFSOperations:
         if max_age_days is not None:
             # Delete snapshots older than max_age_days
             max_age_seconds = max_age_days * 24 * 60 * 60
-            for snapshot in snapshots:
-                if current_time - snapshot.creation_time > max_age_seconds:
-                    snapshots_to_delete.append(snapshot)
+            snapshots_to_delete.extend(
+                s for s in snapshots if current_time - s.creation_time > max_age_seconds
+            )
 
         # Remove age-filtered snapshots from consideration for count-based cleanup
         remaining_snapshots = [s for s in snapshots if s not in snapshots_to_delete]

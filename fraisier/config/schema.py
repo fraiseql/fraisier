@@ -596,7 +596,7 @@ class ZFSConfig:
                     "ZFS data_dataset is required when ZFS is enabled"
                 )
 
-            # Validate prefix format (alphanumeric + underscore, must start with letter or underscore)
+            # Validate prefix format (alphanumeric + underscore only)
             prefix_pattern = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
             if not prefix_pattern.match(self.snapshot_prefix):
                 raise ValidationError(
