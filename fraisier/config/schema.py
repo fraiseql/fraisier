@@ -572,3 +572,55 @@ class ShipConfig:
     checks: list[ShipCheckConfig] = field(default_factory=list)
     pr_base: str | None = None
     parallel: bool = True
+
+
+@dataclass
+class ZFSConfig:
+    """ZFS configuration for deployment environments."""
+
+    enabled: bool = False
+    pool: str | None = None
+    data_dataset: str | None = None
+    snapshot_prefix: str = "snap"
+    clone_prefix: str = "clone"
+    max_snapshot_age_days: int = 7
+    snapshot_retention: int = 10
+
+    def __post_init__(self) -> None:
+        """Validate ZFS configuration after initialization."""
+        if self.enabled:
+            if not self.pool:
+                raise ValidationError("ZFS pool is required when ZFS is enabled")
+            if not self.data_dataset:
+                raise ValidationError("ZFS data_dataset is required when ZFS is enabled")
+
+            # Validate prefix format (alphanumeric + underscore, must start with letter or underscore)
+            prefix_pattern = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+            if not prefix_pattern.match(self.snapshot_prefix):
+                raise ValidationError(
+                    f"ZFS snapshot_prefix '{self.snapshot_prefix}' must contain only "
+                    "alphanumeric characters and underscores"
+                )
+            if not prefix_pattern.match(self.clone_prefix):
+                raise ValidationError(
+                    f"ZFS clone_prefix '{self.clone_prefix}' must contain only "
+                    "alphanumeric characters and underscores"
+                )
+
+            # Validate numeric fields
+            if self.max_snapshot_age_days <= 0:
+                raise ValidationError("ZFS max_snapshot_age_days must be positive")
+            if self.snapshot_retention <= 0:
+                raise ValidationError("ZFS snapshot_retention must be positive")
+
+    @property
+    def full_dataset_path(self) -> str:
+        """Get the full dataset path (pool + data_dataset)."""
+        if not self.pool or not self.data_dataset:
+            return ""
+        return f"{self.pool}/{self.data_dataset}"
+
+    @property
+    def pool_path(self) -> str:
+        """Get the pool path."""
+        return self.pool or ""

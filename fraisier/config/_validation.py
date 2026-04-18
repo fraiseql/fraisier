@@ -239,6 +239,11 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
             )
         errors.extend(_validate_database_url(fraise_name, db))
 
+    # ZFS configuration validation
+    zfs_config = env.get("zfs")
+    if zfs_config is not None:
+        errors.extend(_validate_zfs_config(fraise_name, zfs_config))
+
     if errors:
         raise ValidationError(
             f"Invalid fraise config: {'; '.join(errors)}",
@@ -256,10 +261,66 @@ def _validate_pg_url(fraise_name: str, field: str, value: Any) -> list[str]:
         ]
     if not value.startswith(("postgresql://", "postgres://")):
         return [
-            f"{fraise_name}: database.{field} must start with "
-            f"'postgresql://' or 'postgres://'"
+            f"{fraise_name}: database.{field} must be a PostgreSQL URL "
+            f"(starting with postgresql:// or postgres://), got: {value!r}"
         ]
     return []
+
+
+def _validate_zfs_config(fraise_name: str, zfs: Any) -> list[str]:
+    """Validate ZFS configuration section."""
+    errors: list[str] = []
+
+    if not isinstance(zfs, dict):
+        errors.append(
+            f"{fraise_name}: 'zfs' must be a mapping, got {type(zfs).__name__}"
+        )
+        return errors
+
+    # Check enabled flag
+    enabled = zfs.get("enabled", False)
+    if not isinstance(enabled, bool):
+        errors.append(
+            f"{fraise_name}: zfs.enabled must be a boolean, got {type(enabled).__name__}"
+        )
+
+    if enabled:
+        # Required fields when enabled
+        for field in ["pool", "data_dataset"]:
+            value = zfs.get(field)
+            if not value:
+                errors.append(f"{fraise_name}: zfs.{field} is required when ZFS is enabled")
+            elif not isinstance(value, str):
+                errors.append(
+                    f"{fraise_name}: zfs.{field} must be a string, got {type(value).__name__}"
+                )
+
+        # Optional string fields
+        for field in ["snapshot_prefix", "clone_prefix"]:
+            value = zfs.get(field)
+            if value is not None:
+                if not isinstance(value, str):
+                    errors.append(
+                        f"{fraise_name}: zfs.{field} must be a string, got {type(value).__name__}"
+                    )
+                elif not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", value):
+                    errors.append(
+                        f"{fraise_name}: zfs.{field} '{value}' must contain only "
+                        "alphanumeric characters and underscores, and start with a letter or underscore"
+                    )
+
+        # Optional numeric fields
+        for field in ["max_snapshot_age_days", "snapshot_retention"]:
+            value = zfs.get(field)
+            if value is not None:
+                if not isinstance(value, int):
+                    errors.append(
+                        f"{fraise_name}: zfs.{field} must be an integer, got {type(value).__name__}"
+                    )
+                elif value <= 0:
+                    errors.append(f"{fraise_name}: zfs.{field} must be positive")
+
+    return errors
 
 
 def _validate_database_url(fraise_name: str, db: dict) -> list[str]:
@@ -332,6 +393,18 @@ def validate_branch_mapping(branch_mapping: dict, fraises: dict) -> None:
                     f"({fraise_name}, {environment})",
                 )
             seen.add(pair)
+
+
+def validate_service_manager(service_manager: str | None) -> None:
+    """Validate service_manager field."""
+    if service_manager is None:
+        return
+    valid_values = {"systemd", "rc"}
+    if service_manager not in valid_values:
+        raise ValidationError(
+            f"Invalid service_manager: {service_manager!r}. "
+            f"Must be one of: {', '.join(sorted(valid_values))}"
+        )
 
 
 def validate_notifications(notifications: dict) -> None:
