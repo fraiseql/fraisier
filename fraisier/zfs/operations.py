@@ -6,12 +6,13 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from fraisier.zfs.dataclasses import Snapshot
 from fraisier.zfs.exceptions import (
-    ZFSDatasetNotFoundError,
     ZFSError,
-    ZFSOperationFailedError,
+    ZFSDatasetNotFoundError,
     ZFSPermissionDeniedError,
     ZFSPoolOfflineError,
+    ZFSOperationFailedError,
 )
 
 if TYPE_CHECKING:
@@ -98,6 +99,54 @@ class ZFSOperations:
         cmd = self._cmd._build_clone_cmd(snapshot, clone_dataset, properties)
         self._cmd._run_command(cmd)
         return clone_dataset
+
+    def list_snapshots(
+        self,
+        dataset: str,
+        prefix: str | None = None
+    ) -> list[Snapshot]:
+        """List snapshots for a dataset.
+
+        Args:
+            dataset: Dataset to list snapshots for
+            prefix: Optional prefix to filter snapshots by
+
+        Returns:
+            List of Snapshot objects, sorted by creation time
+
+        Raises:
+            ZFSError: If listing fails
+        """
+        cmd = self._cmd._build_list_cmd(dataset)
+        result = self._cmd._run_command(cmd)
+        snapshots = self._cmd._parse_list_output(result.stdout)
+
+        # Convert to Snapshot objects
+        snapshot_objects = []
+        for snap_data in snapshots:
+            try:
+                snapshot = Snapshot(
+                    name=snap_data["name"],
+                    creation_time=int(snap_data["creation"]),
+                    used=snap_data["used"],
+                    referenced=snap_data["referenced"]
+                )
+                snapshot_objects.append(snapshot)
+            except (KeyError, ValueError) as e:
+                logger.warning(f"Failed to parse snapshot data {snap_data}: {e}")
+                continue
+
+        # Filter by prefix if specified
+        if prefix:
+            snapshot_objects = [
+                s for s in snapshot_objects
+                if s.snapshot_name.startswith(prefix)
+            ]
+
+        # Sort by creation time (should already be sorted by zfs, but ensure it)
+        snapshot_objects.sort(key=lambda s: s.creation_time)
+
+        return snapshot_objects
 
 logger = logging.getLogger(__name__)
 
