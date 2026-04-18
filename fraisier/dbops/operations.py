@@ -173,31 +173,3 @@ def create_db(
         cmd.extend(["-O", owner])
     cmd.append(db_name)
     return _pg_cmd(cmd, connection_url=connection_url)
-
-
-def stop_service(service_name: str) -> tuple[int, str, str]:
-    """Stop a systemd service using sudo systemctl stop.
-
-    Returns (exit_code, stdout, stderr).
-    """
-    result = subprocess.run(
-        ["sudo", "systemctl", "stop", service_name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
-def start_service(service_name: str) -> tuple[int, str, str]:
-    """Start a systemd service using sudo systemctl start.
-
-    Returns (exit_code, stdout, stderr).
-    """
-    result = subprocess.run(
-        ["sudo", "systemctl", "start", service_name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.returncode, result.stdout, result.stderr
