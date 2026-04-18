@@ -136,15 +136,20 @@ def drop_db(
     db_name: str,
     *,
     force_disconnect: bool = False,
+    force: bool = False,
     connection_url: str,
 ) -> tuple[int, str, str]:
     """Drop database *db_name*.
 
     If *force_disconnect* is True, terminate all backends first.
+    If *force* is True, use DROP DATABASE ... WITH (FORCE) via psql.
     """
     validate_pg_identifier(db_name, "database name")
     if force_disconnect:
         terminate_backends(db_name, connection_url=connection_url)
+    if force:
+        sql = f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
+        return _pg_cmd(["psql", "-c", sql], connection_url=connection_url)
     return _pg_cmd(["dropdb", "--if-exists", db_name], connection_url=connection_url)
 
 

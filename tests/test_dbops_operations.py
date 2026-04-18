@@ -194,6 +194,19 @@ class TestDropDb:
         drop_cmd = mock_run.call_args_list[1][0][0]
         assert "dropdb" in drop_cmd
 
+    def test_drop_db_force(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            code, _, _ = drop_db("testdb", force=True, connection_url=_TEST_URL)
+
+        assert code == 0
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "psql"
+        assert "-c" in cmd
+        sql_index = cmd.index("-c") + 1
+        sql = cmd[sql_index]
+        assert "DROP DATABASE IF EXISTS testdb WITH (FORCE)" in sql
+
     def test_drop_db_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             drop_db("test; rm -rf /", connection_url=_TEST_URL)
