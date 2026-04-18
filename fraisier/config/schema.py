@@ -592,7 +592,9 @@ class ZFSConfig:
             if not self.pool:
                 raise ValidationError("ZFS pool is required when ZFS is enabled")
             if not self.data_dataset:
-                raise ValidationError("ZFS data_dataset is required when ZFS is enabled")
+                raise ValidationError(
+                    "ZFS data_dataset is required when ZFS is enabled"
+                )
 
             # Validate prefix format (alphanumeric + underscore, must start with letter or underscore)
             prefix_pattern = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

@@ -4103,6 +4103,77 @@ scaffold:
         assert (out / "systemd" / "myapp_api_production.service").exists()
 
 
+class TestRcdServiceTemplates:
+    """Rc.d service templates for FreeBSD."""
+
+    def _make_config(self, tmp_path, yaml_content):
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(p)
+
+    def test_rcd_template_renders_basic_service(self, tmp_path):
+        """Rc.d template produces valid rc.d script."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+service_manager: rc
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/myapi
+        port: 8000
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        rcd_path = tmp_path / "output" / "rc.d" / "tp_my_api_production"
+        assert rcd_path.exists()
+
+        content = rcd_path.read_text()
+        assert "#!/bin/sh" in content
+        assert "name=tp_my_api_production" in content
+        assert "command=/var/www/myapi/manage.py" in content or "command=" in content
+        assert "rcvar=tp_my_api_production_enable" in content
+
+    def test_rcd_template_with_env_vars(self, tmp_path):
+        """Rc.d template includes environment variables."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+service_manager: rc
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/myapi
+        env:
+          DJANGO_SETTINGS_MODULE: myapi.settings.production
+          DATABASE_URL: postgresql://localhost/mydb
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        rcd_path = tmp_path / "output" / "rc.d" / "tp_my_api_production"
+        content = rcd_path.read_text()
+        assert 'export DJANGO_SETTINGS_MODULE="myapi.settings.production"' in content
+        assert 'export DATABASE_URL="postgresql://localhost/mydb"' in content
+
+
 class TestServerFilteredBootstrapScaffold:
     """Bootstrap renders only nginx/systemd files for the target server (#111)."""
 

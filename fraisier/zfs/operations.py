@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING, Any
 
 from fraisier.zfs.dataclasses import Snapshot
 from fraisier.zfs.exceptions import (
-    ZFSError,
     ZFSDatasetNotFoundError,
+    ZFSError,
+    ZFSOperationFailedError,
     ZFSPermissionDeniedError,
     ZFSPoolOfflineError,
-    ZFSOperationFailedError,
 )
 
 if TYPE_CHECKING:
@@ -35,18 +35,24 @@ class ZFSOperations:
         """Validate dataset name format."""
         if not dataset or not isinstance(dataset, str):
             raise ZFSOperationFailedError(f"Invalid dataset name: {dataset!r}")
-        if '@' in dataset:
-            raise ZFSOperationFailedError(f"Dataset name cannot contain '@': {dataset!r}")
+        if "@" in dataset:
+            raise ZFSOperationFailedError(
+                f"Dataset name cannot contain '@': {dataset!r}"
+            )
 
     def _validate_snapshot_reference(self, snapshot: str) -> None:
         """Validate snapshot reference format (dataset@snapshot)."""
         if not snapshot or not isinstance(snapshot, str):
             raise ZFSOperationFailedError(f"Invalid snapshot reference: {snapshot!r}")
-        if snapshot.count('@') != 1:
-            raise ZFSOperationFailedError(f"Snapshot reference must contain exactly one '@': {snapshot!r}")
-        dataset, snap_name = snapshot.split('@')
+        if snapshot.count("@") != 1:
+            raise ZFSOperationFailedError(
+                f"Snapshot reference must contain exactly one '@': {snapshot!r}"
+            )
+        dataset, snap_name = snapshot.split("@")
         if not dataset or not snap_name:
-            raise ZFSOperationFailedError(f"Invalid snapshot reference format: {snapshot!r}")
+            raise ZFSOperationFailedError(
+                f"Invalid snapshot reference format: {snapshot!r}"
+            )
 
     def create_snapshot(
         self,
@@ -91,7 +97,7 @@ class ZFSOperations:
                 error_msg = str(e).lower()
                 if "already exists" in error_msg and attempt < max_retries - 1:
                     # Exponential backoff: 0.1s, 0.2s, 0.4s
-                    delay = 0.1 * (2 ** attempt)
+                    delay = 0.1 * (2**attempt)
                     time.sleep(delay)
                     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
                     snapshot_name = f"{prefix}_{timestamp}"
@@ -125,22 +131,19 @@ class ZFSOperations:
             ZFSError: If snapshot or clone creation fails
         """
         # Create snapshot first
-        snapshot_path = self.create_snapshot(
-            dataset,
-            snapshot_name=snapshot_name
-        )
+        snapshot_path = self.create_snapshot(dataset, snapshot_name=snapshot_name)
 
         try:
             # Create clone from the snapshot
             self.clone_snapshot(
-                snapshot_path,
-                clone_dataset,
-                properties=clone_properties
+                snapshot_path, clone_dataset, properties=clone_properties
             )
             return snapshot_path, clone_dataset
         except Exception:
             # Clone failed - snapshot remains for cleanup by retention policies
-            logger.warning(f"Clone creation failed, snapshot {snapshot_path} left for cleanup")
+            logger.warning(
+                f"Clone creation failed, snapshot {snapshot_path} left for cleanup"
+            )
             raise
 
     @contextmanager
@@ -173,14 +176,16 @@ class ZFSOperations:
             try:
                 self.destroy_clone(clone_dataset)
             except Exception as e:
-                logger.warning(f"Failed to cleanup temporary clone {clone_dataset}: {e}")
+                logger.warning(
+                    f"Failed to cleanup temporary clone {clone_dataset}: {e}"
+                )
                 # Don't re-raise cleanup errors
 
     def clone_snapshot(
         self,
         snapshot: str,
         clone_dataset: str,
-        properties: dict[str, str] | None = None
+        properties: dict[str, str] | None = None,
     ) -> str:
         """Clone a snapshot to new dataset. Returns clone path.
 
@@ -202,11 +207,7 @@ class ZFSOperations:
         self._cmd._run_command(cmd)
         return clone_dataset
 
-    def list_snapshots(
-        self,
-        dataset: str,
-        prefix: str | None = None
-    ) -> list[Snapshot]:
+    def list_snapshots(self, dataset: str, prefix: str | None = None) -> list[Snapshot]:
         """List snapshots for a dataset.
 
         Args:
@@ -231,7 +232,7 @@ class ZFSOperations:
                     name=snap_data["name"],
                     creation_time=int(snap_data["creation"]),
                     used=snap_data["used"],
-                    referenced=snap_data["referenced"]
+                    referenced=snap_data["referenced"],
                 )
                 snapshot_objects.append(snapshot)
             except (KeyError, ValueError) as e:
@@ -241,8 +242,7 @@ class ZFSOperations:
         # Filter by prefix if specified
         if prefix:
             snapshot_objects = [
-                s for s in snapshot_objects
-                if s.snapshot_name.startswith(prefix)
+                s for s in snapshot_objects if s.snapshot_name.startswith(prefix)
             ]
 
         # Sort by creation time (should already be sorted by zfs, but ensure it)
@@ -251,10 +251,7 @@ class ZFSOperations:
         return snapshot_objects
 
     def destroy_clone(
-        self,
-        clone_dataset: str,
-        recursive: bool = False,
-        force: bool = False
+        self, clone_dataset: str, recursive: bool = False, force: bool = False
     ) -> None:
         """Destroy a clone dataset safely.
 
@@ -285,7 +282,9 @@ class ZFSOperations:
             # Continue with destroy anyway - let ZFS handle the error
 
         # Destroy the clone
-        cmd = self._cmd._build_destroy_cmd(clone_dataset, recursive=recursive, force=force)
+        cmd = self._cmd._build_destroy_cmd(
+            clone_dataset, recursive=recursive, force=force
+        )
         self._cmd._run_command(cmd)
 
     def cleanup_old_snapshots(
@@ -293,7 +292,7 @@ class ZFSOperations:
         dataset: str,
         keep_count: int = 10,
         prefix: str | None = None,
-        max_age_days: float | None = None
+        max_age_days: float | None = None,
     ) -> list[str]:
         """Remove old snapshots, keep N most recent.
 
@@ -314,6 +313,7 @@ class ZFSOperations:
 
         # Separate snapshots by age criteria
         import time
+
         current_time = int(time.time())
         snapshots_to_delete = []
 
@@ -329,7 +329,9 @@ class ZFSOperations:
 
         # Apply count-based cleanup to remaining snapshots
         if len(remaining_snapshots) > keep_count or keep_count == 0:
-            sorted_remaining = sorted(remaining_snapshots, key=lambda s: s.creation_time)
+            sorted_remaining = sorted(
+                remaining_snapshots, key=lambda s: s.creation_time
+            )
             if keep_count == 0:
                 count_based_deletions = sorted_remaining
             else:
@@ -341,7 +343,9 @@ class ZFSOperations:
         # Delete snapshots in order (oldest first)
         for snapshot in snapshots_to_delete:
             try:
-                cmd = self._cmd._build_destroy_cmd(snapshot.name, recursive=False, force=False)
+                cmd = self._cmd._build_destroy_cmd(
+                    snapshot.name, recursive=False, force=False
+                )
                 self._cmd._run_command(cmd)
                 deleted_snapshots.append(snapshot.name)
             except Exception as e:
@@ -350,6 +354,7 @@ class ZFSOperations:
                 continue
 
         return deleted_snapshots
+
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +414,7 @@ class ZFSCommand:
         if dataset:
             error_msg += f" on dataset '{dataset}'"
 
-        stderr = getattr(e, 'stderr', None)
+        stderr = getattr(e, "stderr", None)
         if stderr:
             error_msg += f": {stderr.strip()}"
         else:
@@ -428,9 +433,9 @@ class ZFSCommand:
         """
         # Look for dataset patterns in the command
         for arg in cmd[2:]:  # Skip 'zfs' and operation
-            if '@' in arg:  # snapshot reference
-                return arg.split('@')[0]
-            if '/' in arg and not arg.startswith('-'):  # dataset path
+            if "@" in arg:  # snapshot reference
+                return arg.split("@")[0]
+            if "/" in arg and not arg.startswith("-"):  # dataset path
                 return arg
         return None
 
@@ -449,13 +454,14 @@ class ZFSCommand:
         if "permission denied" in lower_msg:
             return ZFSPermissionDeniedError(error_msg)
         # Check for pool offline/suspended
-        elif ("pool" in lower_msg and
-              ("offline" in lower_msg or "suspended" in lower_msg or
-               "i/o is currently" in lower_msg)):
+        elif "pool" in lower_msg and (
+            "offline" in lower_msg
+            or "suspended" in lower_msg
+            or "i/o is currently" in lower_msg
+        ):
             return ZFSPoolOfflineError(error_msg)
         # Check for dataset not found
-        elif ("dataset does not exist" in lower_msg or
-              "cannot open" in lower_msg):
+        elif "dataset does not exist" in lower_msg or "cannot open" in lower_msg:
             return ZFSDatasetNotFoundError(error_msg)
         else:
             return ZFSOperationFailedError(error_msg)
@@ -539,11 +545,14 @@ class ZFSCommand:
             Command list
         """
         return [
-            "zfs", "list",
+            "zfs",
+            "list",
             "-H",  # No headers
-            "-o", "name,creation,used,referenced",
-            "-t", "snapshot",
-            dataset
+            "-o",
+            "name,creation,used,referenced",
+            "-t",
+            "snapshot",
+            dataset,
         ]
 
     def _build_get_cmd(self, dataset: str, properties: list[str]) -> list[str]:
@@ -557,11 +566,13 @@ class ZFSCommand:
             Command list
         """
         return [
-            "zfs", "get",
+            "zfs",
+            "get",
             "-H",  # No headers
-            "-o", "value",
+            "-o",
+            "value",
             ",".join(properties),
-            dataset
+            dataset,
         ]
 
     def _parse_list_output(self, output: str) -> list[dict[str, str]]:
@@ -576,19 +587,21 @@ class ZFSCommand:
         if not output.strip():
             return []
 
-        lines = output.strip().split('\n')
+        lines = output.strip().split("\n")
         result = []
         for line in lines:
             if not line.strip():
                 continue
-            parts = line.split('\t')
+            parts = line.split("\t")
             if len(parts) == 4:
-                result.append({
-                    "name": parts[0],
-                    "creation": parts[1],
-                    "used": parts[2],
-                    "referenced": parts[3]
-                })
+                result.append(
+                    {
+                        "name": parts[0],
+                        "creation": parts[1],
+                        "used": parts[2],
+                        "referenced": parts[3],
+                    }
+                )
         return result
 
     def _parse_get_output(self, output: str, properties: list[str]) -> dict[str, str]:
@@ -604,7 +617,7 @@ class ZFSCommand:
         if not output.strip():
             return {}
 
-        lines = output.strip().split('\n')
+        lines = output.strip().split("\n")
         result = {}
         for i, line in enumerate(lines):
             if i < len(properties):

@@ -20,6 +20,7 @@ from fraisier.config._validation import (
     validate_hooks,
     validate_notifications,
     validate_servers,
+    validate_service_manager,
 )
 
 # Import all schema definitions from schema module
@@ -108,6 +109,7 @@ class FraisierConfig:
         )
         validate_notifications(self._config.get("notifications", {}))
         validate_hooks(self._config.get("hooks", {}))
+        validate_service_manager(self._config.get("service_manager"))
 
     @property
     def notifications(self) -> dict[str, Any]:

@@ -84,22 +84,21 @@ class TestZFSConfig:
         valid_prefixes = ["snap", "prod_", "backup_123", "my_snapshots_"]
         for prefix in valid_prefixes:
             config = ZFSConfig(
-                enabled=True,
-                pool="zroot",
-                data_dataset="data",
-                snapshot_prefix=prefix
+                enabled=True, pool="zroot", data_dataset="data", snapshot_prefix=prefix
             )
             assert config.snapshot_prefix == prefix
 
         # Invalid prefixes
         invalid_prefixes = ["snap!", "snap space", "snap@domain", "123start"]
         for prefix in invalid_prefixes:
-            with pytest.raises(ValidationError, match=r"prefix.*alphanumeric.*underscore"):
+            with pytest.raises(
+                ValidationError, match=r"prefix.*alphanumeric.*underscore"
+            ):
                 ZFSConfig(
                     enabled=True,
                     pool="zroot",
                     data_dataset="data",
-                    snapshot_prefix=prefix
+                    snapshot_prefix=prefix,
                 )
 
     def test_zfs_config_validation_numeric_fields(self):
@@ -110,7 +109,7 @@ class TestZFSConfig:
             pool="zroot",
             data_dataset="data",
             max_snapshot_age_days=30,
-            snapshot_retention=50
+            snapshot_retention=50,
         )
         assert config.max_snapshot_age_days == 30
         assert config.snapshot_retention == 50
@@ -121,35 +120,24 @@ class TestZFSConfig:
                 enabled=True,
                 pool="zroot",
                 data_dataset="data",
-                max_snapshot_age_days=-1
+                max_snapshot_age_days=-1,
             )
 
         with pytest.raises(ValidationError, match=r"retention.*positive"):
             ZFSConfig(
-                enabled=True,
-                pool="zroot",
-                data_dataset="data",
-                snapshot_retention=0
+                enabled=True, pool="zroot", data_dataset="data", snapshot_retention=0
             )
 
     def test_zfs_config_computed_properties(self):
         """Test computed properties for full dataset paths."""
-        config = ZFSConfig(
-            enabled=True,
-            pool="zroot",
-            data_dataset="app/data"
-        )
+        config = ZFSConfig(enabled=True, pool="zroot", data_dataset="app/data")
 
         assert config.full_dataset_path == "zroot/app/data"
         assert config.pool_path == "zroot"
 
     def test_zfs_config_disabled_behavior(self):
         """Test behavior when ZFS is disabled."""
-        config = ZFSConfig(
-            enabled=False,
-            pool="zroot",
-            data_dataset="data"
-        )
+        config = ZFSConfig(enabled=False, pool="zroot", data_dataset="data")
 
         assert config.enabled is False
         # Other fields should still be accessible
@@ -158,113 +146,121 @@ class TestZFSConfig:
     def test_zfs_config_validation_function(self):
         """Test the ZFS config validation function."""
         # Valid config
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": "zroot",
-            "data_dataset": "app/data",
-            "snapshot_prefix": "prod_",
-            "max_snapshot_age_days": 14
-        })
+        errors = _validate_zfs_config(
+            "my_app",
+            {
+                "enabled": True,
+                "pool": "zroot",
+                "data_dataset": "app/data",
+                "snapshot_prefix": "prod_",
+                "max_snapshot_age_days": 14,
+            },
+        )
         assert errors == []
 
     def test_zfs_config_validation_disabled(self):
         """Test validation when ZFS is disabled."""
         # Should not validate required fields when disabled
-        errors = _validate_zfs_config("my_app", {
-            "enabled": False
-        })
+        errors = _validate_zfs_config("my_app", {"enabled": False})
         assert errors == []
 
     def test_zfs_config_validation_function_required_fields(self):
         """Test validation of required fields when enabled."""
         # Missing pool
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "data_dataset": "app/data"
-        })
+        errors = _validate_zfs_config(
+            "my_app", {"enabled": True, "data_dataset": "app/data"}
+        )
         assert len(errors) == 1
         assert "pool is required" in errors[0]
 
         # Missing data_dataset
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": "zroot"
-        })
+        errors = _validate_zfs_config("my_app", {"enabled": True, "pool": "zroot"})
         assert len(errors) == 1
         assert "data_dataset is required" in errors[0]
 
     def test_zfs_config_validation_types(self):
         """Test validation of field types."""
         # enabled not boolean
-        errors = _validate_zfs_config("my_app", {
-            "enabled": "yes",
-            "pool": "zroot",
-            "data_dataset": "data"
-        })
+        errors = _validate_zfs_config(
+            "my_app", {"enabled": "yes", "pool": "zroot", "data_dataset": "data"}
+        )
         assert len(errors) == 1
         assert "enabled must be a boolean" in errors[0]
 
         # pool not string
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": 123,
-            "data_dataset": "data"
-        })
+        errors = _validate_zfs_config(
+            "my_app", {"enabled": True, "pool": 123, "data_dataset": "data"}
+        )
         assert len(errors) == 1
         assert "pool must be a string" in errors[0]
 
         # max_snapshot_age_days not integer
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": "zroot",
-            "data_dataset": "data",
-            "max_snapshot_age_days": "14"
-        })
+        errors = _validate_zfs_config(
+            "my_app",
+            {
+                "enabled": True,
+                "pool": "zroot",
+                "data_dataset": "data",
+                "max_snapshot_age_days": "14",
+            },
+        )
         assert len(errors) == 1
         assert "max_snapshot_age_days must be an integer" in errors[0]
 
     def test_zfs_config_validation_prefixes(self):
         """Test validation of prefix formats."""
         # Invalid snapshot_prefix
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": "zroot",
-            "data_dataset": "data",
-            "snapshot_prefix": "123invalid"
-        })
+        errors = _validate_zfs_config(
+            "my_app",
+            {
+                "enabled": True,
+                "pool": "zroot",
+                "data_dataset": "data",
+                "snapshot_prefix": "123invalid",
+            },
+        )
         assert len(errors) == 1
         assert "snapshot_prefix" in errors[0]
         assert "start with a letter or underscore" in errors[0]
 
         # Invalid clone_prefix
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": "zroot",
-            "data_dataset": "data",
-            "clone_prefix": "invalid@prefix"
-        })
+        errors = _validate_zfs_config(
+            "my_app",
+            {
+                "enabled": True,
+                "pool": "zroot",
+                "data_dataset": "data",
+                "clone_prefix": "invalid@prefix",
+            },
+        )
         assert len(errors) == 1
         assert "clone_prefix" in errors[0]
 
     def test_zfs_config_validation_numeric_ranges(self):
         """Test validation of numeric field ranges."""
         # Negative age
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": "zroot",
-            "data_dataset": "data",
-            "max_snapshot_age_days": -1
-        })
+        errors = _validate_zfs_config(
+            "my_app",
+            {
+                "enabled": True,
+                "pool": "zroot",
+                "data_dataset": "data",
+                "max_snapshot_age_days": -1,
+            },
+        )
         assert len(errors) == 1
         assert "must be positive" in errors[0]
 
         # Zero retention
-        errors = _validate_zfs_config("my_app", {
-            "enabled": True,
-            "pool": "zroot",
-            "data_dataset": "data",
-            "snapshot_retention": 0
-        })
+        errors = _validate_zfs_config(
+            "my_app",
+            {
+                "enabled": True,
+                "pool": "zroot",
+                "data_dataset": "data",
+                "snapshot_retention": 0,
+            },
+        )
         assert len(errors) == 1
         assert "must be positive" in errors[0]
 

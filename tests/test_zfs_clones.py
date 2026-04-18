@@ -34,18 +34,21 @@ class TestZFSCloneOperations:
         result = self.zfs_ops.clone_snapshot(
             "zroot/data@snap1",
             "zroot/clone1",
-            properties={"mountpoint": "/tmp/test", "readonly": "on"}
+            properties={"mountpoint": "/tmp/test", "readonly": "on"},
         )
 
         assert result == "zroot/clone1"
         self.runner.run.assert_called_once()
         args = self.runner.run.call_args[0][0]
         expected = [
-            "zfs", "clone",
-            "-o", "mountpoint=/tmp/test",
-            "-o", "readonly=on",
+            "zfs",
+            "clone",
+            "-o",
+            "mountpoint=/tmp/test",
+            "-o",
+            "readonly=on",
             "zroot/data@snap1",
-            "zroot/clone1"
+            "zroot/clone1",
         ]
         assert args == expected
 
@@ -62,9 +65,11 @@ class TestZFSCloneOperations:
     def test_clone_snapshot_nonexistent_snapshot(self):
         """Test cloning from non-existent snapshot."""
         from subprocess import CalledProcessError
+
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "clone", "zroot/data@nonexistent", "zroot/clone1"],
-            stderr="cannot open 'zroot/data@nonexistent': dataset does not exist"
+            1,
+            ["zfs", "clone", "zroot/data@nonexistent", "zroot/clone1"],
+            stderr="cannot open 'zroot/data@nonexistent': dataset does not exist",
         )
 
         with pytest.raises(ZFSDatasetNotFoundError):
@@ -73,23 +78,28 @@ class TestZFSCloneOperations:
     def test_clone_snapshot_clone_already_exists(self):
         """Test cloning when target clone already exists."""
         from subprocess import CalledProcessError
+
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "clone", "zroot/data@snap1", "zroot/clone1"],
-            stderr="cannot create 'zroot/clone1': dataset already exists"
+            1,
+            ["zfs", "clone", "zroot/data@snap1", "zroot/clone1"],
+            stderr="cannot create 'zroot/clone1': dataset already exists",
         )
 
         # This should raise ZFSOperationFailedError since "dataset already exists"
         # is not a "does not exist" error
         from fraisier.zfs.exceptions import ZFSOperationFailedError
+
         with pytest.raises(ZFSOperationFailedError):
             self.zfs_ops.clone_snapshot("zroot/data@snap1", "zroot/clone1")
 
     def test_clone_snapshot_permission_denied(self):
         """Test cloning with permission denied."""
         from subprocess import CalledProcessError
+
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "clone", "zroot/data@snap1", "zroot/clone1"],
-            stderr="cannot create 'zroot/clone1': permission denied"
+            1,
+            ["zfs", "clone", "zroot/data@snap1", "zroot/clone1"],
+            stderr="cannot create 'zroot/clone1': permission denied",
         )
 
         with pytest.raises(ZFSPermissionDeniedError):
@@ -100,7 +110,9 @@ class TestZFSCloneOperations:
         # Should still work as long as ZFS accepts it
         self.runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-        result = self.zfs_ops.clone_snapshot("zroot/data@snapshot-name", "zroot/clone-name")
+        result = self.zfs_ops.clone_snapshot(
+            "zroot/data@snapshot-name", "zroot/clone-name"
+        )
 
         assert result == "zroot/clone-name"
         args = self.runner.run.call_args[0][0]
@@ -110,7 +122,9 @@ class TestZFSCloneOperations:
         """Test cloning with empty properties dict."""
         self.runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-        result = self.zfs_ops.clone_snapshot("zroot/data@snap1", "zroot/clone1", properties={})
+        result = self.zfs_ops.clone_snapshot(
+            "zroot/data@snap1", "zroot/clone1", properties={}
+        )
 
         assert result == "zroot/clone1"
         args = self.runner.run.call_args[0][0]

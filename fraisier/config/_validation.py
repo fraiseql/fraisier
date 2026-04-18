@@ -289,7 +289,9 @@ def _validate_zfs_config(fraise_name: str, zfs: Any) -> list[str]:
         for field in ["pool", "data_dataset"]:
             value = zfs.get(field)
             if not value:
-                errors.append(f"{fraise_name}: zfs.{field} is required when ZFS is enabled")
+                errors.append(
+                    f"{fraise_name}: zfs.{field} is required when ZFS is enabled"
+                )
             elif not isinstance(value, str):
                 errors.append(
                     f"{fraise_name}: zfs.{field} must be a string, got {type(value).__name__}"

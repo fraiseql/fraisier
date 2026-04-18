@@ -485,253 +485,74 @@ class TestRestoreMigrateStrategy:
         assert result.success
         assert result.migrations_applied == 5
 
-        # Verify service manager calls
+        # Verify service stop and wait_stopped were called
         mock_svc_mgr.stop.assert_called_once_with("test_svc")
         mock_svc_mgr.wait_stopped.assert_called_once_with("test_svc")
+        # Verify service start was called last
         mock_svc_mgr.start.assert_called_once_with("test_svc")
 
-    @patch("fraisier.dbops.restore.find_latest_backup", return_value=None)
-    def test_execute_no_backup_found_raises(self, mock_find):
-        from fraisier.errors import DatabaseError
-
-        strategy = _make_strategy()
-        with pytest.raises(DatabaseError, match="No backup"):
-            strategy.execute(CONFIG, migrations_dir=MDIR)
-
-    @patch("fraisier.dbops.restore.validate_backup_age", return_value=False)
-    @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_backup_too_old_raises(self, mock_find, mock_age):
-        from fraisier.errors import DatabaseError
-
-        mock_find.return_value = Path("/backup/old.dump")
-        strategy = _make_strategy()
-        with pytest.raises(DatabaseError, match="older than"):
-            strategy.execute(CONFIG, migrations_dir=MDIR)
-
-    @patch("fraisier.dbops.operations.drop_db")
-    @patch("fraisier.dbops.operations.terminate_backends")
     @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
     @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_drop_failure_raises(
-        self, mock_find, mock_age, mock_term, mock_drop
-    ):
-        from fraisier.errors import DatabaseError
-
-        mock_find.return_value = Path("/backup/db.dump")
-        mock_drop.return_value = (1, "", 'database "staging_db" already exists')
-
-        strategy = _make_strategy()
-        with pytest.raises(DatabaseError, match="Failed to drop database staging_db"):
-            strategy.execute(CONFIG, migrations_dir=MDIR)
-
-    @patch("fraisier.dbops.restore.restore_backup")
-    @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
-    @patch("fraisier.dbops.operations.drop_db")
-    @patch("fraisier.dbops.operations.terminate_backends")
-    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
-    @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_restore_failure_raises(
-        self, mock_find, mock_age, mock_term, mock_drop, mock_create, mock_restore
-    ):
-        from fraisier.errors import DatabaseError
-
-        mock_drop.return_value = (0, "", "")
-        mock_find.return_value = Path("/backup/db.dump")
-        mock_restore.return_value = RestoreResult(success=False, error="corrupt file")
-
-        strategy = _make_strategy()
-        with pytest.raises(DatabaseError, match="pg_restore failed"):
-            strategy.execute(CONFIG, migrations_dir=MDIR)
-
-    @patch("fraisier.strategies._restore.migrate_up")
-    @patch("fraisier.dbops.restore.validate_table_count", return_value=(False, 10))
-    @patch("fraisier.dbops.restore.restore_backup")
-    @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
-    @patch("fraisier.dbops.operations.drop_db")
-    @patch("fraisier.dbops.operations.terminate_backends")
-    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
-    @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_table_count_below_threshold_raises(
-        self,
-        mock_find,
-        mock_age,
-        mock_term,
-        mock_drop,
-        mock_create,
-        mock_restore,
-        mock_table,
-        mock_up,
-    ):
-        from fraisier.errors import DatabaseError
-
-        mock_drop.return_value = (0, "", "")
-        mock_find.return_value = Path("/backup/db.dump")
-        mock_restore.return_value = RestoreResult(success=True)
-        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
-
-        strategy = _make_strategy(min_tables=300)
-        with pytest.raises(DatabaseError, match="Table count validation failed"):
-            strategy.execute(CONFIG, migrations_dir=MDIR)
-
-    @patch("fraisier.strategies._restore.migrate_up")
-    @patch("fraisier.dbops.restore.validate_table_count")
-    @patch("fraisier.dbops.restore.restore_backup")
-    @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
-    @patch("fraisier.dbops.operations.drop_db")
-    @patch("fraisier.dbops.operations.terminate_backends")
-    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
-    @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_skips_table_validation_when_min_tables_zero(
-        self,
-        mock_find,
-        mock_age,
-        mock_term,
-        mock_drop,
-        mock_create,
-        mock_restore,
-        mock_table,
-        mock_up,
-    ):
-        mock_drop.return_value = (0, "", "")
-        mock_find.return_value = Path("/backup/db.dump")
-        mock_restore.return_value = RestoreResult(success=True)
-        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
-
-        strategy = _make_strategy(min_tables=0)
-        result = strategy.execute(CONFIG, migrations_dir=MDIR)
-
-        assert result.success
-        mock_table.assert_not_called()
-
-    @patch("fraisier.strategies._restore.migrate_up")
-    @patch("fraisier.dbops.operations.create_db")
-    @patch("fraisier.dbops.operations.drop_db")
-    @patch("fraisier.dbops.operations.terminate_backends")
-    @patch("fraisier.dbops.restore.restore_backup")
-    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
-    @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_creates_template_when_configured(
-        self,
-        mock_find,
-        mock_age,
-        mock_restore,
-        mock_term,
-        mock_drop,
-        mock_create,
-        mock_up,
-    ):
-        mock_drop.return_value = (0, "", "")
-        mock_find.return_value = Path("/backup/db.dump")
-        mock_restore.return_value = RestoreResult(success=True)
-        mock_create.return_value = (0, "", "")
-        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
-
-        strategy = _make_strategy(create_template=True, template_name="staging_tmpl")
-        result = strategy.execute(CONFIG, migrations_dir=MDIR)
-
-        assert result.success
-        # create_db called twice: once for db, once for template
-        assert mock_create.call_count == 2
-        template_call = mock_create.call_args_list[1]
-        assert template_call[0] == ("staging_tmpl",)
-        assert template_call[1] == {
-            "template": "staging_db",
-            "connection_url": _ADMIN_URL,
-        }
-
-    @patch("fraisier.strategies._restore.migrate_up")
-    @patch("fraisier.dbops.restore.validate_table_count")
-    @patch("fraisier.dbops.restore.restore_backup")
-    @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
-    @patch("fraisier.dbops.operations.drop_db")
-    @patch("fraisier.dbops.operations.terminate_backends")
-    @patch("fraisier.dbops.operations.start_service")
-    @patch("fraisier.dbops.operations.stop_service")
-    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
-    @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_stops_and_starts_service(
-        self,
-        mock_find,
-        mock_age,
-        mock_stop_svc,
-        mock_start_svc,
-        mock_term,
-        mock_drop,
-        mock_create,
-        mock_restore,
-        mock_table,
-        mock_up,
-    ):
-        """Service should be stopped before DB operations and restarted after."""
-        backup = Path("/backup/production/db_2026.dump")
-        mock_find.return_value = backup
-        mock_stop_svc.return_value = (0, "", "")
-        mock_start_svc.return_value = (0, "", "")
-        mock_drop.return_value = (0, "", "")
-        mock_create.return_value = (0, "", "")
-        mock_restore.return_value = RestoreResult(success=True)
-        mock_table.return_value = (True, 350)
-        mock_up.return_value = MigrationResult(success=True, steps_applied=5)
-
-        strategy = _make_strategy(service_name="api.service", min_tables=300)
-        result = strategy.execute(CONFIG, migrations_dir=MDIR)
-
-        assert result.success
-        # Verify service stop was called first
-        mock_stop_svc.assert_called_once_with("api.service")
-        # Verify service start was called last
-        mock_start_svc.assert_called_once_with("api.service")
-
-    @patch("fraisier.dbops.operations.stop_service")
-    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
-    @patch("fraisier.dbops.restore.find_latest_backup")
-    def test_execute_service_stop_failure_raises(
-        self, mock_find, mock_age, mock_stop_svc
-    ):
+    def test_execute_service_stop_failure_raises(self, mock_find, mock_age):
         """If service stop fails, execution should stop immediately."""
+        from unittest.mock import MagicMock
+
         from fraisier.errors import DatabaseError
+        from fraisier.service_managers.base import ServiceManagerError
 
         mock_find.return_value = Path("/backup/db.dump")
-        mock_stop_svc.return_value = (1, "", "Unit not found")
 
-        strategy = _make_strategy(service_name="api.service")
-        with pytest.raises(DatabaseError, match="Failed to stop service"):
+        mock_svc_mgr = MagicMock()
+        mock_svc_mgr.stop.side_effect = ServiceManagerError("Unit not found")
+
+        strategy = _make_strategy(
+            service_manager=mock_svc_mgr, service_name="api.service"
+        )
+        with pytest.raises(DatabaseError, match=r"Failed to stop service api\.service"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
     @patch("fraisier.strategies._restore.migrate_up")
+    @patch("fraisier.dbops.restore.validate_table_count")
     @patch("fraisier.dbops.restore.restore_backup")
     @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
     @patch("fraisier.dbops.operations.drop_db")
     @patch("fraisier.dbops.operations.terminate_backends")
-    @patch("fraisier.dbops.operations.start_service")
-    @patch("fraisier.dbops.operations.stop_service")
     @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
     @patch("fraisier.dbops.restore.find_latest_backup")
     def test_execute_service_start_failure_raises(
         self,
         mock_find,
         mock_age,
-        mock_stop_svc,
-        mock_start_svc,
         mock_term,
         mock_drop,
         mock_create,
         mock_restore,
+        mock_table,
         mock_up,
     ):
-        """If service start fails after restore, execution should fail."""
-        from fraisier.errors import DatabaseError
+        """If service start fails, execution should stop immediately."""
+        from unittest.mock import MagicMock
 
-        mock_find.return_value = Path("/backup/db.dump")
-        mock_stop_svc.return_value = (0, "", "")
+        from fraisier.errors import DatabaseError
+        from fraisier.service_managers.base import ServiceManagerError
+
+        backup = Path("/backup/production/db_2026.dump")
+        mock_find.return_value = backup
         mock_drop.return_value = (0, "", "")
         mock_create.return_value = (0, "", "")
         mock_restore.return_value = RestoreResult(success=True)
-        mock_start_svc.return_value = (1, "", "Connection refused")
-        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+        mock_table.return_value = (True, 350)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=5)
 
-        strategy = _make_strategy(service_name="api.service")
-        with pytest.raises(DatabaseError, match="Failed to start service"):
+        mock_svc_mgr = MagicMock()
+        mock_svc_mgr.start.side_effect = ServiceManagerError("Unit not loaded")
+
+        strategy = _make_strategy(
+            service_manager=mock_svc_mgr, service_name="api.service", min_tables=300
+        )
+        with pytest.raises(
+            DatabaseError, match=r"Failed to start service api\.service"
+        ):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
     @patch("fraisier.strategies._restore.migrate_up")

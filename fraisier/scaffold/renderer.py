@@ -627,16 +627,23 @@ class ScaffoldRenderer:
         if not dry_run:
             self._remove_stale_deploy_units(rendered_files)
 
-        # Per-fraise systemd service templates
+        # Per-fraise service templates (systemd or rc.d based on service_manager)
+        service_manager = self.config._config.get("service_manager", "systemd")
         project = self.context["project_name"]
         for fraise in self.context["local_fraises"]:
             name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
                 base = _resolve_service_base(project, name, env_name, env_config or {})
-                svc_name = f"systemd/{base}.service"
-                rendered_files.append(svc_name)
-                if not dry_run:
-                    self._render_systemd_service(fraise, env_name, svc_name)
+                if service_manager == "rc":
+                    svc_name = f"rc.d/{base}"
+                    rendered_files.append(svc_name)
+                    if not dry_run:
+                        self._render_rcd_service(fraise, env_name, svc_name)
+                else:
+                    svc_name = f"systemd/{base}.service"
+                    rendered_files.append(svc_name)
+                    if not dry_run:
+                        self._render_systemd_service(fraise, env_name, svc_name)
 
         # Nginx: shared gateway.conf (always generated)
         nginx_out = "nginx/gateway.conf"
@@ -878,6 +885,61 @@ class ScaffoldRenderer:
             return
 
         content = template.render(**self.context)
+        self._write_output(out_name, content)
+
+    def _render_rcd_service(
+        self,
+        fraise: dict[str, Any],
+        env_name: str,
+        out_name: str,
+    ) -> None:
+        """Render a per-fraise rc.d service script."""
+        env_config = fraise.get("environments", {}).get(env_name, {})
+        service = ServiceConfig.from_env_dict(env_config)
+
+        # Resolve app_path: env_config > fallback /opt/<name>
+        app_path = env_config.get("app_path", f"/opt/{fraise['name']}")
+
+        # Resolve exec_command: service.exec > fraise-level > manage.py for Django-like
+        exec_command = (
+            service.exec or fraise.get("exec_command") or f"{app_path}/manage.py"
+        )
+
+        # For rc.d, command is the executable, command_args are the args
+        # For API, assume gunicorn or similar
+        if fraise.get("type") == "api":
+            # Assume gunicorn for API
+            command = "gunicorn"  # or whatever
+            command_args = f"--chdir {app_path} myapp.wsgi:application"  # placeholder
+        else:
+            command = exec_command
+            command_args = ""
+
+        # PID file
+        pidfile = f"/var/run/{fraise['name']}/{env_name}.pid"
+
+        # Environment variables
+        env_vars = env_config.get("env", {})
+
+        # Service name
+        project = self.context["project_name"]
+        service_name = _resolve_service_base(
+            project, fraise["name"], env_name, env_config or {}
+        )
+
+        context = {
+            "service_name": service_name,
+            "command": command,
+            "command_args": command_args,
+            "pidfile": pidfile,
+            "env": env_vars,
+        }
+
+        try:
+            template = self.env.get_template("provider/rc.d.j2")
+            content = template.render(**context)
+        except jinja2.TemplateNotFound:
+            content = "# Placeholder: rc.d.j2\n"
         self._write_output(out_name, content)
 
     def _render_systemd_service(

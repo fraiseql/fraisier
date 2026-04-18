@@ -180,7 +180,9 @@ fraises:
           database_url: "mysql://localhost/mydb"
 """,
         )
-        with pytest.raises(ValidationError, match=r"database_url.*must start with"):
+        with pytest.raises(
+            ValidationError, match=r"database\.database_url.*PostgreSQL URL"
+        ):
             FraisierConfig(config_file)
 
     def test_accepts_valid_database_url(self, tmp_path):
@@ -298,4 +300,52 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"strategy.*canary"):
+            FraisierConfig(config_file)
+
+    def test_accepts_valid_service_manager_systemd(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+service_manager: systemd
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config._config.get("service_manager") == "systemd"
+
+    def test_accepts_valid_service_manager_rc(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+service_manager: rc
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config._config.get("service_manager") == "rc"
+
+    def test_rejects_invalid_service_manager(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+service_manager: invalid
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+""",
+        )
+        with pytest.raises(ValidationError, match=r"Invalid service_manager"):
             FraisierConfig(config_file)

@@ -21,9 +21,7 @@ class TestZFSTransactionSemantics:
         self.runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         result = self.zfs_ops.create_snapshot_and_clone(
-            "zroot/data",
-            "zroot/clone1",
-            snapshot_name="test_snap"
+            "zroot/data", "zroot/clone1", snapshot_name="test_snap"
         )
 
         assert result == ("zroot/data@test_snap", "zroot/clone1")
@@ -35,7 +33,12 @@ class TestZFSTransactionSemantics:
         # First call: snapshot
         assert calls[0][0][0] == ["zfs", "snapshot", "zroot/data@test_snap"]
         # Second call: clone
-        assert calls[1][0][0] == ["zfs", "clone", "zroot/data@test_snap", "zroot/clone1"]
+        assert calls[1][0][0] == [
+            "zfs",
+            "clone",
+            "zroot/data@test_snap",
+            "zroot/clone1",
+        ]
 
     def test_create_snapshot_and_clone_snapshot_failure(self):
         """Test snapshot failure prevents clone attempt."""
@@ -43,16 +46,16 @@ class TestZFSTransactionSemantics:
 
         # Snapshot fails
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "snapshot", "zroot/data@test_snap"],
-            stderr="cannot create snapshot: dataset busy"
+            1,
+            ["zfs", "snapshot", "zroot/data@test_snap"],
+            stderr="cannot create snapshot: dataset busy",
         )
 
         from fraisier.zfs.exceptions import ZFSOperationFailedError
+
         with pytest.raises(ZFSOperationFailedError):  # Should raise the snapshot error
             self.zfs_ops.create_snapshot_and_clone(
-                "zroot/data",
-                "zroot/clone1",
-                snapshot_name="test_snap"
+                "zroot/data", "zroot/clone1", snapshot_name="test_snap"
             )
 
         # Should only attempt snapshot, not clone
@@ -68,17 +71,17 @@ class TestZFSTransactionSemantics:
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # Snapshot succeeds
             CalledProcessError(
-                1, ["zfs", "clone", "zroot/data@test_snap", "zroot/clone1"],
-                stderr="cannot create clone: dataset exists"
-            )  # Clone fails
+                1,
+                ["zfs", "clone", "zroot/data@test_snap", "zroot/clone1"],
+                stderr="cannot create clone: dataset exists",
+            ),  # Clone fails
         ]
 
         from fraisier.zfs.exceptions import ZFSOperationFailedError
+
         with pytest.raises(ZFSOperationFailedError):  # Should raise the clone error
             self.zfs_ops.create_snapshot_and_clone(
-                "zroot/data",
-                "zroot/clone1",
-                snapshot_name="test_snap"
+                "zroot/data", "zroot/clone1", snapshot_name="test_snap"
             )
 
         # Should attempt both operations
@@ -92,7 +95,7 @@ class TestZFSTransactionSemantics:
             "zroot/data",
             "zroot/clone1",
             snapshot_name="test_snap",
-            clone_properties={"readonly": "on", "mountpoint": "/tmp/test"}
+            clone_properties={"readonly": "on", "mountpoint": "/tmp/test"},
         )
 
         assert result == ("zroot/data@test_snap", "zroot/clone1")
@@ -101,11 +104,14 @@ class TestZFSTransactionSemantics:
         clone_call = self.runner.run.call_args_list[1]
         args = clone_call[0][0]
         expected = [
-            "zfs", "clone",
-            "-o", "readonly=on",
-            "-o", "mountpoint=/tmp/test",
+            "zfs",
+            "clone",
+            "-o",
+            "readonly=on",
+            "-o",
+            "mountpoint=/tmp/test",
             "zroot/data@test_snap",
-            "zroot/clone1"
+            "zroot/clone1",
         ]
         assert args == expected
 
@@ -113,12 +119,11 @@ class TestZFSTransactionSemantics:
         """Test atomic operation with auto-generated snapshot name."""
         import time
 
-        with patch('time.strftime', return_value="20220101_120000"):
+        with patch("time.strftime", return_value="20220101_120000"):
             self.runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
             result = self.zfs_ops.create_snapshot_and_clone(
-                "zroot/data",
-                "zroot/clone1"
+                "zroot/data", "zroot/clone1"
             )
 
             assert result == ("zroot/data@snap_20220101_120000", "zroot/clone1")
@@ -128,11 +133,15 @@ class TestZFSTransactionSemantics:
         # Mock clone creation and type checking for destroy_clone
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # Clone creation
-            MagicMock(returncode=0, stdout="clone\n", stderr=""),  # Type check for destroy
-            MagicMock(returncode=0, stdout="", stderr="")   # Destroy
+            MagicMock(
+                returncode=0, stdout="clone\n", stderr=""
+            ),  # Type check for destroy
+            MagicMock(returncode=0, stdout="", stderr=""),  # Destroy
         ]
 
-        with self.zfs_ops.temporary_clone("zroot/data@snap1", "zroot/temp_clone") as clone_path:
+        with self.zfs_ops.temporary_clone(
+            "zroot/data@snap1", "zroot/temp_clone"
+        ) as clone_path:
             assert clone_path == "zroot/temp_clone"
             # Clone should be created
             assert self.runner.run.call_count == 1
@@ -148,12 +157,18 @@ class TestZFSTransactionSemantics:
         # Mock clone creation and type checking for destroy_clone
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # Clone creation
-            MagicMock(returncode=0, stdout="clone\n", stderr=""),  # Type check for destroy
-            MagicMock(returncode=0, stdout="", stderr="")   # Destroy
+            MagicMock(
+                returncode=0, stdout="clone\n", stderr=""
+            ),  # Type check for destroy
+            MagicMock(returncode=0, stdout="", stderr=""),  # Destroy
         ]
 
-        with pytest.raises(ValueError), \
-             self.zfs_ops.temporary_clone("zroot/data@snap1", "zroot/temp_clone") as clone_path:
+        with (
+            pytest.raises(ValueError),
+            self.zfs_ops.temporary_clone(
+                "zroot/data@snap1", "zroot/temp_clone"
+            ) as clone_path,
+        ):
             assert clone_path == "zroot/temp_clone"
             raise ValueError("Test exception")
 
@@ -168,9 +183,7 @@ class TestZFSTransactionSemantics:
         self.runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         with self.zfs_ops.temporary_clone(
-            "zroot/data@snap1",
-            "zroot/temp_clone",
-            properties={"readonly": "on"}
+            "zroot/data@snap1", "zroot/temp_clone", properties={"readonly": "on"}
         ) as clone_path:
             assert clone_path == "zroot/temp_clone"
 
@@ -178,10 +191,12 @@ class TestZFSTransactionSemantics:
         clone_call = self.runner.run.call_args_list[0]
         args = clone_call[0][0]
         expected = [
-            "zfs", "clone",
-            "-o", "readonly=on",
+            "zfs",
+            "clone",
+            "-o",
+            "readonly=on",
             "zroot/data@snap1",
-            "zroot/temp_clone"
+            "zroot/temp_clone",
         ]
         assert args == expected
 
@@ -190,13 +205,15 @@ class TestZFSTransactionSemantics:
         from subprocess import CalledProcessError
 
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "clone", "zroot/data@snap1", "zroot/temp_clone"],
-            stderr="cannot create clone: permission denied"
+            1,
+            ["zfs", "clone", "zroot/data@snap1", "zroot/temp_clone"],
+            stderr="cannot create clone: permission denied",
         )
 
-        from fraisier.zfs.exceptions import ZFSPermissionDeniedError
-        with pytest.raises(ZFSPermissionDeniedError), \
-             self.zfs_ops.temporary_clone("zroot/data@snap1", "zroot/temp_clone"):
+        with (
+            pytest.raises(ZFSPermissionDeniedError),
+            self.zfs_ops.temporary_clone("zroot/data@snap1", "zroot/temp_clone"),
+        ):
             pass  # Should not reach here
 
         # Should only attempt clone creation, not destruction
@@ -210,17 +227,17 @@ class TestZFSTransactionSemantics:
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # Snapshot succeeds
             CalledProcessError(
-                1, ["zfs", "clone", "zroot/data@test_snap", "zroot/clone1"],
-                stderr="cannot create clone: out of space"
-            )  # Clone fails
+                1,
+                ["zfs", "clone", "zroot/data@test_snap", "zroot/clone1"],
+                stderr="cannot create clone: out of space",
+            ),  # Clone fails
         ]
 
         from fraisier.zfs.exceptions import ZFSOperationFailedError
+
         with pytest.raises(ZFSOperationFailedError):
             self.zfs_ops.create_snapshot_and_clone(
-                "zroot/data",
-                "zroot/clone1",
-                snapshot_name="test_snap"
+                "zroot/data", "zroot/clone1", snapshot_name="test_snap"
             )
 
         # Snapshot should remain (not cleaned up automatically)

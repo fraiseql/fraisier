@@ -37,7 +37,7 @@ class TestZFSSnapshotOperations:
         import time
         from unittest.mock import patch
 
-        with patch('time.strftime') as mock_strftime:
+        with patch("time.strftime") as mock_strftime:
             mock_strftime.return_value = "20220101_120000"
             self.runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
@@ -61,9 +61,11 @@ class TestZFSSnapshotOperations:
     def test_create_snapshot_dataset_not_found(self):
         """Test snapshot creation with non-existent dataset."""
         from subprocess import CalledProcessError
+
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "snapshot", "zroot/nonexistent@test"],
-            stderr="cannot open 'zroot/nonexistent': dataset does not exist"
+            1,
+            ["zfs", "snapshot", "zroot/nonexistent@test"],
+            stderr="cannot open 'zroot/nonexistent': dataset does not exist",
         )
 
         with pytest.raises(ZFSDatasetNotFoundError):
@@ -72,9 +74,11 @@ class TestZFSSnapshotOperations:
     def test_create_snapshot_permission_denied(self):
         """Test snapshot creation with permission denied."""
         from subprocess import CalledProcessError
+
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "snapshot", "zroot/data@test"],
-            stderr="cannot open 'zroot/data': permission denied"
+            1,
+            ["zfs", "snapshot", "zroot/data@test"],
+            stderr="cannot open 'zroot/data': permission denied",
         )
 
         with pytest.raises(ZFSPermissionDeniedError):
@@ -85,10 +89,12 @@ class TestZFSSnapshotOperations:
         from unittest.mock import patch
 
         # Mock time.time() to return a fixed timestamp
-        with patch('time.time', return_value=1640995200.0):
+        with patch("time.time", return_value=1640995200.0):
             self.runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-            result = self.zfs_ops.create_snapshot("zroot/data", "backup_20220101_120000")
+            result = self.zfs_ops.create_snapshot(
+                "zroot/data", "backup_20220101_120000"
+            )
 
             assert result == "zroot/data@backup_20220101_120000"
             self.runner.run.assert_called_once()
@@ -112,7 +118,7 @@ class TestZFSSnapshotOperations:
         from unittest.mock import patch
 
         # Test timestamp-based naming
-        with patch('time.time', return_value=1640995200.0):
+        with patch("time.time", return_value=1640995200.0):
             # This would be in a higher-level function, but testing the concept
             timestamp = int(time.time())
             snapshot_name = f"backup_{timestamp}"
@@ -145,15 +151,14 @@ class TestZFSSnapshotOperations:
         # First call fails with "already exists", second succeeds
         self.runner.run.side_effect = [
             CalledProcessError(
-                1, ["zfs", "snapshot", "zroot/data@snap_20220101_120000"],
-                stderr="cannot create snapshot 'zroot/data@snap_20220101_120000': dataset already exists"
+                1,
+                ["zfs", "snapshot", "zroot/data@snap_20220101_120000"],
+                stderr="cannot create snapshot 'zroot/data@snap_20220101_120000': dataset already exists",
             ),
-            MagicMock(returncode=0, stdout="", stderr="")  # Second call succeeds
+            MagicMock(returncode=0, stdout="", stderr=""),  # Second call succeeds
         ]
 
-        with patch('time.strftime') as mock_strftime, \
-             patch('time.sleep') as mock_sleep:
-
+        with patch("time.strftime") as mock_strftime, patch("time.sleep") as mock_sleep:
             mock_strftime.side_effect = ["20220101_120000", "20220101_120001"]
 
             result = self.zfs_ops.create_snapshot("zroot/data")
@@ -169,13 +174,15 @@ class TestZFSSnapshotOperations:
 
         # Always fail with "already exists"
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "snapshot", "zroot/data@snap_20220101_120000"],
-            stderr="cannot create snapshot 'zroot/data@snap_20220101_120000': dataset already exists"
+            1,
+            ["zfs", "snapshot", "zroot/data@snap_20220101_120000"],
+            stderr="cannot create snapshot 'zroot/data@snap_20220101_120000': dataset already exists",
         )
 
-        with patch('time.strftime', return_value="20220101_120000"), \
-             patch('time.sleep'):
-
+        with (
+            patch("time.strftime", return_value="20220101_120000"),
+            patch("time.sleep"),
+        ):
             with pytest.raises(ZFSOperationFailedError):
                 self.zfs_ops.create_snapshot("zroot/data")
 

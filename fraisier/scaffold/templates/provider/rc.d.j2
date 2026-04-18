@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# PROVIDE: {{ service_name }}
+# REQUIRE: LOGIN
+# KEYWORD: shutdown
+
+#
+# Add the following lines to /etc/rc.conf to enable {{ service_name }}:
+# {{ service_name }}_enable="YES"
+#
+
+. /etc/rc.subr
+
+name={{ service_name }}
+rcvar={{ service_name }}_enable
+{% if command %}
+command="{{ command }}"
+{% endif %}
+{% if command_args %}
+command_args="{{ command_args }}"
+{% endif %}
+{% if pidfile %}
+pidfile="{{ pidfile }}"
+{% endif %}
+
+{% for key, value in env.items() %}
+export {{ key }}="{{ value }}"
+{% endfor %}
+
+load_rc_config $name
+
+run_rc_command "$1"

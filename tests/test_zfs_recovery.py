@@ -39,7 +39,7 @@ class TestZFSErrorRecovery:
         # Simulate permission denied during clone creation
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # Snapshot succeeds
-            Exception("cannot create clone: permission denied")
+            Exception("cannot create clone: permission denied"),
         ]
 
         with pytest.raises(ZFSPermissionDeniedError) as exc_info:
@@ -64,7 +64,7 @@ class TestZFSErrorRecovery:
         # Simulate out of space during clone creation
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # Snapshot succeeds
-            Exception("cannot create clone: out of space")
+            Exception("cannot create clone: out of space"),
         ]
 
         with pytest.raises(ZFSOperationFailedError) as exc_info:
@@ -83,8 +83,7 @@ class TestZFSErrorRecovery:
 
         # Should work with deeply nested paths
         result = self.zfs_ops.clone_snapshot(
-            "zroot/pool/child@snap",
-            "zroot/pool/child/clone"
+            "zroot/pool/child@snap", "zroot/pool/child/clone"
         )
         assert result == "zroot/pool/child/clone"
 
@@ -99,10 +98,18 @@ class TestZFSErrorRecovery:
 
         # Test that cleanup continues even when some operations fail
         snapshots = [
-            type('MockSnapshot', (), {'name': 'zroot/data@snap1', 'creation_time': 1640995200})(),
-            type('MockSnapshot', (), {'name': 'zroot/data@snap2', 'creation_time': 1641081600})(),
+            type(
+                "MockSnapshot",
+                (),
+                {"name": "zroot/data@snap1", "creation_time": 1640995200},
+            )(),
+            type(
+                "MockSnapshot",
+                (),
+                {"name": "zroot/data@snap2", "creation_time": 1641081600},
+            )(),
         ]
-        with patch.object(self.zfs_ops, 'list_snapshots', return_value=snapshots):
+        with patch.object(self.zfs_ops, "list_snapshots", return_value=snapshots):
             deleted = self.zfs_ops.cleanup_old_snapshots("zroot/data", keep_count=0)
 
         # Should have attempted both operations, but only one succeeded
@@ -144,9 +151,9 @@ class TestZFSErrorRecovery:
         # Test various invalid snapshot reference formats
         invalid_refs = [
             "zroot/data@",  # Missing snapshot name
-            "@snapshot",    # Missing dataset
+            "@snapshot",  # Missing dataset
             "zroot/data@snap@extra",  # Too many @
-            "zroot/data snapshot",    # Space instead of @
+            "zroot/data snapshot",  # Space instead of @
         ]
 
         for ref in invalid_refs:
@@ -185,9 +192,7 @@ class TestZFSErrorRecovery:
 
         with pytest.raises(ZFSOperationFailedError) as exc_info:
             self.zfs_ops.clone_snapshot(
-                "zroot/data@snap1",
-                "zroot/clone1",
-                properties={"readonly": "on"}
+                "zroot/data@snap1", "zroot/clone1", properties={"readonly": "on"}
             )
 
         assert "invalid option" in str(exc_info.value)

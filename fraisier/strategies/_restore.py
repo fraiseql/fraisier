@@ -117,8 +117,13 @@ class RestoreMigrateStrategy(Strategy):
 
         # Step 3: Stop service to prevent connection reconnect race
         if self._service_manager and self._service_name:
-            self._service_manager.stop(self._service_name)
-            self._service_manager.wait_stopped(self._service_name)
+            try:
+                self._service_manager.stop(self._service_name)
+                self._service_manager.wait_stopped(self._service_name)
+            except Exception as exc:
+                raise DatabaseError(
+                    f"Failed to stop service {self._service_name}: {exc}"
+                ) from exc
             log.info("Stopped service %s", self._service_name)
 
         # Step 4: Terminate connections
@@ -193,7 +198,12 @@ class RestoreMigrateStrategy(Strategy):
 
         # Step 11: Start service
         if self._service_manager and self._service_name:
-            self._service_manager.start(self._service_name)
+            try:
+                self._service_manager.start(self._service_name)
+            except Exception as exc:
+                raise DatabaseError(
+                    f"Failed to start service {self._service_name}: {exc}"
+                ) from exc
             log.info("Started service %s", self._service_name)
 
         return StrategyResult(success=True, migrations_applied=result.steps_applied)

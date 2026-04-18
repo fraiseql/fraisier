@@ -24,7 +24,7 @@ class TestZFSCloneCleanup:
         # Mock get command to verify it's a clone
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type
-            MagicMock(returncode=0, stdout="", stderr="")  # destroy
+            MagicMock(returncode=0, stdout="", stderr=""),  # destroy
         ]
 
         self.zfs_ops.destroy_clone("zroot/clone1")
@@ -40,7 +40,7 @@ class TestZFSCloneCleanup:
         # Mock get command to verify it's a clone
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type
-            MagicMock(returncode=0, stdout="", stderr="")  # destroy
+            MagicMock(returncode=0, stdout="", stderr=""),  # destroy
         ]
 
         self.zfs_ops.destroy_clone("zroot/clone1", recursive=True)
@@ -58,7 +58,7 @@ class TestZFSCloneCleanup:
         # Mock get command to verify it's a clone
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type
-            MagicMock(returncode=0, stdout="", stderr="")  # destroy
+            MagicMock(returncode=0, stdout="", stderr=""),  # destroy
         ]
 
         self.zfs_ops.destroy_clone("zroot/clone1", force=True)
@@ -76,7 +76,7 @@ class TestZFSCloneCleanup:
         # Mock get command to verify it's a clone
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type
-            MagicMock(returncode=0, stdout="", stderr="")  # destroy
+            MagicMock(returncode=0, stdout="", stderr=""),  # destroy
         ]
 
         self.zfs_ops.destroy_clone("zroot/clone1", recursive=True, force=True)
@@ -95,15 +95,18 @@ class TestZFSCloneCleanup:
         ]
 
         from fraisier.zfs.exceptions import ZFSOperationFailedError
+
         with pytest.raises(ZFSOperationFailedError, match="not a clone"):
             self.zfs_ops.destroy_clone("zroot/filesystem")
 
     def test_destroy_clone_dataset_not_found(self):
         """Test destroying non-existent clone."""
         from subprocess import CalledProcessError
+
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "get", "-H", "-o", "value", "type", "zroot/nonexistent"],
-            stderr="cannot open 'zroot/nonexistent': dataset does not exist"
+            1,
+            ["zfs", "get", "-H", "-o", "value", "type", "zroot/nonexistent"],
+            stderr="cannot open 'zroot/nonexistent': dataset does not exist",
         )
 
         with pytest.raises(ZFSDatasetNotFoundError):
@@ -112,9 +115,11 @@ class TestZFSCloneCleanup:
     def test_destroy_clone_permission_denied_on_get(self):
         """Test permission denied when checking clone type."""
         from subprocess import CalledProcessError
+
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "get", "-H", "-o", "value", "type", "zroot/clone1"],
-            stderr="cannot open 'zroot/clone1': permission denied"
+            1,
+            ["zfs", "get", "-H", "-o", "value", "type", "zroot/clone1"],
+            stderr="cannot open 'zroot/clone1': permission denied",
         )
 
         with pytest.raises(ZFSPermissionDeniedError):
@@ -127,9 +132,10 @@ class TestZFSCloneCleanup:
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type succeeds
             CalledProcessError(
-                1, ["zfs", "destroy", "zroot/clone1"],
-                stderr="cannot destroy 'zroot/clone1': permission denied"
-            )  # destroy fails
+                1,
+                ["zfs", "destroy", "zroot/clone1"],
+                stderr="cannot destroy 'zroot/clone1': permission denied",
+            ),  # destroy fails
         ]
 
         with pytest.raises(ZFSPermissionDeniedError):
@@ -142,12 +148,14 @@ class TestZFSCloneCleanup:
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type succeeds
             CalledProcessError(
-                1, ["zfs", "destroy", "zroot/clone1"],
-                stderr="cannot destroy 'zroot/clone1': dataset is busy"
-            )  # destroy fails
+                1,
+                ["zfs", "destroy", "zroot/clone1"],
+                stderr="cannot destroy 'zroot/clone1': dataset is busy",
+            ),  # destroy fails
         ]
 
         from fraisier.zfs.exceptions import ZFSOperationFailedError
+
         with pytest.raises(ZFSOperationFailedError, match="dataset is busy"):
             self.zfs_ops.destroy_clone("zroot/clone1")
 
@@ -158,12 +166,14 @@ class TestZFSCloneCleanup:
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type succeeds
             CalledProcessError(
-                1, ["zfs", "destroy", "zroot/clone1"],
-                stderr="cannot destroy 'zroot/clone1': unknown error"
-            )  # destroy fails
+                1,
+                ["zfs", "destroy", "zroot/clone1"],
+                stderr="cannot destroy 'zroot/clone1': unknown error",
+            ),  # destroy fails
         ]
 
         from fraisier.zfs.exceptions import ZFSOperationFailedError
+
         with pytest.raises(ZFSOperationFailedError):
             self.zfs_ops.destroy_clone("zroot/clone1")
 
@@ -171,7 +181,7 @@ class TestZFSCloneCleanup:
         """Test that destroy commands are constructed correctly."""
         self.runner.run.side_effect = [
             MagicMock(returncode=0, stdout="clone\n", stderr=""),  # get type
-            MagicMock(returncode=0, stdout="", stderr="")  # destroy
+            MagicMock(returncode=0, stdout="", stderr=""),  # destroy
         ]
 
         self.zfs_ops.destroy_clone("zroot/clone1", recursive=True, force=True)

@@ -29,7 +29,9 @@ class TestZFSCommand:
         assert cmd == ["zfs", "snapshot", "zroot/data@test_snap"]
 
         # Test recursive snapshot
-        cmd = self.zfs_cmd._build_snapshot_cmd("zroot/data", "test_snap", recursive=True)
+        cmd = self.zfs_cmd._build_snapshot_cmd(
+            "zroot/data", "test_snap", recursive=True
+        )
         assert cmd == ["zfs", "snapshot", "-r", "zroot/data@test_snap"]
 
     def test_clone_command_building(self):
@@ -40,15 +42,15 @@ class TestZFSCommand:
 
         # Test clone with properties
         cmd = self.zfs_cmd._build_clone_cmd(
-            "zroot/data@snap",
-            "zroot/clone",
-            properties={"mountpoint": "/tmp/test"}
+            "zroot/data@snap", "zroot/clone", properties={"mountpoint": "/tmp/test"}
         )
         assert cmd == [
-            "zfs", "clone",
-            "-o", "mountpoint=/tmp/test",
+            "zfs",
+            "clone",
+            "-o",
+            "mountpoint=/tmp/test",
             "zroot/data@snap",
-            "zroot/clone"
+            "zroot/clone",
         ]
 
     def test_destroy_command_building(self):
@@ -73,15 +75,32 @@ class TestZFSCommand:
         """Test building zfs list commands."""
         # Test basic list command
         cmd = self.zfs_cmd._build_list_cmd("zroot/data")
-        assert cmd == ["zfs", "list", "-H", "-o", "name,creation,used,referenced", "-t", "snapshot", "zroot/data"]
+        assert cmd == [
+            "zfs",
+            "list",
+            "-H",
+            "-o",
+            "name,creation,used,referenced",
+            "-t",
+            "snapshot",
+            "zroot/data",
+        ]
 
     def test_get_command_building(self):
         """Test building zfs get commands."""
         # Test basic get command
         cmd = self.zfs_cmd._build_get_cmd("zroot/data@snap", ["type", "mountpoint"])
-        assert cmd == ["zfs", "get", "-H", "-o", "value", "type,mountpoint", "zroot/data@snap"]
+        assert cmd == [
+            "zfs",
+            "get",
+            "-H",
+            "-o",
+            "value",
+            "type,mountpoint",
+            "zroot/data@snap",
+        ]
 
-    @patch('subprocess.CompletedProcess')
+    @patch("subprocess.CompletedProcess")
     def test_successful_command_execution(self, mock_process):
         """Test successful command execution."""
         mock_process.returncode = 0
@@ -92,15 +111,11 @@ class TestZFSCommand:
         result = self.zfs_cmd._run_command(["zfs", "list"])
 
         assert result == mock_process
-        self.runner.run.assert_called_once_with(
-            ["zfs", "list"],
-            check=True,
-            timeout=30
-        )
+        self.runner.run.assert_called_once_with(["zfs", "list"], check=True, timeout=30)
 
     def test_command_execution_with_timeout(self):
         """Test command execution with custom timeout."""
-        with patch.object(self.zfs_cmd, '_run_command') as mock_run:
+        with patch.object(self.zfs_cmd, "_run_command") as mock_run:
             self.zfs_cmd._run_command(["zfs", "snapshot", "test"], timeout=60)
             mock_run.assert_called_once_with(["zfs", "snapshot", "test"], timeout=60)
 
@@ -110,8 +125,18 @@ class TestZFSCommand:
 zroot/data@snap2\t1641081600\t2.34G\t1.02G"""
         result = self.zfs_cmd._parse_list_output(output)
         expected = [
-            {"name": "zroot/data@snap1", "creation": "1640995200", "used": "1.23G", "referenced": "512M"},
-            {"name": "zroot/data@snap2", "creation": "1641081600", "used": "2.34G", "referenced": "1.02G"}
+            {
+                "name": "zroot/data@snap1",
+                "creation": "1640995200",
+                "used": "1.23G",
+                "referenced": "512M",
+            },
+            {
+                "name": "zroot/data@snap2",
+                "creation": "1641081600",
+                "used": "2.34G",
+                "referenced": "1.02G",
+            },
         ]
         assert result == expected
 
@@ -126,8 +151,9 @@ zroot/data@snap2\t1641081600\t2.34G\t1.02G"""
     def test_dataset_not_found_error(self):
         """Test handling dataset not found errors."""
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "list", "zroot/nonexistent"],
-            stderr="cannot open 'zroot/nonexistent': dataset does not exist"
+            1,
+            ["zfs", "list", "zroot/nonexistent"],
+            stderr="cannot open 'zroot/nonexistent': dataset does not exist",
         )
 
         with pytest.raises(ZFSDatasetNotFoundError) as exc_info:
@@ -139,8 +165,9 @@ zroot/data@snap2\t1641081600\t2.34G\t1.02G"""
     def test_permission_denied_error(self):
         """Test handling permission denied errors."""
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "snapshot", "zroot/data@test"],
-            stderr="cannot open 'zroot/data': permission denied"
+            1,
+            ["zfs", "snapshot", "zroot/data@test"],
+            stderr="cannot open 'zroot/data': permission denied",
         )
 
         with pytest.raises(ZFSPermissionDeniedError) as exc_info:
@@ -152,8 +179,9 @@ zroot/data@snap2\t1641081600\t2.34G\t1.02G"""
     def test_pool_offline_error(self):
         """Test handling pool offline errors."""
         self.runner.run.side_effect = CalledProcessError(
-            1, ["zfs", "list", "zroot"],
-            stderr="cannot open 'zroot': pool I/O is currently suspended"
+            1,
+            ["zfs", "list", "zroot"],
+            stderr="cannot open 'zroot': pool I/O is currently suspended",
         )
 
         with pytest.raises(ZFSPoolOfflineError) as exc_info:

@@ -2,7 +2,7 @@
 
 **Socket-activated deployment + migration orchestration for Python applications.**
 
-Deploy Django, FastAPI, Flask, or any Python web app with database migrations that work reliably. Uses systemd socket activation for secure, web-triggered deployments. Supports Django migrations, Alembic, Peewee, and Confiture. Coordinates preflight → migrate → restart → health check → rollback as one atomic operation.
+Deploy Django, FastAPI, Flask, or any Python web app with database migrations that work reliably. Uses systemd (Linux) or rc.d (FreeBSD) service management with socket activation for secure, web-triggered deployments. Supports Django migrations, Alembic, Peewee, and Confiture. Coordinates preflight → migrate → restart → health check → rollback as one atomic operation.
 
 ```
 webhook → socket → daemon → preflight → migrate up → restart → health check → done
@@ -12,7 +12,7 @@ webhook → socket → daemon → preflight → migrate up → restart → healt
     (no changes)  (no changes)  (no changes)  migrate down → git rollback
 ```
 
-Works with PostgreSQL databases. Deploy to bare metal or Docker Compose.
+Works with PostgreSQL databases. Deploy to bare metal (Linux or FreeBSD) or Docker Compose.
 
 ---
 
@@ -215,6 +215,16 @@ fraises:
           url: http://localhost:8000/health
 ```
 
+### FreeBSD
+
+For FreeBSD deployments, set the service manager explicitly or let Fraisier auto-detect it:
+
+```yaml
+service_manager: rc
+```
+
+When set to `rc`, scaffold generates rc.d service scripts instead of systemd units.
+
 ---
 
 ## Commands
@@ -244,6 +254,7 @@ fraisier version bump patch|minor|major          Bump version number
 
 ```
 fraisier db migrate <fraise> -e <env>            Run migrations only
+fraisier db restore <fraise> -e <env>            Restore from backup (drains connections, force-drops on PG 13+)
 fraisier db reset <fraise> -e <env>              Reset database (development)
 fraisier backup <fraise> -e <env>                Create database backup
 ```
@@ -266,7 +277,8 @@ Fraisier supports different deployment environments:
 
 | Target | Description |
 |--------|-------------|
-| **Bare metal** | Direct systemd service management on Linux servers |
+| **Bare metal (Linux)** | systemd service management |
+| **Bare metal (FreeBSD)** | rc.d service management |
 | **Docker Compose** | Containerized deployments with docker-compose |
 
 ---
@@ -276,7 +288,7 @@ Fraisier supports different deployment environments:
 - **Python**: 3.11+
 - **PostgreSQL**: Database server (local or remote)
 - **Git**: Version control
-- **Systemd**: Service management (bare metal deployments)
+- **Systemd** (Linux) or **rc.d** (FreeBSD): Service management (bare metal deployments)
 
 ### Framework-specific requirements
 
