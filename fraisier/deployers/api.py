@@ -267,8 +267,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 if self.database_config:
                     self._run_database_migrations()
 
-                # Step 4: Restart service
-                if self.systemd_service:
+                # Step 4: Restart service (unless strategy handles it)
+                if self.systemd_service and not self._is_restore_migrate_strategy():
                     logger.info(f"Restarting service: {self.systemd_service}")
                     self._restart_service()
 
@@ -395,6 +395,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         if resolved == "restore_migrate":
             kwargs["restore_config"] = self.database_config.get("restore", {})
             kwargs["db_name"] = self.database_config.get("name", "")
+            if self.systemd_service:
+                from fraisier.service_managers import get_service_manager
+
+                kwargs["service_manager"] = get_service_manager(self.runner, None)
+                kwargs["service_name"] = self.systemd_service
 
         strategy = get_strategy(resolved, **kwargs)
         confiture_config = Path(
@@ -482,6 +487,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     def _is_rebuild_strategy(self) -> bool:
         """Check if the configured strategy is rebuild."""
         return self.database_config.get("strategy") == "rebuild"
+
+    def _is_restore_migrate_strategy(self) -> bool:
+        """Check if the configured strategy is restore_migrate."""
+        return self.database_config.get("strategy") == "restore_migrate"
 
     def _stop_service(self) -> None:
         """Stop service."""
