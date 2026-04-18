@@ -148,6 +148,44 @@ class ZFSOperations:
 
         return snapshot_objects
 
+    def destroy_clone(
+        self,
+        clone_dataset: str,
+        recursive: bool = False,
+        force: bool = False
+    ) -> None:
+        """Destroy a clone dataset safely.
+
+        Args:
+            clone_dataset: Clone dataset to destroy
+            recursive: Whether to destroy recursively
+            force: Whether to force destroy (unmount, etc.)
+
+        Raises:
+            ZFSError: If destruction fails or safety checks fail
+        """
+        # Safety check: verify this is actually a clone
+        try:
+            result = self._cmd._run_command(
+                self._cmd._build_get_cmd(clone_dataset, ["type"])
+            )
+            dataset_type = self._cmd._parse_get_output(result.stdout, ["type"])
+            if dataset_type.get("type") != "clone":
+                raise ZFSOperationFailedError(
+                    f"Dataset '{clone_dataset}' is not a clone (type: {dataset_type.get('type')})"
+                )
+        except ZFSDatasetNotFoundError:
+            raise  # Re-raise dataset not found
+        except ZFSOperationFailedError:
+            raise  # Re-raise if not a clone
+        except Exception as e:
+            logger.warning(f"Could not verify dataset type for '{clone_dataset}': {e}")
+            # Continue with destroy anyway - let ZFS handle the error
+
+        # Destroy the clone
+        cmd = self._cmd._build_destroy_cmd(clone_dataset, recursive=recursive, force=force)
+        self._cmd._run_command(cmd)
+
 logger = logging.getLogger(__name__)
 
 
