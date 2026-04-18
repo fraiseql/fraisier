@@ -76,6 +76,29 @@ class ZFSOperations:
         # This should never be reached, but satisfies type checker
         raise ZFSOperationFailedError("Snapshot creation failed after all retries")
 
+    def clone_snapshot(
+        self,
+        snapshot: str,
+        clone_dataset: str,
+        properties: dict[str, str] | None = None
+    ) -> str:
+        """Clone a snapshot to new dataset. Returns clone path.
+
+        Args:
+            snapshot: Snapshot to clone from (format: dataset@snapshot)
+            clone_dataset: Target clone dataset name
+            properties: Optional ZFS properties to set on clone
+
+        Returns:
+            Full clone dataset path
+
+        Raises:
+            ZFSError: If cloning fails
+        """
+        cmd = self._cmd._build_clone_cmd(snapshot, clone_dataset, properties)
+        self._cmd._run_command(cmd)
+        return clone_dataset
+
 logger = logging.getLogger(__name__)
 
 
