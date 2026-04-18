@@ -888,6 +888,22 @@ class TestGetStrategy:
         )
         assert isinstance(s, RestoreMigrateStrategy)
 
+    def test_restore_migrate_with_service_manager(self):
+        from unittest.mock import MagicMock
+
+        mock_svc_mgr = MagicMock()
+        s = get_strategy(
+            "restore_migrate",
+            db_name="staging_db",
+            restore_config=_SAMPLE_RESTORE_CONFIG,
+            admin_url=_ADMIN_URL,
+            service_manager=mock_svc_mgr,
+            service_name="test_svc",
+        )
+        assert isinstance(s, RestoreMigrateStrategy)
+        assert s._service_manager is mock_svc_mgr
+        assert s._service_name == "test_svc"
+
     def test_restore_migrate_requires_config(self):
         with pytest.raises(ValueError, match="restore_config"):
             get_strategy("restore_migrate", db_name="staging_db")

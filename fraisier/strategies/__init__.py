@@ -84,6 +84,13 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             min_tables=int(restore_cfg.get("min_tables", 0)),
             backup_path=backup_path,
         )
-        return RestoreMigrateStrategy(config, admin_url=admin_url)
+        service_manager = kwargs.get("service_manager")
+        service_name = kwargs.get("service_name")
+        return RestoreMigrateStrategy(
+            config,
+            admin_url=admin_url,
+            service_manager=service_manager,
+            service_name=service_name,
+        )
     valid = "migrate, rebuild, restore_migrate"
     raise ValueError(f"Unknown strategy '{name}'. Valid: {valid}")
