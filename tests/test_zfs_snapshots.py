@@ -144,7 +144,6 @@ class TestZFSSnapshotOperations:
 
     def test_create_snapshot_retry_on_exists(self):
         """Test retry logic when snapshot already exists."""
-        import time
         from subprocess import CalledProcessError
         from unittest.mock import patch
 
@@ -158,7 +157,10 @@ class TestZFSSnapshotOperations:
             MagicMock(returncode=0, stdout="", stderr=""),  # Second call succeeds
         ]
 
-        with patch("time.strftime") as mock_strftime, patch("time.sleep") as mock_sleep:
+        with (
+            patch("fraisier.zfs.operations.time.strftime") as mock_strftime,
+            patch("fraisier.zfs.operations.time.sleep") as mock_sleep,
+        ):
             mock_strftime.side_effect = ["20220101_120000", "20220101_120001"]
 
             result = self.zfs_ops.create_snapshot("zroot/data")
@@ -180,8 +182,11 @@ class TestZFSSnapshotOperations:
         )
 
         with (
-            patch("time.strftime", return_value="20220101_120000"),
-            patch("time.sleep"),
+            patch(
+                "fraisier.zfs.operations.time.strftime",
+                return_value="20220101_120000",
+            ),
+            patch("fraisier.zfs.operations.time.sleep"),
         ):
             with pytest.raises(ZFSOperationFailedError):
                 self.zfs_ops.create_snapshot("zroot/data")
