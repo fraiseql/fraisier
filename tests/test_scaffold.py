@@ -178,6 +178,59 @@ scaffold:
         assert pairs[1].source == "staging"
         assert pairs[1].target == "production"
 
+    def test_sync_pairs_prefer_source_true(self, tmp_path):
+        """scaffold.sync parses prefer_source: true."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises: {}
+scaffold:
+  sync:
+    - source: dev
+      target: staging
+      prefer_source: true
+""",
+        )
+        pairs = config.scaffold.sync
+        assert len(pairs) == 1
+        assert pairs[0].prefer_source is True
+
+    def test_sync_pairs_prefer_source_false(self, tmp_path):
+        """scaffold.sync parses prefer_source: false."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises: {}
+scaffold:
+  sync:
+    - source: dev
+      target: staging
+      prefer_source: false
+""",
+        )
+        pairs = config.scaffold.sync
+        assert len(pairs) == 1
+        assert pairs[0].prefer_source is False
+
+    def test_sync_pairs_prefer_source_default(self, tmp_path):
+        """scaffold.sync defaults prefer_source to False when absent."""
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises: {}
+scaffold:
+  sync:
+    - source: dev
+      target: staging
+""",
+        )
+        pairs = config.scaffold.sync
+        assert len(pairs) == 1
+        assert pairs[0].prefer_source is False
+
     def test_sync_defaults_to_empty(self, tmp_path):
         """scaffold.sync defaults to empty list when not configured."""
         config = self._make_config(tmp_path, "name: tp\nfraises: {}\n")

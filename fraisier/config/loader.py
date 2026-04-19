@@ -204,7 +204,11 @@ class FraisierConfig:
                 log_rotation_size=raw_pg.get("log_rotation_size", "100MB"),
             ),
             sync=[
-                SyncPair(source=p["source"], target=p["target"])
+                SyncPair(
+                    source=p["source"],
+                    target=p["target"],
+                    prefer_source=bool(p.get("prefer_source", False)),
+                )
                 for p in (raw.get("sync") or [])
                 if isinstance(p, dict) and p.get("source") and p.get("target")
             ],

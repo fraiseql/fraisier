@@ -34,6 +34,24 @@ def _is_auto_resolved(path: str) -> bool:
     return False
 
 
+def _target_unchanged_since_base(merge_base: str, tgt: str, path: str) -> bool:
+    """Return True if *path* in origin/{tgt} is identical to the merge-base version.
+
+    When True, the target branch never touched this file — only the source did.
+    It is safe to auto-resolve by taking the source version.
+
+    Any non-zero exit — including unexpected git errors — returns False, which
+    causes the file to fall through to tier 5 (abort). This is intentional: we
+    would rather fail loudly than silently claim a file is unmodified.
+    """
+    result = subprocess.run(
+        ["git", "diff", "--quiet", merge_base, f"origin/{tgt}", "--", path],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def _resolve_pair(target: str | None, pairs: list[SyncPair]) -> SyncPair:
     """Return the SyncPair matching *target*, or the only pair when target is None."""
     if not pairs:
@@ -123,7 +141,8 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print(f"    git merge origin/{tgt} --no-edit --no-commit")
     console.print(
         f"    # conflicts in [{auto_owned}] auto-resolved from {source};"
-        " others cause a hard failure"
+        f" files unchanged in {tgt} since merge-base also auto-resolved from {source};"
+        " others cause a hard failure unless --prefer-source is used"
     )
     console.print(
         f'    git commit -m "Pre-merge {tgt} into sync branch'
@@ -150,6 +169,11 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     "--dry-run", is_flag=True, help="Print commands that would run; make no changes."
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+@click.option(
+    "--prefer-source",
+    is_flag=True,
+    help="Resolve all non-fraisier-owned conflicts by taking the source version.",
+)
 @click.pass_context
 def sync_cmd(
     ctx: click.Context,
@@ -158,6 +182,7 @@ def sync_cmd(
     check: bool,
     dry_run: bool,
     yes: bool,
+    prefer_source: bool,
 ) -> None:
     """Promote source → target via an auto-merged sync PR.
 
@@ -266,12 +291,33 @@ def sync_cmd(
                     subprocess.run(["git", "rm", f], capture_output=True, check=False)
                     console.print(f"  Auto-resolved source deletion: {f}")
                 elif _is_auto_resolved(f):
+                    # Tier 1: fraisier-owned
                     subprocess.run(
                         ["git", "checkout", f"origin/{source}", "--", f],
                         capture_output=True,
                         check=False,
                     )
                     subprocess.run(["git", "add", f], capture_output=True, check=False)
+                elif _target_unchanged_since_base(merge_base, tgt, f):
+                    # Tier 3: target hasn't changed file since merge-base
+                    subprocess.run(
+                        ["git", "checkout", f"origin/{source}", "--", f],
+                        capture_output=True,
+                        check=False,
+                    )
+                    subprocess.run(["git", "add", f], capture_output=True, check=False)
+                    console.print(
+                        f"  Auto-resolved ({tgt} unchanged since merge-base): {f}"
+                    )
+                elif prefer_source or pair.prefer_source:
+                    # Tier 4: explicit preference — source wins
+                    subprocess.run(
+                        ["git", "checkout", f"origin/{source}", "--", f],
+                        capture_output=True,
+                        check=False,
+                    )
+                    subprocess.run(["git", "add", f], capture_output=True, check=False)
+                    console.print(f"  Auto-resolved (prefer-source): {f}")
 
             remaining = _capture(
                 ["git", "diff", "--name-only", "--diff-filter=U"]

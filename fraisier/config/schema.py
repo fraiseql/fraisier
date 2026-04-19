@@ -387,6 +387,7 @@ class SyncPair:
 
     source: str
     target: str
+    prefer_source: bool = False
 
 
 @dataclass
