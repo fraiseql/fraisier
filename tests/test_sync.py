@@ -200,7 +200,9 @@ class TestTargetUnchangedSinceBase:
 
         with patch(_PATCH) as m:
             m.return_value = _mk(returncode=1)
-            assert _target_unchanged_since_base("abc123", "staging", "file.txt") is False
+            assert (
+                _target_unchanged_since_base("abc123", "staging", "file.txt") is False
+            )
 
     def test_returns_true_when_file_absent_at_merge_base_and_target(self):
         from fraisier.cli.sync import _target_unchanged_since_base
@@ -214,7 +216,9 @@ class TestTargetUnchangedSinceBase:
 
         with patch(_PATCH) as m:
             m.return_value = _mk(returncode=128)
-            assert _target_unchanged_since_base("abc123", "staging", "file.txt") is False
+            assert (
+                _target_unchanged_since_base("abc123", "staging", "file.txt") is False
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +525,9 @@ class TestSyncConflicts:
                 _mk(
                     returncode=0
                 ),  # cat-file origin/dev:src/routes.py (exists in source)
-                _mk(returncode=1),  # git diff merge_base origin/staging -- src/routes.py (changed)
+                _mk(
+                    returncode=1
+                ),  # git diff merge_base origin/staging -- src/routes.py (changed)
                 # src/routes.py exists in source and is not auto-resolved → no checkout/add
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (remaining)
                 _mk(),  # git checkout main (cleanup)
@@ -547,7 +553,9 @@ class TestSyncConflicts:
                 _mk(
                     returncode=0
                 ),  # cat-file origin/dev:src/routes.py (exists in source)
-                _mk(returncode=1),  # git diff merge_base origin/staging -- src/routes.py (changed)
+                _mk(
+                    returncode=1
+                ),  # git diff merge_base origin/staging -- src/routes.py (changed)
                 _mk(stdout="src/routes.py\n"),
                 _mk(),  # git checkout main
                 _mk(),  # git branch -D
@@ -572,7 +580,9 @@ class TestSyncConflicts:
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
-                _mk(returncode=0),  # git diff merge_base origin/staging -- src/routes.py (unchanged)
+                _mk(
+                    returncode=0
+                ),  # git diff merge_base origin/staging -- src/routes.py (unchanged)
                 _mk(),  # checkout origin/dev -- src/routes.py
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
@@ -585,7 +595,10 @@ class TestSyncConflicts:
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 0
         assert self.PR_URL in result.output
-        assert "Auto-resolved (staging unchanged since merge-base): src/routes.py" in result.output
+        assert (
+            "Auto-resolved (staging unchanged since merge-base): src/routes.py"
+            in result.output
+        )
 
     def test_prefer_source_flag_resolves_diverged_file(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -601,7 +614,9 @@ class TestSyncConflicts:
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
-                _mk(returncode=1),  # git diff merge_base origin/staging -- src/routes.py (changed)
+                _mk(
+                    returncode=1
+                ),  # git diff merge_base origin/staging -- src/routes.py (changed)
                 _mk(),  # checkout origin/dev -- src/routes.py (prefer-source)
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
@@ -611,13 +626,17 @@ class TestSyncConflicts:
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
             ]
-            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", "--prefer-source"])
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
         assert result.exit_code == 0
         assert self.PR_URL in result.output
         assert "Auto-resolved (prefer-source): src/routes.py" in result.output
 
     def test_prefer_source_pair_config_resolves_diverged_file(self, tmp_path):
-        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging", "prefer_source": True}])
+        cfg = _setup(
+            tmp_path, [{"source": "dev", "target": "staging", "prefer_source": True}]
+        )
         with patch(_PATCH) as m:
             m.side_effect = [
                 _mk(stdout="main\n"),
@@ -630,7 +649,9 @@ class TestSyncConflicts:
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
-                _mk(returncode=1),  # git diff merge_base origin/staging -- src/routes.py (changed)
+                _mk(
+                    returncode=1
+                ),  # git diff merge_base origin/staging -- src/routes.py (changed)
                 _mk(),  # checkout origin/dev -- src/routes.py (prefer-source from config)
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
@@ -646,7 +667,9 @@ class TestSyncConflicts:
         assert "Auto-resolved (prefer-source): src/routes.py" in result.output
 
     def test_prefer_source_flag_takes_precedence_over_pair(self, tmp_path):
-        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging", "prefer_source": False}])
+        cfg = _setup(
+            tmp_path, [{"source": "dev", "target": "staging", "prefer_source": False}]
+        )
         with patch(_PATCH) as m:
             m.side_effect = [
                 _mk(stdout="main\n"),
@@ -659,7 +682,9 @@ class TestSyncConflicts:
                 _mk(returncode=1),  # git merge (conflict)
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
-                _mk(returncode=1),  # git diff merge_base origin/staging -- src/routes.py (changed)
+                _mk(
+                    returncode=1
+                ),  # git diff merge_base origin/staging -- src/routes.py (changed)
                 _mk(),  # checkout origin/dev -- src/routes.py (flag overrides config)
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
@@ -669,7 +694,9 @@ class TestSyncConflicts:
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
             ]
-            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", "--prefer-source"])
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
         assert result.exit_code == 0
         assert self.PR_URL in result.output
         assert "Auto-resolved (prefer-source): src/routes.py" in result.output

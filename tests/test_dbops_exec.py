@@ -59,7 +59,9 @@ class TestIsReadonlySql:
 
 class TestBuildPsqlArgv:
     def test_basic_select_returns_argv(self):
-        argv = build_psql_argv("mydb", "SELECT 1", timeout_ms=30_000, output_format="table")
+        argv = build_psql_argv(
+            "mydb", "SELECT 1", timeout_ms=30_000, output_format="table"
+        )
         assert argv[0] == "psql"
         assert "-d" in argv
         assert "mydb" in argv
@@ -68,29 +70,41 @@ class TestBuildPsqlArgv:
         assert "SELECT 1" in " ".join(argv)
 
     def test_json_format_sets_tuples_only_and_format(self):
-        argv = build_psql_argv("mydb", "SELECT 1", timeout_ms=5_000, output_format="json")
+        argv = build_psql_argv(
+            "mydb", "SELECT 1", timeout_ms=5_000, output_format="json"
+        )
         joined = " ".join(argv)
         assert "--csv" not in joined
         assert "json" in joined.lower() or "format" in joined.lower()
 
     def test_csv_format_sets_csv_flag(self):
-        argv = build_psql_argv("mydb", "SELECT 1", timeout_ms=5_000, output_format="csv")
+        argv = build_psql_argv(
+            "mydb", "SELECT 1", timeout_ms=5_000, output_format="csv"
+        )
         assert "--csv" in argv
 
     def test_url_passed_directly(self):
         url = "postgresql://app@localhost/mydb"
-        argv = build_psql_argv(url, "SELECT 1", timeout_ms=10_000, output_format="table")
+        argv = build_psql_argv(
+            url, "SELECT 1", timeout_ms=10_000, output_format="table"
+        )
         assert url in argv
 
     def test_timeout_injected_as_set_statement(self):
-        argv = build_psql_argv("mydb", "SELECT 1", timeout_ms=15_000, output_format="table")
+        argv = build_psql_argv(
+            "mydb", "SELECT 1", timeout_ms=15_000, output_format="table"
+        )
         set_clause = next(a for a in argv if "statement_timeout" in a)
         assert "15000" in set_clause
 
     def test_no_psqlrc_flag_present(self):
-        argv = build_psql_argv("mydb", "SELECT 1", timeout_ms=10_000, output_format="table")
+        argv = build_psql_argv(
+            "mydb", "SELECT 1", timeout_ms=10_000, output_format="table"
+        )
         assert "--no-psqlrc" in argv
 
     def test_no_align_flag_for_non_table(self):
-        argv = build_psql_argv("mydb", "SELECT 1", timeout_ms=10_000, output_format="csv")
+        argv = build_psql_argv(
+            "mydb", "SELECT 1", timeout_ms=10_000, output_format="csv"
+        )
         assert "-A" in argv

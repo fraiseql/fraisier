@@ -38,7 +38,9 @@ class TestDbExecLocal:
     def test_select_succeeds(self, runner, local_config):
         mock_result = MagicMock(stdout="1\n", returncode=0)
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            result = runner.invoke(main, ["db", "exec", "api", "-e", "staging", "SELECT 1"])
+            result = runner.invoke(
+                main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
+            )
         assert result.exit_code == 0
         mock_run.assert_called_once()
         argv = mock_run.call_args[0][0]
@@ -61,12 +63,16 @@ class TestDbExecLocal:
 
     def test_missing_fraise_exits_1(self, runner, local_config):
         local_config.get_fraise.return_value = None
-        result = runner.invoke(main, ["db", "exec", "nonexistent", "-e", "staging", "SELECT 1"])
+        result = runner.invoke(
+            main, ["db", "exec", "nonexistent", "-e", "staging", "SELECT 1"]
+        )
         assert result.exit_code == 1
 
     def test_missing_environment_exits_1(self, runner, local_config):
         local_config.get_fraise_environment.return_value = None
-        result = runner.invoke(main, ["db", "exec", "api", "-e", "nonexistent", "SELECT 1"])
+        result = runner.invoke(
+            main, ["db", "exec", "api", "-e", "nonexistent", "SELECT 1"]
+        )
         assert result.exit_code == 1
 
     def test_missing_database_config_exits_1(self, runner, local_config):
@@ -114,7 +120,9 @@ class TestDbExecLocal:
             stdout="", stderr="ERROR: relation not found", returncode=1
         )
         with patch("subprocess.run", return_value=mock_result):
-            result = runner.invoke(main, ["db", "exec", "api", "-e", "staging", "SELECT 1"])
+            result = runner.invoke(
+                main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
+            )
         assert result.exit_code != 0
 
     def test_timeout_default_30s(self, runner, local_config):
@@ -172,12 +180,11 @@ class TestDbExecRemote:
 
     def test_subprocess_run_not_called_for_remote(self, runner, remote_config):
         mock_proc = MagicMock(stdout="1\n", returncode=0)
-        with patch("fraisier.ssh.short_cmd", return_value=mock_proc), patch(
-            "subprocess.run"
-        ) as mock_local:
-            runner.invoke(
-                main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
-            )
+        with (
+            patch("fraisier.ssh.short_cmd", return_value=mock_proc),
+            patch("subprocess.run") as mock_local,
+        ):
+            runner.invoke(main, ["db", "exec", "api", "-e", "staging", "SELECT 1"])
         mock_local.assert_not_called()
 
     def test_ssh_error_exits_nonzero(self, runner, remote_config):
@@ -185,7 +192,9 @@ class TestDbExecRemote:
 
         with patch(
             "fraisier.ssh.short_cmd",
-            side_effect=subprocess.CalledProcessError(1, "psql", stderr="connection refused"),
+            side_effect=subprocess.CalledProcessError(
+                1, "psql", stderr="connection refused"
+            ),
         ):
             result = runner.invoke(
                 main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
