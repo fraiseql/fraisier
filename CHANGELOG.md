@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-04-21
+
+### Fixed
+
+- **Nginx config not regenerated when `fraises.yaml` scaffold configuration changed** ([#176](https://github.com/evoludigit/fraisier/issues/176)). The `ConfigWatcher.save_hash()` method was never called after scaffold regeneration, so the `.config_hash` file was never written. This caused either unnecessary regeneration on every deployment, or (if the hash file existed from a previous operation) changes were never detected. Additionally, scaffold install failures were silently logged as warnings, leaving nginx unreloaded with no visible indication of failure. Fixed by:
+  - Calling `save_hash()` after successful scaffold regeneration + install to persist state across deployments
+  - Upgrading error logging from `logger.warning` to `logger.error` with helpful hints for manual recovery
+  - Removing `# pragma: no cover` annotations from scaffold methods so they're properly tested
+
+## [0.11.0] - 2026-04-20
+
+### Added
+
+- **`--prefer-source` flag for `fraisier sync` command** — auto-resolves sync conflicts by preferring the source (upstream/target-branch) when the current branch is behind. Useful for unattended sync workflows where local changes should be discarded in favor of the upstream version.
+
 ## [0.10.0] - 2026-04-18
 
 ### Added
