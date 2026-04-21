@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -245,6 +246,40 @@ class BaseDeployer(ABC):
             )
             return True  # Assume changed if we can't detect
 
+    @staticmethod
+    def _get_fraisier_executable() -> str:
+        """Get the full path to the fraisier executable.
+
+        Uses shutil.which() to locate the fraisier command, falling back to
+        standard system locations if not found in PATH. This is critical for
+        webhook services that may not have fraisier in their PATH.
+
+        Returns:
+            Full path to fraisier executable
+
+        Raises:
+            RuntimeError: If fraisier executable cannot be found
+        """
+        # Try to find fraisier in the current PATH
+        fraisier_path = shutil.which("fraisier")
+        if fraisier_path:
+            return fraisier_path
+
+        # Fall back to standard system locations
+        standard_paths = [
+            "/usr/local/bin/fraisier",
+            "/usr/bin/fraisier",
+            "/opt/fraisier/bin/fraisier",
+        ]
+        for path in standard_paths:
+            if Path(path).exists():
+                return path
+
+        raise RuntimeError(
+            "fraisier executable not found. Checked PATH and standard locations: "
+            f"{standard_paths}"
+        )
+
     def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
         """Regenerate scaffold files based on current fraises.yaml.
 
@@ -267,11 +302,11 @@ class BaseDeployer(ABC):
 
         config_path = Path(config_path)
         project_dir = config_path.parent
+        fraisier_exe = self._get_fraisier_executable()
 
-        # Run scaffold regeneration
-        result = self.runner.run(
-            ["sh", "-c", f"cd {project_dir} && fraisier -c {config_path} scaffold"]
-        )
+        # Run scaffold regeneration with full path to fraisier
+        cmd = f"cd {project_dir} && {fraisier_exe} -c {config_path} scaffold"
+        result = self.runner.run(["sh", "-c", cmd])
 
         if result.returncode != 0:
             raise DeploymentError(
@@ -293,8 +328,10 @@ class BaseDeployer(ABC):
 
         logger.info("Installing updated scaffold files")
 
-        # Run scaffold install
-        result = self.runner.run(["fraisier", "scaffold-install", "--yes"])
+        fraisier_exe = self._get_fraisier_executable()
+
+        # Run scaffold install with full path to fraisier
+        result = self.runner.run([fraisier_exe, "scaffold-install", "--yes"])
 
         if result.returncode != 0:
             raise DeploymentError(f"Failed to install scaffold files: {result.stdout}")
