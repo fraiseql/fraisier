@@ -245,9 +245,7 @@ class BaseDeployer(ABC):
             )
             return True  # Assume changed if we can't detect
 
-    def _regenerate_scaffold(
-        self, config_path: Path | None = None
-    ) -> None:  # pragma: no cover
+    def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
         """Regenerate scaffold files based on current fraises.yaml.
 
         Runs 'fraisier scaffold' on the server to generate updated
@@ -282,7 +280,7 @@ class BaseDeployer(ABC):
 
         logger.info("✓ Scaffold files regenerated")
 
-    def _install_scaffold(self) -> None:  # pragma: no cover
+    def _install_scaffold(self) -> None:
         """Install updated scaffold files to system locations.
 
         Runs 'fraisier scaffold-install' on the server to install
@@ -303,9 +301,7 @@ class BaseDeployer(ABC):
 
         logger.info("✓ Scaffold files installed")
 
-    def _rollback_config(
-        self, config_path: Path | None = None
-    ) -> bool:  # pragma: no cover
+    def _rollback_config(self, config_path: Path | None = None) -> bool:
         """Rollback to previous fraises.yaml and regenerate scaffold.
 
         Restores previous commit version of fraises.yaml from git and

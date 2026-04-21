@@ -156,8 +156,18 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         if app_config.exists():
             self._sync_fraises_yaml(source_path=app_config, dest_path=opt_config)
             if self._detect_config_changes(config_path=opt_config):
+                logger.info(
+                    "fraises.yaml changed — regenerating nginx and scaffold config"
+                )
                 self._regenerate_scaffold(config_path=opt_config)
                 self._install_scaffold()
+                # Persist hash so next deployment does not redundantly regenerate
+                from fraisier.config_watcher import ConfigWatcher
+
+                ConfigWatcher(opt_config.parent).save_hash()
+                logger.info(
+                    "Scaffold regenerated and nginx reloaded — config hash updated"
+                )
 
     def _generate_version_json(self) -> None:
         """Write version.json to app_path from pyproject.toml + git metadata.
@@ -239,7 +249,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 try:
                     self._sync_config_if_needed()
                 except Exception as e:
-                    logger.warning(f"Config sync failed: {e}")
+                    logger.error(
+                        f"Scaffold config sync/regeneration failed: {e}\n"
+                        "nginx config may be stale — run: "
+                        "fraisier scaffold && fraisier scaffold-install --yes"
+                    )
                     # Continue with deployment - config mismatch is not fatal
 
                 # Warn if the installed service file has drifted from scaffold
@@ -255,7 +269,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 try:
                     self._sync_config_if_needed()
                 except Exception as e:
-                    logger.warning(f"Post-pull config sync failed: {e}")
+                    logger.error(
+                        f"Post-pull scaffold config sync/regeneration failed: {e}\n"
+                        "nginx config may be stale — run: "
+                        "fraisier scaffold && fraisier scaffold-install --yes"
+                    )
 
                 # Step 2: Install dependencies
                 self._install_dependencies()

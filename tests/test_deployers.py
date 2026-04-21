@@ -122,6 +122,56 @@ class TestAPIDeployer:
         assert result.status == DeploymentStatus.FAILED
         assert result.error_message is not None
 
+    def test_execute_logs_error_on_scaffold_install_failure(self, tmp_path):
+        """Test execute logs ERROR (not WARNING) when scaffold install fails."""
+        config = {
+            "app_path": str(tmp_path),
+            "systemd_service": "api.service",
+            "health_check": {"url": "http://localhost:8000/health"},
+        }
+
+        deployer = APIDeployer(config)
+
+        # Set up a counter to track calls to _sync_config_if_needed
+        call_count = {"count": 0}
+
+        def sync_config_side_effect():
+            call_count["count"] += 1
+            # Fail on the second call (post-pull)
+            if call_count["count"] == 2:
+                raise DeploymentError("Post-pull scaffold install failed")
+
+        with (
+            patch.object(deployer, "_validate_wrapper_scripts"),
+            patch.object(deployer, "_check_service_file_staleness"),
+            patch.object(deployer, "_git_pull", return_value=("abc", "def")),
+            patch.object(
+                deployer,
+                "_sync_config_if_needed",
+                side_effect=sync_config_side_effect,
+            ),
+            patch.object(deployer, "_write_status"),
+            patch.object(deployer, "_start_db_record", return_value=None),
+            patch.object(deployer, "_complete_db_record"),
+            patch.object(deployer, "_notify"),
+            patch.object(deployer, "_wrap_error"),
+            patch.object(deployer, "_restore_previous_state"),
+        ):
+            # Capture log records
+            import logging
+
+            with patch.object(logging.getLogger("fraisier"), "error") as mock_error:
+                result = deployer.execute()
+
+            # Should still complete deployment (error is non-fatal)
+            assert result.success is False
+
+            # Should log error, not warning
+            mock_error.assert_called()
+            # Check that the error message includes the expected text
+            calls = [str(call) for call in mock_error.call_args_list]
+            assert any("scaffold" in str(call).lower() for call in calls)
+
     def test_fetch_and_checkout_called_during_execute(
         self,
         mock_subprocess,
@@ -667,6 +717,102 @@ class TestAPIDeployer:
         assert mock_subprocess.call_count == 1
         install_call = mock_subprocess.call_args_list[0][0][0]
         assert install_call[:3] == ["sudo", "-u", "appuser"]
+
+    def test_sync_config_saves_hash_after_successful_install(
+        self, tmp_path, monkeypatch
+    ):
+        """_sync_config_if_needed calls save_hash after successful scaffold install."""
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        opt_dir = tmp_path / "opt"
+        opt_dir.mkdir()
+        opt_config = opt_dir / "fraises.yaml"
+        opt_config.write_text("new: config")
+
+        (app_dir / "fraises.yaml").write_text("new: config")
+        monkeypatch.setenv("FRAISIER_CONFIG", str(opt_config))
+
+        deployer = APIDeployer({"fraise_name": "api", "app_path": str(app_dir)})
+
+        with (
+            patch.object(deployer, "_detect_config_changes", return_value=True),
+            patch.object(deployer, "_regenerate_scaffold"),
+            patch.object(deployer, "_install_scaffold"),
+            patch("fraisier.config_watcher.ConfigWatcher") as mock_watcher_class,
+        ):
+            mock_watcher = MagicMock()
+            mock_watcher_class.return_value = mock_watcher
+            deployer._sync_config_if_needed()
+
+        # Verify ConfigWatcher was instantiated with the right directory
+        mock_watcher_class.assert_called_once_with(opt_dir)
+        # Verify save_hash was called
+        mock_watcher.save_hash.assert_called_once()
+
+    def test_sync_config_does_not_save_hash_if_install_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """_sync_config_if_needed does NOT save hash if scaffold install fails."""
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        opt_dir = tmp_path / "opt"
+        opt_dir.mkdir()
+        opt_config = opt_dir / "fraises.yaml"
+        opt_config.write_text("new: config")
+
+        (app_dir / "fraises.yaml").write_text("new: config")
+        monkeypatch.setenv("FRAISIER_CONFIG", str(opt_config))
+
+        deployer = APIDeployer({"fraise_name": "api", "app_path": str(app_dir)})
+
+        with (
+            patch.object(deployer, "_detect_config_changes", return_value=True),
+            patch.object(deployer, "_regenerate_scaffold"),
+            patch.object(
+                deployer,
+                "_install_scaffold",
+                side_effect=DeploymentError("Install failed"),
+            ),
+            patch("fraisier.config_watcher.ConfigWatcher") as mock_watcher_class,
+        ):
+            mock_watcher = MagicMock()
+            mock_watcher_class.return_value = mock_watcher
+
+            with pytest.raises(DeploymentError):
+                deployer._sync_config_if_needed()
+
+        # Verify save_hash was NOT called (install failed)
+        mock_watcher.save_hash.assert_not_called()
+
+    def test_sync_config_skips_scaffold_when_unchanged(self, tmp_path, monkeypatch):
+        """_sync_config_if_needed skips scaffold regen when config unchanged."""
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        opt_dir = tmp_path / "opt"
+        opt_dir.mkdir()
+        opt_config = opt_dir / "fraises.yaml"
+        opt_config.write_text("same: config")
+
+        (app_dir / "fraises.yaml").write_text("same: config")
+        monkeypatch.setenv("FRAISIER_CONFIG", str(opt_config))
+
+        deployer = APIDeployer({"fraise_name": "api", "app_path": str(app_dir)})
+
+        with (
+            patch.object(deployer, "_detect_config_changes", return_value=False),
+            patch.object(deployer, "_regenerate_scaffold") as mock_regen,
+            patch.object(deployer, "_install_scaffold") as mock_install,
+            patch("fraisier.config_watcher.ConfigWatcher") as mock_watcher_class,
+        ):
+            mock_watcher = MagicMock()
+            mock_watcher_class.return_value = mock_watcher
+            deployer._sync_config_if_needed()
+
+        # Neither regenerate nor install should be called
+        mock_regen.assert_not_called()
+        mock_install.assert_not_called()
+        # save_hash should not be called either
+        mock_watcher.save_hash.assert_not_called()
 
 
 class TestServiceFileStaleness:
