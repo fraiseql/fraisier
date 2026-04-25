@@ -1047,7 +1047,9 @@ class TestShipAutoMerge:
     @patch("subprocess.run")
     @patch("fraisier.cli.version._ship_create_pr")
     @patch("fraisier.cli.version._ship_enable_auto_merge")
-    def test_auto_merge_with_pr_flag(self, mock_enable, mock_create_pr, mock_run, tmp_path):
+    def test_auto_merge_with_pr_flag(
+        self, mock_enable, mock_create_pr, mock_run, tmp_path
+    ):
         """--auto-merge enables auto-merge after PR creation."""
         mock_run.return_value = MagicMock(returncode=0)
         mock_create_pr.return_value = "https://github.com/user/repo/pull/1"
@@ -1072,11 +1074,15 @@ class TestShipAutoMerge:
             ],
         )
         assert result.exit_code == 0, result.output
-        mock_enable.assert_called_once_with("squash", pr_url="https://github.com/user/repo/pull/1")
+        mock_enable.assert_called_once_with(
+            "squash", pr_url="https://github.com/user/repo/pull/1"
+        )
 
     @patch("subprocess.run")
     @patch("fraisier.cli.version._ship_enable_auto_merge")
-    def test_auto_merge_without_pr_flag_detects_pr(self, mock_enable, mock_run, tmp_path):
+    def test_auto_merge_without_pr_flag_detects_pr(
+        self, mock_enable, mock_run, tmp_path
+    ):
         """--auto-merge without --pr calls _ship_enable_auto_merge with no pr_url (detection path)."""
         mock_run.return_value = MagicMock(returncode=0)
         cfg = _setup_project(tmp_path)

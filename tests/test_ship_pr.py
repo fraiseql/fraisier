@@ -43,17 +43,26 @@ class TestGitHubPRBackend:
         )
         mock_run.assert_called_once_with(
             [
-                "gh", "pr", "create",
-                "--base", "main",
-                "--title", "release: v1.2.3",
-                "--body", "Automated release of v1.2.3 via `fraisier ship`.",
+                "gh",
+                "pr",
+                "create",
+                "--base",
+                "main",
+                "--title",
+                "release: v1.2.3",
+                "--body",
+                "Automated release of v1.2.3 via `fraisier ship`.",
             ],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     @patch("fraisier.ship.pr.subprocess.run")
     def test_create_pr_failure(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stderr="Error: PR already exists\n")
+        mock_run.return_value = MagicMock(
+            returncode=1, stderr="Error: PR already exists\n"
+        )
         console = MagicMock()
         result = GitHubPRBackend().create_pr("1.2.3", "main", console)
         assert result is None
@@ -73,7 +82,9 @@ class TestGitHubPRBackend:
 
     @patch("fraisier.ship.pr.subprocess.run")
     def test_find_current_pr_url_not_found_emits_hint(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stderr="no pull requests found\n")
+        mock_run.return_value = MagicMock(
+            returncode=1, stderr="no pull requests found\n"
+        )
         console = MagicMock()
         url = GitHubPRBackend().find_current_pr_url(console)
         assert url is None
@@ -89,8 +100,17 @@ class TestGitHubPRBackend:
             "https://github.com/user/repo/pull/1", "squash", console
         )
         mock_run.assert_called_once_with(
-            ["gh", "pr", "merge", "--auto", "--squash", "https://github.com/user/repo/pull/1"],
-            capture_output=True, text=True, check=False,
+            [
+                "gh",
+                "pr",
+                "merge",
+                "--auto",
+                "--squash",
+                "https://github.com/user/repo/pull/1",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         console.print.assert_called_once_with(
             "[green]Auto-merge enabled (squash):[/green] https://github.com/user/repo/pull/1"
@@ -109,7 +129,8 @@ class TestGitHubPRBackend:
     @patch("fraisier.ship.pr.subprocess.run")
     def test_enable_auto_merge_failure_warns_non_fatally(self, mock_run):
         mock_run.return_value = MagicMock(
-            returncode=1, stderr="GraphQL: Auto-merge is not enabled for this repository\n"
+            returncode=1,
+            stderr="GraphQL: Auto-merge is not enabled for this repository\n",
         )
         console = MagicMock()
         GitHubPRBackend().enable_auto_merge(
@@ -160,7 +181,8 @@ class TestPublicAPI:
         backend = MagicMock()
         console = MagicMock()
         enable_auto_merge(
-            "squash", console,
+            "squash",
+            console,
             pr_url="https://github.com/x/y/pull/1",
             backend=backend,
         )
