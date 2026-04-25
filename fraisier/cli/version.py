@@ -188,6 +188,24 @@ def version_bump(
     default=300,
     help="Timeout in seconds for deployment verification",
 )
+@click.option(
+    "--auto-merge",
+    "auto_merge",
+    is_flag=True,
+    help=(
+        "Enable GitHub auto-merge on the PR after push. "
+        "Requires an existing PR; combine with --pr to create one."
+    ),
+)
+@click.option(
+    "--merge-method",
+    type=click.Choice(["squash", "merge", "rebase"]),
+    default=None,
+    help=(
+        "Merge method for auto-merge (squash/merge/rebase). "
+        "Falls back to ship.merge_method in fraises.yaml."
+    ),
+)
 @click.pass_context
 def ship(
     ctx: click.Context,
@@ -201,6 +219,8 @@ def ship(
     pyproject: str,
     wait_deploy: bool,
     deploy_timeout: int,
+    auto_merge: bool,
+    merge_method: str | None,
 ) -> None:
     """Bump version, commit, push, and deploy in one step.
 
@@ -212,6 +232,8 @@ def ship(
         fraisier ship patch --pr --pr-base dev
         fraisier ship major --skip-checks
         fraisier ship --no-bump
+        fraisier ship minor --auto-merge
+        fraisier ship patch --pr --auto-merge --merge-method rebase
     """
     if no_bump and bump_type is not None:
         console.print(
@@ -235,6 +257,14 @@ def ship(
     ship_config: ShipConfig | None = config.ship if config else None
     has_pipeline = bool(ship_config and ship_config.checks and not skip_checks)
 
+    # CLI flags take precedence; fall back to fraises.yaml ship: section defaults
+    resolved_auto_merge = auto_merge or (
+        ship_config.auto_merge if ship_config else False
+    )
+    resolved_merge_method = merge_method or (
+        ship_config.merge_method if ship_config else "squash"
+    )
+
     if no_bump:
         if dry_run:
             _ship_dry_run_no_bump(
@@ -245,6 +275,8 @@ def ship(
                 create_pr,
                 pr_base,
                 no_deploy,
+                auto_merge=resolved_auto_merge,
+                merge_method=resolved_merge_method,
                 bare_repo_skip=_resolve_bare_repo_skip() if not no_deploy else None,
             )
             return
@@ -258,6 +290,8 @@ def ship(
             no_deploy,
             wait_deploy,
             deploy_timeout,
+            auto_merge=resolved_auto_merge,
+            merge_method=resolved_merge_method,
             label=f"v{current_version} (no bump)",
         )
         return
@@ -275,6 +309,8 @@ def ship(
             create_pr,
             pr_base,
             no_deploy,
+            auto_merge=resolved_auto_merge,
+            merge_method=resolved_merge_method,
             bare_repo_skip=_resolve_bare_repo_skip() if not no_deploy else None,
         )
         return
@@ -292,6 +328,8 @@ def ship(
         no_deploy,
         wait_deploy,
         deploy_timeout,
+        auto_merge=resolved_auto_merge,
+        merge_method=resolved_merge_method,
         label=f"v{info.version}",
     )
 
@@ -306,6 +344,8 @@ def _ship_commit_push_deploy(
     wait_deploy: bool,
     deploy_timeout: int,
     *,
+    auto_merge: bool = False,
+    merge_method: str = "squash",
     label: str,
 ) -> None:
     """Run the commit-push-PR-deploy sequence."""
@@ -315,7 +355,11 @@ def _ship_commit_push_deploy(
         _ship_legacy(version)
 
     if create_pr:
-        _ship_create_pr(version, pr_base, ship_config)
+        pr_url = _ship_create_pr(version, pr_base, ship_config)
+        if auto_merge and pr_url:
+            _ship_enable_auto_merge(merge_method, pr_url=pr_url)
+    elif auto_merge:
+        _ship_enable_auto_merge(merge_method)
 
     console.print(f"[green]Shipped {label}[/green]")
 
@@ -359,6 +403,8 @@ def _ship_dry_run(
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
+    auto_merge: bool = False,
+    merge_method: str = "squash",
     bare_repo_skip: Path | None = None,
 ) -> None:
     """Print dry-run plan for ship."""
@@ -374,6 +420,8 @@ def _ship_dry_run(
     if create_pr:
         base = pr_base or (ship_config.pr_base if ship_config else None)
         console.print(f"  PR: create against {base or '<default branch>'}")
+    if auto_merge:
+        console.print(f"  Auto-merge: enable ({merge_method})")
     if not no_deploy:
         _print_deploy_note(bare_repo_skip)
 
@@ -386,6 +434,8 @@ def _ship_dry_run_no_bump(
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
+    auto_merge: bool = False,
+    merge_method: str = "squash",
     bare_repo_skip: Path | None = None,
 ) -> None:
     """Print dry-run plan for ship --no-bump."""
@@ -401,6 +451,8 @@ def _ship_dry_run_no_bump(
     if create_pr:
         base = pr_base or (ship_config.pr_base if ship_config else None)
         console.print(f"  PR: create against {base or '<default branch>'}")
+    if auto_merge:
+        console.print(f"  Auto-merge: enable ({merge_method})")
     if not no_deploy:
         _print_deploy_note(bare_repo_skip)
 
@@ -419,8 +471,8 @@ def _ship_create_pr(
     version: str,
     pr_base: str | None,
     ship_config: ShipConfig | None,
-) -> None:
-    """Create a PR after push."""
+) -> str | None:
+    """Create a PR after push. Returns the PR URL on success, None otherwise."""
     base = pr_base or (ship_config.pr_base if ship_config else None)
     if not base:
         console.print(
@@ -429,7 +481,14 @@ def _ship_create_pr(
         raise SystemExit(1)
     from fraisier.ship.pr import create_pr as do_create_pr
 
-    do_create_pr(version, base, console)
+    return do_create_pr(version, base, console)
+
+
+def _ship_enable_auto_merge(merge_method: str, *, pr_url: str | None = None) -> None:
+    """Enable auto-merge on the current PR."""
+    from fraisier.ship.pr import enable_auto_merge
+
+    enable_auto_merge(merge_method, console, pr_url=pr_url)
 
 
 def _git_push() -> None:

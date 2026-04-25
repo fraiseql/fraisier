@@ -1039,3 +1039,289 @@ class TestShipDeploy:
         mock_deployer.execute.assert_not_called()
         assert "Skipping local deploy" in result.output
         assert "webhook" in result.output
+
+
+class TestShipAutoMerge:
+    """Test fraisier ship --auto-merge flag."""
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_create_pr")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_auto_merge_with_pr_flag(
+        self, mock_enable, mock_create_pr, mock_run, tmp_path
+    ):
+        """--auto-merge enables auto-merge after PR creation."""
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_create_pr.return_value = "https://github.com/user/repo/pull/1"
+        mock_enable.return_value = None
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pr",
+                "--pr-base",
+                "main",
+                "--auto-merge",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_called_once_with(
+            "squash", pr_url="https://github.com/user/repo/pull/1"
+        )
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_auto_merge_without_pr_flag_detects_pr(
+        self, mock_enable, mock_run, tmp_path
+    ):
+        """--auto-merge without --pr calls _ship_enable_auto_merge with no pr_url (detection path)."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--auto-merge",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_called_once_with("squash")
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_auto_merge_merge_method_rebase(self, mock_enable, mock_run, tmp_path):
+        """--merge-method rebase is forwarded to _ship_enable_auto_merge."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--auto-merge",
+                "--merge-method",
+                "rebase",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_called_once_with("rebase")
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_no_auto_merge_flag_skips_enable(self, mock_enable, mock_run, tmp_path):
+        """Without --auto-merge, enable_auto_merge is never called."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_not_called()
+
+    def test_dry_run_shows_auto_merge(self, tmp_path):
+        """--dry-run with --auto-merge prints the auto-merge plan."""
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--dry-run",
+                "--auto-merge",
+                "--merge-method",
+                "squash",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Auto-merge" in result.output
+        assert "squash" in result.output
+
+    def test_dry_run_without_auto_merge_omits_line(self, tmp_path):
+        """--dry-run without --auto-merge does not print auto-merge line."""
+        cfg = _setup_project(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--dry-run",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Auto-merge" not in result.output
+
+
+def _setup_project_with_auto_merge(tmp_path, merge_method="squash", auto_merge=True):
+    """Create project with ship auto_merge config."""
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text('[project]\nname = "myapp"\nversion = "1.0.0"\n')
+
+    config = {
+        "fraises": {
+            "my_api": {
+                "type": "api",
+                "environments": {
+                    "production": {"name": "my-api", "app_path": "/var/www/my-api"},
+                },
+            },
+        },
+        "ship": {
+            "pr_base": "main",
+            "auto_merge": auto_merge,
+            "merge_method": merge_method,
+        },
+    }
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text(yaml.dump(config))
+    return str(cfg)
+
+
+class TestShipAutoMergeConfig:
+    """Test ship.auto_merge and ship.merge_method from fraises.yaml."""
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_config_auto_merge_true_enables_without_flag(
+        self, mock_enable, mock_run, tmp_path
+    ):
+        """ship.auto_merge: true in fraises.yaml enables auto-merge without --auto-merge flag."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project_with_auto_merge(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_called_once()
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_config_merge_method_forwarded(self, mock_enable, mock_run, tmp_path):
+        """ship.merge_method from fraises.yaml is forwarded to _ship_enable_auto_merge."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project_with_auto_merge(tmp_path, merge_method="rebase")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_called_once_with("rebase")
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_cli_flag_overrides_config_merge_method(
+        self, mock_enable, mock_run, tmp_path
+    ):
+        """--merge-method CLI flag overrides ship.merge_method in fraises.yaml."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project_with_auto_merge(tmp_path, merge_method="rebase")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--merge-method",
+                "merge",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_called_once_with("merge")
+
+    @patch("subprocess.run")
+    @patch("fraisier.cli.version._ship_enable_auto_merge")
+    def test_config_auto_merge_false_does_not_enable(
+        self, mock_enable, mock_run, tmp_path
+    ):
+        """ship.auto_merge: false (default) does not enable auto-merge."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project_with_auto_merge(tmp_path, auto_merge=False)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        mock_enable.assert_not_called()
