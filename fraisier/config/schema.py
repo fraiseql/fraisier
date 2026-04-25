@@ -573,6 +573,8 @@ class ShipConfig:
     checks: list[ShipCheckConfig] = field(default_factory=list)
     pr_base: str | None = None
     parallel: bool = True
+    auto_merge: bool = False
+    merge_method: str = "squash"
 
 
 @dataclass

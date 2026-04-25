@@ -200,8 +200,11 @@ def version_bump(
 @click.option(
     "--merge-method",
     type=click.Choice(["squash", "merge", "rebase"]),
-    default="squash",
-    help="Merge method for auto-merge (default: squash)",
+    default=None,
+    help=(
+        "Merge method for auto-merge (squash/merge/rebase). "
+        "Falls back to ship.merge_method in fraises.yaml."
+    ),
 )
 @click.pass_context
 def ship(
@@ -217,7 +220,7 @@ def ship(
     wait_deploy: bool,
     deploy_timeout: int,
     auto_merge: bool,
-    merge_method: str,
+    merge_method: str | None,
 ) -> None:
     """Bump version, commit, push, and deploy in one step.
 
@@ -254,6 +257,14 @@ def ship(
     ship_config: ShipConfig | None = config.ship if config else None
     has_pipeline = bool(ship_config and ship_config.checks and not skip_checks)
 
+    # CLI flags take precedence; fall back to fraises.yaml ship: section defaults
+    resolved_auto_merge = auto_merge or (
+        ship_config.auto_merge if ship_config else False
+    )
+    resolved_merge_method = merge_method or (
+        ship_config.merge_method if ship_config else "squash"
+    )
+
     if no_bump:
         if dry_run:
             _ship_dry_run_no_bump(
@@ -264,8 +275,8 @@ def ship(
                 create_pr,
                 pr_base,
                 no_deploy,
-                auto_merge=auto_merge,
-                merge_method=merge_method,
+                auto_merge=resolved_auto_merge,
+                merge_method=resolved_merge_method,
                 bare_repo_skip=_resolve_bare_repo_skip() if not no_deploy else None,
             )
             return
@@ -279,8 +290,8 @@ def ship(
             no_deploy,
             wait_deploy,
             deploy_timeout,
-            auto_merge=auto_merge,
-            merge_method=merge_method,
+            auto_merge=resolved_auto_merge,
+            merge_method=resolved_merge_method,
             label=f"v{current_version} (no bump)",
         )
         return
@@ -298,8 +309,8 @@ def ship(
             create_pr,
             pr_base,
             no_deploy,
-            auto_merge=auto_merge,
-            merge_method=merge_method,
+            auto_merge=resolved_auto_merge,
+            merge_method=resolved_merge_method,
             bare_repo_skip=_resolve_bare_repo_skip() if not no_deploy else None,
         )
         return
@@ -317,8 +328,8 @@ def ship(
         no_deploy,
         wait_deploy,
         deploy_timeout,
-        auto_merge=auto_merge,
-        merge_method=merge_method,
+        auto_merge=resolved_auto_merge,
+        merge_method=resolved_merge_method,
         label=f"v{info.version}",
     )
 

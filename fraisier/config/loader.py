@@ -263,6 +263,8 @@ class FraisierConfig:
             checks=checks,
             pr_base=raw.get("pr_base"),
             parallel=raw.get("parallel", True),
+            auto_merge=raw.get("auto_merge", False),
+            merge_method=raw.get("merge_method", "squash"),
         )
 
     @property
