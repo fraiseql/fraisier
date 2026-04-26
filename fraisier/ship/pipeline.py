@@ -42,6 +42,54 @@ class ShipPipeline:
         self._cwd = cwd
         self._console = console
 
+    def check_untracked_migrations(self, migrations_dir: Path) -> PipelineResult:
+        """Fail if untracked files exist in the migrations directory.
+
+        Prevents shipping a commit that references a migration file which
+        was never ``git add``-ed.  ``git add --update`` (used by the ship
+        pipeline) only stages *tracked* files, so a brand-new migration
+        would be silently left behind.
+        """
+        if not migrations_dir.is_dir():
+            return PipelineResult(success=True)
+
+        result = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", str(migrations_dir)],
+            cwd=self._cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        untracked = [line for line in result.stdout.strip().split("\n") if line]
+        if not untracked:
+            return PipelineResult(success=True)
+
+        self._console.print("[red]Untracked migration files detected:[/red]")
+        for path in untracked:
+            self._console.print(f"  {path}")
+        self._console.print(
+            "\n[yellow]Why:[/yellow] git add --update only stages tracked files."
+            " These new migrations would be silently left out of the commit,"
+            " causing deployment failures when confiture migrate runs."
+        )
+        self._console.print(
+            f"\nTo include them:  [bold]git add {' '.join(untracked)}[/bold]"
+        )
+        self._console.print("To ignore:        delete or .gitignore the files above.")
+
+        return PipelineResult(
+            success=False,
+            failed_phase="untracked-migrations",
+            results=[
+                CheckResult(
+                    name="untracked-migrations",
+                    success=False,
+                    output="\n".join(untracked),
+                    duration_seconds=0.0,
+                ),
+            ],
+        )
+
     def run_fix_phase(self) -> PipelineResult:
         """Run auto-fixer checks (before staging)."""
         return self._run_phase("fix")

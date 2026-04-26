@@ -140,7 +140,9 @@ def main() -> None:
     listen_fds = int(os.environ.get("LISTEN_FDS", "0"))
     if listen_fds < 1:
         logger.error(
-            "LISTEN_FDS not set or zero — must be run via systemd socket activation"
+            "LISTEN_FDS not set or zero — must be run via systemd socket activation.\n"
+            "Check: systemctl status fraisier-*-install.socket\n"
+            "Enable: systemctl enable --now fraisier-<fraise>-<env>-install.socket"
         )
         sys.exit(1)
 

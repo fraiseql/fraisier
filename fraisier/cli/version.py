@@ -415,7 +415,7 @@ def _ship_dry_run(
         assert ship_config is not None
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
-            console.print(f"    [{c.phase}] {c.name}")
+            console.print(f"    [{c.phase}] {c.name}: {' '.join(c.command)}")
     console.print("  Git: add, commit, push")
     if create_pr:
         base = pr_base or (ship_config.pr_base if ship_config else None)
@@ -446,7 +446,7 @@ def _ship_dry_run_no_bump(
         assert ship_config is not None
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
-            console.print(f"    [{c.phase}] {c.name}")
+            console.print(f"    [{c.phase}] {c.name}: {' '.join(c.command)}")
     console.print("  Git: add, commit, push")
     if create_pr:
         base = pr_base or (ship_config.pr_base if ship_config else None)
@@ -521,6 +521,13 @@ def _ship_with_pipeline(
     assert ship_config is not None  # only called when has_pipeline is True
     cwd = Path.cwd()
     pipeline = ShipPipeline(ship_config, cwd, console)
+
+    # Pre-flight: detect untracked migration files that git add --update
+    # would silently leave behind (see issue #181)
+    migrations_dir = cwd / "db" / "migrations"
+    migration_result = pipeline.check_untracked_migrations(migrations_dir)
+    if not migration_result.success:
+        raise SystemExit(1)
 
     # Phase 1: auto-fixers (before staging)
     console.print("[bold]Running fix checks...[/bold]")

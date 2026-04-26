@@ -161,7 +161,12 @@ def db_exec(
         try:
             proc = ssh.short_cmd(target, argv, timeout=timeout + 10)
         except subprocess.CalledProcessError as exc:
-            console.print(f"[red]Error:[/red] {exc.stderr or exc}")
+            stderr = exc.stderr or str(exc)
+            console.print(f"[red]Error:[/red] {stderr}")
+            host = ssh_config.get("host", "<host>")
+            console.print(
+                f"[yellow]Hint:[/yellow] Check SSH connectivity: ssh {host} echo ok"
+            )
             raise SystemExit(1) from exc
         console.print(proc.stdout, end="")
     else:

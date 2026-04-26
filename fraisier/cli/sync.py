@@ -172,7 +172,11 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
 @click.option(
     "--prefer-source",
     is_flag=True,
-    help="Resolve all non-fraisier-owned conflicts by taking the source version.",
+    help=(
+        "Resolve remaining conflicts by taking the source version. "
+        "Fraisier-owned files and unchanged target files auto-resolve first; "
+        "this flag handles anything left over."
+    ),
 )
 @click.pass_context
 def sync_cmd(
@@ -198,6 +202,7 @@ def sync_cmd(
         fraisier sync staging --check      # version diff only, no git ops
         fraisier sync staging --dry-run    # print commands, make no changes
         fraisier sync staging --yes        # skip confirmation prompt
+        fraisier sync staging --prefer-source  # auto-resolve conflicts from source
     """
     config = require_config(ctx)
     pairs: list[SyncPair] = config.scaffold.sync

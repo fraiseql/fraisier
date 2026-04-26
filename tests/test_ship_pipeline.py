@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from rich.console import Console
 
 from fraisier.config import ShipCheckConfig, ShipConfig
@@ -200,3 +201,74 @@ class TestShipPipeline:
         result = pipeline.run_verify_phase()
         assert result.success
         mock_check.assert_called_once()
+
+
+class TestCheckUntrackedMigrations:
+    """Test the built-in untracked migration file check."""
+
+    def _make_pipeline(self) -> ShipPipeline:
+        config = ShipConfig(checks=[])
+        return ShipPipeline(
+            config=config,
+            cwd=Path(),
+            console=Console(quiet=True),
+        )
+
+    def test_missing_migrations_dir_passes(self, tmp_path: Path) -> None:
+        """No error when migration directory does not exist."""
+        pipeline = self._make_pipeline()
+        result = pipeline.check_untracked_migrations(tmp_path / "db" / "migrations")
+        assert result.success
+
+    def test_empty_migrations_dir_passes(self, tmp_path: Path) -> None:
+        """No error when migration directory is empty."""
+        migrations = tmp_path / "db" / "migrations"
+        migrations.mkdir(parents=True)
+        pipeline = self._make_pipeline()
+        result = pipeline.check_untracked_migrations(migrations)
+        assert result.success
+
+    @patch("fraisier.ship.pipeline.subprocess.run")
+    def test_no_untracked_files_passes(self, mock_run: MagicMock) -> None:
+        """Passes when git reports no untracked files."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        pipeline = self._make_pipeline()
+        migrations = Path("db/migrations")
+        with patch.object(Path, "is_dir", return_value=True):
+            result = pipeline.check_untracked_migrations(migrations)
+        assert result.success
+
+    @patch("fraisier.ship.pipeline.subprocess.run")
+    def test_untracked_files_detected(self, mock_run: MagicMock) -> None:
+        """Fails when untracked migration files exist."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="db/migrations/003_add_users.sql\ndb/migrations/004_add_roles.sql\n",
+        )
+        pipeline = self._make_pipeline()
+        migrations = Path("db/migrations")
+        with patch.object(Path, "is_dir", return_value=True):
+            result = pipeline.check_untracked_migrations(migrations)
+        assert not result.success
+        assert result.failed_phase == "untracked-migrations"
+        assert len(result.results) == 1
+        assert "003_add_users.sql" in result.results[0].output
+        assert "004_add_roles.sql" in result.results[0].output
+
+    @patch("fraisier.ship.pipeline.subprocess.run")
+    def test_git_ls_files_called_with_correct_args(self, mock_run: MagicMock) -> None:
+        """Verifies the correct git command is invoked."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        pipeline = self._make_pipeline()
+        migrations = Path("db/migrations")
+        with patch.object(Path, "is_dir", return_value=True):
+            pipeline.check_untracked_migrations(migrations)
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd == [
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "db/migrations",
+        ]

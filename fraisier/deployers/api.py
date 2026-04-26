@@ -245,12 +245,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
         try:
             with deployment_timeout(timeout):
-                # Config sync and scaffold regeneration
+                # Config sync and scaffold regeneration (pre-pull, from cached worktree)
                 try:
                     self._sync_config_if_needed()
                 except Exception as e:
                     logger.error(
-                        f"Scaffold config sync/regeneration failed: {e}\n"
+                        f"Pre-pull scaffold sync failed: {e}\n"
                         "nginx config may be stale — run: "
                         "fraisier scaffold && fraisier scaffold-install --yes"
                     )

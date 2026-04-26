@@ -491,9 +491,8 @@ def _verify_signature(
             return provider, normalized_headers
 
     logger.warning(
-        "Invalid webhook signature from %s (tried %d secret(s))",
+        "Invalid webhook signature from %s",
         provider_name,
-        len(secrets),
     )
     raise _structured_error(401, "authentication_error", "Invalid webhook signature")
 

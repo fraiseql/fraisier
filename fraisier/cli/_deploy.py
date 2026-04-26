@@ -100,9 +100,15 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
 @click.option("--no-cache", is_flag=True, help="Skip deployment caches")
 @click.option("--dry-run", is_flag=True, help="Show deployment plan without executing")
 @click.option(
-    "--wait", is_flag=True, help="Wait for deployment completion and show result"
+    "--wait",
+    is_flag=True,
+    help="Wait for deployment to finish and print the result summary",
 )
-@click.option("--follow", is_flag=True, help="Wait and follow deployment logs")
+@click.option(
+    "--follow",
+    is_flag=True,
+    help="Wait and stream live service logs via journalctl (implies --wait)",
+)
 @click.option(
     "--timeout", type=int, default=300, help="Timeout in seconds (default: 300)"
 )
@@ -257,7 +263,7 @@ def trigger_deploy(
         console.print(
             f"[red]Error:[/red] Cannot connect to deployment socket: {socket_path}\n"
             f"[yellow]Hint:[/yellow] Socket service may not be running. Check status:\n"
-            f"  systemctl status fraisier-{fraise}-{environment}.socket"
+            f"  systemctl status {socket_stem}.socket"
         )
         raise SystemExit(1) from None
     except PermissionError:
@@ -394,6 +400,27 @@ def _display_deployment_status(data: dict, environment: str) -> None:
     duration = data.get("duration_seconds")
     if duration is not None:
         console.print(f"[bold]Duration:[/bold]     {duration:.1f}s")
+
+    # Show how stale this status is
+    deployed_at = data.get("deployed_at", "")
+    if deployed_at:
+        try:
+            from datetime import datetime
+
+            dt = datetime.fromisoformat(deployed_at)
+            ago = datetime.now(tz=dt.tzinfo) - dt
+            minutes = int(ago.total_seconds() // 60)
+            if minutes < 1:
+                age_str = "just now"
+            elif minutes < 60:
+                age_str = f"{minutes}m ago"
+            elif minutes < 1440:
+                age_str = f"{minutes // 60}h ago"
+            else:
+                age_str = f"{minutes // 1440}d ago"
+            console.print(f"[bold]Last deploy:[/bold]  {deployed_at} ({age_str})")
+        except (ValueError, TypeError):
+            pass
 
     error = data.get("error")
     if error:

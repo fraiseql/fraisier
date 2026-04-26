@@ -174,7 +174,22 @@ def bootstrap(
         console.print("[yellow]Aborted.[/yellow]")
         return
 
-    bootstrapper = ServerBootstrapper(
+    # Detect remote OS and pick the right bootstrapper
+    bootstrapper_cls = ServerBootstrapper
+    try:
+        uname = runner.run(["uname", "-s"], check=True).stdout.strip()
+        if uname == "FreeBSD":
+            from fraisier.bootstrap_freebsd import FreebsdBootstrapper
+
+            bootstrapper_cls = FreebsdBootstrapper
+            console.print(f"[dim]Detected remote OS: {uname}[/dim]")
+        elif verbose:
+            console.print(f"[dim]Detected remote OS: {uname}[/dim]")
+    except Exception:
+        if verbose:
+            console.print("[dim]Could not detect remote OS, assuming Linux[/dim]")
+
+    bootstrapper = bootstrapper_cls(
         config=config,
         environment=environment,
         runner=runner,
