@@ -90,10 +90,13 @@ class TestInstallDependenciesExecution:
         mock_runner = MagicMock()
         deployer.runner = mock_runner
 
-        deployer._install_dependencies()
+        with patch(
+            "fraisier.deployers.mixins.shutil.which", return_value="/usr/local/bin/uv"
+        ):
+            deployer._install_dependencies()
 
         mock_runner.run.assert_called_once_with(
-            ["sudo", "-u", "myapp", "uv", "sync", "--frozen"],
+            ["sudo", "-u", "myapp", "/usr/local/bin/uv", "sync", "--frozen"],
             cwd="/var/www/api",
         )
 
@@ -133,9 +136,34 @@ class TestInstallDependenciesExecution:
         mock_runner = MagicMock()
         deployer.runner = mock_runner
 
-        deployer._install_dependencies()
+        with patch(
+            "fraisier.deployers.mixins.shutil.which", return_value="/usr/local/bin/uv"
+        ):
+            deployer._install_dependencies()
 
         # Should use sudo since install_user != deploy_user
+        mock_runner.run.assert_called_once_with(
+            ["sudo", "-u", "myapp", "/usr/local/bin/uv", "sync", "--frozen"],
+            cwd="/var/www/api",
+        )
+
+    def test_sudo_falls_back_to_bare_name_when_which_returns_none(self):
+        """When shutil.which cannot resolve the binary, uses the bare name."""
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "myapp",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        with patch("fraisier.deployers.mixins.shutil.which", return_value=None):
+            deployer._install_dependencies()
+
         mock_runner.run.assert_called_once_with(
             ["sudo", "-u", "myapp", "uv", "sync", "--frozen"],
             cwd="/var/www/api",
@@ -209,14 +237,31 @@ class TestInstallViaSocket:
         mock_runner = MagicMock()
         deployer.runner = mock_runner
 
-        with patch.dict(
-            "os.environ",
-            {"FRAISIER_INSTALL_SOCKET_API_PRODUCTION": str(tmp_path / "missing.sock")},
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "FRAISIER_INSTALL_SOCKET_API_PRODUCTION": str(
+                        tmp_path / "missing.sock"
+                    )
+                },
+            ),
+            patch(
+                "fraisier.deployers.mixins.shutil.which",
+                return_value="/home/fraisier/.local/bin/uv",
+            ),
         ):
             deployer._install_dependencies()
 
         mock_runner.run.assert_called_once_with(
-            ["sudo", "-u", "appuser", "uv", "sync", "--frozen"],
+            [
+                "sudo",
+                "-u",
+                "appuser",
+                "/home/fraisier/.local/bin/uv",
+                "sync",
+                "--frozen",
+            ],
             cwd="/var/www/api",
         )
 
@@ -236,11 +281,24 @@ class TestInstallViaSocket:
         mock_runner = MagicMock()
         deployer.runner = mock_runner
 
-        with patch.dict("os.environ", {}, clear=True):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch(
+                "fraisier.deployers.mixins.shutil.which",
+                return_value="/home/fraisier/.local/bin/uv",
+            ),
+        ):
             deployer._install_dependencies()
 
         mock_runner.run.assert_called_once_with(
-            ["sudo", "-u", "appuser", "uv", "sync", "--frozen"],
+            [
+                "sudo",
+                "-u",
+                "appuser",
+                "/home/fraisier/.local/bin/uv",
+                "sync",
+                "--frozen",
+            ],
             cwd="/var/www/api",
         )
 

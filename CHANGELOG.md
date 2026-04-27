@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-04-27
+
+### Fixed
+
+- **`trigger-deploy` path fails: `sudo -u <app_user> uv sync` cannot find `uv`** ([#184](https://github.com/evoludigit/fraisier/issues/184)). When the socket-activated install helper is unavailable, the fallback `sudo -u` path ran the install command with a bare binary name (e.g. `uv`). Since `sudo` resets `PATH`, per-user installations of `uv` (e.g. `~/.local/bin/uv`) were not found. Fixed by resolving the binary to an absolute path via `shutil.which()` before constructing the `sudo` command. Falls back gracefully to the bare name if resolution fails.
+
 ## [0.13.1] - 2026-04-27
 
 ### Fixed

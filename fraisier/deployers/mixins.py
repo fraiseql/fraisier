@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -156,6 +157,11 @@ class GitDeployMixin:
                 if isinstance(_co, FraisierConfig):
                     manifest = build_manifest(_co)
                     _verify_manifest_ownership(manifest)
+            # Resolve the binary to an absolute path so sudo can find it
+            # even though sudo resets PATH (uv is typically per-user).
+            resolved = shutil.which(cmd[0])
+            if resolved:
+                cmd[0] = resolved
             cmd = ["sudo", "-u", self.install_user, *cmd]
         logger.info("Installing dependencies: %s", cmd)
         try:
