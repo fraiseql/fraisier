@@ -200,7 +200,9 @@ class TestSystemdManagerSocketPath:
             result = mgr.status("api.service")
 
         assert result == "active"
-        mock_socket.assert_called_once_with(sock, "is-active", "api.service", check=False)
+        mock_socket.assert_called_once_with(
+            sock, "is-active", "api.service", check=False
+        )
         runner.run.assert_not_called()
 
     def test_socket_takes_precedence_over_wrapper(self, monkeypatch):
