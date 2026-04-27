@@ -301,6 +301,56 @@ class TestBuildServerSocket:
             assert "ready" in call_args[0]
 
 
+class TestIsActiveExitCodes:
+    """Helper returns ok=False + returncode=3 for inactive services (issue #183)."""
+
+    def _call(self, request: dict, allowed: frozenset[str]) -> dict:
+        import socket as _socket
+
+        server, client = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        client.sendall(json.dumps(request).encode() + b"\n")
+        client.shutdown(_socket.SHUT_WR)
+        _handle_connection(server, allowed)
+        with client.makefile("rb") as f:
+            raw = f.readline()
+        client.close()
+        return json.loads(raw.decode()) if raw else {}
+
+    def test_is_active_inactive_returns_exit_3(self):
+        """systemctl is-active returns exit code 3 for an inactive service."""
+        mock_result = MagicMock()
+        mock_result.returncode = 3
+        mock_result.stdout = "inactive\n"
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = self._call(
+                {"action": "is-active", "service": "api.service"},
+                frozenset({"api.service"}),
+            )
+
+        assert result["ok"] is False
+        assert result["returncode"] == 3
+        assert result["stdout"] == "inactive\n"
+
+    def test_is_active_active_returns_exit_0(self):
+        """systemctl is-active returns exit code 0 for an active service."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "active\n"
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = self._call(
+                {"action": "is-active", "service": "api.service"},
+                frozenset({"api.service"}),
+            )
+
+        assert result["ok"] is True
+        assert result["returncode"] == 0
+        assert result["stdout"] == "active\n"
+
+
 class TestAllowlistIntegration:
     """Verify that only exactly matching service names are permitted."""
 

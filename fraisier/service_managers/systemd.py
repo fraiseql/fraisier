@@ -22,6 +22,7 @@ def _call_via_socket(
     socket_path: str,
     action: str,
     service_name: str = "",
+    check: bool = True,
 ) -> types.SimpleNamespace:
     """Send a JSON command to the systemctl helper over a Unix socket.
 
@@ -29,6 +30,9 @@ def _call_via_socket(
         socket_path: Absolute path to the Unix domain socket.
         action: systemctl action (stop, start, restart, is-active, daemon-reload).
         service_name: Service unit name (empty for daemon-reload).
+        check: If True (default), raise on non-zero exit codes.  When False,
+            return the result even if the helper reports ``ok=false`` (e.g.
+            ``systemctl is-active`` returns exit code 3 for inactive services).
 
     Returns:
         A SimpleNamespace with ``.stdout``, ``.stderr``, ``.returncode`` attributes,
@@ -36,7 +40,8 @@ def _call_via_socket(
 
     Raises:
         ConnectionRefusedError: If the helper socket is not available.
-        subprocess.CalledProcessError: If the helper returns ok=false.
+        subprocess.CalledProcessError: If *check* is True and the helper
+            returns ok=false.
     """
     request: dict[str, str] = {"action": action}
     if service_name:
@@ -67,7 +72,7 @@ def _call_via_socket(
         returncode=response.get("returncode", 0),
     )
 
-    if not response.get("ok", False):
+    if check and not response.get("ok", False):
         error = response.get("error", "unknown error from systemctl helper")
         raise subprocess.CalledProcessError(
             result.returncode or 1,
@@ -104,7 +109,7 @@ class SystemdServiceManager(ServiceManager):
         """
         socket_path = os.environ.get("FRAISIER_SYSTEMCTL_SOCKET")
         if socket_path:
-            return _call_via_socket(socket_path, action, service_name)
+            return _call_via_socket(socket_path, action, service_name, check=check)
         wrapper = os.environ.get("FRAISIER_SYSTEMCTL_WRAPPER")
         if wrapper:
             cmd = [wrapper, action] + ([service_name] if service_name else [])

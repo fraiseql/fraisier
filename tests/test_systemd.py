@@ -181,7 +181,7 @@ class TestSystemdManagerSocketPath:
             )
             mgr.restart("api.service")
 
-        mock_socket.assert_called_once_with(sock, "restart", "api.service")
+        mock_socket.assert_called_once_with(sock, "restart", "api.service", check=True)
         runner.run.assert_not_called()
 
     def test_status_uses_socket_when_set(self, monkeypatch):
@@ -200,7 +200,7 @@ class TestSystemdManagerSocketPath:
             result = mgr.status("api.service")
 
         assert result == "active"
-        mock_socket.assert_called_once_with(sock, "is-active", "api.service")
+        mock_socket.assert_called_once_with(sock, "is-active", "api.service", check=False)
         runner.run.assert_not_called()
 
     def test_socket_takes_precedence_over_wrapper(self, monkeypatch):
@@ -240,7 +240,7 @@ class TestSystemdManagerSocketPath:
             )
             mgr.daemon_reload()
 
-        mock_socket.assert_called_once_with(sock, "daemon-reload", "")
+        mock_socket.assert_called_once_with(sock, "daemon-reload", "", check=True)
         runner.run.assert_not_called()
 
     def test_daemon_reload_falls_back_to_sudo(self, monkeypatch):

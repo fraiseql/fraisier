@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-04-27
+
+### Fixed
+
+- **`is_active()` crashes when service is already stopped (exit code 3)** ([#183](https://github.com/fraiseql/fraisier/issues/183)). `_call_via_socket()` raised `CalledProcessError` for any non-zero exit code, but `systemctl is-active` returns exit code 3 for inactive services. The `check` parameter was not forwarded to the socket path, so `status()` (which passes `check=False`) still crashed. Fixed by adding a `check` parameter to `_call_via_socket()` and forwarding it from `_run_systemctl()`. This unblocks all automated restore-migrate deployments when the target service happens to be stopped.
+
 ## [0.11.1] - 2026-04-21
 
 ### Fixed
