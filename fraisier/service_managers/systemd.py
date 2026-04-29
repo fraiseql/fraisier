@@ -102,7 +102,7 @@ class SystemdServiceManager(ServiceManager):
         service_name: str = "",
         timeout: int = 60,
         check: bool = True,
-    ) -> types.SimpleNamespace:
+    ) -> types.SimpleNamespace | subprocess.CompletedProcess[str]:
         """Run a systemctl command via socket, wrapper, or sudo.
 
         Returns the result mimicking subprocess.CompletedProcess.

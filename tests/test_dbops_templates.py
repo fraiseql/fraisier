@@ -90,6 +90,22 @@ class TestConnectionUrlPassthrough:
         assert all(u == _TEST_URL for u in captured_urls)
 
 
+class TestCleanupTemplatesDatabaseInjection:
+    """Verify cleanup_templates gets -d from the URL (#185)."""
+
+    def test_cleanup_templates_uses_url_database(self, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
+        url = "postgresql://user@localhost/postgres"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            cleanup_templates("mydb", connection_url=url)
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "psql"
+        assert "-d" in cmd
+        assert cmd[cmd.index("-d") + 1] == "postgres"
+
+
 class TestCleanupTemplatesSQL:
     """Verify cleanup_templates uses parameterized SQL, not f-string interpolation."""
 
