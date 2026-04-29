@@ -12,13 +12,7 @@ class TestZFSConfig:
 
     def test_zfs_config_required_fields(self):
         """Test ZFS config with all required fields."""
-        config_data = {
-            "enabled": True,
-            "pool": "zroot",
-            "data_dataset": "pgsql/data",
-        }
-
-        config = ZFSConfig(**config_data)
+        config = ZFSConfig(enabled=True, pool="zroot", data_dataset="pgsql/data")
 
         assert config.enabled is True
         assert config.pool == "zroot"
@@ -30,17 +24,15 @@ class TestZFSConfig:
 
     def test_zfs_config_all_fields(self):
         """Test ZFS config with all optional fields set."""
-        config_data = {
-            "enabled": True,
-            "pool": "tank",
-            "data_dataset": "app/data",
-            "snapshot_prefix": "prod_backup_",
-            "clone_prefix": "deploy_",
-            "max_snapshot_age_days": 14,
-            "snapshot_retention": 20,
-        }
-
-        config = ZFSConfig(**config_data)
+        config = ZFSConfig(
+            enabled=True,
+            pool="tank",
+            data_dataset="app/data",
+            snapshot_prefix="prod_backup_",
+            clone_prefix="deploy_",
+            max_snapshot_age_days=14,
+            snapshot_retention=20,
+        )
 
         assert config.enabled is True
         assert config.pool == "tank"
@@ -52,13 +44,7 @@ class TestZFSConfig:
 
     def test_zfs_config_defaults(self):
         """Test ZFS config defaults when not specified."""
-        config_data = {
-            "enabled": False,
-            "pool": "zroot",
-            "data_dataset": "data",
-        }
-
-        config = ZFSConfig(**config_data)
+        config = ZFSConfig(enabled=False, pool="zroot", data_dataset="data")
 
         assert config.enabled is False
         assert config.pool == "zroot"

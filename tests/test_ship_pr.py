@@ -23,6 +23,7 @@ class TestGetPRBackend:
 
     def test_unsupported_stores_provider_name(self):
         backend = get_pr_backend("gitea")
+        assert isinstance(backend, UnimplementedPRBackend)
         assert backend._provider == "gitea"
 
 

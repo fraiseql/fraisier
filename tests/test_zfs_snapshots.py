@@ -157,11 +157,14 @@ class TestZFSSnapshotOperations:
             MagicMock(returncode=0, stdout="", stderr=""),  # Second call succeeds
         ]
 
-        self.zfs_ops._generate_snapshot_name = MagicMock(
+        mock_gen = MagicMock(
             side_effect=["snap_20220101_120000", "snap_20220101_120001"]
         )
 
-        with patch("fraisier.zfs.operations.time.sleep") as mock_sleep:
+        with (
+            patch("fraisier.zfs.operations.time.sleep") as mock_sleep,
+            patch.object(self.zfs_ops, "_generate_snapshot_name", mock_gen),
+        ):
             result = self.zfs_ops.create_snapshot("zroot/data")
 
             assert result == "zroot/data@snap_20220101_120001"
@@ -180,11 +183,12 @@ class TestZFSSnapshotOperations:
             stderr="cannot create snapshot 'zroot/data@snap_20220101_120000': dataset already exists",
         )
 
-        self.zfs_ops._generate_snapshot_name = MagicMock(
-            return_value="snap_20220101_120000"
-        )
+        mock_gen = MagicMock(return_value="snap_20220101_120000")
 
-        with patch("fraisier.zfs.operations.time.sleep"):
+        with (
+            patch("fraisier.zfs.operations.time.sleep"),
+            patch.object(self.zfs_ops, "_generate_snapshot_name", mock_gen),
+        ):
             with pytest.raises(ZFSOperationFailedError):
                 self.zfs_ops.create_snapshot("zroot/data")
 

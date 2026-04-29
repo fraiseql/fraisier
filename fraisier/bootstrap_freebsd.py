@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 from fraisier.bootstrap import ServerBootstrapper, StepResult
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from fraisier.config import FraisierConfig
     from fraisier.runners import SSHRunner
 
@@ -25,7 +27,7 @@ class FreebsdBootstrapper(ServerBootstrapper):
         config: FraisierConfig,
         environment: str,
         runner: SSHRunner,
-        fraises_yaml_path: str,
+        fraises_yaml_path: Path,
         dry_run: bool = False,
         verbose: bool = False,
     ) -> None:
