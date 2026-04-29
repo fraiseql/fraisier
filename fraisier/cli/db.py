@@ -327,6 +327,143 @@ def db_build(ctx: click.Context, fraise: str, env: str, rebuild: bool) -> None:
         raise SystemExit(1)
 
 
+@db.command(name="preflight")
+@click.argument("fraise")
+@click.option("--env", "-e", required=True, help="Target environment")
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Output format",
+)
+@click.pass_context
+def db_preflight(ctx: click.Context, fraise: str, env: str, fmt: str) -> None:
+    """Test pending migrations against a schema-only copy of the backup.
+
+    Creates a temporary database, extracts the schema from the configured
+    backup, runs all pending migrations via SAVEPOINT (always rolled back),
+    and reports results. The original database is never touched.
+
+    \b
+    Examples:
+        fraisier db preflight myapp -e staging
+        fraisier db preflight myapp -e staging --format json
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    from fraisier.dbops.preflight import (
+        MigrationPreflightResult,
+        run_migration_preflight,
+    )
+    from fraisier.dbops.restore import find_latest_backup
+
+    config = ctx.obj["config"]
+    fraise_cfg, env_config = _get_db_config(config, fraise, env)
+
+    if not fraise_cfg or not env_config:
+        console.print(f"[red]Error:[/red] Fraise '{fraise}' env '{env}' not found")
+        raise SystemExit(1)
+
+    db_cfg = env_config.get("database", {})
+    restore_cfg = db_cfg.get("restore")
+
+    if not restore_cfg:
+        console.print(
+            f"[red]Error:[/red] No 'restore' config for '{fraise}' env '{env}'. "
+            "Migration preflight requires a restore strategy with backup config."
+        )
+        raise SystemExit(2)
+
+    admin_url = db_cfg.get("admin_url")
+    if not admin_url:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' env '{env}' has no admin_url"
+        )
+        raise SystemExit(1)
+
+    app_path = _Path(env_config.get("app_path", "."))
+    confiture_config_rel = _Path(db_cfg.get("confiture_config", "confiture.yaml"))
+    confiture_config = (
+        confiture_config_rel
+        if confiture_config_rel.is_absolute()
+        else app_path / confiture_config_rel
+    )
+    migrations_dir = app_path / "db" / "migrations"
+
+    backup_dir = _Path(restore_cfg["backup_dir"])
+    backup_pattern = restore_cfg.get("backup_pattern", "*.dump")
+    backup_file = find_latest_backup(backup_dir, pattern=backup_pattern)
+
+    if backup_file is None:
+        console.print(
+            f"[red]Error:[/red] No backup matching '{backup_pattern}' in {backup_dir}"
+        )
+        raise SystemExit(1)
+
+    result: MigrationPreflightResult = run_migration_preflight(
+        backup_path=backup_file,
+        admin_url=admin_url,
+        confiture_config=confiture_config,
+        migrations_dir=migrations_dir,
+    )
+
+    if fmt == "json":
+        print(
+            _json.dumps(
+                {
+                    "all_passed": result.all_passed,
+                    "total_ms": result.total_ms,
+                    "schema_extraction_ms": result.schema_extraction_ms,
+                    "migration_count": len(result.migrations),
+                    "failure_count": result.failure_count,
+                    "migrations": [
+                        {
+                            "version": m.version,
+                            "name": m.name,
+                            "passed": m.passed,
+                            "error": m.error,
+                            "time_ms": m.time_ms,
+                            "skipped": m.skipped,
+                        }
+                        for m in result.migrations
+                    ],
+                }
+            )
+        )
+    else:
+        console.print(
+            f"\nMigration preflight: {len(result.migrations)} migration(s) checked "
+            f"(schema extracted in {result.schema_extraction_ms}ms)\n"
+        )
+        for m in result.migrations:
+            if m.skipped:
+                console.print(f"  -  {m.version}  {m.name}  [skipped]", style="dim")
+            elif m.passed:
+                console.print(f"  +  {m.version}  {m.name}  ({m.time_ms}ms)")
+            else:
+                console.print(f"  !  {m.version}  {m.name}", style="red")
+                if m.error:
+                    console.print(f"       Error: {m.error}", style="dim")
+        console.print()
+        if result.all_passed:
+            console.print(
+                f"  Preflight passed: all {len(result.migrations)} migration(s) OK "
+                f"({result.total_ms}ms)",
+                style="green",
+            )
+        else:
+            console.print(
+                f"  Preflight failed: {result.failure_count} of "
+                f"{len(result.migrations)} migration(s) would fail.",
+                style="red bold",
+            )
+        console.print("  [Rolled back — preflight DB dropped]\n", style="dim")
+
+    raise SystemExit(0 if result.all_passed else 1)
+
+
 @db.command(name="restore")
 @click.argument("fraise")
 @click.argument("environment")
@@ -347,6 +484,11 @@ def db_build(ctx: click.Context, fraise: str, env: str, rebuild: bool) -> None:
     is_flag=True,
     help="Skip stopping/restarting the systemd service",
 )
+@click.option(
+    "--skip-preflight",
+    is_flag=True,
+    help="Skip migration preflight check (emergency restores only)",
+)
 @click.pass_context
 def db_restore(
     ctx: click.Context,
@@ -355,6 +497,7 @@ def db_restore(
     from_backup: Path | None,
     dry_run: bool,
     no_service_restart: bool,
+    skip_preflight: bool,
 ) -> None:
     """Restore staging database from a production backup.
 
@@ -457,6 +600,14 @@ def db_restore(
         else None
     )
 
+    from fraisier.config.schema import PreflightConfig
+
+    preflight_cfg = db_cfg.get("preflight") or {}
+    preflight = PreflightConfig(
+        enabled=bool(preflight_cfg.get("enabled", True)),
+        timeout_seconds=int(preflight_cfg.get("timeout_seconds", 120)),
+    )
+
     strategy = RestoreMigrateStrategy(
         RestoreConfig(
             db_name=db_name,
@@ -468,6 +619,7 @@ def db_restore(
             template_name=restore_cfg.get("template_name"),
             min_tables=int(restore_cfg.get("min_tables", 0)),
             backup_path=from_backup,
+            preflight=preflight,
         ),
         admin_url=admin_url,
         service_manager=svc_mgr,
@@ -478,6 +630,7 @@ def db_restore(
         result = strategy.execute(
             confiture_config,
             migrations_dir=app_path / "db" / "migrations",
+            skip_preflight=skip_preflight,
         )
     except DatabaseError as exc:
         if svc_mgr and systemd_service:

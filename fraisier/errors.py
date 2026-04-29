@@ -7,9 +7,12 @@ Provides structured error types for different failure scenarios with:
 - Hierarchical structure for flexible exception handling
 """
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from fraisier.dbops.preflight import MigrationPreflightResult
     from fraisier.migration_analyzer import ErrorClassification
 
 
@@ -405,6 +408,33 @@ class GitProviderError(FrameworkError):
     """Git provider related errors."""
 
     code = "GIT_PROVIDER_ERROR"
+
+
+class MigrationPreflightError(DatabaseError):
+    """Raised when migration preflight detects migrations that would fail.
+
+    Carries a structured ``preflight_result`` so callers can inspect which
+    migrations failed and display per-migration error messages.
+
+    Attributes:
+        preflight_result: The ``MigrationPreflightResult`` from the failed
+            preflight run, or ``None`` if unavailable.
+    """
+
+    code = "MIGRATION_PREFLIGHT_FAILED"
+    recoverable = True
+    recovery_hint = (
+        "Fix the failing migrations and redeploy. "
+        "No database changes were made — the full restore was not started."
+    )
+
+    def __init__(
+        self,
+        message: str,
+        preflight_result: MigrationPreflightResult | None = None,
+    ) -> None:
+        super().__init__(message=message)
+        self.preflight_result = preflight_result
 
 
 class WebhookError(FrameworkError):

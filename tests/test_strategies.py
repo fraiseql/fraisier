@@ -339,10 +339,18 @@ class TestDjangoGetLatestVersionExceptionNarrowing:
 
 
 def _make_config(**overrides) -> RestoreConfig:
-    """Create a RestoreConfig with sensible defaults for tests."""
+    """Create a RestoreConfig with sensible defaults for tests.
+
+    Preflight is disabled by default here — the restore lifecycle tests focus
+    on backup/restore/migrate steps. Preflight behaviour is covered separately
+    in test_restore_strategy_preflight.py.
+    """
+    from fraisier.config.schema import PreflightConfig
+
     defaults = {
         "db_name": "staging_db",
         "backup_dir": Path("/backup/production"),
+        "preflight": PreflightConfig(enabled=False),
     }
     defaults.update(overrides)
     return RestoreConfig(**defaults)  # ty: ignore[invalid-argument-type]

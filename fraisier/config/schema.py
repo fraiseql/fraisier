@@ -578,6 +578,23 @@ class ShipConfig:
 
 
 @dataclass
+class PreflightConfig:
+    """Configuration for migration preflight checks.
+
+    Preflight runs pending migrations against a schema-only copy of the backup
+    before the expensive full ``pg_restore``. Failures abort deployment before
+    any destructive operations — the original database is never touched.
+
+    Attributes:
+        enabled: Whether to run migration preflight (default ``True``).
+        timeout_seconds: Maximum wall-clock time for the entire preflight run.
+    """
+
+    enabled: bool = True
+    timeout_seconds: int = 120
+
+
+@dataclass
 class ZFSConfig:
     """ZFS configuration for deployment environments."""
 

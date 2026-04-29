@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from fraisier.config.schema import PreflightConfig
 from fraisier.dbops.confiture import migrate_down, migrate_up
 
 from ._base import Strategy, StrategyResult
@@ -27,6 +28,7 @@ class RestoreConfig:
     template_name: str | None = None
     min_tables: int = 0
     backup_path: Path | None = None
+    preflight: PreflightConfig = field(default_factory=PreflightConfig)
 
 
 class RestoreMigrateStrategy(Strategy):
@@ -72,6 +74,56 @@ class RestoreMigrateStrategy(Strategy):
     def _resolved_template_name(self) -> str:
         return self._config.template_name or f"template_{self._config.db_name}"
 
+    def _preflight_enabled(self) -> bool:
+        """Return True when the migration preflight check should run."""
+        return self._config.preflight.enabled
+
+    def _run_preflight(
+        self,
+        backup_path: Path,
+        confiture_config: Path,
+        migrations_dir: Path,
+    ) -> None:
+        """Run migration preflight. Raises MigrationPreflightError on failure.
+
+        Args:
+            backup_path: Path to the pg_dump backup file.
+            confiture_config: Path to the confiture config file.
+            migrations_dir: Directory containing migration files.
+
+        Raises:
+            MigrationPreflightError: When one or more migrations would fail,
+                with a structured result attached for programmatic use.
+        """
+        from fraisier.dbops.preflight import run_migration_preflight
+        from fraisier.errors import MigrationPreflightError
+
+        pf = self._config.preflight
+        log.info("Running migration preflight check...")
+        result = run_migration_preflight(
+            backup_path=backup_path,
+            admin_url=self._admin_url,
+            confiture_config=confiture_config,
+            migrations_dir=migrations_dir,
+            timeout_seconds=pf.timeout_seconds,
+        )
+
+        if result.all_passed:
+            log.info(
+                "Preflight passed: %d migrations validated in %dms",
+                len(result.migrations),
+                result.total_ms,
+            )
+        else:
+            failures = "\n".join(
+                f"  - {m.version} ({m.name}): {m.error}" for m in result.failures
+            )
+            raise MigrationPreflightError(
+                f"Migration preflight failed ({result.failure_count} of "
+                f"{len(result.migrations)} migrations would fail):\n{failures}",
+                preflight_result=result,
+            )
+
     def execute(
         self,
         confiture_config: Path,
@@ -81,6 +133,7 @@ class RestoreMigrateStrategy(Strategy):
         pre_migrate_verify: bool = False,
         database_url: str | None = None,
         hooks_config: dict[str, Any] | None = None,
+        skip_preflight: bool = False,
     ) -> StrategyResult:
         from fraisier.dbops.operations import (
             create_db,
@@ -114,6 +167,15 @@ class RestoreMigrateStrategy(Strategy):
                 raise DatabaseError(
                     f"Backup {backup_file.name} is older than {cfg.max_age_hours}h",
                 )
+
+        # Step 2.5: Preflight check (before any destructive operations)
+        # Service is still running here — preflight only uses a temp DB.
+        if not skip_preflight and self._preflight_enabled():
+            self._run_preflight(
+                backup_path=backup_file,
+                confiture_config=confiture_config,
+                migrations_dir=migrations_dir,
+            )
 
         # Step 3: Stop service to prevent connection reconnect race
         if self._service_manager and self._service_name:

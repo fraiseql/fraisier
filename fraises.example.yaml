@@ -89,6 +89,9 @@ fraises:
             create_template: true             # create rollback template before migrating
             template_name: myapp_staging_template
             min_tables: 300                   # post-restore validation
+          # preflight:                          # Migration preflight (default: enabled)
+          #   enabled: true                     # Test migrations before full restore
+          #   timeout_seconds: 120              # Max wall-clock time for preflight
         health_check:
           url: https://api.myapp.staging/health
           timeout: 30

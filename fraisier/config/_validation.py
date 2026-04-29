@@ -239,6 +239,10 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
             )
         errors.extend(_validate_database_url(fraise_name, db))
 
+    # Preflight configuration validation
+    if isinstance(db, dict) and db.get("preflight"):
+        errors.extend(_validate_preflight(fraise_name, db))
+
     # ZFS configuration validation
     zfs_config = env.get("zfs")
     if zfs_config is not None:
@@ -347,6 +351,33 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
         errors.append(
             f"{fraise_name}: strategy 'restore_migrate' requires database.name"
         )
+    return errors
+
+
+def _validate_preflight(fraise_name: str, db: dict) -> list[str]:
+    """Return validation errors for a database.preflight config block."""
+    errors: list[str] = []
+    preflight = db.get("preflight", {})
+    if not isinstance(preflight, dict):
+        return errors
+
+    enabled = preflight.get("enabled", True)
+    strategy = db.get("strategy")
+
+    if enabled and strategy != "restore_migrate":
+        errors.append(
+            f"{fraise_name}: database.preflight.enabled requires "
+            f"strategy 'restore_migrate' (got {strategy!r}). "
+            "Preflight only applies to the restore_migrate strategy."
+        )
+
+    timeout = preflight.get("timeout_seconds")
+    if timeout is not None and timeout <= 0:
+        errors.append(
+            f"{fraise_name}: database.preflight.timeout_seconds must be "
+            f"a positive integer, got {timeout!r}"
+        )
+
     return errors
 
 
