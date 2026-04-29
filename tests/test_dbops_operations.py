@@ -39,6 +39,8 @@ class TestPgCmd:
             "5432",
             "-U",
             "postgres",
+            "-d",
+            "mydb",
             "-c",
             "SELECT 1",
         ]
@@ -73,6 +75,97 @@ class TestPgCmd:
         env = mock_run.call_args.kwargs["env"]
         assert env is not None
         assert env["PGPASSWORD"] == "pass"
+
+
+class TestPgCmdDatabaseInjection:
+    """Test that _pg_cmd injects the database from the URL (#185)."""
+
+    def test_injects_db_from_url_when_no_d_flag(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["psql", "-c", "SELECT 1"],
+                connection_url="postgresql://user@localhost/postgres",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "-d" in cmd
+        assert cmd[cmd.index("-d") + 1] == "postgres"
+
+    def test_does_not_inject_db_when_d_already_present(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["psql", "-d", "mydb", "-c", "SELECT 1"],
+                connection_url="postgresql://user@localhost/postgres",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("-d") == 1
+        assert cmd[cmd.index("-d") + 1] == "mydb"
+
+    def test_no_db_injection_when_url_path_empty(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["psql", "-c", "SELECT 1"],
+                connection_url="postgresql://user@localhost/",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "-d" not in cmd
+
+    def test_injects_db_from_socket_url(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["psql", "-c", "SELECT 1"],
+                connection_url="postgresql:///postgres?host=/var/run/postgresql",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "-d" in cmd
+        assert cmd[cmd.index("-d") + 1] == "postgres"
+
+    def test_injects_maintenance_db_for_createdb(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["createdb", "newdb"],
+                connection_url="postgresql://user@localhost/postgres",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "--maintenance-db" in cmd
+        assert cmd[cmd.index("--maintenance-db") + 1] == "postgres"
+
+    def test_injects_maintenance_db_for_dropdb(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["dropdb", "--if-exists", "olddb"],
+                connection_url="postgresql://user@localhost/postgres",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "--maintenance-db" in cmd
+        assert cmd[cmd.index("--maintenance-db") + 1] == "postgres"
+
+    def test_does_not_inject_maintenance_db_when_already_present(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["createdb", "--maintenance-db", "template1", "newdb"],
+                connection_url="postgresql://user@localhost/postgres",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("--maintenance-db") == 1
+        assert cmd[cmd.index("--maintenance-db") + 1] == "template1"
+
+    def test_no_injection_for_pg_dump(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["pg_dump", "-Fc", "mydb"],
+                connection_url="postgresql://user@localhost/postgres",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "-d" not in cmd
+        assert "--maintenance-db" not in cmd
 
 
 class TestRunPsql:
@@ -142,6 +235,15 @@ class TestCheckDbExists:
             )
             assert check_db_exists("mydb", connection_url=_TEST_URL) is False
 
+    def test_check_db_exists_uses_url_database(self):
+        url = "postgresql://user@localhost/postgres"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="1\n", stderr="")
+            check_db_exists("mydb", connection_url=url)
+        cmd = mock_run.call_args[0][0]
+        assert "-d" in cmd
+        assert cmd[cmd.index("-d") + 1] == "postgres"
+
     def test_check_db_exists_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             check_db_exists("mydb; DROP TABLE users", connection_url=_TEST_URL)
@@ -159,6 +261,15 @@ class TestTerminateBackends:
         cmd = mock_run.call_args[0][0]
         assert "psql" in cmd
         assert any("pg_terminate_backend" in arg for arg in cmd)
+
+    def test_terminate_backends_uses_url_database(self):
+        url = "postgresql://user@localhost/postgres"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="t\n", stderr="")
+            terminate_backends("mydb", connection_url=url)
+        cmd = mock_run.call_args[0][0]
+        assert "-d" in cmd
+        assert cmd[cmd.index("-d") + 1] == "postgres"
 
     def test_terminate_backends_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid database name"):
@@ -207,6 +318,26 @@ class TestDropDb:
         sql = cmd[sql_index]
         assert "DROP DATABASE IF EXISTS testdb WITH (FORCE)" in sql
 
+    def test_drop_db_force_uses_url_database(self):
+        url = "postgresql://user@localhost/postgres"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            drop_db("testdb", force=True, connection_url=url)
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "psql"
+        assert "-d" in cmd
+        assert cmd[cmd.index("-d") + 1] == "postgres"
+
+    def test_drop_db_simple_uses_maintenance_db(self):
+        url = "postgresql://user@localhost/postgres"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            drop_db("testdb", connection_url=url)
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "dropdb"
+        assert "--maintenance-db" in cmd
+        assert cmd[cmd.index("--maintenance-db") + 1] == "postgres"
+
     def test_drop_db_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             drop_db("test; rm -rf /", connection_url=_TEST_URL)
@@ -245,6 +376,16 @@ class TestCreateDb:
         assert "appuser" in cmd
         assert "newdb" in cmd
         assert "sudo" not in cmd
+
+    def test_create_db_uses_maintenance_db(self):
+        url = "postgresql://user@localhost/postgres"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            create_db("newdb", connection_url=url)
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "createdb"
+        assert "--maintenance-db" in cmd
+        assert cmd[cmd.index("--maintenance-db") + 1] == "postgres"
 
     def test_create_db_rejects_bad_template(self):
         with pytest.raises(ValueError, match="Invalid template name"):

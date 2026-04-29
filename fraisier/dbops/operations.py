@@ -15,6 +15,16 @@ from urllib.parse import urlparse
 
 from fraisier.dbops._validation import validate_pg_identifier
 
+# PostgreSQL CLI tools that accept a database/maintenance-db flag.
+# psql and pg_restore use -d; createdb and dropdb use --maintenance-db.
+# pg_dump takes the database as a positional argument — no flag needed.
+_DB_FLAG_FOR_TOOL: dict[str, str] = {
+    "psql": "-d",
+    "pg_restore": "-d",
+    "createdb": "--maintenance-db",
+    "dropdb": "--maintenance-db",
+}
+
 
 def _parse_connection_flags(connection_url: str) -> tuple[list[str], dict[str, str]]:
     """Extract CLI flags and env vars from a PostgreSQL connection URL.
@@ -46,9 +56,21 @@ def _pg_cmd(
     Host, port, user and password are taken from the URL and injected
     into the command (``-h -p -U``) and environment (``PGPASSWORD``).
 
+    The database path from the URL is also forwarded when the caller has
+    not already specified one: ``-d`` for psql/pg_restore,
+    ``--maintenance-db`` for createdb/dropdb.
+
     Returns (exit_code, stdout, stderr).
     """
     conn_flags, extra_env = _parse_connection_flags(connection_url)
+
+    db_flag = _DB_FLAG_FOR_TOOL.get(cmd[0])
+    if db_flag and db_flag not in cmd:
+        parsed = urlparse(connection_url)
+        db = parsed.path.lstrip("/")
+        if db:
+            conn_flags = [*conn_flags, db_flag, db]
+
     full_cmd = [cmd[0], *conn_flags, *cmd[1:]]
     run_env = {**os.environ, **extra_env} if extra_env else None
 
