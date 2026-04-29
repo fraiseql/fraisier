@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-04-29
+
+### Fixed
+
+- **Restore strategy fails when deploy user has no matching PostgreSQL database** ([#185](https://github.com/fraiseql/fraisier/issues/185)). `_pg_cmd` silently dropped the database path from `connection_url`, so `terminate_backends`, `drop_db`, `check_db_exists`, `create_db`, and `prune_templates` connected to a database named after the unix user instead of the maintenance database. Fixed by extracting the URL's database path and injecting `-d` (for psql/pg_restore) or `--maintenance-db` (for createdb/dropdb) when the caller hasn't already specified one. `admin_url` must now include an explicit maintenance database path (e.g. `/postgres`).
+
+- **Resolved all `ty` type-checking errors** across `bootstrap_freebsd.py`, `service_managers/systemd.py`, and several test files.
+
 ## [0.13.2] - 2026-04-27
 
 ### Fixed
