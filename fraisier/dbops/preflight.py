@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 import uuid
 from dataclasses import dataclass, field
@@ -302,8 +303,9 @@ def _run_confiture_preflight(
     """
     from fraisier.errors import DatabaseError
 
+    confiture_exe = str(Path(sys.executable).parent / "confiture")
     cmd = [
-        "confiture",
+        confiture_exe,
         "migrate",
         "preflight",
         "--against",

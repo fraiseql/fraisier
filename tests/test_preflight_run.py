@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -139,6 +140,15 @@ class TestRunConfiturePreflight:
             result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         assert result.migrations[0].skipped is True
         assert result.migrations[0].skipped_reason == "non-transactional"
+
+    def test_executable_resolved_from_venv(self):
+        """confiture is resolved relative to sys.executable, not as a bare name."""
+        stdout = _against_json([])
+        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
+        cmd = mock_run.call_args[0][0]
+        expected_exe = str(Path(sys.executable).parent / "confiture")
+        assert cmd[0] == expected_exe
 
     def test_command_includes_against_flag(self):
         stdout = _against_json([])

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-05-04
+
+### Fixed
+
+- **`confiture migrate preflight` fails with `FileNotFoundError` when confiture is installed in a venv** ([#190](https://github.com/fraiseql/fraisier/issues/190)). `_run_confiture_preflight` invoked `confiture` as a bare subprocess command, which requires the binary to be on `PATH`. When fraisier and confiture are installed together via `uv sync` (not `uv tool install confiture`), the binary lives in the venv's `bin/` directory rather than on `PATH`. Fixed by resolving the executable relative to `sys.executable` (`Path(sys.executable).parent / "confiture"`), which is always correct regardless of how the venv is activated.
+
 ## [0.14.0] - 2026-04-29
 
 ### Added
