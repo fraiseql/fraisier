@@ -315,11 +315,16 @@ class BaseDeployer(ABC):
 
         logger.info("✓ Scaffold files regenerated")
 
-    def _install_scaffold(self) -> None:
+    def _install_scaffold(self, config_path: Path | None = None) -> None:
         """Install updated scaffold files to system locations.
 
         Runs 'fraisier scaffold-install' on the server to install
         sudoers, systemd units, nginx configs, wrappers, etc.
+
+        Args:
+            config_path: Path to fraises.yaml; when provided, the subprocess
+                is run with ``cd <project_dir>`` so relative paths in the
+                config (e.g. ``output_dir``) resolve correctly.
 
         Raises:
             DeploymentError: If scaffold installation fails
@@ -330,8 +335,19 @@ class BaseDeployer(ABC):
 
         fraisier_exe = self._get_fraisier_executable()
 
-        # Run scaffold install with full path to fraisier
-        result = self.runner.run([fraisier_exe, "scaffold-install", "--yes"])
+        if config_path:
+            config_path = Path(config_path)
+            project_dir = config_path.parent
+            cmd = (
+                f"cd {project_dir} && "
+                f"{fraisier_exe} -c {config_path} scaffold-install --yes"
+            )
+            result = self.runner.run(["sh", "-c", cmd])
+        else:
+            logger.warning(
+                "No config_path provided to _install_scaffold(); CWD may be wrong"
+            )
+            result = self.runner.run([fraisier_exe, "scaffold-install", "--yes"])
 
         if result.returncode != 0:
             raise DeploymentError(f"Failed to install scaffold files: {result.stdout}")
@@ -373,7 +389,7 @@ class BaseDeployer(ABC):
 
                 # Regenerate and install scaffold from restored config
                 self._regenerate_scaffold(config_path=config_path)
-                self._install_scaffold()
+                self._install_scaffold(config_path=config_path)
 
                 logger.info("✓ Configuration rolled back")
                 return True

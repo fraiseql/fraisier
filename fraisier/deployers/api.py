@@ -160,7 +160,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     "fraises.yaml changed — regenerating nginx and scaffold config"
                 )
                 self._regenerate_scaffold(config_path=opt_config)
-                self._install_scaffold()
+                self._install_scaffold(config_path=opt_config)
                 # Persist hash so next deployment does not redundantly regenerate
                 from fraisier.config_watcher import ConfigWatcher
 

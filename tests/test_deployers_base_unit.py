@@ -6,6 +6,17 @@ import pytest
 
 from fraisier.deployers.api import APIDeployer
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_deployer_with_runner(runner=None):
+    deployer = APIDeployer({})
+    if runner is not None:
+        deployer.runner = runner
+    return deployer
+
 
 class TestDetectConfigChanges:
     def test_no_config_path_returns_false(self):
@@ -86,3 +97,36 @@ class TestSyncFraisesYaml:
         deployer._sync_fraises_yaml(source_path=source, dest_path=dest)
         calls = mock_runner.run.call_args_list
         assert calls[0][0][0] == ["mkdir", "-p", str(tmp_path / "subdir")]
+
+
+class TestInstallScaffold:
+    """_install_scaffold() must pass cwd and -c config_path to the runner."""
+
+    def test_install_scaffold_uses_cwd_and_config(self, tmp_path):
+        """With config_path, command must include cd <dir> and -c <path>."""
+        config_path = tmp_path / "fraises.yaml"
+        config_path.touch()
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer = _make_deployer_with_runner(mock_runner)
+        deployer._install_scaffold(config_path=config_path)
+
+        mock_runner.run.assert_called_once()
+        cmd = mock_runner.run.call_args[0][0]
+        assert f"cd {tmp_path}" in cmd[-1]
+        assert f"-c {config_path}" in cmd[-1]
+
+    def test_install_scaffold_no_config_falls_back(self):
+        """Without config_path, original simple command is used."""
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer = _make_deployer_with_runner(mock_runner)
+        deployer._install_scaffold(config_path=None)
+
+        mock_runner.run.assert_called_once()
+        cmd = mock_runner.run.call_args[0][0]
+        assert "scaffold-install" in " ".join(cmd)
+        assert "cd " not in " ".join(cmd)
