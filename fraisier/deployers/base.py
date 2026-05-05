@@ -360,8 +360,13 @@ class BaseDeployer(ABC):
                 stdout=response.get("stdout", ""),
                 stderr=response.get("stderr", ""),
             )
-        except (FileNotFoundError, ConnectionRefusedError, OSError,
-                json.JSONDecodeError, UnicodeDecodeError):
+        except (
+            FileNotFoundError,
+            ConnectionRefusedError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ):
             return None
 
     def _install_scaffold(self, config_path: Path | None = None) -> None:

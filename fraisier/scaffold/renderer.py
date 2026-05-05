@@ -766,9 +766,7 @@ class ScaffoldRenderer:
                 )
             finally:
                 del self.context["scaffold_install_script"]
-            self._render_template(
-                "core/scaffold-install-helper.socket.j2", socket_out
-            )
+            self._render_template("core/scaffold-install-helper.socket.j2", socket_out)
 
         return [service_out, socket_out]
 

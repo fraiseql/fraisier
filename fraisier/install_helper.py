@@ -169,9 +169,7 @@ def main() -> None:
     server_sock = socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
     server_sock.setblocking(True)
 
-    logger.info(
-        "fraisier-install-helper ready, allowed command: %s", allowed_command
-    )
+    logger.info("fraisier-install-helper ready, allowed command: %s", allowed_command)
 
     try:
         while True:

@@ -174,9 +174,7 @@ def main() -> None:
     )
 
     if len(sys.argv) < 2:
-        logger.error(
-            "Usage: fraisier-scaffold-install-helper <path-to-install.sh>"
-        )
+        logger.error("Usage: fraisier-scaffold-install-helper <path-to-install.sh>")
         sys.exit(1)
 
     allowed_script = sys.argv[1]

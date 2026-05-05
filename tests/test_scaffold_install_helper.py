@@ -276,7 +276,9 @@ fraises:
 
         output_dir = renderer.output_dir
         service_file = (
-            output_dir / "systemd" / "fraisier-myproject-scaffold-install-helper.service"
+            output_dir
+            / "systemd"
+            / "fraisier-myproject-scaffold-install-helper.service"
         )
         assert service_file.exists(), f"Expected {service_file} to exist"
         content = service_file.read_text()
@@ -381,7 +383,9 @@ class TestInstallScaffoldSocketClient:
         ):
             deployer._install_scaffold(config_path=config_path)
 
-        assert not mock_runner.run.called, "subprocess should not be called when socket succeeds"
+        assert not mock_runner.run.called, (
+            "subprocess should not be called when socket succeeds"
+        )
 
     def test_falls_back_to_subprocess_when_no_socket(self, tmp_path):
         """When no socket exists, falls back to subprocess."""

@@ -749,9 +749,7 @@ class TestAPIDeployer:
         # Verify save_hash was called
         mock_watcher.save_hash.assert_called_once()
 
-    def test_sync_config_saves_hash_even_if_install_fails(
-        self, tmp_path, monkeypatch
-    ):
+    def test_sync_config_saves_hash_even_if_install_fails(self, tmp_path, monkeypatch):
         """_sync_config_if_needed saves hash after regenerate, even if install fails.
 
         The hash records "what config produced the scaffold output directory",
