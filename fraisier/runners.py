@@ -7,6 +7,7 @@ is provided, ``SSHRunner`` routes commands through SSH to a remote host.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shlex
 import subprocess
@@ -168,10 +169,8 @@ class SSHRunner:
             self._tar_pipe_to_remote(local_dir, remote_cmd)
         except Exception:
             # Best-effort remote cleanup; ignore secondary errors.
-            try:
+            with contextlib.suppress(Exception):
                 self.run(["rm", "-rf", tmp_dir], check=False)
-            except Exception:
-                pass
             raise
         # Step 2: sudo -S mv into place via the regular run() path.
         move_cmd = (

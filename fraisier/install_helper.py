@@ -153,7 +153,7 @@ def main() -> None:
         logger.error(
             "Usage: fraisier-install-helper <command> [args...]\n"
             "  Example: fraisier-install-helper uv sync --frozen\n"
-            "The allowed command is baked into the service unit at scaffold render time."
+            "The allowed command is baked into the unit at scaffold render time."
         )
         sys.exit(1)
 
