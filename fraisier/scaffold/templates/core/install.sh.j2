@@ -306,6 +306,19 @@ if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
     _run sudo systemctl restart fraisier-{{ project_name }}-systemctl-helper.socket || true
 fi
 
+# Install scaffold-install-helper service and socket (runs as root, no sudo needed)
+SCAFFOLD_INSTALL_HELPER_SVC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-scaffold-install-helper.service"
+SCAFFOLD_INSTALL_HELPER_SOCK="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-scaffold-install-helper.socket"
+if [ -f "${SCAFFOLD_INSTALL_HELPER_SVC}" ] && [ -f "${SCAFFOLD_INSTALL_HELPER_SOCK}" ]; then
+    echo "  Installing scaffold-install helper"
+    _run sudo cp "${SCAFFOLD_INSTALL_HELPER_SVC}" \
+       /etc/systemd/system/fraisier-{{ project_name }}-scaffold-install-helper.service
+    _run sudo cp "${SCAFFOLD_INSTALL_HELPER_SOCK}" \
+       /etc/systemd/system/fraisier-{{ project_name }}-scaffold-install-helper.socket
+    _run sudo systemctl daemon-reload
+    _run sudo systemctl enable --now fraisier-{{ project_name }}-scaffold-install-helper.socket
+fi
+
 # Install sudoers fragment
 SUDOERS_SRC="${SCAFFOLD_DIR}/sudoers"
 SUDOERS_DST="/etc/sudoers.d/{{ project_name }}"

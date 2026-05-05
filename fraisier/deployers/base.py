@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
+import socket as _socket_mod
+import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -15,6 +18,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from fraisier.runners import CommandRunner
 
 logger = logging.getLogger("fraisier")
+
+
+def _get_scaffold_socket_path(project_name: str) -> str:
+    """Return the Unix socket path for the scaffold-install-helper of *project_name*."""
+    return f"/run/fraisier/scaffold-install-{project_name}.sock"
 
 
 class DeploymentStatus(Enum):
@@ -315,11 +323,46 @@ class BaseDeployer(ABC):
 
         logger.info("✓ Scaffold files regenerated")
 
+    def _try_scaffold_install_via_socket(
+        self, config_path: Path
+    ) -> types.SimpleNamespace | None:
+        """Attempt scaffold installation via the helper socket.
+
+        Returns a result namespace if the socket was reachable (success or failure),
+        or None if the socket is not available (caller should fall back to subprocess).
+        """
+        from fraisier.config import get_config
+
+        try:
+            project_name = get_config(config_path).project_name
+        except Exception:
+            return None
+
+        socket_path = _get_scaffold_socket_path(project_name)
+
+        try:
+            with _socket_mod.socket(
+                _socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM
+            ) as sock:
+                sock.connect(socket_path)
+                sock.sendall(b'{"action": "install"}\n')
+                with sock.makefile("rb") as f:
+                    raw = f.readline()
+            response = json.loads(raw.decode())
+            return types.SimpleNamespace(
+                returncode=0 if response.get("ok") else 1,
+                stdout=response.get("stdout", ""),
+                stderr=response.get("stderr", ""),
+            )
+        except (FileNotFoundError, ConnectionRefusedError, OSError):
+            return None
+
     def _install_scaffold(self, config_path: Path | None = None) -> None:
         """Install updated scaffold files to system locations.
 
-        Runs 'fraisier scaffold-install' on the server to install
-        sudoers, systemd units, nginx configs, wrappers, etc.
+        Tries the scaffold-install-helper Unix socket first (compatible with
+        ``NoNewPrivileges=true``), then falls back to a subprocess call for
+        deployments that have not yet reinstalled the scaffold.
 
         Args:
             config_path: Path to fraises.yaml; when provided, the subprocess
@@ -333,11 +376,27 @@ class BaseDeployer(ABC):
 
         logger.info("Installing updated scaffold files")
 
-        fraisier_exe = self._get_fraisier_executable()
-
         if config_path:
             config_path = Path(config_path)
             project_dir = config_path.parent
+
+            # Try socket helper first (compatible with NoNewPrivileges=true)
+            socket_result = self._try_scaffold_install_via_socket(config_path)
+            if socket_result is not None:
+                if socket_result.returncode != 0:
+                    raise DeploymentError(
+                        f"Failed to install scaffold files via socket helper: "
+                        f"{socket_result.stdout}"
+                    )
+                logger.info("✓ Scaffold files installed via helper socket")
+                return
+
+            # Fall back to subprocess (pre-helper deployments)
+            logger.debug(
+                "Scaffold-install-helper socket not available;"
+                " falling back to subprocess"
+            )
+            fraisier_exe = self._get_fraisier_executable()
             cmd = (
                 f"cd {project_dir} && "
                 f"{fraisier_exe} -c {config_path} scaffold-install --yes"
@@ -347,6 +406,7 @@ class BaseDeployer(ABC):
             logger.warning(
                 "No config_path provided to _install_scaffold(); CWD may be wrong"
             )
+            fraisier_exe = self._get_fraisier_executable()
             result = self.runner.run([fraisier_exe, "scaffold-install", "--yes"])
 
         if result.returncode != 0:

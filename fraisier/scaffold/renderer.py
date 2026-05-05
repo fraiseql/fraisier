@@ -611,6 +611,9 @@ class ScaffoldRenderer:
         if self.context["allowed_services"]:
             rendered_files.extend(self._render_systemctl_helper(dry_run))
 
+        # Scaffold-install-helper: root-privileged socket service (always generated)
+        rendered_files.extend(self._render_scaffold_install_helper(dry_run))
+
         # Install helper units: socket+service per fraise+env with separate install user
         rendered_files.extend(self._render_install_helper_units(dry_run))
 
@@ -740,6 +743,28 @@ class ScaffoldRenderer:
         if not dry_run:
             self._render_template("core/systemctl-helper.service.j2", service_out)
             self._render_template("core/systemctl-helper.socket.j2", socket_out)
+
+        return [service_out, socket_out]
+
+    def _render_scaffold_install_helper(self, dry_run: bool) -> list[str]:
+        """Render the scaffold-install-helper .service and .socket units."""
+        project = self.context["project_name"]
+        service_out = f"systemd/fraisier-{project}-scaffold-install-helper.service"
+        socket_out = f"systemd/fraisier-{project}-scaffold-install-helper.socket"
+
+        if not dry_run:
+            # _render_template() does template.render(**self.context) with no
+            # extra_context support.  Inject scaffold_install_script temporarily.
+            self.context["scaffold_install_script"] = (
+                f"/opt/{project}/{self.config.scaffold.output_dir}/install.sh"
+            )
+            self._render_template(
+                "core/scaffold-install-helper.service.j2", service_out
+            )
+            del self.context["scaffold_install_script"]
+            self._render_template(
+                "core/scaffold-install-helper.socket.j2", socket_out
+            )
 
         return [service_out, socket_out]
 
