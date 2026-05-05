@@ -2,11 +2,78 @@
 
 from __future__ import annotations
 
+import json
+import shlex
+import subprocess
+
 import click
 from rich.table import Table
 
+from fraisier import ssh
+
 from ._helpers import console, require_config
 from .main import main
+
+
+class RemoteHistoryError(Exception):
+    """Raised when the remote history fetch via SSH fails."""
+
+
+def _remote_history_fetch(
+    target: ssh.SshTarget,
+    fraise: str,
+    environment: str,
+    limit: int,
+    since: str | None,
+) -> list[dict]:
+    """Fetch deployment history from a remote server via SSH."""
+    remote_argv = _build_remote_history_argv(
+        fraise=fraise,
+        environment=environment,
+        limit=limit,
+        since=since,
+        fraisier_bin=target.fraisier_bin,
+        db_path=target.db_path,
+    )
+    try:
+        proc = ssh.short_cmd(target, remote_argv, timeout=30)
+    except subprocess.CalledProcessError as exc:
+        raise RemoteHistoryError(exc.stderr or str(exc)) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RemoteHistoryError("timed out waiting for remote history") from exc
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RemoteHistoryError(
+            f"malformed JSON from remote: {proc.stdout[:200]}"
+        ) from exc
+
+
+def _build_remote_history_argv(
+    *,
+    fraise: str,
+    environment: str,
+    limit: int,
+    since: str | None,
+    fraisier_bin: str,
+    db_path: str | None,
+) -> list[str]:
+    """Build the remote argv for an SSH-dispatched history fetch."""
+    parts: list[str] = []
+    if db_path:
+        parts.append(f"FRAISIER_DB_PATH={shlex.quote(db_path)}")
+    parts.append(shlex.quote(fraisier_bin))
+    parts += [
+        "history",
+        shlex.quote(fraise),
+        shlex.quote(environment),
+        "--json",
+        "--limit",
+        str(limit),
+    ]
+    if since:
+        parts += ["--since", shlex.quote(since)]
+    return ["sh", "-c", " ".join(parts)]
 
 
 @main.command(name="status-all")
@@ -83,6 +150,72 @@ def status_all(
     console.print(table)
 
 
+def _render_history_table(deployments: list[dict]) -> None:
+    """Render deployment history as a Rich table."""
+    table = Table(title="Deployment History")
+    table.add_column("ID", style="dim")
+    table.add_column("Fraise", style="cyan")
+    table.add_column("Env", style="magenta")
+    table.add_column("SHA", style="dim")
+    table.add_column("Triggered By", style="magenta")
+    table.add_column("Version", style="green")
+    table.add_column("Status")
+    table.add_column("Duration", style="yellow")
+    table.add_column("Started", style="dim")
+
+    for d in deployments:
+        status = d["status"]
+        if status == "success":
+            status_str = "[green]success[/green]"
+        elif status == "failed":
+            status_str = "[red]failed[/red]"
+        elif status == "rolled_back":
+            status_str = "[yellow]rolled back[/yellow]"
+        elif status == "in_progress":
+            status_str = "[blue]in progress[/blue]"
+        else:
+            status_str = status
+
+        duration = d.get("duration_seconds")
+        if duration:
+            if duration < 60:
+                duration_str = f"{duration:.1f}s"
+            elif duration < 3600:
+                minutes = int(duration // 60)
+                seconds = duration % 60
+                duration_str = f"{minutes}m {seconds:.1f}s"
+            else:
+                hours = int(duration // 3600)
+                minutes = int((duration % 3600) // 60)
+                duration_str = f"{hours}h {minutes}m"
+        else:
+            duration_str = "-"
+
+        old_v = d.get("old_version") or "?"
+        new_v = d.get("new_version") or "?"
+        version_str = f"{old_v} -> {new_v}"
+
+        git_commit = d.get("git_commit", "")
+        sha_str = git_commit[:8] if git_commit else "-"
+
+        triggered_by = d.get("triggered_by", "-")
+        started = d.get("started_at", "")[:16].replace("T", " ")
+
+        table.add_row(
+            str(d["id"]),
+            d["fraise"],
+            d["environment"],
+            sha_str,
+            triggered_by,
+            version_str,
+            status_str,
+            duration_str,
+            started,
+        )
+
+    console.print(table)
+
+
 @main.command()
 @click.argument("fraise", required=False, default=None)
 @click.argument("environment", required=False, default=None)
@@ -93,7 +226,7 @@ def status_all(
 @click.option("--since", default=None, help="Filter: '7d', '24h', '2026-04-01'")
 @click.pass_context
 def history(
-    _ctx: click.Context,
+    ctx: click.Context,
     fraise: str | None,
     environment: str | None,
     fraise_option: str | None,
@@ -109,6 +242,46 @@ def history(
     # Merge positional args with options for backward compatibility
     final_fraise = fraise or fraise_option
     final_environment = environment or environment_option
+
+    # --- SSH dispatch ---
+    if final_fraise and final_environment:
+        config = require_config(ctx)
+        fraise_cfg = config.get_fraise_environment(final_fraise, final_environment)
+        if fraise_cfg and fraise_cfg.get("ssh"):
+            ssh_config = fraise_cfg["ssh"]
+            target = ssh.SshTarget.from_config(ssh_config)
+            if not as_json:
+                console.print(
+                    f"[cyan]Fetching history[/cyan] for"
+                    f" [bold]{final_fraise}[/bold] / [bold]{final_environment}[/bold]"
+                    f" on [cyan]{target.host}[/cyan]..."
+                )
+            try:
+                with console.status("Fetching remote deployment history..."):
+                    deployments = _remote_history_fetch(
+                        target, final_fraise, final_environment, limit, since
+                    )
+            except RemoteHistoryError as exc:
+                console.print(f"[red]Error:[/red] {exc}")
+                host = ssh_config.get("host", "<host>")
+                console.print(
+                    f"[yellow]Hint:[/yellow] Check SSH connectivity: ssh {host} echo ok"
+                )
+                raise SystemExit(1) from exc
+
+            if not deployments:
+                if as_json:
+                    click.echo("[]")
+                else:
+                    console.print("[yellow]No deployments found[/yellow]")
+                return
+
+            if as_json:
+                click.echo(json.dumps(deployments, indent=2, default=str))
+                return
+            _render_history_table(deployments)
+            return
+    # --- fall through: local DB ---
 
     # Parse since parameter
     since_iso = parse_since(since) if since else None
@@ -129,93 +302,40 @@ def history(
         return
 
     if as_json:
-        import json
-
         click.echo(json.dumps(deployments, indent=2, default=str))
         return
 
-    table = Table(title="Deployment History")
-    table.add_column("ID", style="dim")
-    table.add_column("Fraise", style="cyan")
-    table.add_column("Env", style="magenta")
-    table.add_column("SHA", style="dim")
-    table.add_column("Triggered By", style="magenta")
-    table.add_column("Version", style="green")
-    table.add_column("Status")
-    table.add_column("Duration", style="yellow")
-    table.add_column("Started", style="dim")
-
-    for d in deployments:
-        # Format status with color
-        status = d["status"]
-        if status == "success":
-            status_str = "[green]success[/green]"
-        elif status == "failed":
-            status_str = "[red]failed[/red]"
-        elif status == "rolled_back":
-            status_str = "[yellow]rolled back[/yellow]"
-        elif status == "in_progress":
-            status_str = "[blue]in progress[/blue]"
-        else:
-            status_str = status
-
-        # Format duration with better units
-        duration = d.get("duration_seconds")
-        if duration:
-            if duration < 60:
-                duration_str = f"{duration:.1f}s"
-            elif duration < 3600:
-                minutes = int(duration // 60)
-                seconds = duration % 60
-                duration_str = f"{minutes}m {seconds:.1f}s"
-            else:
-                hours = int(duration // 3600)
-                minutes = int((duration % 3600) // 60)
-                duration_str = f"{hours}h {minutes}m"
-        else:
-            duration_str = "-"
-
-        # Format version change
-        old_v = d.get("old_version") or "?"
-        new_v = d.get("new_version") or "?"
-        version_str = f"{old_v} -> {new_v}"
-
-        # Format SHA (truncated)
-        git_commit = d.get("git_commit", "")
-        sha_str = git_commit[:8] if git_commit else "-"
-
-        # Triggered by
-        triggered_by = d.get("triggered_by", "-")
-
-        # Format timestamp (just time if today)
-        started = d.get("started_at", "")[:16].replace("T", " ")
-
-        table.add_row(
-            str(d["id"]),
-            d["fraise"],
-            d["environment"],
-            sha_str,
-            triggered_by,
-            version_str,
-            status_str,
-            duration_str,
-            started,
-        )
-
-    console.print(table)
+    _render_history_table(deployments)
 
 
-@main.command()
-@click.option("--fraise", "-f", help="Filter by fraise")
-@click.option("--days", "-d", default=30, help="Number of days to analyze")
-@click.pass_context
-def stats(_ctx: click.Context, fraise: str | None, days: int) -> None:
-    """Show deployment statistics."""
-    from fraisier.database import get_db
+def _build_remote_stats_argv(
+    *,
+    fraise: str,
+    environment: str,
+    days: int,
+    fraisier_bin: str,
+    db_path: str | None,
+) -> list[str]:
+    """Build the remote argv for an SSH-dispatched stats fetch."""
+    parts: list[str] = []
+    if db_path:
+        parts.append(f"FRAISIER_DB_PATH={shlex.quote(db_path)}")
+    parts.append(shlex.quote(fraisier_bin))
+    parts += [
+        "stats",
+        "--fraise",
+        shlex.quote(fraise),
+        "--env",
+        shlex.quote(environment),
+        "--days",
+        str(days),
+        "--json",
+    ]
+    return ["sh", "-c", " ".join(parts)]
 
-    db = get_db()
-    s = db.get_deployment_stats(fraise=fraise, days=days)
 
+def _render_stats(s: dict, fraise: str | None, days: int) -> None:
+    """Render deployment statistics."""
     if not s.get("total"):
         console.print(f"[yellow]No deployments in the last {days} days[/yellow]")
         return
@@ -248,10 +368,91 @@ def stats(_ctx: click.Context, fraise: str | None, days: int) -> None:
 
 
 @main.command()
+@click.option("--fraise", "-f", help="Filter by fraise")
+@click.option("--env", "-e", "environment", default=None, help="Filter by environment")
+@click.option("--days", "-d", default=30, help="Number of days to analyze")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def stats(
+    ctx: click.Context,
+    fraise: str | None,
+    environment: str | None,
+    days: int,
+    as_json: bool,
+) -> None:
+    """Show deployment statistics."""
+    # --- SSH dispatch ---
+    if fraise and environment:
+        config = require_config(ctx)
+        fraise_cfg = config.get_fraise_environment(fraise, environment)
+        if fraise_cfg and fraise_cfg.get("ssh"):
+            ssh_config = fraise_cfg["ssh"]
+            target = ssh.SshTarget.from_config(ssh_config)
+            if not as_json:
+                console.print(
+                    f"[cyan]Fetching stats[/cyan] for"
+                    f" [bold]{fraise}[/bold] / [bold]{environment}[/bold]"
+                    f" on [cyan]{target.host}[/cyan]..."
+                )
+            remote_argv = _build_remote_stats_argv(
+                fraise=fraise,
+                environment=environment,
+                days=days,
+                fraisier_bin=target.fraisier_bin,
+                db_path=target.db_path,
+            )
+            try:
+                with console.status("Fetching remote deployment stats..."):
+                    proc = ssh.short_cmd(target, remote_argv, timeout=30)
+            except subprocess.CalledProcessError as exc:
+                console.print(f"[red]Error:[/red] {exc.stderr or exc}")
+                host = ssh_config.get("host", "<host>")
+                console.print(
+                    f"[yellow]Hint:[/yellow] Check SSH connectivity: ssh {host} echo ok"
+                )
+                raise SystemExit(1) from exc
+            except subprocess.TimeoutExpired as exc:
+                console.print("[red]Error:[/red] Timed out fetching remote stats.")
+                host = ssh_config.get("host", "<host>")
+                console.print(
+                    f"[yellow]Hint:[/yellow] Check SSH connectivity: ssh {host} echo ok"
+                )
+                raise SystemExit(1) from exc
+            try:
+                s = json.loads(proc.stdout)
+            except json.JSONDecodeError as exc:
+                console.print(
+                    f"[red]Error:[/red] Malformed response from remote:"
+                    f" {proc.stdout[:200]}"
+                )
+                raise SystemExit(1) from exc
+
+            if as_json:
+                click.echo(json.dumps(s, indent=2, default=str))
+                return
+            _render_stats(s, fraise, days)
+            return
+    # --- fall through: local DB ---
+
+    from fraisier.database import get_db
+
+    db = get_db()
+    s = db.get_deployment_stats(fraise=fraise, days=days)
+
+    if as_json:
+        click.echo(json.dumps(s, indent=2, default=str))
+        return
+
+    _render_stats(s, fraise, days)
+
+
+@main.command()
 @click.option("--limit", "-n", default=10, help="Number of events to show")
 def webhooks(limit: int) -> None:
     """Show recent webhook events."""
     from fraisier.database import get_db
+
+    console.print("[yellow]Note:[/yellow] Showing local webhook events only.")
 
     db = get_db()
     events = db.get_recent_webhooks(limit=limit)

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-05-05
+
+### Added
+
+- **SSH dispatch for `history`, `rollback`, and `stats`** ([#194](https://github.com/fraiseql/fraisier/issues/194)). When an environment is SSH-configured, these commands now fetch data from the remote server's database instead of reading the local (nearly empty) database. The remote invocation is controlled by two new optional SSH config fields: `ssh.db_path` (sets `FRAISIER_DB_PATH` on the remote) and `ssh.fraisier_bin` (path to the remote executable, default `"fraisier"`).
+- `stats` command gains `--env/-e` flag to filter by environment and `--json` flag for structured output.
+- `webhooks` command prints a `Note: Showing local webhook events only.` notice to set expectations when SSH-configured environments exist.
+
 ## [0.14.3] - 2026-05-05
 
 ### Security

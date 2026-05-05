@@ -74,6 +74,8 @@ class SshTarget:
     strict_host_key: bool = True
     connect_timeout: int = 30
     address_family: str | None = None
+    db_path: str | None = None
+    fraisier_bin: str = "fraisier"
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> SshTarget:
@@ -94,6 +96,8 @@ class SshTarget:
             strict_host_key=cfg.get("strict_host_key", True),
             connect_timeout=cfg.get("connect_timeout", 30),
             address_family=cfg.get("address_family"),
+            db_path=cfg.get("db_path"),
+            fraisier_bin=cfg.get("fraisier_bin", "fraisier"),
         )
 
     def _options(self) -> list[str]:

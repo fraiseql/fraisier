@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import click
 
+from fraisier import ssh
+
 from ._helpers import _get_deployer, console
 from .main import main
+from .ops import RemoteHistoryError, _remote_history_fetch
 
 
 @main.command()
@@ -53,18 +56,41 @@ def rollback(
 
     target = to_version
     current = deployer.get_current_version()
+    target_deployment = None
+    history: list[dict] = []
 
     if not target:
-        from fraisier.database import get_db
+        ssh_config = fraise_config.get("ssh")
+        if ssh_config:
+            ssh_target = ssh.SshTarget.from_config(ssh_config)
+            console.print(
+                f"[cyan]Fetching history[/cyan] for"
+                f" [bold]{fraise}[/bold] / [bold]{environment}[/bold]"
+                f" on [cyan]{ssh_target.host}[/cyan]..."
+            )
+            try:
+                with console.status("Fetching remote deployment history..."):
+                    history = _remote_history_fetch(
+                        ssh_target, fraise, environment, limit=20, since=None
+                    )
+            except RemoteHistoryError as exc:
+                console.print(f"[red]Error:[/red] {exc}")
+                host = ssh_config.get("host", "<host>")
+                console.print(
+                    f"[yellow]Hint:[/yellow] Check SSH connectivity: ssh {host} echo ok"
+                )
+                raise SystemExit(1) from exc
+        else:
+            from fraisier.database import get_db
 
-        db = get_db()
-        history = db.get_recent_deployments(
-            limit=20, fraise=fraise, environment=environment
-        )
+            db = get_db()
+            history = db.get_recent_deployments(
+                limit=20, fraise=fraise, environment=environment
+            )
+
         successful = [d for d in history if d["status"] == "success"]
 
         # Find the most recent successful deployment that is not the current version
-        target_deployment = None
         for deployment in successful:
             if deployment.get("new_version") != current:
                 target = deployment.get("new_version")
