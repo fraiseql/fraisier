@@ -145,7 +145,7 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
         " others cause a hard failure unless --prefer-source is used"
     )
     console.print(
-        f'    git commit -m "Pre-merge {tgt} into sync branch'
+        f'    git commit --no-edit --no-verify -m "Pre-merge {tgt} into sync branch'
         ' (auto-resolved fraisier files)"'
     )
     console.print(f"    git push origin {sync_branch}")
@@ -344,6 +344,7 @@ def sync_cmd(
                     "git",
                     "commit",
                     "--no-edit",
+                    "--no-verify",
                     "-m",
                     f"Pre-merge {tgt} into sync branch (auto-resolved fraisier files)",
                 ]
@@ -357,6 +358,7 @@ def sync_cmd(
                         "git",
                         "commit",
                         "--no-edit",
+                        "--no-verify",
                         "-m",
                         f"Pre-merge {tgt} into sync branch",
                     ]

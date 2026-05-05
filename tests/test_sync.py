@@ -440,6 +440,16 @@ class TestSyncHappyPath:
         commit_calls = [c for c in commands if "commit" in c]
         assert commit_calls == []
 
+    def test_pre_merge_commit_uses_no_verify_clean_merge(self, tmp_path):
+        """Pre-merge commit on clean merge path must include --no-verify."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = self._side_effects()
+            CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        commit_calls = [c[0][0] for c in m.call_args_list if "commit" in c[0][0]]
+        assert commit_calls, "expected at least one commit call"
+        assert all("--no-verify" in call for call in commit_calls)
+
 
 # ---------------------------------------------------------------------------
 # CLI: conflict resolution
@@ -480,6 +490,35 @@ class TestSyncConflicts:
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
         assert result.exit_code == 0
         assert self.PR_URL in result.output
+
+    def test_pre_merge_commit_uses_no_verify_conflict_path(self, tmp_path):
+        """Pre-merge commit on conflict-resolution path must include --no-verify."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="main\n"),
+                _mk(),
+                _mk(stdout=self.SHA + "\n"),
+                _mk(stdout=self.MERGE_BASE + "\n"),
+                _mk(returncode=0, stdout='{"version": "1.1.0"}'),
+                _mk(returncode=0, stdout='{"version": "1.0.0"}'),
+                _mk(),  # git checkout -b
+                _mk(returncode=1),  # git merge (conflict)
+                _mk(stdout="version.json\n"),  # diff --filter=U (first)
+                _mk(returncode=0),  # cat-file origin/dev:version.json (exists)
+                _mk(),  # checkout origin/dev -- version.json
+                _mk(),  # git add version.json
+                _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _mk(),  # git commit
+                _mk(),  # git push
+                _mk(stdout=self.PR_URL + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
+            ]
+            CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        commit_calls = [c[0][0] for c in m.call_args_list if "commit" in c[0][0]]
+        assert commit_calls, "expected at least one commit call"
+        assert all("--no-verify" in call for call in commit_calls)
 
     def test_source_deletion_auto_resolved(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] - 2026-05-05
+
+### Fixed
+
+- **`fraisier sync` aborts when pre-commit hooks modify auto-resolved files** ([#192](https://github.com/fraiseql/fraisier/issues/192)). The two internal bookkeeping commits made during a sync operation (`Pre-merge <tgt> into sync branch`) were invoked without `--no-verify`, so hooks such as `end-of-file-fixer` or `trailing-whitespace` could modify a resolved file and exit with code 1, causing fraisier to abort and clean up the branch. Fixed by adding `--no-verify` to both commit calls — these commits are fraisier internals, not user code, and must never trigger user-configured hooks.
+
 ## [0.14.1] - 2026-05-04
 
 ### Fixed
