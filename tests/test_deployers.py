@@ -1498,3 +1498,114 @@ class TestExecuteWithLifecycle:
         assert "kaboom" in result.error_message
         ws.assert_any_call("deploying")
         ws.assert_any_call("failed", error_message="kaboom")
+
+
+class TestSyncConfigHashPersistence:
+    """save_hash() must be called after _regenerate_scaffold(), even when
+    _install_scaffold() subsequently raises.  Without this, every deploy
+    re-enters the regenerate+install loop indefinitely.
+    """
+
+    def _make_deployer(self, app_path):
+        config = {
+            "app_path": str(app_path),
+            "systemd_service": "api.service",
+        }
+        return APIDeployer(config)
+
+    def test_save_hash_persisted_even_when_install_fails(self, tmp_path):
+        """save_hash() must be called even if _install_scaffold() raises."""
+        from types import SimpleNamespace
+
+        app_path = tmp_path / "app"
+        app_path.mkdir()
+        config_path = tmp_path / "fraises.yaml"
+        config_path.write_text("project_name: test\n")
+
+        saved = []
+
+        def fake_save_hash():
+            saved.append(True)
+
+        def fake_regenerate(*, config_path):
+            pass  # succeeds
+
+        def fake_install(*, config_path=None):
+            raise DeploymentError("sudo blocked")
+
+        deployer = self._make_deployer(app_path)
+        with (
+            patch.object(deployer, "_regenerate_scaffold", side_effect=fake_regenerate),
+            patch.object(deployer, "_install_scaffold", side_effect=fake_install),
+            patch(
+                "fraisier.config_watcher.ConfigWatcher",
+                return_value=SimpleNamespace(
+                    save_hash=fake_save_hash,
+                    has_changed=lambda: True,
+                ),
+            ),
+            patch.object(deployer, "_detect_config_changes", return_value=True),
+            patch.object(deployer, "_sync_fraises_yaml"),
+        ):
+            # app_config must appear to exist so the branch is entered
+            (app_path / "fraises.yaml").write_text("project_name: test\n")
+            with pytest.raises(DeploymentError):
+                deployer._sync_config_if_needed()
+
+        assert saved, "save_hash() was not called despite successful regeneration"
+
+    def test_second_deploy_skips_scaffold_when_hash_saved_after_failed_install(
+        self, tmp_path
+    ):
+        """After a failed install that saved the hash, next deploy skips regen."""
+        from types import SimpleNamespace
+
+        app_path = tmp_path / "app"
+        app_path.mkdir()
+        (app_path / "fraises.yaml").write_text("project_name: test\n")
+
+        regenerate_calls = []
+        install_calls = []
+
+        deployer = self._make_deployer(app_path)
+
+        # Simulate: detect_config_changes returns False on second call (hash saved)
+        detect_side_effects = [True, False]
+
+        with (
+            patch.object(
+                deployer,
+                "_detect_config_changes",
+                side_effect=detect_side_effects,
+            ),
+            patch.object(deployer, "_sync_fraises_yaml"),
+            patch.object(
+                deployer,
+                "_regenerate_scaffold",
+                side_effect=lambda *, config_path=None: regenerate_calls.append(True),  # noqa: ARG005
+            ),
+            patch.object(
+                deployer,
+                "_install_scaffold",
+                side_effect=lambda *, config_path=None: install_calls.append(True)  # noqa: ARG005
+                or (_ for _ in ()).throw(DeploymentError("blocked")),
+            ),
+            patch(
+                "fraisier.config_watcher.ConfigWatcher",
+                return_value=SimpleNamespace(
+                    save_hash=lambda: None,
+                    has_changed=lambda: True,
+                ),
+            ),
+        ):
+            # First deploy: regenerate+install, install fails, hash saved
+            with pytest.raises(DeploymentError):
+                deployer._sync_config_if_needed()
+
+            assert len(regenerate_calls) == 1, "should regenerate on first deploy"
+
+            # Second deploy: hash already saved → detect returns False → no regen
+            deployer._sync_config_if_needed()
+
+        assert len(regenerate_calls) == 1, "should NOT regenerate on unchanged config"
+        assert len(install_calls) == 1, "should NOT install on unchanged config"

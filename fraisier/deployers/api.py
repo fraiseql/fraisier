@@ -160,14 +160,14 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     "fraises.yaml changed — regenerating nginx and scaffold config"
                 )
                 self._regenerate_scaffold(config_path=opt_config)
-                self._install_scaffold(config_path=opt_config)
-                # Persist hash so next deployment does not redundantly regenerate
+                # Persist hash now: scaffold files on disk match the new config.
+                # Even if install fails below, we must not loop on regeneration.
                 from fraisier.config_watcher import ConfigWatcher
 
                 ConfigWatcher(opt_config.parent).save_hash()
-                logger.info(
-                    "Scaffold regenerated and nginx reloaded — config hash updated"
-                )
+                logger.info("Scaffold regenerated — config hash updated")
+                self._install_scaffold(config_path=opt_config)
+                logger.info("Scaffold regenerated and installed")
 
     def _generate_version_json(self) -> None:
         """Write version.json to app_path from pyproject.toml + git metadata.
