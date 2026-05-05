@@ -1590,8 +1590,10 @@ class TestSyncConfigHashPersistence:
             patch.object(
                 deployer,
                 "_install_scaffold",
-                side_effect=lambda *, config_path=None: install_calls.append(True)  # noqa: ARG005
-                or (_ for _ in ()).throw(DeploymentError("blocked")),
+                side_effect=lambda *, config_path=None: (  # noqa: ARG005
+                    install_calls.append(True)
+                    or (_ for _ in ()).throw(DeploymentError("blocked"))
+                ),
             ),
             patch(
                 "fraisier.config_watcher.ConfigWatcher",
