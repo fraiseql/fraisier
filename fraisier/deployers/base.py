@@ -312,9 +312,10 @@ class BaseDeployer(ABC):
         project_dir = config_path.parent
         fraisier_exe = self._get_fraisier_executable()
 
-        # Run scaffold regeneration with full path to fraisier
-        cmd = f"cd {project_dir} && {fraisier_exe} -c {config_path} scaffold"
-        result = self.runner.run(["sh", "-c", cmd])
+        result = self.runner.run(
+            [fraisier_exe, "-c", str(config_path), "scaffold"],
+            cwd=str(project_dir),
+        )
 
         if result.returncode != 0:
             raise DeploymentError(
@@ -336,6 +337,11 @@ class BaseDeployer(ABC):
         try:
             project_name = get_config(config_path).project_name
         except Exception:
+            logger.debug(
+                "Could not parse config for socket path resolution, "
+                "falling back to subprocess",
+                exc_info=True,
+            )
             return None
 
         socket_path = _get_scaffold_socket_path(project_name)
@@ -354,7 +360,8 @@ class BaseDeployer(ABC):
                 stdout=response.get("stdout", ""),
                 stderr=response.get("stderr", ""),
             )
-        except (FileNotFoundError, ConnectionRefusedError, OSError):
+        except (FileNotFoundError, ConnectionRefusedError, OSError,
+                json.JSONDecodeError, UnicodeDecodeError):
             return None
 
     def _install_scaffold(self, config_path: Path | None = None) -> None:
@@ -397,11 +404,10 @@ class BaseDeployer(ABC):
                 " falling back to subprocess"
             )
             fraisier_exe = self._get_fraisier_executable()
-            cmd = (
-                f"cd {project_dir} && "
-                f"{fraisier_exe} -c {config_path} scaffold-install --yes"
+            result = self.runner.run(
+                [fraisier_exe, "-c", str(config_path), "scaffold-install", "--yes"],
+                cwd=str(project_dir),
             )
-            result = self.runner.run(["sh", "-c", cmd])
         else:
             logger.warning(
                 "No config_path provided to _install_scaffold(); CWD may be wrong"

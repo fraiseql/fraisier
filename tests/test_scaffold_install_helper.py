@@ -401,3 +401,24 @@ class TestInstallScaffoldSocketClient:
         assert mock_runner.run.called, "subprocess should be called as fallback"
         cmd = mock_runner.run.call_args[0][0]
         assert "scaffold-install" in " ".join(cmd)
+
+    def test_raises_deployment_error_when_socket_returns_failure(self, tmp_path):
+        """Socket helper returning ok=False must raise DeploymentError, not fall back."""
+        import types
+
+        from fraisier.errors import DeploymentError
+
+        deployer, config_path = self._make_deployer(tmp_path)
+
+        failure_result = types.SimpleNamespace(
+            returncode=1, stdout="install.sh failed", stderr=""
+        )
+        with (
+            patch.object(
+                deployer,
+                "_try_scaffold_install_via_socket",
+                return_value=failure_result,
+            ),
+            pytest.raises(DeploymentError),
+        ):
+            deployer._install_scaffold(config_path=config_path)

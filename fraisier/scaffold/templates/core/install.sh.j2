@@ -316,7 +316,8 @@ if [ -f "${SCAFFOLD_INSTALL_HELPER_SVC}" ] && [ -f "${SCAFFOLD_INSTALL_HELPER_SO
     _run sudo cp "${SCAFFOLD_INSTALL_HELPER_SOCK}" \
        /etc/systemd/system/fraisier-{{ project_name }}-scaffold-install-helper.socket
     _run sudo systemctl daemon-reload
-    _run sudo systemctl enable --now fraisier-{{ project_name }}-scaffold-install-helper.socket
+    _run sudo systemctl enable fraisier-{{ project_name }}-scaffold-install-helper.socket
+    _run sudo systemctl restart fraisier-{{ project_name }}-scaffold-install-helper.socket
 fi
 
 # Install sudoers fragment

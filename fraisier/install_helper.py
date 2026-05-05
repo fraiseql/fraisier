@@ -48,8 +48,14 @@ def _send_response(conn: socket.socket, response: dict) -> None:
         logger.warning("Failed to send response: %s", exc)
 
 
-def _handle_connection(conn: socket.socket) -> None:
-    """Read one JSON request from *conn*, execute it, send JSON response."""
+def _handle_connection(conn: socket.socket, allowed_command: list[str]) -> None:
+    """Read one JSON request from *conn*, execute it, send JSON response.
+
+    Args:
+        conn: Connected socket for this request.
+        allowed_command: The exact command list this helper is authorised to run.
+            Baked in at service-unit render time — acts as a security allowlist.
+    """
     with conn:
         raw = b""
         try:
@@ -87,6 +93,11 @@ def _handle_connection(conn: socket.socket) -> None:
             return
         if not isinstance(cwd, str) or not cwd.startswith("/"):
             _send_error(conn, "invalid request: 'cwd' must be an absolute path")
+            return
+
+        if command != allowed_command:
+            logger.warning("Command not allowed: %s", command)
+            _send_error(conn, "command not allowed")
             return
 
         logger.info("Running install command: %s in %s", command, cwd)
@@ -137,6 +148,15 @@ def main() -> None:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
+    allowed_command = sys.argv[1:]
+    if not allowed_command:
+        logger.error(
+            "Usage: fraisier-install-helper <command> [args...]\n"
+            "  Example: fraisier-install-helper uv sync --frozen\n"
+            "The allowed command is baked into the service unit at scaffold render time."
+        )
+        sys.exit(1)
+
     listen_fds = int(os.environ.get("LISTEN_FDS", "0"))
     if listen_fds < 1:
         logger.error(
@@ -149,7 +169,9 @@ def main() -> None:
     server_sock = socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
     server_sock.setblocking(True)
 
-    logger.info("fraisier-install-helper ready")
+    logger.info(
+        "fraisier-install-helper ready, allowed command: %s", allowed_command
+    )
 
     try:
         while True:
@@ -159,7 +181,7 @@ def main() -> None:
                 logger.error("accept() failed: %s", exc)
                 break
             try:
-                _handle_connection(conn)
+                _handle_connection(conn, allowed_command=allowed_command)
             except Exception as exc:
                 # Bare-except is intentional here: any handler crash must
                 # not bring down the systemd-supervised socket server.

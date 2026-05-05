@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import tempfile
 import time
@@ -67,10 +68,13 @@ def write_status(
     status_dir.mkdir(parents=True, exist_ok=True)
     path = status_dir / f"{status.fraise_name}.status.json"
 
-    # Write to temp file in same directory, then atomic rename
+    # Write to temp file in same directory, then atomic rename.
+    # mkstemp() returns an OS fd; close it immediately so write_text() can
+    # open the path independently.  The fd must be closed even on error.
     _fd, tmp_path_str = tempfile.mkstemp(
         dir=status_dir, suffix=".tmp", prefix=f"{status.fraise_name}."
     )
+    os.close(_fd)
     tmp_path = Path(tmp_path_str)
     try:
         tmp_path.write_text(json.dumps(asdict(status), indent=2))

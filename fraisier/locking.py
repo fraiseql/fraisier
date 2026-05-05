@@ -84,10 +84,11 @@ def is_deployment_locked(
     if lock_dir is None:
         lock_dir = DEFAULT_LOCK_DIR
 
+    # Open (or create) the lock file and attempt a non-blocking exclusive
+    # flock.  No exists() pre-check: that would introduce a TOCTOU window
+    # where the file could be created or deleted between the check and the
+    # open, producing a false "not locked" answer.
     lock_path = lock_dir / f"{fraise_name}.lock"
-    if not lock_path.exists():
-        return False
-
     fd = None
     try:
         fd = lock_path.open("w")
@@ -96,6 +97,9 @@ def is_deployment_locked(
         return False
     except BlockingIOError:
         return True
+    except FileNotFoundError:
+        # Lock directory doesn't exist yet — no deployment can be running.
+        return False
     finally:
         if fd is not None:
             fd.close()

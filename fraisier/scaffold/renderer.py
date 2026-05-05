@@ -150,6 +150,7 @@ def _collect_install_helper_sockets(
                     "env_name": env_name,
                     "install_user": install_user,
                     "app_path": str(app_path),
+                    "install_command": install.get("command") or [],
                     "socket_path": (
                         f"/run/fraisier/install-{project_name}-{fraise_name}-{env_name}.sock"
                     ),
@@ -716,6 +717,7 @@ class ScaffoldRenderer:
                     "env_name": entry["env_name"],
                     "install_user": entry["install_user"],
                     "app_path": entry["app_path"],
+                    "install_command": entry.get("install_command", []),
                 }
                 try:
                     tpl = self.env.get_template("core/install-helper.socket.j2")
@@ -758,10 +760,12 @@ class ScaffoldRenderer:
             self.context["scaffold_install_script"] = (
                 f"/opt/{project}/{self.config.scaffold.output_dir}/install.sh"
             )
-            self._render_template(
-                "core/scaffold-install-helper.service.j2", service_out
-            )
-            del self.context["scaffold_install_script"]
+            try:
+                self._render_template(
+                    "core/scaffold-install-helper.service.j2", service_out
+                )
+            finally:
+                del self.context["scaffold_install_script"]
             self._render_template(
                 "core/scaffold-install-helper.socket.j2", socket_out
             )

@@ -156,12 +156,23 @@ class SSHRunner:
 
     def _upload_tree_with_password(self, local_dir: Path, remote_dir: str) -> None:
         """Upload tree via temp dir + sudo -S mv when password is needed."""
-        tmp_dir = "/tmp/.fraisier-upload-tree"
+        import uuid
+
+        # Randomise the tmp path to avoid collisions between concurrent uploads.
+        tmp_dir = f"/tmp/.fraisier-upload-{uuid.uuid4().hex[:12]}"
         # Step 1: tar -> remote temp dir, no sudo (stdin is the tar stream).
         remote_cmd = (
             f"mkdir -p {shlex.quote(tmp_dir)} && tar xzf - -C {shlex.quote(tmp_dir)}"
         )
-        self._tar_pipe_to_remote(local_dir, remote_cmd)
+        try:
+            self._tar_pipe_to_remote(local_dir, remote_cmd)
+        except Exception:
+            # Best-effort remote cleanup; ignore secondary errors.
+            try:
+                self.run(["rm", "-rf", tmp_dir], check=False)
+            except Exception:
+                pass
+            raise
         # Step 2: sudo -S mv into place via the regular run() path.
         move_cmd = (
             f"mkdir -p {shlex.quote(remote_dir)}"

@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] - 2026-05-05
+
+### Security
+
+- **`fraisier-install-helper` accepted arbitrary commands with no allowlist** (adversarial review). Any caller with write access to the Unix socket could invoke any subprocess as the privileged deploy user. Fixed by baking the allowed command into the systemd unit at scaffold render time (`ExecStart=fraisier-install-helper uv sync --frozen`) and enforcing an exact-match check in the handler. Requests with a mismatched command are rejected with a structured error response.
+
+- **Shell injection in `_regenerate_scaffold` and `_install_scaffold`** (adversarial review). Both methods built `sh -c "cd {project_dir} && {fraisier_exe} ..."` using f-strings with unquoted paths. A project directory or executable path containing shell metacharacters would be executed verbatim. Fixed by replacing the shell invocation with `runner.run([...], cwd=str(project_dir))`, eliminating the shell entirely.
+
+- **`_DeliveryDedupe` webhook replay store was not thread-safe** (adversarial review). Concurrent webhook requests could race on `_store` dict mutation, causing missed deduplication or corruption. Fixed by adding a `threading.Lock()` around all read/write access.
+
+### Fixed
+
+- **`is_deployment_locked` had a TOCTOU race** (adversarial review). An `exists()` pre-check before `open()` could return `False` for a directory that was created between the check and the open, or `True` for a file deleted in the same window. Removed the pre-check entirely; `FileNotFoundError` from `open()` is now caught and returns `False`.
+
+- **`mkstemp()` file descriptor leak in `status.py`** (adversarial review). `tempfile.mkstemp()` returns an OS-level fd that must be closed with `os.close()` before `Path.write_text()` opens the same path. Fixed by adding `os.close(_fd)` immediately after `mkstemp()`.
+
+- **Remote tmp dir collision in `_upload_tree_with_password`** (adversarial review). The hardcoded path `/tmp/.fraisier-upload-tree` would be shared by concurrent uploads to the same host. Fixed by appending a 12-character random hex suffix (`uuid4`). Added try/except to clean up the remote dir if the tar step fails.
+
+- **Jinja2 context mutation without cleanup in `_render_scaffold_install_helper`** (adversarial review). A `KeyError` or render failure after `self.context["scaffold_install_script"]` was set left the renderer in dirty state for subsequent calls. Fixed by wrapping the mutation in `try/finally` so the key is always deleted.
+
+- **`systemctl enable --now` does not reload an already-running unit** (adversarial review). `install.sh` used `enable --now`, which starts a stopped unit but does not restart a running one after the unit file changes. Split into `systemctl enable` + `systemctl restart` so re-running install always picks up changes.
+
+- **Starlette `QueryParams` private dict mutated in legacy webhook route** (adversarial review). The `github_webhook` compatibility endpoint set `request._query_params` to a plain `dict`, but Starlette's routing layer expects a `QueryParams` instance. Fixed by assigning `QueryParams("provider=github")`.
+
+- **`_try_scaffold_install_via_socket` swallowed `json.JSONDecodeError` and `UnicodeDecodeError`** (adversarial review). A malformed response from the helper socket would propagate as an unhandled exception rather than triggering the sudo fallback. Added both error types to the `except` clause.
+
 ## [0.14.2] - 2026-05-05
 
 ### Fixed

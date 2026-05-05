@@ -583,7 +583,7 @@ class TestSSHRunnerSudoPassword:
         first_ssh = mock_run.call_args_list[0][0][0]
         first_remote = first_ssh[-1]
         assert "sudo" not in first_remote
-        assert "/tmp/.fraisier-upload-tree" in first_remote
+        assert "/tmp/.fraisier-upload-" in first_remote
 
         # Second call: sudo -S mv into place
         second_ssh = mock_run.call_args_list[1][0][0]

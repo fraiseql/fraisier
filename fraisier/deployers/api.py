@@ -161,7 +161,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 )
                 self._regenerate_scaffold(config_path=opt_config)
                 # Persist hash now: scaffold files on disk match the new config.
-                # Even if install fails below, we must not loop on regeneration.
+                # Saving before install means a broken install does not cause an
+                # infinite regenerate+install loop on subsequent deploys (#193).
+                # Trade-off: if disk fills mid-regenerate and some files are
+                # corrupt, the hash is still saved and future deploys will skip
+                # regeneration.  Recovery: run `fraisier scaffold` manually.
                 from fraisier.config_watcher import ConfigWatcher
 
                 ConfigWatcher(opt_config.parent).save_hash()

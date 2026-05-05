@@ -15,6 +15,7 @@ store (SQLite or similar).
 
 import hashlib
 import hmac
+import threading
 import time
 from typing import Any
 
@@ -34,21 +35,24 @@ class _DeliveryDedupe:
         self._max = max_entries
         self._ttl = ttl_seconds
         self._store: dict[str, float] = {}  # {delivery_id: first_seen_at}
+        self._lock = threading.Lock()
 
     def seen(self, delivery_id: str) -> bool:
         """Return True if *delivery_id* was already seen (replay), else record it."""
-        now = time.time()
-        self._prune(now)
-        if delivery_id in self._store:
-            return True
-        if len(self._store) >= self._max:
-            # Evict the entry with the oldest timestamp
-            oldest = min(self._store, key=self._store.__getitem__)
-            del self._store[oldest]
-        self._store[delivery_id] = now
-        return False
+        with self._lock:
+            now = time.time()
+            self._prune(now)
+            if delivery_id in self._store:
+                return True
+            if len(self._store) >= self._max:
+                # Evict the entry with the oldest timestamp
+                oldest = min(self._store, key=self._store.__getitem__)
+                del self._store[oldest]
+            self._store[delivery_id] = now
+            return False
 
     def _prune(self, now: float) -> None:
+        # Must be called with self._lock held.
         expired = [k for k, t in self._store.items() if now - t > self._ttl]
         for k in expired:
             del self._store[k]

@@ -103,7 +103,7 @@ class TestInstallScaffold:
     """_install_scaffold() must pass cwd and -c config_path to the runner."""
 
     def test_install_scaffold_uses_cwd_and_config(self, tmp_path):
-        """With config_path, command must include cd <dir> and -c <path>."""
+        """With config_path, runner receives cwd and -c flag as distinct args."""
         config_path = tmp_path / "fraises.yaml"
         config_path.touch()
 
@@ -115,8 +115,11 @@ class TestInstallScaffold:
 
         mock_runner.run.assert_called_once()
         cmd = mock_runner.run.call_args[0][0]
-        assert f"cd {tmp_path}" in cmd[-1]
-        assert f"-c {config_path}" in cmd[-1]
+        kwargs = mock_runner.run.call_args[1]
+        assert "-c" in cmd
+        assert str(config_path) in cmd
+        assert "scaffold-install" in cmd
+        assert kwargs.get("cwd") == str(tmp_path)
 
     def test_install_scaffold_no_config_falls_back(self):
         """Without config_path, original simple command is used."""

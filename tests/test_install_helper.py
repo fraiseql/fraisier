@@ -15,6 +15,8 @@ from fraisier.install_helper import (
     _send_response,
 )
 
+_DEFAULT_ALLOWED = ["uv", "sync", "--frozen"]
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -31,12 +33,15 @@ def _recv_json(sock) -> dict:
     return json.loads(raw.decode())
 
 
-def _call(request: dict) -> dict:
+def _call(
+    request: dict,
+    allowed_command: list[str] | None = None,
+) -> dict:
     """Send *request* via socket pair, call handler, return parsed response."""
     server, client = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
     client.sendall(json.dumps(request).encode() + b"\n")
     client.shutdown(_socket.SHUT_WR)
-    _handle_connection(server)
+    _handle_connection(server, allowed_command=allowed_command or _DEFAULT_ALLOWED)
     with client.makefile("rb") as f:
         raw = f.readline()
     client.close()
@@ -114,15 +119,38 @@ class TestInputValidation:
         client.sendall(b"not valid json\n")
         client.shutdown(_socket.SHUT_WR)
         # Should not raise
-        _handle_connection(server)
+        _handle_connection(server, allowed_command=_DEFAULT_ALLOWED)
         client.close()
 
     def test_empty_connection_is_handled_gracefully(self):
         server, client = _make_socket_pair()
         client.shutdown(_socket.SHUT_WR)
         # Should not raise
-        _handle_connection(server)
+        _handle_connection(server, allowed_command=_DEFAULT_ALLOWED)
         client.close()
+
+    def test_rejects_command_not_in_allowlist(self):
+        """Command that differs from the baked-in allowed command is rejected."""
+        result = _call(
+            {"command": ["rm", "-rf", "/"], "cwd": "/var/www/app"},
+            allowed_command=_DEFAULT_ALLOWED,
+        )
+        assert result["ok"] is False
+        assert "command not allowed" in result["error"]
+
+    def test_accepts_exact_allowed_command(self):
+        """Exact match of allowed command passes the allowlist check."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = _call(
+                {"command": _DEFAULT_ALLOWED, "cwd": "/var/www/app"},
+                allowed_command=_DEFAULT_ALLOWED,
+            )
+        assert result["ok"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -172,14 +200,20 @@ class TestCommandExecution:
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=[], timeout=600),
         ):
-            result = _call({"command": ["uv", "sync"], "cwd": "/var/www/app"})
+            result = _call(
+                {"command": ["uv", "sync"], "cwd": "/var/www/app"},
+                allowed_command=["uv", "sync"],
+            )
 
         assert result["ok"] is False
         assert "timed out" in result["error"]
 
     def test_oserror_returns_ok_false(self):
         with patch("subprocess.run", side_effect=OSError("command not found")):
-            result = _call({"command": ["uv", "sync"], "cwd": "/var/www/app"})
+            result = _call(
+                {"command": ["uv", "sync"], "cwd": "/var/www/app"},
+                allowed_command=["uv", "sync"],
+            )
 
         assert result["ok"] is False
         assert "failed to run command" in result["error"]
@@ -190,7 +224,7 @@ class TestCommandExecution:
         mock_sock.__enter__ = MagicMock(return_value=mock_sock)
         mock_sock.__exit__ = MagicMock(return_value=False)
         # Should not raise
-        _handle_connection(mock_sock)
+        _handle_connection(mock_sock, allowed_command=_DEFAULT_ALLOWED)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +235,7 @@ class TestCommandExecution:
 class TestMain:
     def test_exits_when_listen_fds_not_set(self):
         with (
+            patch("sys.argv", ["fraisier-install-helper", "uv", "sync", "--frozen"]),
             patch.dict("os.environ", {"LISTEN_FDS": "0"}, clear=False),
             patch("sys.exit", side_effect=SystemExit(1)),
             pytest.raises(SystemExit),
@@ -211,7 +246,19 @@ class TestMain:
 
     def test_exits_when_listen_fds_missing(self):
         with (
+            patch("sys.argv", ["fraisier-install-helper", "uv", "sync", "--frozen"]),
             patch.dict("os.environ", {}, clear=True),
+            patch("sys.exit", side_effect=SystemExit(1)),
+            pytest.raises(SystemExit),
+        ):
+            from fraisier.install_helper import main
+
+            main()
+
+    def test_exits_when_no_allowed_command(self):
+        with (
+            patch("sys.argv", ["fraisier-install-helper"]),
+            patch.dict("os.environ", {"LISTEN_FDS": "1"}, clear=False),
             patch("sys.exit", side_effect=SystemExit(1)),
             pytest.raises(SystemExit),
         ):

@@ -650,9 +650,11 @@ async def github_webhook(
     request: Request, background_tasks: BackgroundTasks
 ) -> dict[str, Any]:
     """GitHub-specific webhook endpoint (legacy, use /webhook instead)."""
-    # Add provider hint to query params
-    request._query_params = request.query_params._dict.copy()
-    request._query_params["provider"] = "github"
+    from starlette.datastructures import QueryParams
+
+    # Inject the provider hint via a proper QueryParams object instead of
+    # mutating _query_params as a raw dict (wrong type, breaks on API changes).
+    request._query_params = QueryParams("provider=github")
     return await generic_webhook(request, background_tasks)
 
 
