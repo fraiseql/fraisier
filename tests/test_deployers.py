@@ -749,10 +749,15 @@ class TestAPIDeployer:
         # Verify save_hash was called
         mock_watcher.save_hash.assert_called_once()
 
-    def test_sync_config_does_not_save_hash_if_install_fails(
+    def test_sync_config_saves_hash_even_if_install_fails(
         self, tmp_path, monkeypatch
     ):
-        """_sync_config_if_needed does NOT save hash if scaffold install fails."""
+        """_sync_config_if_needed saves hash after regenerate, even if install fails.
+
+        The hash records "what config produced the scaffold output directory",
+        not "what is currently installed".  Persisting before install prevents
+        an indefinite regenerate+install loop when install is broken (#193).
+        """
         app_dir = tmp_path / "app"
         app_dir.mkdir()
         opt_dir = tmp_path / "opt"
@@ -781,8 +786,8 @@ class TestAPIDeployer:
             with pytest.raises(DeploymentError):
                 deployer._sync_config_if_needed()
 
-        # Verify save_hash was NOT called (install failed)
-        mock_watcher.save_hash.assert_not_called()
+        # Verify save_hash WAS called (hash persisted before install attempt)
+        mock_watcher.save_hash.assert_called_once()
 
     def test_sync_config_skips_scaffold_when_unchanged(self, tmp_path, monkeypatch):
         """_sync_config_if_needed skips scaffold regen when config unchanged."""
