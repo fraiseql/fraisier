@@ -664,6 +664,12 @@ def db_restore(
     if result.success:
         msg = f"{result.migrations_applied} migration(s) applied"
         console.print(f"[green]Restore complete:[/green] {msg}")
+        if result.total_duration_seconds > 0:
+            console.print(
+                f"  Restore: {result.restore_duration_seconds:.1f}s"
+                f" | Migration: {result.migration_duration_seconds:.1f}s"
+                f" | Total: {result.total_duration_seconds:.1f}s"
+            )
     else:
         errors = ", ".join(result.errors)
         console.print(f"[red]Restore failed:[/red] {errors}")

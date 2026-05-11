@@ -323,7 +323,13 @@ class TestDbRestore:
 
     def test_db_restore_success(self, runner, restore_config):
         """db restore calls strategy.execute and reports success."""
-        result_mock = MagicMock(success=True, migrations_applied=3)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=3,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
             patch(
@@ -408,7 +414,13 @@ class TestDbRestore:
         """--from-backup passes path to RestoreConfig.backup_path."""
         from pathlib import Path as _Path
 
-        result_mock = MagicMock(success=True, migrations_applied=1)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=1,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
             patch(
@@ -449,7 +461,13 @@ class TestDbRestore:
 
     def test_db_restore_jobs_flag(self, runner, restore_config):
         """--jobs passes jobs to RestoreConfig."""
-        result_mock = MagicMock(success=True, migrations_applied=0)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=0,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
             patch(
@@ -471,9 +489,39 @@ class TestDbRestore:
         cfg = mock_init.call_args[0][0]
         assert cfg.jobs == 4
 
+    def test_db_restore_prints_timing(self, runner, restore_config):
+        """Successful restore prints timing summary."""
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=2,
+            restore_duration_seconds=45.3,
+            migration_duration_seconds=12.7,
+            total_duration_seconds=58.0,
+        )
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch("fraisier.systemd.SystemdServiceManager"),
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 0
+        assert "45.3s" in result.output
+        assert "12.7s" in result.output
+        assert "58.0s" in result.output
+
     def test_db_restore_preferred_compression_flag(self, runner, restore_config):
         """--preferred-compression passes through to RestoreConfig."""
-        result_mock = MagicMock(success=True, migrations_applied=0)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=0,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
             patch(
@@ -539,7 +587,13 @@ class TestDbRestore:
 
     def test_db_restore_no_service_restart(self, runner, restore_config):
         """--no-service-restart prevents service stop/restart."""
-        result_mock = MagicMock(success=True, migrations_applied=1)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=1,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
             patch(
@@ -564,7 +618,13 @@ class TestDbRestore:
         """Relative confiture_config is resolved against app_path."""
         from pathlib import Path as _Path
 
-        result_mock = MagicMock(success=True, migrations_applied=0)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=0,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
             patch(
