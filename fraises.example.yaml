@@ -89,6 +89,8 @@ fraises:
             create_template: true             # create rollback template before migrating
             template_name: myapp_staging_template
             min_tables: 300                   # post-restore validation
+            jobs: 4                           # parallel pg_restore jobs (default: 1)
+            preferred_compression: lz4        # prefer lz4 backups (faster decompress)
           # preflight:                          # Migration preflight (default: enabled)
           #   enabled: true                     # Test migrations before full restore
           #   timeout_seconds: 120              # Max wall-clock time for preflight

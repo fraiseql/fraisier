@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Parallel `pg_restore` via `restore.jobs`** ([#195](https://github.com/fraiseql/fraisier/issues/195)). Set `restore.jobs: N` in fraises.yaml or pass `--jobs N` on the CLI to run pg_restore with `-j N` for parallel restore. Default is 1 (no change in behavior).
+
+- **Compression preference for backup selection** ([#195](https://github.com/fraiseql/fraisier/issues/195)). Set `restore.preferred_compression: lz4` (or `zstd`, `gzip`) to prefer backups compressed with a faster algorithm. Falls back to the newest backup if no match is found. Also pass `--preferred-compression` on the CLI.
+
+- **Compression algorithm in backup filenames** ([#195](https://github.com/fraiseql/fraisier/issues/195)). `run_backup()` now encodes the compression algorithm in the dump filename (e.g. `mydb_full_20260511_0030_lz4.dump`), enabling compression-aware backup selection.
+
+- **Restore timing observability** ([#195](https://github.com/fraiseql/fraisier/issues/195)). The restore pipeline now tracks per-phase timing (pg_restore, migration, total). Durations are logged, returned in `StrategyResult`, printed by the CLI after restore, and recorded in the `fraisier_restore_duration_seconds` Prometheus histogram.
+
 ## [0.15.0] - 2026-05-05
 
 ### Added
