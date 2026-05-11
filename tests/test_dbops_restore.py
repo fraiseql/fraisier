@@ -219,3 +219,49 @@ class TestFindLatestBackup:
     def test_find_latest_backup_empty(self, tmp_path: Path):
         result = find_latest_backup(tmp_path)
         assert result is None
+
+    def test_find_latest_backup_preferred_compression(self, tmp_path: Path):
+        """With preferred_compression='lz4', returns newest lz4 dump even if
+        a newer zstd dump exists."""
+        import os
+
+        zstd_old = tmp_path / "db_full_20260501_0000_zstd.dump"
+        zstd_old.write_text("old zstd")
+        os.utime(zstd_old, (1000, 1000))
+
+        lz4_mid = tmp_path / "db_full_20260502_0000_lz4.dump"
+        lz4_mid.write_text("mid lz4")
+        os.utime(lz4_mid, (2000, 2000))
+
+        zstd_new = tmp_path / "db_full_20260503_0000_zstd.dump"
+        zstd_new.write_text("new zstd")
+        os.utime(zstd_new, (3000, 3000))
+
+        result = find_latest_backup(tmp_path, preferred_compression="lz4")
+        assert result == lz4_mid
+
+    def test_find_latest_backup_preferred_compression_fallback(self, tmp_path: Path):
+        """When no dump matches the preferred compression, fall back to newest."""
+        import os
+
+        zstd = tmp_path / "db_full_20260501_0000_zstd.dump"
+        zstd.write_text("zstd")
+        os.utime(zstd, (1000, 1000))
+
+        result = find_latest_backup(tmp_path, preferred_compression="lz4")
+        assert result == zstd
+
+    def test_find_latest_backup_preferred_compression_none(self, tmp_path: Path):
+        """No preference returns newest regardless of compression."""
+        import os
+
+        lz4 = tmp_path / "db_full_20260501_0000_lz4.dump"
+        lz4.write_text("lz4")
+        os.utime(lz4, (1000, 1000))
+
+        zstd = tmp_path / "db_full_20260502_0000_zstd.dump"
+        zstd.write_text("zstd")
+        os.utime(zstd, (2000, 2000))
+
+        result = find_latest_backup(tmp_path)
+        assert result == zstd

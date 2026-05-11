@@ -106,8 +106,20 @@ def find_latest_backup(
     backup_dir: Path,
     *,
     pattern: str = "*.dump",
+    preferred_compression: str | None = None,
 ) -> Path | None:
-    """Find the most recent backup file matching *pattern* in *backup_dir*."""
+    """Find the most recent backup file matching *pattern* in *backup_dir*.
+
+    When *preferred_compression* is set (e.g. ``"lz4"``), tries to find
+    the newest dump whose filename contains ``_{algo}.dump`` first.
+    Falls back to the regular newest-dump selection if none match.
+    """
+    if preferred_compression:
+        pref_pattern = f"*_{preferred_compression}.dump"
+        pref_dumps = list(backup_dir.glob(pref_pattern))
+        if pref_dumps:
+            return max(pref_dumps, key=lambda p: p.stat().st_mtime)
+
     dumps = list(backup_dir.glob(pattern))
     if not dumps:
         return None
