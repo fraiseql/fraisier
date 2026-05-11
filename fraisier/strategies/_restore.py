@@ -214,6 +214,7 @@ class RestoreMigrateStrategy(Strategy):
             db_name=cfg.db_name,
             db_owner=cfg.target_owner,
             connection_url=self._admin_url,
+            jobs=cfg.jobs,
         )
         if not restore_result.success:
             raise DatabaseError(

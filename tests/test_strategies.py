@@ -404,6 +404,37 @@ class TestRestoreMigrateStrategy:
         cfg = _make_config(jobs=4)
         assert cfg.jobs == 4
 
+    # -- Jobs passthrough --
+
+    @patch("fraisier.strategies._restore.migrate_up")
+    @patch("fraisier.dbops.restore.restore_backup")
+    @patch("fraisier.dbops.operations.create_db")
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_execute_passes_jobs_to_restore(
+        self,
+        mock_find,
+        mock_age,
+        mock_term,
+        mock_drop,
+        mock_create,
+        mock_restore,
+        mock_up,
+    ):
+        mock_find.return_value = Path("/backup/latest.dump")
+        mock_drop.return_value = (0, "", "")
+        mock_create.return_value = (0, "", "")
+        mock_restore.return_value = RestoreResult(success=True)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
+
+        strategy = _make_strategy(jobs=4)
+        strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        _, kwargs = mock_restore.call_args
+        assert kwargs["jobs"] == 4
+
     # -- Execute lifecycle --
 
     @patch("fraisier.strategies._restore.migrate_up")
@@ -455,6 +486,7 @@ class TestRestoreMigrateStrategy:
             db_name="staging_db",
             db_owner="app_user",
             connection_url=_ADMIN_URL,
+            jobs=1,
         )
         mock_table.assert_called_once_with(
             "staging_db", min_threshold=300, connection_url=_ADMIN_URL
