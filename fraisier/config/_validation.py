@@ -351,6 +351,14 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
         errors.append(
             f"{fraise_name}: strategy 'restore_migrate' requires database.name"
         )
+    if isinstance(restore, dict):
+        jobs = restore.get("jobs")
+        if jobs is not None:
+            if not isinstance(jobs, int) or isinstance(jobs, bool) or jobs < 1:
+                errors.append(
+                    f"{fraise_name}: restore.jobs must be a positive integer, "
+                    f"got {jobs!r}"
+                )
     return errors
 
 

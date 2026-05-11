@@ -349,3 +349,72 @@ fraises:
         )
         with pytest.raises(ValidationError, match=r"Invalid service_manager"):
             FraisierConfig(config_file)
+
+    def test_accepts_restore_jobs(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          restore:
+            backup_dir: /var/backups
+            jobs: 4
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
+    def test_rejects_restore_jobs_zero(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          restore:
+            backup_dir: /var/backups
+            jobs: 0
+""",
+        )
+        with pytest.raises(ValidationError, match=r"jobs.*must be.*positive"):
+            FraisierConfig(config_file)
+
+    def test_rejects_restore_jobs_negative(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          restore:
+            backup_dir: /var/backups
+            jobs: -1
+""",
+        )
+        with pytest.raises(ValidationError, match=r"jobs.*must be.*positive"):
+            FraisierConfig(config_file)

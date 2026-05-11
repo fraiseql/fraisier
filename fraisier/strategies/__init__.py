@@ -82,6 +82,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             create_template=bool(restore_cfg.get("create_template", False)),
             template_name=restore_cfg.get("template_name"),
             min_tables=int(restore_cfg.get("min_tables", 0)),
+            jobs=int(restore_cfg.get("jobs", 1)),
             backup_path=backup_path,
         )
         service_manager = kwargs.get("service_manager")
