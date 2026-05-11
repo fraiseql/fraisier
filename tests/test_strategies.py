@@ -396,6 +396,14 @@ class TestRestoreMigrateStrategy:
         strategy = _make_strategy(target_owner="app_user")
         assert strategy._config.db_name == "staging_db"
 
+    def test_restore_config_jobs_default(self):
+        cfg = _make_config()
+        assert cfg.jobs == 1
+
+    def test_restore_config_jobs_custom(self):
+        cfg = _make_config(jobs=4)
+        assert cfg.jobs == 4
+
     # -- Execute lifecycle --
 
     @patch("fraisier.strategies._restore.migrate_up")

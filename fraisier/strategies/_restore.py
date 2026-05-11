@@ -27,6 +27,7 @@ class RestoreConfig:
     create_template: bool = False
     template_name: str | None = None
     min_tables: int = 0
+    jobs: int = 1
     backup_path: Path | None = None
     preflight: PreflightConfig = field(default_factory=PreflightConfig)
 
