@@ -359,6 +359,14 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
                     f"{fraise_name}: restore.jobs must be a positive integer, "
                     f"got {jobs!r}"
                 )
+        pref = restore.get("preferred_compression")
+        if pref is not None:
+            valid_algos = {"zstd", "lz4", "gzip", "none"}
+            if not isinstance(pref, str) or pref not in valid_algos:
+                errors.append(
+                    f"{fraise_name}: restore.preferred_compression must be one "
+                    f"of {', '.join(sorted(valid_algos))}, got {pref!r}"
+                )
     return errors
 
 

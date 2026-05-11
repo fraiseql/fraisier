@@ -418,3 +418,49 @@ fraises:
         )
         with pytest.raises(ValidationError, match=r"jobs.*must be.*positive"):
             FraisierConfig(config_file)
+
+    def test_accepts_restore_preferred_compression(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          restore:
+            backup_dir: /var/backups
+            preferred_compression: lz4
+""",
+        )
+        config = FraisierConfig(config_file)
+        assert config.get_fraise("my_api") is not None
+
+    def test_rejects_invalid_preferred_compression(self, tmp_path):
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          restore:
+            backup_dir: /var/backups
+            preferred_compression: brotli
+""",
+        )
+        with pytest.raises(ValidationError, match=r"preferred_compression"):
+            FraisierConfig(config_file)
