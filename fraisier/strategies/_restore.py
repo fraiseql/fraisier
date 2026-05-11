@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -209,6 +210,7 @@ class RestoreMigrateStrategy(Strategy):
         log.info("Recreated database %s", cfg.db_name)
 
         # Step 6 + 7: pg_restore (with optional ownership fix)
+        t_total = time.monotonic()
         restore_result = restore_backup(
             backup_path=str(backup_file),
             db_name=cfg.db_name,
@@ -216,11 +218,16 @@ class RestoreMigrateStrategy(Strategy):
             connection_url=self._admin_url,
             jobs=cfg.jobs,
         )
+        restore_secs = restore_result.duration_seconds
         if not restore_result.success:
             raise DatabaseError(
                 f"pg_restore failed: {restore_result.error}",
             )
-        log.info("Restored backup into %s", cfg.db_name)
+        log.info(
+            "Restored backup into %s (%dms)",
+            cfg.db_name,
+            int(restore_secs * 1000),
+        )
 
         # Step 8: Create rollback template
         if cfg.create_template:
@@ -239,13 +246,19 @@ class RestoreMigrateStrategy(Strategy):
             log.info("Created rollback template %s", template_name)
 
         # Step 9: Migrate up
+        t_migrate = time.monotonic()
         result = migrate_up(
             confiture_config,
             migrations_dir=migrations_dir,
             database_url=database_url,
             hooks_config=hooks_config,
         )
-        log.info("Applied %d migrations", result.steps_applied)
+        migration_secs = time.monotonic() - t_migrate
+        log.info(
+            "Applied %d migrations (%dms)",
+            result.steps_applied,
+            int(migration_secs * 1000),
+        )
 
         # Step 10: Validate table count
         if cfg.min_tables > 0:
@@ -270,7 +283,29 @@ class RestoreMigrateStrategy(Strategy):
                 ) from exc
             log.info("Started service %s", self._service_name)
 
-        return StrategyResult(success=True, migrations_applied=result.steps_applied)
+        total_secs = time.monotonic() - t_total
+        log.info("Restore pipeline total: %dms", int(total_secs * 1000))
+
+        # Record Prometheus metrics
+        from fraisier.metrics import DeploymentMetrics
+
+        DeploymentMetrics.restore_duration_seconds.labels(phase="pg_restore").observe(
+            restore_secs
+        )
+        DeploymentMetrics.restore_duration_seconds.labels(phase="migration").observe(
+            migration_secs
+        )
+        DeploymentMetrics.restore_duration_seconds.labels(phase="total").observe(
+            total_secs
+        )
+
+        return StrategyResult(
+            success=True,
+            migrations_applied=result.steps_applied,
+            restore_duration_seconds=restore_secs,
+            migration_duration_seconds=migration_secs,
+            total_duration_seconds=total_secs,
+        )
 
     def rollback(
         self,

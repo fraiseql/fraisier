@@ -19,6 +19,7 @@ class RestoreResult:
 
     success: bool
     error: str = ""
+    duration_seconds: float = 0.0
 
 
 def restore_backup(
@@ -39,13 +40,17 @@ def restore_backup(
         validate_pg_identifier(db_owner, "database owner")
 
     # Run pg_restore
+    t0 = time.monotonic()
     cmd = ["pg_restore", "-d", db_name, "--no-owner", "--no-acl"]
     if jobs > 1:
         cmd.extend(["-j", str(jobs)])
     cmd.append(backup_path)
     code, _, stderr = _pg_cmd(cmd, connection_url=connection_url)
+    duration = time.monotonic() - t0
     if code != 0:
-        return RestoreResult(success=False, error=stderr.strip())
+        return RestoreResult(
+            success=False, error=stderr.strip(), duration_seconds=duration
+        )
 
     # Fix ownership if requested — use psql variable binding to prevent injection
     if db_owner:
@@ -65,9 +70,10 @@ def restore_backup(
             return RestoreResult(
                 success=False,
                 error=f"Ownership reassignment to {db_owner} failed: {stderr.strip()}",
+                duration_seconds=time.monotonic() - t0,
             )
 
-    return RestoreResult(success=True)
+    return RestoreResult(success=True, duration_seconds=time.monotonic() - t0)
 
 
 def validate_table_count(

@@ -132,6 +132,29 @@ class TestRestoreBackup:
         cmd = mock_cmd.call_args[0][0]
         assert "-j" not in cmd
 
+    def test_restore_returns_duration(self):
+        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+            mock_cmd.return_value = (0, "", "")
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
+
+        assert result.duration_seconds > 0
+
+    def test_restore_failure_still_has_duration(self):
+        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+            mock_cmd.return_value = (1, "", "pg_restore: error")
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
+
+        assert not result.success
+        assert result.duration_seconds > 0
+
     def test_restore_rejects_bad_db_name(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             restore_backup(

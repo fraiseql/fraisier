@@ -134,6 +134,13 @@ class DeploymentMetrics:
         buckets=[5, 10, 30, 60, 120],
     )
 
+    restore_duration_seconds = Histogram(
+        "fraisier_restore_duration_seconds",
+        "Restore pipeline duration in seconds",
+        ["phase"],
+        buckets=[5, 10, 30, 60, 120, 300, 600],
+    )
+
     # Database operation latency
     query_latency_seconds = Histogram(
         "fraisier_query_latency_seconds",

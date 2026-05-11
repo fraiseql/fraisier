@@ -15,6 +15,9 @@ class StrategyResult:
     success: bool
     migrations_applied: int = 0
     errors: list[str] = field(default_factory=list)
+    restore_duration_seconds: float = 0.0
+    migration_duration_seconds: float = 0.0
+    total_duration_seconds: float = 0.0
 
 
 @dataclass
