@@ -91,6 +91,47 @@ class TestRestoreBackup:
         assert result.success is False
         assert "baduser" in result.error or "role" in result.error
 
+    def test_restore_with_jobs(self):
+        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+            mock_cmd.return_value = (0, "", "")
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+                jobs=4,
+            )
+
+        assert result.success is True
+        cmd = mock_cmd.call_args[0][0]
+        assert "-j" in cmd
+        j_idx = cmd.index("-j")
+        assert cmd[j_idx + 1] == "4"
+
+    def test_restore_jobs_1_no_flag(self):
+        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+            mock_cmd.return_value = (0, "", "")
+            restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+                jobs=1,
+            )
+
+        cmd = mock_cmd.call_args[0][0]
+        assert "-j" not in cmd
+
+    def test_restore_default_no_j_flag(self):
+        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+            mock_cmd.return_value = (0, "", "")
+            restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
+
+        cmd = mock_cmd.call_args[0][0]
+        assert "-j" not in cmd
+
     def test_restore_rejects_bad_db_name(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             restore_backup(

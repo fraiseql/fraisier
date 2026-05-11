@@ -27,6 +27,7 @@ def restore_backup(
     db_name: str,
     connection_url: str,
     db_owner: str | None = None,
+    jobs: int = 1,
 ) -> RestoreResult:
     """Restore a pg_dump backup into *db_name*.
 
@@ -38,10 +39,11 @@ def restore_backup(
         validate_pg_identifier(db_owner, "database owner")
 
     # Run pg_restore
-    code, _, stderr = _pg_cmd(
-        ["pg_restore", "-d", db_name, "--no-owner", "--no-acl", backup_path],
-        connection_url=connection_url,
-    )
+    cmd = ["pg_restore", "-d", db_name, "--no-owner", "--no-acl"]
+    if jobs > 1:
+        cmd.extend(["-j", str(jobs)])
+    cmd.append(backup_path)
+    code, _, stderr = _pg_cmd(cmd, connection_url=connection_url)
     if code != 0:
         return RestoreResult(success=False, error=stderr.strip())
 
