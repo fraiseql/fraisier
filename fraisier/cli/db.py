@@ -495,6 +495,13 @@ def db_preflight(ctx: click.Context, fraise: str, env: str, fmt: str) -> None:
     default=None,
     help="Number of parallel pg_restore jobs (overrides config restore.jobs)",
 )
+@click.option(
+    "--preferred-compression",
+    "preferred_compression",
+    type=click.Choice(["zstd", "lz4", "gzip", "none"]),
+    default=None,
+    help="Prefer backups compressed with this algorithm (overrides config)",
+)
 @click.pass_context
 def db_restore(
     ctx: click.Context,
@@ -505,6 +512,7 @@ def db_restore(
     no_service_restart: bool,
     skip_preflight: bool,
     jobs: int | None,
+    preferred_compression: str | None,
 ) -> None:
     """Restore staging database from a production backup.
 
@@ -626,6 +634,11 @@ def db_restore(
             template_name=restore_cfg.get("template_name"),
             min_tables=int(restore_cfg.get("min_tables", 0)),
             jobs=jobs if jobs is not None else int(restore_cfg.get("jobs", 1)),
+            preferred_compression=(
+                preferred_compression
+                if preferred_compression is not None
+                else restore_cfg.get("preferred_compression")
+            ),
             backup_path=from_backup,
             preflight=preflight,
         ),
