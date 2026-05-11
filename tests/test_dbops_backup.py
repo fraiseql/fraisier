@@ -78,6 +78,47 @@ class TestRunBackup:
         assert result.success is False
         assert "connection refused" in result.error
 
+    def test_backup_filename_includes_lz4(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = run_backup(
+                db_name="proddb",
+                output_dir="/backups",
+                database_url=_TEST_URL,
+                compression="lz4:1",
+            )
+
+        assert result.success
+        assert "_lz4.dump" in result.backup_path
+
+    def test_backup_filename_includes_zstd(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = run_backup(
+                db_name="proddb",
+                output_dir="/backups",
+                database_url=_TEST_URL,
+                compression="zstd:9",
+            )
+
+        assert result.success
+        assert "_zstd.dump" in result.backup_path
+
+    def test_backup_filename_no_suffix_for_none(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = run_backup(
+                db_name="proddb",
+                output_dir="/backups",
+                database_url=_TEST_URL,
+                compression="none",
+            )
+
+        assert result.success
+        # Should not have _none in filename, just ends with .dump
+        assert not result.backup_path.endswith("_none.dump")
+        assert result.backup_path.endswith(".dump")
+
     def test_backup_rejects_bad_db_name(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             run_backup(

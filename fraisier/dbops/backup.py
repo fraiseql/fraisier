@@ -62,7 +62,9 @@ def run_backup(
     validate_file_path(output_dir)
 
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M")
-    filename = f"{db_name}_{mode}_{timestamp}.dump"
+    algo = compression.split(":", maxsplit=1)[0]
+    suffix = f"_{algo}" if algo != "none" else ""
+    filename = f"{db_name}_{mode}_{timestamp}{suffix}.dump"
     backup_path = f"{output_dir}/{filename}"
 
     cmd: list[str] = [
