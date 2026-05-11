@@ -405,6 +405,45 @@ class TestRestoreMigrateStrategy:
         cfg = _make_config(jobs=4)
         assert cfg.jobs == 4
 
+    def test_restore_config_preferred_compression_default(self):
+        cfg = _make_config()
+        assert cfg.preferred_compression is None
+
+    def test_restore_config_preferred_compression_custom(self):
+        cfg = _make_config(preferred_compression="lz4")
+        assert cfg.preferred_compression == "lz4"
+
+    # -- Compression preference passthrough --
+
+    @patch("fraisier.strategies._restore.migrate_up")
+    @patch("fraisier.dbops.restore.restore_backup")
+    @patch("fraisier.dbops.operations.create_db")
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_execute_passes_preferred_compression(
+        self,
+        mock_find,
+        mock_age,
+        mock_term,
+        mock_drop,
+        mock_create,
+        mock_restore,
+        mock_up,
+    ):
+        mock_find.return_value = Path("/backup/db_lz4.dump")
+        mock_drop.return_value = (0, "", "")
+        mock_create.return_value = (0, "", "")
+        mock_restore.return_value = RestoreResult(success=True, duration_seconds=0.1)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
+
+        strategy = _make_strategy(preferred_compression="lz4")
+        strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        _, kwargs = mock_find.call_args
+        assert kwargs["preferred_compression"] == "lz4"
+
     # -- Jobs passthrough --
 
     @patch("fraisier.strategies._restore.migrate_up")
@@ -513,7 +552,11 @@ class TestRestoreMigrateStrategy:
         assert result.success
         assert result.migrations_applied == 5
 
-        mock_find.assert_called_once_with(cfg.backup_dir, pattern=cfg.backup_pattern)
+        mock_find.assert_called_once_with(
+            cfg.backup_dir,
+            pattern=cfg.backup_pattern,
+            preferred_compression=None,
+        )
         mock_age.assert_called_once_with(backup, max_age_hours=48.0)
         mock_term.assert_called_once_with("staging_db", connection_url=_ADMIN_URL)
         mock_drop.assert_called_once_with(

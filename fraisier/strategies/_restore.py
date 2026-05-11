@@ -29,6 +29,7 @@ class RestoreConfig:
     template_name: str | None = None
     min_tables: int = 0
     jobs: int = 1
+    preferred_compression: str | None = None
     backup_path: Path | None = None
     preflight: PreflightConfig = field(default_factory=PreflightConfig)
 
@@ -157,7 +158,11 @@ class RestoreMigrateStrategy(Strategy):
             backup_file = cfg.backup_path
             log.info("Using explicit backup: %s", backup_file)
         else:
-            backup_file = find_latest_backup(cfg.backup_dir, pattern=cfg.backup_pattern)
+            backup_file = find_latest_backup(
+                cfg.backup_dir,
+                pattern=cfg.backup_pattern,
+                preferred_compression=cfg.preferred_compression,
+            )
             if backup_file is None:
                 raise DatabaseError(
                     f"No backup matching '{cfg.backup_pattern}' in {cfg.backup_dir}",
