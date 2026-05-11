@@ -447,6 +447,30 @@ class TestDbRestore:
 
                 Path(backup_path).unlink()
 
+    def test_db_restore_jobs_flag(self, runner, restore_config):
+        """--jobs passes jobs to RestoreConfig."""
+        result_mock = MagicMock(success=True, migrations_applied=0)
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.__init__",
+                return_value=None,
+            ) as mock_init,
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch("fraisier.systemd.SystemdServiceManager"),
+        ):
+            result = runner.invoke(
+                main,
+                ["db", "restore", "my_api", "staging", "--jobs", "4"],
+            )
+
+        assert result.exit_code == 0
+        cfg = mock_init.call_args[0][0]
+        assert cfg.jobs == 4
+
     def test_db_restore_skips_external_db(self, runner, restore_config):
         """db restore skips when external_db is true."""
         with patch("fraisier.dbops.guard.is_external_db", return_value=True):

@@ -489,6 +489,12 @@ def db_preflight(ctx: click.Context, fraise: str, env: str, fmt: str) -> None:
     is_flag=True,
     help="Skip migration preflight check (emergency restores only)",
 )
+@click.option(
+    "--jobs",
+    type=int,
+    default=None,
+    help="Number of parallel pg_restore jobs (overrides config restore.jobs)",
+)
 @click.pass_context
 def db_restore(
     ctx: click.Context,
@@ -498,6 +504,7 @@ def db_restore(
     dry_run: bool,
     no_service_restart: bool,
     skip_preflight: bool,
+    jobs: int | None,
 ) -> None:
     """Restore staging database from a production backup.
 
@@ -618,6 +625,7 @@ def db_restore(
             create_template=bool(restore_cfg.get("create_template", False)),
             template_name=restore_cfg.get("template_name"),
             min_tables=int(restore_cfg.get("min_tables", 0)),
+            jobs=jobs if jobs is not None else int(restore_cfg.get("jobs", 1)),
             backup_path=from_backup,
             preflight=preflight,
         ),
