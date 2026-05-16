@@ -215,6 +215,22 @@ fi
 {% endfor %}
 {% endfor %}
 
+# Clean up root-owned __pycache__ dirs that block uv sync (issue #196)
+# When fraisier runs as root it may leave __pycache__/ owned by root inside app
+# venvs, causing Permission denied errors on the next `uv sync --frozen`.
+echo "  Cleaning root-owned __pycache__ directories"
+{% for fraise in local_fraises %}
+{% for env_name, env_config in fraise.get('environments', {}).items() %}
+{% set app_path = env_config.get('app_path') %}
+{% if app_path %}
+if _env_active "{{ env_name }}"; then
+    find "{{ app_path }}/.venv" -name "__pycache__" -user root -type d -exec rm -rf {} + 2>/dev/null || true
+fi
+{% endif %}
+{% endfor %}
+{% endfor %}
+find "/home/${DEPLOY_USER}/.local/lib" -name "__pycache__" -user root -type d -exec rm -rf {} + 2>/dev/null || true
+
 # Create project directory
 if [ ! -d "${PROJECT_DIR}" ]; then
     echo "  Creating ${PROJECT_DIR}"

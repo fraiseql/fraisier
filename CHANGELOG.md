@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`uv sync` fails when root-owned `__pycache__` dirs exist in app venv** ([#196](https://github.com/fraiseql/fraisier/issues/196)). Three-layer fix: (1) `fraisier/__init__.py` now sets `sys.dont_write_bytecode = True` and `PYTHONDONTWRITEBYTECODE=1` at import time to prevent future `__pycache__` creation regardless of invocation context; (2) `install.sh` cleans up existing root-owned `__pycache__` directories in app venvs and the deploy user's tool install dir on every scaffold run; (3) the install helper and deployer now detect the `__pycache__` permission pattern and provide actionable advice in the error message.
+
 ## [0.16.0] - 2026-05-11
 
 ### Added

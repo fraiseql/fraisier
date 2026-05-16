@@ -133,6 +133,14 @@ def _handle_connection(conn: socket.socket, allowed_command: list[str]) -> None:
                 result.returncode,
                 result.stderr.strip(),
             )
+            if "__pycache__" in result.stderr and "Permission denied" in result.stderr:
+                response["advice"] = (
+                    "Root-owned __pycache__ directories are blocking uv sync. "
+                    f"Fix: sudo find {cwd}/.venv -name __pycache__ -user root "
+                    "-type d -exec rm -rf {{}} + then retry the deployment. "
+                    "The venv may be corrupted — run uv sync --frozen manually "
+                    "after cleanup. See: https://github.com/fraiseql/fraisier/issues/196"
+                )
 
         _send_response(conn, response)
 

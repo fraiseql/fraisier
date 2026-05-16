@@ -168,18 +168,36 @@ class GitDeployMixin:
             self.runner.run(cmd, cwd=self.app_path)
         except subprocess.CalledProcessError as exc:
             suggested = f"cd {self.app_path} && {shlex.join(cmd)}"
-            raise DeploymentError(
+            stderr = exc.stderr or ""
+            advice = None
+            if "__pycache__" in stderr and "Permission denied" in stderr:
+                advice = (
+                    "Root-owned __pycache__ directories are blocking uv sync."
+                    f" Fix: sudo find {self.app_path}/.venv -name __pycache__"
+                    " -user root -type d -exec rm -rf {} +"
+                    " then retry the deployment."
+                    " The venv may be corrupted — run uv sync --frozen"
+                    " manually after cleanup."
+                    " See: https://github.com/fraiseql/fraisier/issues/196"
+                )
+            msg = (
                 f"Install command failed (exit code {exc.returncode}): "
                 f"{shlex.join(exc.cmd) if isinstance(exc.cmd, list) else exc.cmd}\n"
                 f"  Directory: {self.app_path}\n"
-                f"  To debug: {suggested}",
+                f"  To debug: {suggested}"
+            )
+            if advice:
+                msg += f"\n  Advice: {advice}"
+            raise DeploymentError(
+                msg,
                 context={
                     "command": exc.cmd,
                     "cwd": self.app_path,
                     "exit_code": exc.returncode,
                     "stdout": exc.stdout or "",
-                    "stderr": exc.stderr or "",
+                    "stderr": stderr,
                     "suggested_command": suggested,
+                    "advice": advice,
                 },
             ) from exc
 
@@ -228,13 +246,19 @@ class GitDeployMixin:
         if not response.get("ok"):
             error = response.get("error") or response.get("stderr") or "unknown error"
             suggested = f"cd {cwd} && {shlex.join(command)}"
-            raise DeploymentError(
+            advice = response.get("advice")
+            msg = (
                 "Install command failed"
                 f" (exit code {response.get('returncode', '?')}):"
                 f" {shlex.join(command)}\n"
                 f"  Directory: {cwd}\n"
                 f"  Error: {error}\n"
-                f"  To debug: {suggested}",
+                f"  To debug: {suggested}"
+            )
+            if advice:
+                msg += f"\n  Advice: {advice}"
+            raise DeploymentError(
+                msg,
                 context={
                     "command": command,
                     "cwd": cwd,
@@ -242,6 +266,7 @@ class GitDeployMixin:
                     "stdout": response.get("stdout", ""),
                     "stderr": response.get("stderr", ""),
                     "suggested_command": suggested,
+                    "advice": advice,
                 },
             )
 

@@ -1,0 +1,228 @@
+"""Tests for __pycache__ permission error diagnostics (#196)."""
+
+from __future__ import annotations
+
+import json
+import socket as _socket
+import subprocess
+import threading
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from fraisier.deployers.api import APIDeployer
+from fraisier.errors import DeploymentError
+from fraisier.install_helper import _handle_connection
+
+_DEFAULT_ALLOWED = ["uv", "sync", "--frozen"]
+
+_PYCACHE_STDERR = (
+    "error: failed to remove directory "
+    "'/var/www/api/.venv/lib/python3.13/site-packages/fraisier/__pycache__': "
+    "Permission denied (os error 13)"
+)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3, Cycle 1: install_helper.py returns advice field
+# ---------------------------------------------------------------------------
+
+
+class TestInstallHelperAdvice:
+    def _call(self, request: dict, allowed_command: list[str] | None = None) -> dict:
+        server, client = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        client.sendall(json.dumps(request).encode() + b"\n")
+        client.shutdown(_socket.SHUT_WR)
+        _handle_connection(server, allowed_command=allowed_command or _DEFAULT_ALLOWED)
+        with client.makefile("rb") as f:
+            raw = f.readline()
+        client.close()
+        return json.loads(raw.decode()) if raw else {}
+
+    def test_advice_added_on_pycache_permission_error(self):
+        """When stderr contains __pycache__ + Permission denied, response has advice."""
+        mock_result = MagicMock()
+        mock_result.returncode = 2
+        mock_result.stdout = ""
+        mock_result.stderr = _PYCACHE_STDERR
+
+        with patch("subprocess.run", return_value=mock_result):
+            response = self._call({"command": _DEFAULT_ALLOWED, "cwd": "/var/www/api"})
+
+        assert response["ok"] is False
+        assert "advice" in response
+        assert "__pycache__" in response["advice"]
+        assert "issue/196" in response["advice"] or "issues/196" in response["advice"]
+
+    def test_no_advice_on_regular_failure(self):
+        """Regular failures don't get an advice field."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "error: lockfile out of date"
+
+        with patch("subprocess.run", return_value=mock_result):
+            response = self._call({"command": _DEFAULT_ALLOWED, "cwd": "/var/www/api"})
+
+        assert response["ok"] is False
+        assert "advice" not in response
+
+
+# ---------------------------------------------------------------------------
+# Phase 3, Cycle 2: _install_via_socket surfaces advice in DeploymentError
+# ---------------------------------------------------------------------------
+
+
+class TestInstallViaSocketAdvice:
+    def test_advice_included_in_deployment_error(self, tmp_path):
+        """When response has advice field, DeploymentError message includes it."""
+        sock_path = str(tmp_path / "test.sock")
+        server_sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        server_sock.bind(sock_path)
+        server_sock.listen(1)
+
+        response_payload = (
+            json.dumps(
+                {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": _PYCACHE_STDERR,
+                    "returncode": 2,
+                    "advice": "Root-owned __pycache__ directories are blocking uv sync.",
+                }
+            ).encode()
+            + b"\n"
+        )
+
+        def _serve():
+            conn, _ = server_sock.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(response_payload)
+            server_sock.close()
+
+        t = threading.Thread(target=_serve, daemon=True)
+        t.start()
+
+        cfg = {"app_path": "/var/www/api", "fraise_name": "api", "environment": "prod"}
+        deployer = APIDeployer(cfg)
+
+        with pytest.raises(DeploymentError, match=r"Advice:.*__pycache__"):
+            deployer._install_via_socket(
+                sock_path, ["uv", "sync", "--frozen"], "/var/www/api"
+            )
+        t.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3, Cycle 3: sudo fallback path includes advice
+# ---------------------------------------------------------------------------
+
+
+class TestSudoFallbackAdvice:
+    def test_advice_on_pycache_permission_in_sudo_fallback(self):
+        """CalledProcessError with __pycache__+Permission denied gets advice."""
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "fraise_name": "api",
+            "environment": "production",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        exc = subprocess.CalledProcessError(
+            2, ["sudo", "-u", "appuser", "uv", "sync", "--frozen"]
+        )
+        exc.stdout = ""
+        exc.stderr = _PYCACHE_STDERR
+        mock_runner.run.side_effect = exc
+        deployer.runner = mock_runner
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch(
+                "fraisier.deployers.mixins.shutil.which",
+                return_value="/usr/local/bin/uv",
+            ),
+            pytest.raises(DeploymentError, match=r"Advice:.*__pycache__"),
+        ):
+            deployer._install_dependencies()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Integration test — socket returns advice, deployer surfaces it
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrationPycacheAdvice:
+    def test_deploy_with_pycache_error_gets_advice(self, tmp_path):
+        """Full path: socket returns pycache error+advice, deployer raises with both."""
+        sock_path = str(tmp_path / "install.sock")
+        server_sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        server_sock.bind(sock_path)
+        server_sock.listen(1)
+
+        advice_text = (
+            "Root-owned __pycache__ directories are blocking uv sync. "
+            "Fix: sudo find /var/www/api/.venv -name __pycache__ -user root "
+            "-type d -exec rm -rf {} + then retry the deployment. "
+            "The venv may be corrupted — run uv sync --frozen manually "
+            "after cleanup. See: https://github.com/fraiseql/fraisier/issues/196"
+        )
+        response_payload = (
+            json.dumps(
+                {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": _PYCACHE_STDERR,
+                    "returncode": 2,
+                    "advice": advice_text,
+                }
+            ).encode()
+            + b"\n"
+        )
+
+        def _serve():
+            conn, _ = server_sock.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(response_payload)
+            server_sock.close()
+
+        t = threading.Thread(target=_serve, daemon=True)
+        t.start()
+
+        # Create the socket file so Path(socket_path).exists() passes
+        config = {
+            "app_path": "/var/www/api",
+            "deploy_user": "fraisier",
+            "fraise_name": "api",
+            "environment": "production",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "appuser",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"FRAISIER_INSTALL_SOCKET_API_PRODUCTION": sock_path},
+            ),
+            pytest.raises(DeploymentError) as exc_info,
+        ):
+            deployer._install_dependencies()
+
+        t.join(timeout=2)
+
+        error = exc_info.value
+        assert _PYCACHE_STDERR in str(error)
+        assert "Advice:" in str(error)
+        assert "venv may be corrupted" in str(error)
