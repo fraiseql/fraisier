@@ -256,3 +256,190 @@ class TestApplySqlLogsStderr:
             RebuildStrategy._apply_sql("postgresql://u@h/db", Path("/tmp/s.sql"))
 
         assert caplog.text == ""
+
+
+class TestRebuildStrategyTemplateCreation:
+    """RebuildStrategy create_template snapshots the rebuilt DB."""
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_no_template_skips_template_ops(self, _mock_rebuild_deps):
+        """Without create_template, terminate/drop/create are called once each (for the main DB)."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends") as mock_term,
+            patch("fraisier.strategies._core.drop_db") as mock_drop,
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+        ):
+            strategy = RebuildStrategy(
+                create_template=False,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        # Only the main DB: terminate once, drop once, create once
+        assert mock_term.call_count == 1
+        assert mock_drop.call_count == 1
+        assert mock_create.call_count == 1
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_with_template_calls_create_db_with_template(
+        self, _mock_rebuild_deps
+    ):
+        """With create_template=True, create_db is called with template=<db_name>."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        # Second call is template creation: create_db(template_name, template=db_name)
+        assert mock_create.call_count == 2
+        template_call = mock_create.call_args_list[1]
+        assert template_call[0][0] == "template_myapp"
+        assert template_call[1]["template"] == "myapp"
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_with_template_terminates_source_before_clone(
+        self, _mock_rebuild_deps
+    ):
+        """Source DB connections are terminated before cloning to template."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        terminate_calls = []
+
+        with (
+            patch(
+                "fraisier.strategies._core.terminate_backends",
+                side_effect=lambda db, **_kw: terminate_calls.append(db),
+            ),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        # Expected order: terminate myapp (main rebuild), terminate template_myapp, terminate myapp (before clone)
+        assert "myapp" in terminate_calls
+        assert "template_myapp" in terminate_calls
+        # myapp terminated twice (initial + before clone)
+        assert terminate_calls.count("myapp") == 2
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_with_template_drops_existing_template_first(
+        self, _mock_rebuild_deps
+    ):
+        """Existing template DB is dropped before recreating."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        drop_calls = []
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch(
+                "fraisier.strategies._core.drop_db",
+                side_effect=lambda db, **_kw: drop_calls.append(db),
+            ),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        # Both main DB and template DB are dropped
+        assert "myapp" in drop_calls
+        assert "template_myapp" in drop_calls
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_with_default_template_name(self, _mock_rebuild_deps):
+        """Default template name is template_<db_name>."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        template_call = mock_create.call_args_list[1]
+        assert template_call[0][0] == "template_myapp"
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_with_explicit_template_name(self, _mock_rebuild_deps):
+        """Explicit template_name overrides the default naming."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                template_name="custom_snapshot",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        template_call = mock_create.call_args_list[1]
+        assert template_call[0][0] == "custom_snapshot"
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_template_creation_failure_raises(self, _mock_rebuild_deps):
+        """A non-zero exit from create_db during template step raises CalledProcessError."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        create_returns = iter(
+            [(0, "", ""), (1, "", "createdb: error: template clone failed")]
+        )
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", side_effect=create_returns),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))

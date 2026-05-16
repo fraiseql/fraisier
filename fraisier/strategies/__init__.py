@@ -60,7 +60,11 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         project_dir = kwargs.get("project_dir")
         admin_url = kwargs.get("admin_url")
         return RebuildStrategy(
-            required_roles=roles, project_dir=project_dir, admin_url=admin_url
+            required_roles=roles,
+            project_dir=project_dir,
+            admin_url=admin_url,
+            create_template=bool(kwargs.get("create_template", False)),
+            template_name=kwargs.get("template_name"),
         )
     if name == "restore_migrate":
         restore_cfg = kwargs.get("restore_config")

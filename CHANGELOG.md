@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-05-16
+
+### Added
+
+- **`create_template` support in `RebuildStrategy`**. Set `create_template: true` (and optionally `template_name: <name>`) in fraises.yaml under `database:` to snapshot the freshly-rebuilt database as a PostgreSQL template database after every rebuild. The default template name is `template_<db_name>`. This allows downstream tooling (e.g. a reseed endpoint) to restore from the template using `CREATE DATABASE … TEMPLATE …` for a fast, schema-current reset without re-running the full rebuild.
+
 ## [0.16.1] - 2026-05-16
 
 ### Fixed

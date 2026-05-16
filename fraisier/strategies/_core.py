@@ -106,6 +106,8 @@ class RebuildStrategy(Strategy):
         required_roles: list[str] | None = None,
         project_dir: Path | None = None,
         admin_url: str | None = None,
+        create_template: bool = False,
+        template_name: str | None = None,
     ) -> None:
         self._required_roles: list[str] = []
         for role in required_roles or []:
@@ -113,6 +115,14 @@ class RebuildStrategy(Strategy):
             self._required_roles.append(role)
         self._project_dir = project_dir
         self._admin_url = admin_url
+        if template_name:
+            validate_pg_identifier(template_name, "template name")
+        self._create_template = create_template
+        self._template_name = template_name
+
+    def _resolved_template_name(self, db_name: str) -> str:
+        """Return the template DB name: explicit or derived from db_name."""
+        return self._template_name or f"template_{db_name}"
 
     @staticmethod
     def _apply_sql(connection_url: str, sql_path: Path) -> None:
@@ -279,6 +289,20 @@ class RebuildStrategy(Strategy):
         # Re-baseline migration tracking table.
         with Migrator.from_config(env, migrations_dir=migrations_dir) as m:
             m.reinit()
+
+        # Snapshot the freshly-built DB as a template for fast reseeds.
+        if self._create_template:
+            template_name = self._resolved_template_name(db_name)
+            terminate_backends(template_name, connection_url=admin_url)
+            drop_db(template_name, connection_url=admin_url)
+            # Must terminate connections to source before cloning it.
+            terminate_backends(db_name, connection_url=admin_url)
+            code, _, stderr = create_db(
+                template_name, template=db_name, connection_url=admin_url
+            )
+            if code != 0:
+                raise subprocess.CalledProcessError(code, "createdb", stderr=stderr)
+            log.info("Created template database %s from %s", template_name, db_name)
 
         return StrategyResult(success=True)
 

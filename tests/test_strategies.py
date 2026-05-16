@@ -198,6 +198,34 @@ class TestRebuildStrategyValidation:
         strategy = RebuildStrategy()
         assert strategy._required_roles == []
 
+    def test_init_create_template_false_by_default(self):
+        strategy = RebuildStrategy()
+        assert strategy._create_template is False
+
+    def test_init_create_template_stores_flag(self):
+        strategy = RebuildStrategy(create_template=True)
+        assert strategy._create_template is True
+
+    def test_init_template_name_none_by_default(self):
+        strategy = RebuildStrategy()
+        assert strategy._template_name is None
+
+    def test_init_template_name_validates_identifier(self):
+        with pytest.raises(ValueError, match="template name"):
+            RebuildStrategy(template_name="bad;name")
+
+    def test_init_template_name_accepts_valid(self):
+        strategy = RebuildStrategy(template_name="template_myapp")
+        assert strategy._template_name == "template_myapp"
+
+    def test_resolved_template_name_default(self):
+        strategy = RebuildStrategy()
+        assert strategy._resolved_template_name("myapp") == "template_myapp"
+
+    def test_resolved_template_name_explicit(self):
+        strategy = RebuildStrategy(template_name="snapshot_myapp")
+        assert strategy._resolved_template_name("myapp") == "snapshot_myapp"
+
 
 class TestProvisionRolesIdentifierValidation:
     """Defense-in-depth: ``_provision_roles`` must validate every identifier
@@ -829,6 +857,20 @@ class TestGetStrategy:
         s = get_strategy("rebuild", required_roles=["app_core", "app_admin"])
         assert isinstance(s, RebuildStrategy)
         assert s._required_roles == ["app_core", "app_admin"]
+
+    def test_rebuild_create_template_defaults_false(self):
+        s = get_strategy("rebuild")
+        assert s._create_template is False
+
+    def test_rebuild_with_create_template(self):
+        s = get_strategy("rebuild", create_template=True)
+        assert isinstance(s, RebuildStrategy)
+        assert s._create_template is True
+
+    def test_rebuild_with_template_name(self):
+        s = get_strategy("rebuild", create_template=True, template_name="snap_myapp")
+        assert isinstance(s, RebuildStrategy)
+        assert s._template_name == "snap_myapp"
 
     def test_restore_migrate(self):
         s = get_strategy(

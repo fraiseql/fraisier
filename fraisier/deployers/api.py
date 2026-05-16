@@ -412,6 +412,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             kwargs["admin_url"] = admin_url
         if resolved == "rebuild":
             kwargs["required_roles"] = self.database_config.get("required_roles", [])
+            kwargs["create_template"] = bool(
+                self.database_config.get("create_template", False)
+            )
+            kwargs["template_name"] = self.database_config.get("template_name")
             if self.app_path:
                 kwargs["project_dir"] = Path(self.app_path)
         if resolved == "restore_migrate":
