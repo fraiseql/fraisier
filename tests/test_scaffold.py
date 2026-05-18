@@ -1241,11 +1241,12 @@ scaffold:
         assert "tp_backend_api_backend" in content
 
     def test_no_ssl_catchall_when_server_name_only_in_per_env_nginx(self, tmp_path):
-        """gateway.conf must not emit catch-all SSL when server_name is per-env only.
+        """gateway.conf must not emit any HTTPS blocks when per-env nginx exists.
 
-        Regression for #127: fraise-level server_name is None but per-env
-        nginx.server_name is set — has_server_names must be True so the
-        catch-all (server_name _) block is suppressed.
+        Regression for #127 (catch-all suppression) and #197 (multi-server
+        safety): when per-env nginx configs exist, each gateway_env.conf is a
+        self-contained virtual host.  gateway.conf should contain only the
+        shared limit_req_zone and HTTP catch-all — no HTTPS blocks at all.
         """
         config = self._make_config(
             tmp_path,
@@ -1273,12 +1274,14 @@ scaffold:
         renderer.render()
 
         content = (tmp_path / "output" / "nginx" / "gateway.conf").read_text()
-        # The listen-80 redirect block always has `server_name _;` — correct.
-        # The bug emits a second listen-443 block with `server_name _` referencing
-        # a non-existent cert.  After the fix, only one `server_name _;` exists.
+        # Only the HTTP catch-all should have server_name _;
         assert content.count("server_name _;") == 1
-        # And the proper named SSL block must be present (has_server_names was True).
-        assert "server_name api.example.com" in content
+        # No HTTPS blocks — those live in the per-env config now (#197).
+        assert "listen 443" not in content
+        assert "ssl_certificate" not in content
+        # The named SSL block must be in the per-env config instead.
+        env_conf = (tmp_path / "output" / "nginx" / "api.example.com.conf").read_text()
+        assert "server_name api.example.com" in env_conf
 
     def test_single_fraise_uses_location_root(self, tmp_path):
         """Single API fraise still gets location / (no prefix needed)."""
@@ -4313,30 +4316,34 @@ fraises:
         assert dev_sockets
         assert not prod_sockets
 
-    def test_gateway_conf_ssl_cert_uses_local_server_name(self, tmp_path):
-        """gateway.conf SSL cert path uses the server's own server_name, not another server's.
+    def test_gateway_conf_has_no_ssl_when_per_env_nginx(self, tmp_path):
+        """gateway.conf must not contain HTTPS blocks when per-env nginx configs exist.
 
-        Regression for #143: when fraise has environments on multiple servers with
-        different nginx.server_name values, the gateway.conf generated for each server
-        must use that server's server_name — not the first env's server_name globally.
+        Fix for #197: per-env gateway_env.conf files are self-contained virtual
+        hosts.  gateway.conf should only contain shared directives (limit_req_zone,
+        HTTP catch-all) so it is safe to install on every machine.
+
+        Supersedes the #143 regression (server_name selection) — the whole HTTPS
+        block is removed rather than picking the right server_name for it.
         """
+        for server in ("server-a", "server-b"):
+            out = self._render(tmp_path, server)
+            content = (out / "nginx" / "gateway.conf").read_text()
+            assert "listen 443" not in content
+            assert "ssl_certificate" not in content
+            # Shared directives must still be present
+            assert "limit_req_zone" in content
+            assert "listen 80" in content
+
+    def test_per_env_nginx_has_correct_ssl_cert(self, tmp_path):
+        """Per-env nginx configs contain the correct SSL cert for their environment."""
         out = self._render(tmp_path, "server-b")
-        content = (out / "nginx" / "gateway.conf").read_text()
+        prod_content = (out / "nginx" / "api.example.com.conf").read_text()
+        assert "server_name api.example.com" in prod_content
         assert (
             "ssl_certificate /etc/letsencrypt/live/api.example.com/fullchain.pem"
-            in content
+            in prod_content
         )
-        assert "api.dev.example.com" not in content
-
-    def test_gateway_conf_ssl_cert_server_a_uses_dev_name(self, tmp_path):
-        """gateway.conf for server-a uses dev server_name in SSL cert, not prod's."""
-        out = self._render(tmp_path, "server-a")
-        content = (out / "nginx" / "gateway.conf").read_text()
-        assert (
-            "ssl_certificate /etc/letsencrypt/live/api.dev.example.com/fullchain.pem"
-            in content
-        )
-        assert "api.example.com/fullchain" not in content
 
 
 class TestServerScopedCollectors:

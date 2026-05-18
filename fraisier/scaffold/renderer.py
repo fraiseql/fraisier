@@ -367,6 +367,16 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         has_restricted_paths=bool(config.scaffold.nginx.restricted_paths),
     )
 
+    # Detect whether per-environment nginx configs exist.  When they do,
+    # each gateway_env.conf is a self-contained virtual host and gateway.conf
+    # should only contain shared directives (limit_req_zone, HTTP catch-all)
+    # so it is safe to install unconditionally on every machine (#197).
+    has_per_env_nginx = any(
+        isinstance((env_cfg or {}), dict) and isinstance(env_cfg.get("nginx"), dict)
+        for f in local_fraises
+        for env_cfg in (f.get("environments") or {}).values()
+    )
+
     return {
         "manifest": build_manifest(config),
         "scaffold": config.scaffold,
@@ -385,6 +395,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "machine_env_map": machine_env_map,
         "install_helper_sockets": install_helper_sockets,
         "gateway_fraise": gateway_fraise,
+        "has_per_env_nginx": has_per_env_nginx,
     }
 
 
