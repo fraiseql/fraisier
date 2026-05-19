@@ -18,21 +18,37 @@ _SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 APP_VERSION_RE = re.compile(r"^[A-Za-z0-9._+\-]+$")
 
 
+def _validate_app_version(version: str, *, source: str) -> tuple[str, str] | None:
+    """Return ``(version, source)`` or ``None`` (with warning) on bad chars."""
+    if not APP_VERSION_RE.match(version):
+        log.warning(
+            "Rejecting app_version %r from %s: contains characters "
+            "unsafe for SQL interpolation",
+            version,
+            source,
+        )
+        return None
+    return version, source
+
+
 def resolve_app_version(
-    project_dir: Path | None,  # noqa: ARG001
+    project_dir: Path | None,
     *,
     override: str | None = None,
 ) -> tuple[str, str] | None:
     """Resolve a build-time app version for stamping into databases."""
     if override:
-        if not APP_VERSION_RE.match(override):
-            log.warning(
-                "Rejecting app_version %r from override: contains characters "
-                "unsafe for SQL interpolation",
-                override,
-            )
-            return None
-        return override, "override"
+        return _validate_app_version(override, source="override")
+
+    if project_dir is None:
+        return None
+
+    version_json = project_dir / "version.json"
+    if version_json.exists():
+        info = read_version(version_json)
+        if info is not None and info.version:
+            return _validate_app_version(info.version, source="version.json")
+
     return None
 
 

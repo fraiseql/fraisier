@@ -447,3 +447,8 @@ class TestResolveAppVersion:
     def test_explicit_override_wins(self, tmp_path):
         """Explicit override returns (value, "override") with no file lookups."""
         assert resolve_app_version(tmp_path, override="1.2.3") == ("1.2.3", "override")
+
+    def test_version_json_discovery(self, tmp_path):
+        """version.json containing a valid version returns (value, "version.json")."""
+        (tmp_path / "version.json").write_text('{"version": "0.4.2"}')
+        assert resolve_app_version(tmp_path) == ("0.4.2", "version.json")
