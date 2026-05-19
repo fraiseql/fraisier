@@ -138,9 +138,7 @@ class RebuildStrategy(Strategy):
         """Return the template DB name: explicit or derived from db_name."""
         return self._template_name or f"template_{db_name}"
 
-    def _stamp_source_for_template(
-        self, db_name: str, connection_url: str
-    ) -> None:
+    def _stamp_source_for_template(self, db_name: str, connection_url: str) -> None:
         """Best-effort: stamp the live DB so the template carries app_version.
 
         Failures (no resolvable version, missing/empty ``tb_version``, psql
@@ -149,9 +147,7 @@ class RebuildStrategy(Strategy):
         """
         from fraisier.versioning import APP_VERSION_RE, resolve_app_version
 
-        resolved = resolve_app_version(
-            self._project_dir, override=self._app_version
-        )
+        resolved = resolve_app_version(self._project_dir, override=self._app_version)
         if resolved is None:
             log.warning(
                 "Skipping pre-clone version stamp on %s: no app version "
@@ -375,9 +371,7 @@ class RebuildStrategy(Strategy):
             # Kick any reconnected app off before stamping so the stamp is
             # the last write to tb_version before the clone.
             terminate_backends(db_name, connection_url=admin_url)
-            self._stamp_source_for_template(
-                db_name, connection_url=env.database_url
-            )
+            self._stamp_source_for_template(db_name, connection_url=env.database_url)
             # Belt-and-suspenders: catch anything that reconnected between
             # the stamp's psql exit and the clone. CREATE DATABASE … TEMPLATE …
             # itself fails closed if any backend is still attached.

@@ -511,9 +511,7 @@ class TestRebuildStrategyVersionStamp:
             if "UPDATE public.tb_version" in c.args[0]
         ]
         assert all(c.kwargs["db_name"] == "myapp" for c in stamp_calls)
-        assert not any(
-            c.kwargs["db_name"] == "template_myapp" for c in stamp_calls
-        )
+        assert not any(c.kwargs["db_name"] == "template_myapp" for c in stamp_calls)
 
     @pytest.mark.usefixtures("_mock_rebuild_deps")
     def test_race_free_ordering(self, _mock_rebuild_deps):
@@ -546,12 +544,8 @@ class TestRebuildStrategyVersionStamp:
                 side_effect=_record_term,
             ),
             patch("fraisier.strategies._core.drop_db", side_effect=_record_drop),
-            patch(
-                "fraisier.strategies._core.create_db", side_effect=_record_create
-            ),
-            patch(
-                "fraisier.strategies._core.run_psql", side_effect=_record_psql
-            ),
+            patch("fraisier.strategies._core.create_db", side_effect=_record_create),
+            patch("fraisier.strategies._core.run_psql", side_effect=_record_psql),
         ):
             strategy = RebuildStrategy(
                 create_template=True,
@@ -699,9 +693,7 @@ class TestRebuildStrategyVersionStamp:
         assert "from pyproject.toml" in caplog.text
 
     @pytest.mark.usefixtures("_mock_rebuild_deps")
-    def test_no_version_resolvable_warns_and_clones(
-        self, _mock_rebuild_deps, caplog
-    ):
+    def test_no_version_resolvable_warns_and_clones(self, _mock_rebuild_deps, caplog):
         """When no version resolves, warn and continue with the clone."""
         import logging
 
@@ -719,9 +711,7 @@ class TestRebuildStrategyVersionStamp:
                 "fraisier.strategies._core.run_psql",
                 return_value=(0, "UPDATE 1", ""),
             ) as mock_run_psql,
-            patch(
-                "fraisier.versioning.resolve_app_version", return_value=None
-            ),
+            patch("fraisier.versioning.resolve_app_version", return_value=None),
             caplog.at_level(logging.WARNING, logger="fraisier.strategies._core"),
         ):
             strategy = RebuildStrategy(
@@ -816,8 +806,7 @@ class TestRebuildStrategyVersionStamp:
         stamped_info = [
             r
             for r in caplog.records
-            if r.levelno == logging.INFO
-            and r.message.startswith("Stamped ")
+            if r.levelno == logging.INFO and r.message.startswith("Stamped ")
         ]
         assert stamped_info == []
 
