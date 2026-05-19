@@ -576,3 +576,37 @@ class TestRebuildStrategyVersionStamp:
             ("terminate", "myapp"),
             ("create", "template_myapp<-myapp"),
         ]
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_stamp_uses_env_database_url(self, _mock_rebuild_deps):
+        """The stamp uses env.database_url (app role), not admin_url."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert len(stamp_calls) == 1
+        assert (
+            stamp_calls[0].kwargs["connection_url"]
+            == "postgresql://appuser@localhost/myapp"
+        )
