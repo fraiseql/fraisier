@@ -418,6 +418,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             kwargs["template_name"] = self.database_config.get("template_name")
             if self.app_path:
                 kwargs["project_dir"] = Path(self.app_path)
+            if self.database_config.get("app_version"):
+                kwargs["app_version"] = self.database_config["app_version"]
         if resolved == "restore_migrate":
             kwargs["restore_config"] = self.database_config.get("restore", {})
             kwargs["db_name"] = self.database_config.get("name", "")

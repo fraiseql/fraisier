@@ -12,6 +12,7 @@ from fraisier.strategies import (
     PeeweeMigrateStrategy,
 )
 from fraisier.versioning import (
+    APP_VERSION_RE,
     VersionInfo,
     VersionSyncConfig,
     VersionSyncTarget,
@@ -23,6 +24,7 @@ from fraisier.versioning import (
     parse_semver,
     read_pyproject_version,
     read_version,
+    resolve_app_version,
     sync_version_to_targets,
     write_version,
 )
@@ -437,3 +439,91 @@ class TestGenerateVersionJson:
         info = generate_version_json(tmp_path)
         assert info.schema_hash == ""
         assert info.database_version == ""
+
+
+class TestResolveAppVersion:
+    """Test resolve_app_version helper for build-time stamping."""
+
+    def test_explicit_override_wins(self, tmp_path):
+        """Explicit override returns (value, "override") with no file lookups."""
+        assert resolve_app_version(tmp_path, override="1.2.3") == ("1.2.3", "override")
+
+    def test_version_json_discovery(self, tmp_path):
+        """version.json containing a valid version returns (value, "version.json")."""
+        (tmp_path / "version.json").write_text('{"version": "0.4.2"}')
+        assert resolve_app_version(tmp_path) == ("0.4.2", "version.json")
+
+    def test_pyproject_fallback(self, tmp_path):
+        """With no version.json, pyproject.toml [project].version is used."""
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "x"\nversion = "0.0.1"\n'
+        )
+        assert resolve_app_version(tmp_path) == ("0.0.1", "pyproject.toml")
+
+    def test_missing_project_dir_returns_none(self):
+        """project_dir=None and no override returns None."""
+        assert resolve_app_version(None) is None
+
+    def test_empty_project_dir_returns_none(self, tmp_path):
+        """No version.json and no pyproject.toml returns None without raising."""
+        assert resolve_app_version(tmp_path) is None
+
+    def test_malformed_version_in_version_json_rejected(self, tmp_path, caplog):
+        """A version containing SQL-unsafe characters is rejected with a warning."""
+        bad = "1.0.0'; DROP TABLE--"
+        (tmp_path / "version.json").write_text(f'{{"version": "{bad}"}}')
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path)
+        assert result is None
+        assert bad in caplog.text
+        assert "version.json" in caplog.text
+
+    def test_override_beats_files(self, tmp_path):
+        """Override is consulted before version.json, even when version.json exists."""
+        (tmp_path / "version.json").write_text('{"version": "1.0.0"}')
+        assert resolve_app_version(tmp_path, override="9.9.9") == ("9.9.9", "override")
+
+    def test_empty_override_falls_through(self, tmp_path):
+        """Empty-string override is treated as not supplied; falls back to version.json."""
+        (tmp_path / "version.json").write_text('{"version": "1.0.0"}')
+        assert resolve_app_version(tmp_path, override="") == ("1.0.0", "version.json")
+
+    def test_pep440_epoch_rejected(self, tmp_path, caplog):
+        """PEP 440 epoch versions (1!2.3.4) are rejected — documented limitation."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path, override="1!2.3.4")
+        assert result is None
+        assert "1!2.3.4" in caplog.text
+
+    def test_malformed_version_json_returns_none(self, tmp_path, caplog):
+        """Malformed JSON in version.json is caught and the function returns None."""
+        import logging
+
+        (tmp_path / "version.json").write_text("{not: valid json")
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path)
+        assert result is None
+        assert "version.json" in caplog.text
+
+    def test_pyproject_without_version_line_returns_none(self, tmp_path, caplog):
+        """pyproject.toml without a version = line returns None with warning."""
+        import logging
+
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path)
+        assert result is None
+        assert "pyproject.toml" in caplog.text
+
+    def test_empty_version_json_version_falls_through(self, tmp_path):
+        """Empty version field in version.json falls through to pyproject.toml."""
+        (tmp_path / "version.json").write_text('{"version": ""}')
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "x"\nversion = "0.0.1"\n'
+        )
+        assert resolve_app_version(tmp_path) == ("0.0.1", "pyproject.toml")

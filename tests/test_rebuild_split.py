@@ -339,11 +339,12 @@ class TestRebuildStrategyTemplateCreation:
             )
             strategy.execute(Path("confiture.yaml"))
 
-        # Expected order: terminate myapp (main rebuild), terminate template_myapp, terminate myapp (before clone)
+        # Expected order: terminate myapp (initial rebuild), terminate template_myapp,
+        # terminate myapp (pre-stamp), terminate myapp (pre-clone, belt-and-suspenders).
         assert "myapp" in terminate_calls
         assert "template_myapp" in terminate_calls
-        # myapp terminated twice (initial + before clone)
-        assert terminate_calls.count("myapp") == 2
+        # myapp terminated three times: initial drop, pre-stamp, pre-clone.
+        assert terminate_calls.count("myapp") == 3
 
     @pytest.mark.usefixtures("_mock_rebuild_deps")
     def test_execute_with_template_drops_existing_template_first(
@@ -443,3 +444,408 @@ class TestRebuildStrategyTemplateCreation:
                 admin_url="postgresql://postgres@localhost/postgres",
             )
             strategy.execute(Path("confiture.yaml"))
+
+
+class TestRebuildStrategyVersionStamp:
+    """RebuildStrategy stamps the source DB before cloning the template (#198)."""
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_stamps_with_explicit_app_version(self, _mock_rebuild_deps):
+        """Explicit app_version is written into public.tb_version via run_psql."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert len(stamp_calls) == 1
+        call = stamp_calls[0]
+        assert "SET app_version = '1.2.3'" in call.args[0]
+        assert call.kwargs["db_name"] == "myapp"
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_stamps_source_db_not_template_db(self, _mock_rebuild_deps):
+        """The stamp targets the source DB, not the template DB (pre-clone)."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert all(c.kwargs["db_name"] == "myapp" for c in stamp_calls)
+        assert not any(c.kwargs["db_name"] == "template_myapp" for c in stamp_calls)
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_race_free_ordering(self, _mock_rebuild_deps):
+        """terminate(template) → drop(template) → terminate(src) → stamp → terminate(src) → create(template)."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        sequence: list[tuple[str, str]] = []
+
+        def _record_term(db, **_kw):
+            sequence.append(("terminate", db))
+
+        def _record_drop(db, **_kw):
+            sequence.append(("drop", db))
+
+        def _record_create(db, **kw):
+            template = kw.get("template")
+            sequence.append(("create", db if template is None else f"{db}<-{template}"))
+            return (0, "", "")
+
+        def _record_psql(sql, **kw):
+            if "UPDATE public.tb_version" in sql:
+                sequence.append(("stamp", kw["db_name"]))
+            return (0, "UPDATE 1", "")
+
+        with (
+            patch(
+                "fraisier.strategies._core.terminate_backends",
+                side_effect=_record_term,
+            ),
+            patch("fraisier.strategies._core.drop_db", side_effect=_record_drop),
+            patch("fraisier.strategies._core.create_db", side_effect=_record_create),
+            patch("fraisier.strategies._core.run_psql", side_effect=_record_psql),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        # Filter to just the template-block operations (after the initial rebuild).
+        # The initial DB rebuild produces: terminate(myapp), drop(myapp), create(myapp).
+        # Then the template block runs:
+        #   terminate(template_myapp), drop(template_myapp),
+        #   terminate(myapp), stamp(myapp), terminate(myapp),
+        #   create(template_myapp<-myapp)
+        # Trim the leading 3 entries from the initial rebuild.
+        template_block = sequence[3:]
+        assert template_block == [
+            ("terminate", "template_myapp"),
+            ("drop", "template_myapp"),
+            ("terminate", "myapp"),
+            ("stamp", "myapp"),
+            ("terminate", "myapp"),
+            ("create", "template_myapp<-myapp"),
+        ]
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_stamp_uses_env_database_url(self, _mock_rebuild_deps):
+        """The stamp uses env.database_url (app role), not admin_url."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert len(stamp_calls) == 1
+        assert (
+            stamp_calls[0].kwargs["connection_url"]
+            == "postgresql://appuser@localhost/myapp"
+        )
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_discovers_version_from_version_json(
+        self, _mock_rebuild_deps, tmp_path, caplog
+    ):
+        """With version.json discovery, the UPDATE carries the value and INFO logs the source."""
+        import logging
+
+        # The shared fixture globally patches ``Path.read_text`` to return a
+        # YAML config blob, which breaks real version.json reads here. Mock
+        # ``resolve_app_version`` directly to pin the wiring: constructor
+        # forwards project_dir, the resolver result drives the UPDATE and log.
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+            patch(
+                "fraisier.versioning.resolve_app_version",
+                return_value=("0.4.2", "version.json"),
+            ) as mock_resolve,
+            caplog.at_level(logging.INFO, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                project_dir=tmp_path,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        mock_resolve.assert_called_once_with(tmp_path, override=None)
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert len(stamp_calls) == 1
+        assert "SET app_version = '0.4.2'" in stamp_calls[0].args[0]
+        assert "from version.json" in caplog.text
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_discovers_version_from_pyproject(
+        self, _mock_rebuild_deps, tmp_path, caplog
+    ):
+        """pyproject.toml fallback drives the UPDATE and INFO log."""
+        import logging
+
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+            patch(
+                "fraisier.versioning.resolve_app_version",
+                return_value=("0.0.7", "pyproject.toml"),
+            ),
+            caplog.at_level(logging.INFO, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                project_dir=tmp_path,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert len(stamp_calls) == 1
+        assert "SET app_version = '0.0.7'" in stamp_calls[0].args[0]
+        assert "from pyproject.toml" in caplog.text
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_no_version_resolvable_warns_and_clones(self, _mock_rebuild_deps, caplog):
+        """When no version resolves, warn and continue with the clone."""
+        import logging
+
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+            patch("fraisier.versioning.resolve_app_version", return_value=None),
+            caplog.at_level(logging.WARNING, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            result = strategy.execute(Path("confiture.yaml"))
+
+        assert result.success
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert stamp_calls == []
+        # Template clone still happens: create_db called twice (db + template).
+        assert mock_create.call_count == 2
+        template_call = mock_create.call_args_list[1]
+        assert template_call[0][0] == "template_myapp"
+        assert template_call[1]["template"] == "myapp"
+        assert "Skipping pre-clone version stamp" in caplog.text
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_psql_failure_warns_and_clones(self, _mock_rebuild_deps, caplog):
+        """psql non-zero exit logs WARNING with stderr and continues with clone."""
+        import logging
+
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(1, "", "relation tb_version does not exist"),
+            ),
+            caplog.at_level(logging.WARNING, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            result = strategy.execute(Path("confiture.yaml"))
+
+        assert result.success
+        assert mock_create.call_count == 2
+        assert "Could not stamp" in caplog.text
+        assert "relation tb_version does not exist" in caplog.text
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_empty_tb_version_warns_and_clones(self, _mock_rebuild_deps, caplog):
+        """UPDATE 0 against an empty tb_version warns and skips the INFO success log."""
+        import logging
+
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 0", ""),
+            ),
+            caplog.at_level(logging.DEBUG, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        assert mock_create.call_count == 2
+        warning_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "tb_version" in r.message
+        ]
+        assert len(warning_records) == 1
+        # No INFO "Stamped" log for this run.
+        stamped_info = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and r.message.startswith("Stamped ")
+        ]
+        assert stamped_info == []
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_create_template_false_skips_stamp(self, _mock_rebuild_deps):
+        """create_template=False short-circuits: no UPDATE against tb_version."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=False,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert stamp_calls == []
+
+    def test_init_rejects_invalid_app_version(self):
+        """A non-empty app_version that fails the regex raises ValueError."""
+        with pytest.raises(ValueError, match=r"app_version"):
+            RebuildStrategy(app_version="1!2.3.4")
+
+    def test_init_accepts_empty_app_version(self):
+        """Empty app_version is treated as not-supplied; no raise."""
+        strategy = RebuildStrategy(app_version="")
+        assert strategy._app_version == ""

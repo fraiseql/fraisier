@@ -872,6 +872,27 @@ class TestGetStrategy:
         assert isinstance(s, RebuildStrategy)
         assert s._template_name == "snap_myapp"
 
+    def test_rebuild_forwards_app_version(self):
+        """get_strategy forwards app_version kwarg to RebuildStrategy."""
+        s = get_strategy("rebuild", create_template=True, app_version="1.2.3")
+        assert isinstance(s, RebuildStrategy)
+        assert s._app_version == "1.2.3"
+
+    def test_rebuild_app_version_default_is_none(self):
+        """Without app_version kwarg, the strategy's _app_version is None."""
+        s = get_strategy("rebuild")
+        assert s._app_version is None
+
+    def test_rebuild_empty_app_version_is_ignored(self):
+        """Empty-string app_version is dropped so auto-discovery runs."""
+        s = get_strategy("rebuild", create_template=True, app_version="")
+        assert s._app_version is None
+
+    def test_rebuild_invalid_app_version_raises(self):
+        """Invalid app_version propagates ValueError (not swallowed by factory)."""
+        with pytest.raises(ValueError, match="app_version"):
+            get_strategy("rebuild", create_template=True, app_version="1!2.3.4")
+
     def test_restore_migrate(self):
         s = get_strategy(
             "restore_migrate",

@@ -315,6 +315,99 @@ fraisier db migrate my_api -e production
 fraisier db migrate my_api -e production -d down
 ```
 
+### Rebuild strategy: template version stamp
+
+When `database.strategy: rebuild` and `database.create_template: true`, fraisier
+writes the build-time application version into the source DB's
+`public.tb_version.app_version` column immediately **before** cloning the
+template. The atomic `CREATE DATABASE … TEMPLATE …` carries the stamp into the
+template, so a downstream "reseed from template" endpoint can verify that the
+template matches the running application before restoring.
+
+The stamped version is resolved from, in order:
+
+1. `database.app_version` in `fraises.yaml` (explicit override; rarely needed).
+   An invalid value here (anything outside `[A-Za-z0-9._+\-]`, including PEP 440
+   epoch forms like `1!2.3.4`) is rejected at construction with a `ValueError`
+   — typos are not silently accepted.
+2. `<app_path>/version.json` `version` field (preferred — written by the
+   deployer).
+3. `<app_path>/pyproject.toml` `[project].version` (fallback).
+
+If none resolve, or if `public.tb_version` does not exist, or if `tb_version`
+exists but contains zero rows, fraisier logs a warning and continues without
+stamping. The protection is fail-safe: a missing or mismatched stamp causes
+the *consumer* to refuse a reseed, not fraisier to refuse a rebuild.
+
+**Schema requirement**: the stamp UPDATE has no WHERE clause and will silently
+no-op on an empty `tb_version`. Projects must seed `tb_version` with at least
+one row as part of their schema for the stamp to take effect. Fraisier emits
+a distinct warning (`"tb_version is empty …"`) in this case so the
+misconfiguration is visible in build logs.
+
+**Upgrade note**: templates built by fraisier versions before this feature
+shipped are unstamped. Consumers should either expect a rebuild after upgrade,
+or treat missing stamps as "unknown" during a cutover window rather than
+rejecting outright.
+
+#### Consumer-side check (worked example)
+
+The stamp lives in the template database, so the consumer must open a
+connection targeting the template name — there is no asyncpg API for switching
+databases on an existing connection. The example uses plain `asyncpg.connect`
+against a DSN whose path is the template name:
+
+```python
+import asyncpg
+from urllib.parse import urlparse, urlunparse
+
+
+def _dsn_for_db(base_dsn: str, db_name: str) -> str:
+    parsed = urlparse(base_dsn)
+    return urlunparse(parsed._replace(path=f"/{db_name}"))
+
+
+async def reseed_endpoint(
+    app_version: str,
+    template_name: str,
+    base_dsn: str,
+) -> None:
+    conn = await asyncpg.connect(_dsn_for_db(base_dsn, template_name))
+    try:
+        stamped = await conn.fetchval(
+            "SELECT app_version FROM public.tb_version LIMIT 1"
+        )
+    finally:
+        await conn.close()
+
+    if stamped is None:
+        # Either the template was built by a pre-stamping fraisier version,
+        # or the project's tb_version is empty. Decide policy:
+        # - Strict: reject and require a rebuild.
+        # - Lenient (cutover): accept, log a warning.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Template {template_name} has no version stamp. "
+                f"Rebuild the template before reseeding."
+            ),
+        )
+    if stamped != app_version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Refusing to reseed: template {template_name} is stamped "
+                f"with app_version={stamped!r} but the running app is "
+                f"{app_version!r}. Rebuild before reseeding."
+            ),
+        )
+    # ... proceed with reseed ...
+```
+
+Projects using a connection pool can replace the bare `asyncpg.connect` with
+their pool's per-DB acquisition pattern (e.g. a registry of pools keyed by
+database name) — the SQL is the same.
+
 ---
 
 ## Multi-Environment Setup

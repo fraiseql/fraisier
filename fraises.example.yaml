@@ -67,6 +67,8 @@ fraises:
           name: myapp_development
           strategy: rebuild  # drop and recreate (dev only!)
           # admin_url: postgresql://postgres@/postgres?host=/var/run/postgresql  # for DROP/CREATE DB
+          # create_template: true   # snapshot the rebuilt DB as template_<name> for fast reseeds
+          # app_version: "1.2.3"    # optional override; auto-discovered from version.json / pyproject.toml otherwise
         health_check:
           url: https://api.myapp.dev/health
           timeout: 30

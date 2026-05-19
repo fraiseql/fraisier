@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-05-19
+
+### Added
+
+- **Template database version stamping** ([#198](https://github.com/fraiseql/fraisier/issues/198)). `RebuildStrategy` now writes a build-time version stamp into the source database's `public.tb_version.app_version` immediately before cloning the template. The atomic `CREATE DATABASE … TEMPLATE …` carries the stamp into the template, so downstream consumers (e.g. a reseed endpoint) can read `tb_version.app_version` from the template and reject reseeds from stale templates.
+  - The version is auto-discovered from `<project>/version.json` (preferred) or `<project>/pyproject.toml`. No `fraises.yaml` change is required for standard projects.
+  - New optional `database.app_version` key in `fraises.yaml` to override auto-discovery. Invalid values (anything outside `[A-Za-z0-9._+\-]`, including PEP 440 epoch versions like `1!2.3.4`) cause `RebuildStrategy` to fail loudly at construction with a `ValueError` so typos do not silently produce unstamped templates.
+  - The stamp is best-effort: if no version is resolvable, if `tb_version` is missing, or if psql returns a non-zero exit, fraisier logs a warning and the rebuild succeeds normally — the protection is fail-safe on the consumer side.
+  - **Requires `public.tb_version` to contain at least one row.** The UPDATE has no WHERE clause and would silently affect zero rows on an empty table; fraisier detects this case (`"UPDATE 0"` in psql stdout) and emits a distinct warning ("`tb_version` is empty; template will be unstamped") instead of logging false-positive success. Projects must seed `tb_version` with one row as part of their schema for the stamp to take effect.
+  - The race against a reconnecting app overwriting the stamp between commit and clone is closed by a `terminate_backends → stamp → terminate_backends → create_db(template, template=source)` window inside the rebuild's `create_template` block. `CREATE DATABASE … TEMPLATE …` itself fails closed if any backend slipped through.
+
+### Upgrade notes
+
+- Templates created by earlier fraisier versions are not stamped. Consumers that strictly reject unstamped templates will refuse reseeds from these pre-existing templates until the next rebuild. Operators should either trigger a rebuild after upgrade, or implement a grace period in their consumer that treats a missing stamp as "unknown" rather than "stale" during the cutover.
+
 ## [0.16.3] - 2026-05-18
 
 ### Fixed

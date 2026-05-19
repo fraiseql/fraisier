@@ -15,6 +15,70 @@ log = logging.getLogger(__name__)
 
 _SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
+APP_VERSION_RE = re.compile(r"^[A-Za-z0-9._+\-]+$")
+
+
+def _validate_app_version(version: str, *, source: str) -> tuple[str, str] | None:
+    """Return ``(version, source)`` or ``None`` (with warning) on bad chars."""
+    if not APP_VERSION_RE.match(version):
+        log.warning(
+            "Rejecting app_version %r from %s: contains characters "
+            "unsafe for SQL interpolation",
+            version,
+            source,
+        )
+        return None
+    return version, source
+
+
+def resolve_app_version(
+    project_dir: Path | None,
+    *,
+    override: str | None = None,
+) -> tuple[str, str] | None:
+    """Resolve a build-time app version for stamping into databases.
+
+    Precedence:
+        1. *override* (if non-empty).
+        2. ``<project_dir>/version.json`` ``version`` field.
+        3. ``<project_dir>/pyproject.toml`` ``[project].version``.
+
+    Returns ``(version, source)`` where *source* is one of ``"override"``,
+    ``"version.json"``, or ``"pyproject.toml"``. Returns ``None`` when no
+    source resolves a version, when reading a source raises (malformed
+    JSON, missing version line, OS error), or when the resolved value
+    contains characters unsafe for interpolation into a psql literal
+    (anything outside ``[A-Za-z0-9._+\\-]``). Never raises in normal
+    operation.
+    """
+    if override:
+        return _validate_app_version(override, source="override")
+
+    if project_dir is None:
+        return None
+
+    version_json = project_dir / "version.json"
+    if version_json.exists():
+        try:
+            info = read_version(version_json)
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Could not read %s: %s", version_json, exc)
+            info = None
+        if info is not None and info.version:
+            return _validate_app_version(info.version, source="version.json")
+
+    pyproject = project_dir / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            version = read_pyproject_version(pyproject)
+        except (ValueError, OSError) as exc:
+            log.warning("Could not read version from %s: %s", pyproject, exc)
+            return None
+        return _validate_app_version(version, source="pyproject.toml")
+
+    return None
+
+
 _VERSION_FIELDS = frozenset(
     {
         "version",
