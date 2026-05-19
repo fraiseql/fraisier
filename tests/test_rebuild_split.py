@@ -514,3 +514,65 @@ class TestRebuildStrategyVersionStamp:
         assert not any(
             c.kwargs["db_name"] == "template_myapp" for c in stamp_calls
         )
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_race_free_ordering(self, _mock_rebuild_deps):
+        """terminate(template) → drop(template) → terminate(src) → stamp → terminate(src) → create(template)."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        sequence: list[tuple[str, str]] = []
+
+        def _record_term(db, **_kw):
+            sequence.append(("terminate", db))
+
+        def _record_drop(db, **_kw):
+            sequence.append(("drop", db))
+
+        def _record_create(db, **kw):
+            template = kw.get("template")
+            sequence.append(("create", db if template is None else f"{db}<-{template}"))
+            return (0, "", "")
+
+        def _record_psql(sql, **kw):
+            if "UPDATE public.tb_version" in sql:
+                sequence.append(("stamp", kw["db_name"]))
+            return (0, "UPDATE 1", "")
+
+        with (
+            patch(
+                "fraisier.strategies._core.terminate_backends",
+                side_effect=_record_term,
+            ),
+            patch("fraisier.strategies._core.drop_db", side_effect=_record_drop),
+            patch(
+                "fraisier.strategies._core.create_db", side_effect=_record_create
+            ),
+            patch(
+                "fraisier.strategies._core.run_psql", side_effect=_record_psql
+            ),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        # Filter to just the template-block operations (after the initial rebuild).
+        # The initial DB rebuild produces: terminate(myapp), drop(myapp), create(myapp).
+        # Then the template block runs:
+        #   terminate(template_myapp), drop(template_myapp),
+        #   terminate(myapp), stamp(myapp), terminate(myapp),
+        #   create(template_myapp<-myapp)
+        # Trim the leading 3 entries from the initial rebuild.
+        template_block = sequence[3:]
+        assert template_block == [
+            ("terminate", "template_myapp"),
+            ("drop", "template_myapp"),
+            ("terminate", "myapp"),
+            ("stamp", "myapp"),
+            ("terminate", "myapp"),
+            ("create", "template_myapp<-myapp"),
+        ]
