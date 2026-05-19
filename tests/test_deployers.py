@@ -818,6 +818,24 @@ class TestAPIDeployer:
         mock_watcher.save_hash.assert_not_called()
 
 
+class TestAPIDeployerRebuildAppVersion:
+    """APIDeployer plumbs database.app_version through to RebuildStrategy."""
+
+    def test_reads_app_version_from_database_config(self):
+        deployer = APIDeployer(
+            {
+                "app_path": "/tmp/x",
+                "database": {
+                    "strategy": "rebuild",
+                    "create_template": True,
+                    "app_version": "9.9.9",
+                },
+            }
+        )
+        strategy, *_ = deployer._resolve_strategy()
+        assert strategy._app_version == "9.9.9"
+
+
 class TestServiceFileStaleness:
     """_check_service_file_staleness warns when live unit differs from scaffold."""
 
