@@ -55,7 +55,11 @@ def resolve_app_version(
 
     pyproject = project_dir / "pyproject.toml"
     if pyproject.exists():
-        version = read_pyproject_version(pyproject)
+        try:
+            version = read_pyproject_version(pyproject)
+        except (ValueError, OSError) as exc:
+            log.warning("Could not read version from %s: %s", pyproject, exc)
+            return None
         return _validate_app_version(version, source="pyproject.toml")
 
     return None

@@ -509,3 +509,13 @@ class TestResolveAppVersion:
             result = resolve_app_version(tmp_path)
         assert result is None
         assert "version.json" in caplog.text
+
+    def test_pyproject_without_version_line_returns_none(self, tmp_path, caplog):
+        """pyproject.toml without a version = line returns None with warning."""
+        import logging
+
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path)
+        assert result is None
+        assert "pyproject.toml" in caplog.text
