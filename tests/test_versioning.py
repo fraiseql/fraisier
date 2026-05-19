@@ -463,3 +463,7 @@ class TestResolveAppVersion:
     def test_missing_project_dir_returns_none(self):
         """project_dir=None and no override returns None."""
         assert resolve_app_version(None) is None
+
+    def test_empty_project_dir_returns_none(self, tmp_path):
+        """No version.json and no pyproject.toml returns None without raising."""
+        assert resolve_app_version(tmp_path) is None
