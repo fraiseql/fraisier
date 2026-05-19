@@ -656,3 +656,44 @@ class TestRebuildStrategyVersionStamp:
         assert len(stamp_calls) == 1
         assert "SET app_version = '0.4.2'" in stamp_calls[0].args[0]
         assert "from version.json" in caplog.text
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_discovers_version_from_pyproject(
+        self, _mock_rebuild_deps, tmp_path, caplog
+    ):
+        """pyproject.toml fallback drives the UPDATE and INFO log."""
+        import logging
+
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+            patch(
+                "fraisier.versioning.resolve_app_version",
+                return_value=("0.0.7", "pyproject.toml"),
+            ),
+            caplog.at_level(logging.INFO, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                project_dir=tmp_path,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert len(stamp_calls) == 1
+        assert "SET app_version = '0.0.7'" in stamp_calls[0].args[0]
+        assert "from pyproject.toml" in caplog.text
