@@ -878,6 +878,11 @@ class TestGetStrategy:
         assert isinstance(s, RebuildStrategy)
         assert s._app_version == "1.2.3"
 
+    def test_rebuild_app_version_default_is_none(self):
+        """Without app_version kwarg, the strategy's _app_version is None."""
+        s = get_strategy("rebuild")
+        assert s._app_version is None
+
     def test_restore_migrate(self):
         s = get_strategy(
             "restore_migrate",
