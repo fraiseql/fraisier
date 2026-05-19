@@ -872,6 +872,12 @@ class TestGetStrategy:
         assert isinstance(s, RebuildStrategy)
         assert s._template_name == "snap_myapp"
 
+    def test_rebuild_forwards_app_version(self):
+        """get_strategy forwards app_version kwarg to RebuildStrategy."""
+        s = get_strategy("rebuild", create_template=True, app_version="1.2.3")
+        assert isinstance(s, RebuildStrategy)
+        assert s._app_version == "1.2.3"
+
     def test_restore_migrate(self):
         s = get_strategy(
             "restore_migrate",

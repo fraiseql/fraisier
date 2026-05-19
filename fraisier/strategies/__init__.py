@@ -59,13 +59,16 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         roles = kwargs.get("required_roles") or []
         project_dir = kwargs.get("project_dir")
         admin_url = kwargs.get("admin_url")
-        return RebuildStrategy(
-            required_roles=roles,
-            project_dir=project_dir,
-            admin_url=admin_url,
-            create_template=bool(kwargs.get("create_template", False)),
-            template_name=kwargs.get("template_name"),
-        )
+        rebuild_kwargs: dict[str, Any] = {
+            "required_roles": roles,
+            "project_dir": project_dir,
+            "admin_url": admin_url,
+            "create_template": bool(kwargs.get("create_template", False)),
+            "template_name": kwargs.get("template_name"),
+        }
+        if kwargs.get("app_version"):
+            rebuild_kwargs["app_version"] = kwargs["app_version"]
+        return RebuildStrategy(**rebuild_kwargs)
     if name == "restore_migrate":
         restore_cfg = kwargs.get("restore_config")
         if not restore_cfg or not isinstance(restore_cfg, dict):
