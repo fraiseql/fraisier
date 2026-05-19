@@ -120,6 +120,18 @@ class RebuildStrategy(Strategy):
             validate_pg_identifier(template_name, "template name")
         self._create_template = create_template
         self._template_name = template_name
+        if app_version:
+            # Loud failure on a typo'd fraises.yaml value. Auto-discovered
+            # values from version.json / pyproject.toml are validated
+            # silently in resolve_app_version (warn-and-skip path).
+            from fraisier.versioning import APP_VERSION_RE
+
+            if not APP_VERSION_RE.match(app_version):
+                msg = (
+                    f"invalid app_version {app_version!r}: must match "
+                    f"{APP_VERSION_RE.pattern}"
+                )
+                raise ValueError(msg)
         self._app_version = app_version
 
     def _resolved_template_name(self, db_name: str) -> str:

@@ -850,3 +850,13 @@ class TestRebuildStrategyVersionStamp:
             if "UPDATE public.tb_version" in c.args[0]
         ]
         assert stamp_calls == []
+
+    def test_init_rejects_invalid_app_version(self):
+        """A non-empty app_version that fails the regex raises ValueError."""
+        with pytest.raises(ValueError, match=r"app_version"):
+            RebuildStrategy(app_version="1!2.3.4")
+
+    def test_init_accepts_empty_app_version(self):
+        """Empty app_version is treated as not-supplied; no raise."""
+        strategy = RebuildStrategy(app_version="")
+        assert strategy._app_version == ""
