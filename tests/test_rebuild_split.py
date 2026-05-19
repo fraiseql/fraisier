@@ -820,3 +820,33 @@ class TestRebuildStrategyVersionStamp:
             and r.message.startswith("Stamped ")
         ]
         assert stamped_info == []
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_create_template_false_skips_stamp(self, _mock_rebuild_deps):
+        """create_template=False short-circuits: no UPDATE against tb_version."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=False,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert stamp_calls == []
