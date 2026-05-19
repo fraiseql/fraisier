@@ -519,3 +519,11 @@ class TestResolveAppVersion:
             result = resolve_app_version(tmp_path)
         assert result is None
         assert "pyproject.toml" in caplog.text
+
+    def test_empty_version_json_version_falls_through(self, tmp_path):
+        """Empty version field in version.json falls through to pyproject.toml."""
+        (tmp_path / "version.json").write_text('{"version": ""}')
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "x"\nversion = "0.0.1"\n'
+        )
+        assert resolve_app_version(tmp_path) == ("0.0.1", "pyproject.toml")
