@@ -883,6 +883,11 @@ class TestGetStrategy:
         s = get_strategy("rebuild")
         assert s._app_version is None
 
+    def test_rebuild_empty_app_version_is_ignored(self):
+        """Empty-string app_version is dropped so auto-discovery runs."""
+        s = get_strategy("rebuild", create_template=True, app_version="")
+        assert s._app_version is None
+
     def test_restore_migrate(self):
         s = get_strategy(
             "restore_migrate",
