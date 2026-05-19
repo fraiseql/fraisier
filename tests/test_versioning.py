@@ -480,3 +480,8 @@ class TestResolveAppVersion:
         assert result is None
         assert bad in caplog.text
         assert "version.json" in caplog.text
+
+    def test_override_beats_files(self, tmp_path):
+        """Override is consulted before version.json, even when version.json exists."""
+        (tmp_path / "version.json").write_text('{"version": "1.0.0"}')
+        assert resolve_app_version(tmp_path, override="9.9.9") == ("9.9.9", "override")
