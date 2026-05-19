@@ -499,3 +499,13 @@ class TestResolveAppVersion:
             result = resolve_app_version(tmp_path, override="1!2.3.4")
         assert result is None
         assert "1!2.3.4" in caplog.text
+
+    def test_malformed_version_json_returns_none(self, tmp_path, caplog):
+        """Malformed JSON in version.json is caught and the function returns None."""
+        import logging
+
+        (tmp_path / "version.json").write_text("{not: valid json")
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path)
+        assert result is None
+        assert "version.json" in caplog.text

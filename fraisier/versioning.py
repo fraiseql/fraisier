@@ -45,7 +45,11 @@ def resolve_app_version(
 
     version_json = project_dir / "version.json"
     if version_json.exists():
-        info = read_version(version_json)
+        try:
+            info = read_version(version_json)
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Could not read %s: %s", version_json, exc)
+            info = None
         if info is not None and info.version:
             return _validate_app_version(info.version, source="version.json")
 
