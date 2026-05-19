@@ -485,3 +485,8 @@ class TestResolveAppVersion:
         """Override is consulted before version.json, even when version.json exists."""
         (tmp_path / "version.json").write_text('{"version": "1.0.0"}')
         assert resolve_app_version(tmp_path, override="9.9.9") == ("9.9.9", "override")
+
+    def test_empty_override_falls_through(self, tmp_path):
+        """Empty-string override is treated as not supplied; falls back to version.json."""
+        (tmp_path / "version.json").write_text('{"version": "1.0.0"}')
+        assert resolve_app_version(tmp_path, override="") == ("1.0.0", "version.json")
