@@ -459,3 +459,7 @@ class TestResolveAppVersion:
             '[project]\nname = "x"\nversion = "0.0.1"\n'
         )
         assert resolve_app_version(tmp_path) == ("0.0.1", "pyproject.toml")
+
+    def test_missing_project_dir_returns_none(self):
+        """project_dir=None and no override returns None."""
+        assert resolve_app_version(None) is None
