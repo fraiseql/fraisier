@@ -467,3 +467,16 @@ class TestResolveAppVersion:
     def test_empty_project_dir_returns_none(self, tmp_path):
         """No version.json and no pyproject.toml returns None without raising."""
         assert resolve_app_version(tmp_path) is None
+
+    def test_malformed_version_in_version_json_rejected(self, tmp_path, caplog):
+        """A version containing SQL-unsafe characters is rejected with a warning."""
+        bad = "1.0.0'; DROP TABLE--"
+        (tmp_path / "version.json").write_text(f'{{"version": "{bad}"}}')
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path)
+        assert result is None
+        assert bad in caplog.text
+        assert "version.json" in caplog.text
