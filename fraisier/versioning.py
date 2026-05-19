@@ -36,7 +36,21 @@ def resolve_app_version(
     *,
     override: str | None = None,
 ) -> tuple[str, str] | None:
-    """Resolve a build-time app version for stamping into databases."""
+    """Resolve a build-time app version for stamping into databases.
+
+    Precedence:
+        1. *override* (if non-empty).
+        2. ``<project_dir>/version.json`` ``version`` field.
+        3. ``<project_dir>/pyproject.toml`` ``[project].version``.
+
+    Returns ``(version, source)`` where *source* is one of ``"override"``,
+    ``"version.json"``, or ``"pyproject.toml"``. Returns ``None`` when no
+    source resolves a version, when reading a source raises (malformed
+    JSON, missing version line, OS error), or when the resolved value
+    contains characters unsafe for interpolation into a psql literal
+    (anything outside ``[A-Za-z0-9._+\\-]``). Never raises in normal
+    operation.
+    """
     if override:
         return _validate_app_version(override, source="override")
 
