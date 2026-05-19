@@ -108,6 +108,7 @@ class RebuildStrategy(Strategy):
         admin_url: str | None = None,
         create_template: bool = False,
         template_name: str | None = None,
+        app_version: str | None = None,
     ) -> None:
         self._required_roles: list[str] = []
         for role in required_roles or []:
@@ -119,10 +120,74 @@ class RebuildStrategy(Strategy):
             validate_pg_identifier(template_name, "template name")
         self._create_template = create_template
         self._template_name = template_name
+        self._app_version = app_version
 
     def _resolved_template_name(self, db_name: str) -> str:
         """Return the template DB name: explicit or derived from db_name."""
         return self._template_name or f"template_{db_name}"
+
+    def _stamp_source_for_template(
+        self, db_name: str, connection_url: str
+    ) -> None:
+        """Best-effort: stamp the live DB so the template carries app_version.
+
+        Failures (no resolvable version, missing/empty ``tb_version``, psql
+        error) log at WARNING and never raise — the consumer side is
+        responsible for rejecting unstamped/stale templates.
+        """
+        from fraisier.versioning import APP_VERSION_RE, resolve_app_version
+
+        resolved = resolve_app_version(
+            self._project_dir, override=self._app_version
+        )
+        if resolved is None:
+            log.warning(
+                "Skipping pre-clone version stamp on %s: no app version "
+                "could be resolved (override=%r, project_dir=%s); "
+                "template will be unstamped",
+                db_name,
+                self._app_version,
+                self._project_dir,
+            )
+            return
+        version, source = resolved
+
+        if not APP_VERSION_RE.match(version):  # pragma: no cover
+            log.warning(
+                "Refusing to stamp %s: resolved version %r failed "
+                "interpolation re-validation",
+                db_name,
+                version,
+            )
+            return
+
+        sql = f"UPDATE public.tb_version SET app_version = '{version}'"
+        code, stdout, stderr = run_psql(
+            sql, db_name=db_name, connection_url=connection_url
+        )
+        if code != 0:
+            log.warning(
+                "Could not stamp %s with app_version=%s (from %s): %s",
+                db_name,
+                version,
+                source,
+                stderr.strip(),
+            )
+            return
+        if "UPDATE 0" in stdout:
+            log.warning(
+                "tb_version on %s is empty; template will be unstamped. "
+                "Project must seed tb_version with at least one row for "
+                "the stamp to take effect.",
+                db_name,
+            )
+            return
+        log.info(
+            "Stamped %s with app_version=%s (from %s) before template clone",
+            db_name,
+            version,
+            source,
+        )
 
     @staticmethod
     def _apply_sql(connection_url: str, sql_path: Path) -> None:
@@ -295,7 +360,15 @@ class RebuildStrategy(Strategy):
             template_name = self._resolved_template_name(db_name)
             terminate_backends(template_name, connection_url=admin_url)
             drop_db(template_name, connection_url=admin_url)
-            # Must terminate connections to source before cloning it.
+            # Kick any reconnected app off before stamping so the stamp is
+            # the last write to tb_version before the clone.
+            terminate_backends(db_name, connection_url=admin_url)
+            self._stamp_source_for_template(
+                db_name, connection_url=env.database_url
+            )
+            # Belt-and-suspenders: catch anything that reconnected between
+            # the stamp's psql exit and the clone. CREATE DATABASE … TEMPLATE …
+            # itself fails closed if any backend is still attached.
             terminate_backends(db_name, connection_url=admin_url)
             code, _, stderr = create_db(
                 template_name, template=db_name, connection_url=admin_url

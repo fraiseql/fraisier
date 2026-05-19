@@ -339,11 +339,12 @@ class TestRebuildStrategyTemplateCreation:
             )
             strategy.execute(Path("confiture.yaml"))
 
-        # Expected order: terminate myapp (main rebuild), terminate template_myapp, terminate myapp (before clone)
+        # Expected order: terminate myapp (initial rebuild), terminate template_myapp,
+        # terminate myapp (pre-stamp), terminate myapp (pre-clone, belt-and-suspenders).
         assert "myapp" in terminate_calls
         assert "template_myapp" in terminate_calls
-        # myapp terminated twice (initial + before clone)
-        assert terminate_calls.count("myapp") == 2
+        # myapp terminated three times: initial drop, pre-stamp, pre-clone.
+        assert terminate_calls.count("myapp") == 3
 
     @pytest.mark.usefixtures("_mock_rebuild_deps")
     def test_execute_with_template_drops_existing_template_first(
@@ -443,3 +444,40 @@ class TestRebuildStrategyTemplateCreation:
                 admin_url="postgresql://postgres@localhost/postgres",
             )
             strategy.execute(Path("confiture.yaml"))
+
+
+class TestRebuildStrategyVersionStamp:
+    """RebuildStrategy stamps the source DB before cloning the template (#198)."""
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_stamps_with_explicit_app_version(self, _mock_rebuild_deps):
+        """Explicit app_version is written into public.tb_version via run_psql."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert len(stamp_calls) == 1
+        call = stamp_calls[0]
+        assert "SET app_version = '1.2.3'" in call.args[0]
+        assert call.kwargs["db_name"] == "myapp"
