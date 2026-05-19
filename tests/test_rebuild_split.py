@@ -697,3 +697,49 @@ class TestRebuildStrategyVersionStamp:
         assert len(stamp_calls) == 1
         assert "SET app_version = '0.0.7'" in stamp_calls[0].args[0]
         assert "from pyproject.toml" in caplog.text
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_no_version_resolvable_warns_and_clones(
+        self, _mock_rebuild_deps, caplog
+    ):
+        """When no version resolves, warn and continue with the clone."""
+        import logging
+
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+            patch(
+                "fraisier.versioning.resolve_app_version", return_value=None
+            ),
+            caplog.at_level(logging.WARNING, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            result = strategy.execute(Path("confiture.yaml"))
+
+        assert result.success
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert stamp_calls == []
+        # Template clone still happens: create_db called twice (db + template).
+        assert mock_create.call_count == 2
+        template_call = mock_create.call_args_list[1]
+        assert template_call[0][0] == "template_myapp"
+        assert template_call[1]["template"] == "myapp"
+        assert "Skipping pre-clone version stamp" in caplog.text
