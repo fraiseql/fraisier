@@ -490,3 +490,12 @@ class TestResolveAppVersion:
         """Empty-string override is treated as not supplied; falls back to version.json."""
         (tmp_path / "version.json").write_text('{"version": "1.0.0"}')
         assert resolve_app_version(tmp_path, override="") == ("1.0.0", "version.json")
+
+    def test_pep440_epoch_rejected(self, tmp_path, caplog):
+        """PEP 440 epoch versions (1!2.3.4) are rejected — documented limitation."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="fraisier.versioning"):
+            result = resolve_app_version(tmp_path, override="1!2.3.4")
+        assert result is None
+        assert "1!2.3.4" in caplog.text
