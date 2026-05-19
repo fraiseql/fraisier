@@ -49,6 +49,11 @@ def resolve_app_version(
         if info is not None and info.version:
             return _validate_app_version(info.version, source="version.json")
 
+    pyproject = project_dir / "pyproject.toml"
+    if pyproject.exists():
+        version = read_pyproject_version(pyproject)
+        return _validate_app_version(version, source="pyproject.toml")
+
     return None
 
 

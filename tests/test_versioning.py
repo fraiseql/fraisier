@@ -452,3 +452,10 @@ class TestResolveAppVersion:
         """version.json containing a valid version returns (value, "version.json")."""
         (tmp_path / "version.json").write_text('{"version": "0.4.2"}')
         assert resolve_app_version(tmp_path) == ("0.4.2", "version.json")
+
+    def test_pyproject_fallback(self, tmp_path):
+        """With no version.json, pyproject.toml [project].version is used."""
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "x"\nversion = "0.0.1"\n'
+        )
+        assert resolve_app_version(tmp_path) == ("0.0.1", "pyproject.toml")
