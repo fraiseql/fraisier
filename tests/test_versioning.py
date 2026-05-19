@@ -12,6 +12,7 @@ from fraisier.strategies import (
     PeeweeMigrateStrategy,
 )
 from fraisier.versioning import (
+    APP_VERSION_RE,
     VersionInfo,
     VersionSyncConfig,
     VersionSyncTarget,
@@ -23,6 +24,7 @@ from fraisier.versioning import (
     parse_semver,
     read_pyproject_version,
     read_version,
+    resolve_app_version,
     sync_version_to_targets,
     write_version,
 )
@@ -437,3 +439,11 @@ class TestGenerateVersionJson:
         info = generate_version_json(tmp_path)
         assert info.schema_hash == ""
         assert info.database_version == ""
+
+
+class TestResolveAppVersion:
+    """Test resolve_app_version helper for build-time stamping."""
+
+    def test_explicit_override_wins(self, tmp_path):
+        """Explicit override returns (value, "override") with no file lookups."""
+        assert resolve_app_version(tmp_path, override="1.2.3") == ("1.2.3", "override")

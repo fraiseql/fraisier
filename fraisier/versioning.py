@@ -15,6 +15,27 @@ log = logging.getLogger(__name__)
 
 _SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
+APP_VERSION_RE = re.compile(r"^[A-Za-z0-9._+\-]+$")
+
+
+def resolve_app_version(
+    project_dir: Path | None,  # noqa: ARG001
+    *,
+    override: str | None = None,
+) -> tuple[str, str] | None:
+    """Resolve a build-time app version for stamping into databases."""
+    if override:
+        if not APP_VERSION_RE.match(override):
+            log.warning(
+                "Rejecting app_version %r from override: contains characters "
+                "unsafe for SQL interpolation",
+                override,
+            )
+            return None
+        return override, "override"
+    return None
+
+
 _VERSION_FIELDS = frozenset(
     {
         "version",
