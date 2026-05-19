@@ -848,6 +848,20 @@ class TestAPIDeployerRebuildAppVersion:
         strategy, *_ = deployer._resolve_strategy()
         assert strategy._app_version is None
 
+    def test_invalid_app_version_propagates(self):
+        deployer = APIDeployer(
+            {
+                "app_path": "/tmp/x",
+                "database": {
+                    "strategy": "rebuild",
+                    "create_template": True,
+                    "app_version": "1!2.3.4",
+                },
+            }
+        )
+        with pytest.raises(ValueError, match="app_version"):
+            deployer._resolve_strategy()
+
 
 class TestServiceFileStaleness:
     """_check_service_file_staleness warns when live unit differs from scaffold."""

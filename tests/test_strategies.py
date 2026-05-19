@@ -888,6 +888,11 @@ class TestGetStrategy:
         s = get_strategy("rebuild", create_template=True, app_version="")
         assert s._app_version is None
 
+    def test_rebuild_invalid_app_version_raises(self):
+        """Invalid app_version propagates ValueError (not swallowed by factory)."""
+        with pytest.raises(ValueError, match="app_version"):
+            get_strategy("rebuild", create_template=True, app_version="1!2.3.4")
+
     def test_restore_migrate(self):
         s = get_strategy(
             "restore_migrate",
