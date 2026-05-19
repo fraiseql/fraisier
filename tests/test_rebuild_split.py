@@ -481,3 +481,36 @@ class TestRebuildStrategyVersionStamp:
         call = stamp_calls[0]
         assert "SET app_version = '1.2.3'" in call.args[0]
         assert call.kwargs["db_name"] == "myapp"
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_stamps_source_db_not_template_db(self, _mock_rebuild_deps):
+        """The stamp targets the source DB, not the template DB (pre-clone)."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(0, "UPDATE 1", ""),
+            ) as mock_run_psql,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        stamp_calls = [
+            c
+            for c in mock_run_psql.call_args_list
+            if "UPDATE public.tb_version" in c.args[0]
+        ]
+        assert all(c.kwargs["db_name"] == "myapp" for c in stamp_calls)
+        assert not any(
+            c.kwargs["db_name"] == "template_myapp" for c in stamp_calls
+        )
