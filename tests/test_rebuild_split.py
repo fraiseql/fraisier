@@ -743,3 +743,36 @@ class TestRebuildStrategyVersionStamp:
         assert template_call[0][0] == "template_myapp"
         assert template_call[1]["template"] == "myapp"
         assert "Skipping pre-clone version stamp" in caplog.text
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_psql_failure_warns_and_clones(self, _mock_rebuild_deps, caplog):
+        """psql non-zero exit logs WARNING with stderr and continues with clone."""
+        import logging
+
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db"),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+            patch(
+                "fraisier.strategies._core.run_psql",
+                return_value=(1, "", "relation tb_version does not exist"),
+            ),
+            caplog.at_level(logging.WARNING, logger="fraisier.strategies._core"),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                app_version="1.2.3",
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            result = strategy.execute(Path("confiture.yaml"))
+
+        assert result.success
+        assert mock_create.call_count == 2
+        assert "Could not stamp" in caplog.text
+        assert "relation tb_version does not exist" in caplog.text
