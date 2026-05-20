@@ -367,7 +367,15 @@ class RebuildStrategy(Strategy):
         if self._create_template:
             template_name = self._resolved_template_name(db_name)
             terminate_backends(template_name, connection_url=admin_url)
-            drop_db(template_name, connection_url=admin_url)
+            # clear_template_flag: Postgres refuses to drop a database with
+            # datistemplate=true (even WITH FORCE); fixes #200 re-deploys.
+            code, _, stderr = drop_db(
+                template_name,
+                clear_template_flag=True,
+                connection_url=admin_url,
+            )
+            if code != 0:
+                raise subprocess.CalledProcessError(code, "dropdb", stderr=stderr)
             # Kick any reconnected app off before stamping so the stamp is
             # the last write to tb_version before the clone.
             terminate_backends(db_name, connection_url=admin_url)

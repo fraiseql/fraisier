@@ -776,6 +776,76 @@ class TestRestoreMigrateStrategy:
             CONFIG, migrations_dir=MDIR, database_url=url, hooks_config=None
         )
 
+    @patch("fraisier.strategies._restore.migrate_up")
+    @patch("fraisier.dbops.restore.restore_backup")
+    @patch("fraisier.dbops.operations.create_db")
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_execute_with_create_template_drops_template_with_clear_flag(
+        self,
+        mock_find,
+        mock_age,
+        mock_term,
+        mock_drop,
+        mock_create,
+        mock_restore,
+        mock_up,
+    ):
+        """create_template path passes clear_template_flag=True on the template drop (#200)."""
+        mock_find.return_value = Path("/backup/db.dump")
+        mock_drop.return_value = (0, "", "")
+        mock_create.return_value = (0, "", "")
+        mock_restore.return_value = RestoreResult(success=True)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
+
+        strategy = _make_strategy(create_template=True, template_name="tpl_staging")
+        strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        template_drop_calls = [
+            call for call in mock_drop.call_args_list
+            if call.args and call.args[0] == "tpl_staging"
+        ]
+        assert len(template_drop_calls) == 1
+        assert template_drop_calls[0].kwargs.get("clear_template_flag") is True
+
+    @patch("fraisier.strategies._restore.migrate_up")
+    @patch("fraisier.dbops.restore.restore_backup")
+    @patch("fraisier.dbops.operations.create_db")
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_execute_raises_when_template_drop_fails(
+        self,
+        mock_find,
+        mock_age,
+        mock_term,
+        mock_drop,
+        mock_create,
+        mock_restore,
+        mock_up,
+    ):
+        """Non-zero return from template drop_db surfaces as DatabaseError (#200)."""
+        from fraisier.errors import DatabaseError
+
+        mock_find.return_value = Path("/backup/db.dump")
+        mock_create.return_value = (0, "", "")
+        mock_restore.return_value = RestoreResult(success=True)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
+
+        def drop_side_effect(db, **_kw):
+            if db == "tpl_staging":
+                return (1, "", "permission denied")
+            return (0, "", "")
+
+        mock_drop.side_effect = drop_side_effect
+
+        strategy = _make_strategy(create_template=True, template_name="tpl_staging")
+        with pytest.raises(DatabaseError, match="Failed to drop template"):
+            strategy.execute(CONFIG, migrations_dir=MDIR)
+
     @patch("fraisier.strategies._restore.migrate_down")
     def test_rollback_passes_database_url_to_migrate_down(self, mock_down):
         mock_down.return_value = MigrationResult(success=True, steps_applied=1)
