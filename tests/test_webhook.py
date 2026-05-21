@@ -455,6 +455,195 @@ class TestRunDeploymentErrorRecording:
         assert "Unexpected" in caplog.text
 
 
+class TestSelfUpgradeWireUp:
+    """`_run_deployment` invokes `maybe_self_upgrade` after a successful deploy
+    (issue #162). Default is enabled; opt-out via `webhook.self_upgrade: false`."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_lock(self, tmp_path):
+        @contextmanager
+        def tmp_lock(fraise_name):
+            from fraisier.locking import file_deployment_lock as real_lock
+
+            with real_lock(fraise_name, lock_dir=tmp_path) as path:
+                yield path
+
+        with patch("fraisier.webhook.deployment_lock", side_effect=tmp_lock):
+            yield
+
+    def _make_config(self, webhook_cfg: dict | None = None, project: str = "myproj"):
+        cfg = MagicMock()
+        cfg._config = {"git": {}}
+        cfg.webhook = webhook_cfg if webhook_cfg is not None else {}
+        cfg.project_name = project
+        cfg.get_deploy_user.return_value = "deployer"
+        return cfg
+
+    def _success_result(self):
+        return MagicMock(
+            success=True,
+            new_version="2.0.0",
+            old_version="1.0.0",
+            error_message=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_invoked_on_successful_deploy_with_app_path(self, test_db):
+        fraise_config = {
+            "type": "api",
+            "app_path": "/srv/app",
+            "systemd_service": "test-api.service",
+        }
+        mock_deployer = MagicMock()
+        mock_deployer.execute.return_value = self._success_result()
+
+        with (
+            patch("fraisier.webhook.get_config", return_value=self._make_config()),
+            patch(
+                "fraisier.deployers.api.APIDeployer",
+                return_value=mock_deployer,
+            ),
+            patch("fraisier.webhook.maybe_self_upgrade") as mock_upgrade,
+        ):
+            await execute_deployment(
+                fraise_name="my_api",
+                environment="production",
+                fraise_config=fraise_config,
+                git_branch="main",
+            )
+
+        mock_upgrade.assert_called_once()
+        kwargs = mock_upgrade.call_args.kwargs
+        # First positional is app_path
+        from pathlib import Path as _Path
+
+        assert mock_upgrade.call_args.args[0] == _Path("/srv/app")
+        assert kwargs["project_name"] == "myproj"
+        assert kwargs["enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_not_invoked_on_failed_deploy(self, test_db):
+        fraise_config = {
+            "type": "api",
+            "app_path": "/srv/app",
+            "systemd_service": "test-api.service",
+        }
+        failed = MagicMock(
+            success=False,
+            new_version=None,
+            old_version="1.0.0",
+            error_message="boom",
+        )
+        mock_deployer = MagicMock()
+        mock_deployer.execute.return_value = failed
+
+        with (
+            patch("fraisier.webhook.get_config", return_value=self._make_config()),
+            patch(
+                "fraisier.deployers.api.APIDeployer",
+                return_value=mock_deployer,
+            ),
+            patch("fraisier.webhook.maybe_self_upgrade") as mock_upgrade,
+        ):
+            await execute_deployment(
+                fraise_name="my_api",
+                environment="production",
+                fraise_config=fraise_config,
+                git_branch="main",
+            )
+
+        mock_upgrade.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disabled_via_webhook_self_upgrade_false(self, test_db):
+        fraise_config = {
+            "type": "api",
+            "app_path": "/srv/app",
+            "systemd_service": "test-api.service",
+        }
+        mock_deployer = MagicMock()
+        mock_deployer.execute.return_value = self._success_result()
+
+        with (
+            patch(
+                "fraisier.webhook.get_config",
+                return_value=self._make_config(webhook_cfg={"self_upgrade": False}),
+            ),
+            patch(
+                "fraisier.deployers.api.APIDeployer",
+                return_value=mock_deployer,
+            ),
+            patch("fraisier.webhook.maybe_self_upgrade") as mock_upgrade,
+        ):
+            await execute_deployment(
+                fraise_name="my_api",
+                environment="production",
+                fraise_config=fraise_config,
+                git_branch="main",
+            )
+
+        mock_upgrade.assert_called_once()
+        assert mock_upgrade.call_args.kwargs["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_exception_in_upgrade_does_not_break_deploy(self, test_db, caplog):
+        fraise_config = {
+            "type": "api",
+            "app_path": "/srv/app",
+            "systemd_service": "test-api.service",
+        }
+        mock_deployer = MagicMock()
+        mock_deployer.execute.return_value = self._success_result()
+
+        with (
+            patch("fraisier.webhook.get_config", return_value=self._make_config()),
+            patch(
+                "fraisier.deployers.api.APIDeployer",
+                return_value=mock_deployer,
+            ),
+            patch(
+                "fraisier.webhook.maybe_self_upgrade",
+                side_effect=RuntimeError("nope"),
+            ),
+        ):
+            # Must complete without raising.
+            await execute_deployment(
+                fraise_name="my_api",
+                environment="production",
+                fraise_config=fraise_config,
+                git_branch="main",
+            )
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_no_app_path(self, test_db):
+        """ETL/docker_compose fraises without an app_path can't self-upgrade —
+        the call must be skipped, not raise on a None path."""
+        fraise_config = {
+            "type": "etl",
+            "script_path": "scripts/pipeline.py",
+            # no app_path
+        }
+        mock_deployer = MagicMock()
+        mock_deployer.execute.return_value = self._success_result()
+
+        with (
+            patch("fraisier.webhook.get_config", return_value=self._make_config()),
+            patch(
+                "fraisier.deployers.etl.ETLDeployer",
+                return_value=mock_deployer,
+            ),
+            patch("fraisier.webhook.maybe_self_upgrade") as mock_upgrade,
+        ):
+            await execute_deployment(
+                fraise_name="data_pipeline",
+                environment="production",
+                fraise_config=fraise_config,
+                git_branch="main",
+            )
+
+        mock_upgrade.assert_not_called()
+
+
 class TestProcessWebhookEvent:
     """Tests for process_webhook_event function."""
 
