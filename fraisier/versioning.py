@@ -20,9 +20,7 @@ APP_VERSION_RE = re.compile(r"^[A-Za-z0-9._+\-]+$")
 
 # Matches "fraisier" or "fraisier[extras]" as the dependency name,
 # followed by an exact == pin and a semver-shaped version.
-_FRAISIER_PIN_RE = re.compile(
-    r"^\s*fraisier(?:\[[^\]]*\])?\s*==\s*(\d+\.\d+\.\d+)\s*$"
-)
+_FRAISIER_PIN_RE = re.compile(r"^\s*fraisier(?:\[[^\]]*\])?\s*==\s*(\d+\.\d+\.\d+)\s*$")
 
 
 def _validate_app_version(version: str, *, source: str) -> tuple[str, str] | None:

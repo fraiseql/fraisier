@@ -535,19 +535,19 @@ class TestDetectRequiredFraisierVersion:
 
     def test_returns_pinned_version_from_pep621_deps(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myapp"\n'
             'version = "1.0.0"\n'
-            'dependencies = [\n'
+            "dependencies = [\n"
             '  "fraisier==0.16.5",\n'
             '  "fastapi>=0.100",\n'
-            ']\n'
+            "]\n"
         )
         assert detect_required_fraisier_version(tmp_path) == "0.16.5"
 
     def test_returns_none_when_fraisier_absent(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myapp"\n'
             'version = "1.0.0"\n'
             'dependencies = ["fastapi>=0.100"]\n'
@@ -556,7 +556,7 @@ class TestDetectRequiredFraisierVersion:
 
     def test_returns_none_for_range_pin(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myapp"\n'
             'version = "1.0.0"\n'
             'dependencies = ["fraisier>=0.16,<0.17"]\n'
@@ -565,7 +565,7 @@ class TestDetectRequiredFraisierVersion:
 
     def test_returns_none_for_unpinned(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myapp"\n'
             'version = "1.0.0"\n'
             'dependencies = ["fraisier"]\n'
@@ -574,12 +574,12 @@ class TestDetectRequiredFraisierVersion:
 
     def test_handles_optional_dependencies_group(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myapp"\n'
             'version = "1.0.0"\n'
-            'dependencies = []\n'
-            '\n'
-            '[project.optional-dependencies]\n'
+            "dependencies = []\n"
+            "\n"
+            "[project.optional-dependencies]\n"
             'deploy = ["fraisier==0.17.0"]\n'
         )
         assert detect_required_fraisier_version(tmp_path) == "0.17.0"
@@ -590,7 +590,7 @@ class TestDetectRequiredFraisierVersion:
     def test_extras_marker_does_not_trip_match(self, tmp_path):
         """An entry like fraisier[extra]==X.Y.Z still extracts the pin."""
         (tmp_path / "pyproject.toml").write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myapp"\n'
             'version = "1.0.0"\n'
             'dependencies = ["fraisier[full]==0.16.6"]\n'
@@ -600,7 +600,7 @@ class TestDetectRequiredFraisierVersion:
     def test_does_not_match_substring_packages(self, tmp_path):
         """A package named 'fraisier-plugin' must not be treated as fraisier."""
         (tmp_path / "pyproject.toml").write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myapp"\n'
             'version = "1.0.0"\n'
             'dependencies = ["fraisier-plugin==1.0.0"]\n'

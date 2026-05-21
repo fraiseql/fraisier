@@ -43,17 +43,13 @@ class TestMaybeSelfUpgrade:
     def test_no_spawn_when_disabled(self, tmp_path):
         _write_pyproject(tmp_path, "99.0.0")
         spawn = MagicMock()
-        maybe_self_upgrade(
-            tmp_path, project_name="foo", enabled=False, spawn=spawn
-        )
+        maybe_self_upgrade(tmp_path, project_name="foo", enabled=False, spawn=spawn)
         spawn.assert_not_called()
 
     def test_no_spawn_when_required_is_none(self, tmp_path):
         # No pyproject.toml at all → detect returns None.
         spawn = MagicMock()
-        maybe_self_upgrade(
-            tmp_path, project_name="foo", enabled=True, spawn=spawn
-        )
+        maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
         spawn.assert_not_called()
 
     def test_no_spawn_when_required_equals_installed(self, tmp_path):
@@ -63,9 +59,7 @@ class TestMaybeSelfUpgrade:
             "fraisier.webhook_self_upgrade.importlib_metadata.version",
             return_value="1.2.3",
         ):
-            maybe_self_upgrade(
-                tmp_path, project_name="foo", enabled=True, spawn=spawn
-            )
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
         spawn.assert_not_called()
 
     def test_no_spawn_when_required_older(self, tmp_path):
@@ -75,9 +69,7 @@ class TestMaybeSelfUpgrade:
             "fraisier.webhook_self_upgrade.importlib_metadata.version",
             return_value="1.2.3",
         ):
-            maybe_self_upgrade(
-                tmp_path, project_name="foo", enabled=True, spawn=spawn
-            )
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
         spawn.assert_not_called()
 
     def test_spawn_when_required_newer(self, tmp_path):
@@ -87,9 +79,7 @@ class TestMaybeSelfUpgrade:
             "fraisier.webhook_self_upgrade.importlib_metadata.version",
             return_value="1.2.3",
         ):
-            maybe_self_upgrade(
-                tmp_path, project_name="foo", enabled=True, spawn=spawn
-            )
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
         spawn.assert_called_once_with("2.0.0", "foo")
 
     def test_never_raises_on_internal_error(self, tmp_path):
@@ -100,9 +90,7 @@ class TestMaybeSelfUpgrade:
             "fraisier.webhook_self_upgrade.importlib_metadata.version",
             return_value="1.2.3",
         ):
-            maybe_self_upgrade(
-                tmp_path, project_name="foo", enabled=True, spawn=spawn
-            )
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
 
     def test_never_raises_on_malformed_installed_version(self, tmp_path):
         _write_pyproject(tmp_path, "1.2.3")
@@ -111,22 +99,16 @@ class TestMaybeSelfUpgrade:
             "fraisier.webhook_self_upgrade.importlib_metadata.version",
             return_value="not-a-version",
         ):
-            maybe_self_upgrade(
-                tmp_path, project_name="foo", enabled=True, spawn=spawn
-            )
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
         # Conservative: skip when we can't compare.
         spawn.assert_not_called()
 
 
 class TestSpawnUpgrade:
     def test_spawn_uses_detached_kwargs(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(
-            "fraisier.webhook_self_upgrade._LOG_DIR", tmp_path / "logs"
-        )
+        monkeypatch.setattr("fraisier.webhook_self_upgrade._LOG_DIR", tmp_path / "logs")
         monkeypatch.setenv("FRAISIER_SYSTEMCTL_SOCKET", "/run/x.sock")
-        with patch(
-            "fraisier.webhook_self_upgrade.subprocess.Popen"
-        ) as mock_popen:
+        with patch("fraisier.webhook_self_upgrade.subprocess.Popen") as mock_popen:
             _spawn_upgrade("0.17.0", "myproj")
         mock_popen.assert_called_once()
         args, kwargs = mock_popen.call_args
@@ -153,9 +135,7 @@ class TestSpawnUpgrade:
             "fraisier.webhook_self_upgrade._LOG_DIR", Path("/dev/null/no")
         )
         monkeypatch.setenv("FRAISIER_SYSTEMCTL_SOCKET", "/run/x.sock")
-        with patch(
-            "fraisier.webhook_self_upgrade.subprocess.Popen"
-        ) as mock_popen:
+        with patch("fraisier.webhook_self_upgrade.subprocess.Popen") as mock_popen:
             _spawn_upgrade("0.17.0", "myproj")
         mock_popen.assert_called_once()
         _, kwargs = mock_popen.call_args
@@ -163,13 +143,9 @@ class TestSpawnUpgrade:
         assert kwargs["stdout"] is subprocess.DEVNULL
 
     def test_spawn_with_no_socket_env(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(
-            "fraisier.webhook_self_upgrade._LOG_DIR", tmp_path / "logs"
-        )
+        monkeypatch.setattr("fraisier.webhook_self_upgrade._LOG_DIR", tmp_path / "logs")
         monkeypatch.delenv("FRAISIER_SYSTEMCTL_SOCKET", raising=False)
-        with patch(
-            "fraisier.webhook_self_upgrade.subprocess.Popen"
-        ) as mock_popen:
+        with patch("fraisier.webhook_self_upgrade.subprocess.Popen") as mock_popen:
             _spawn_upgrade("0.17.0", "myproj")
         args, _ = mock_popen.call_args
         cmd = args[0]
@@ -180,17 +156,12 @@ class TestSpawnUpgrade:
 
 class TestRunUpgrade:
     def test_install_success_triggers_restart_rpc(self):
-        with patch(
-            "fraisier.webhook_self_upgrade.subprocess.run"
-        ) as mock_run, patch(
-            "fraisier.webhook_self_upgrade._call_via_socket"
-        ) as mock_socket:
-            mock_run.return_value = SimpleNamespace(
-                returncode=0, stdout="", stderr=""
-            )
-            rc = _run_upgrade(
-                "0.17.0", "fraisier-foo-webhook.service", "/run/x.sock"
-            )
+        with (
+            patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
+            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+        ):
+            mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+            rc = _run_upgrade("0.17.0", "fraisier-foo-webhook.service", "/run/x.sock")
         assert rc == 0
         assert mock_run.call_args[0][0] == _build_install_cmd("0.17.0")
         mock_socket.assert_called_once_with(
@@ -198,53 +169,41 @@ class TestRunUpgrade:
         )
 
     def test_install_failure_skips_restart(self):
-        with patch(
-            "fraisier.webhook_self_upgrade.subprocess.run"
-        ) as mock_run, patch(
-            "fraisier.webhook_self_upgrade._call_via_socket"
-        ) as mock_socket:
+        with (
+            patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
+            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+        ):
             mock_run.return_value = SimpleNamespace(
                 returncode=1, stdout="", stderr="oops"
             )
-            rc = _run_upgrade(
-                "0.17.0", "fraisier-foo-webhook.service", "/run/x.sock"
-            )
+            rc = _run_upgrade("0.17.0", "fraisier-foo-webhook.service", "/run/x.sock")
         assert rc == 1
         mock_socket.assert_not_called()
 
     def test_install_success_no_socket_logs_and_returns_ok(self, caplog):
         import logging
 
-        with patch(
-            "fraisier.webhook_self_upgrade.subprocess.run"
-        ) as mock_run, patch(
-            "fraisier.webhook_self_upgrade._call_via_socket"
-        ) as mock_socket, caplog.at_level(
-            logging.WARNING, logger="fraisier.webhook_self_upgrade"
+        with (
+            patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
+            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+            caplog.at_level(logging.WARNING, logger="fraisier.webhook_self_upgrade"),
         ):
-            mock_run.return_value = SimpleNamespace(
-                returncode=0, stdout="", stderr=""
-            )
-            rc = _run_upgrade(
-                "0.17.0", "fraisier-foo-webhook.service", ""
-            )
+            mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+            rc = _run_upgrade("0.17.0", "fraisier-foo-webhook.service", "")
         assert rc == 0
         mock_socket.assert_not_called()
         assert "FRAISIER_SYSTEMCTL_SOCKET" in caplog.text
 
     def test_restart_rpc_failure_returns_nonzero(self):
-        with patch(
-            "fraisier.webhook_self_upgrade.subprocess.run"
-        ) as mock_run, patch(
-            "fraisier.webhook_self_upgrade._call_via_socket",
-            side_effect=ConnectionRefusedError("nope"),
+        with (
+            patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
+            patch(
+                "fraisier.webhook_self_upgrade._call_via_socket",
+                side_effect=ConnectionRefusedError("nope"),
+            ),
         ):
-            mock_run.return_value = SimpleNamespace(
-                returncode=0, stdout="", stderr=""
-            )
-            rc = _run_upgrade(
-                "0.17.0", "fraisier-foo-webhook.service", "/run/x.sock"
-            )
+            mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+            rc = _run_upgrade("0.17.0", "fraisier-foo-webhook.service", "/run/x.sock")
         assert rc != 0
 
 

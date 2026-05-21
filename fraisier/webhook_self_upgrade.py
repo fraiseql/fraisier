@@ -155,8 +155,7 @@ def _run_upgrade(required: str, service: str, socket_path: str) -> int:
     log.info("self-upgrade: install succeeded; requesting restart of %s", service)
     if not socket_path:
         log.warning(
-            "self-upgrade: FRAISIER_SYSTEMCTL_SOCKET not set; "
-            "skipping restart of %s",
+            "self-upgrade: FRAISIER_SYSTEMCTL_SOCKET not set; skipping restart of %s",
             service,
         )
         return 0
