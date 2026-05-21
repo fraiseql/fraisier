@@ -339,10 +339,18 @@ class FraisierDB:
         new_version: str | None = None,
         error_message: str | None = None,
         details: str | None = None,
+        strategy: str | None = None,
+        db_size_mb: int | None = None,
     ) -> None:
         """Record completion of a deployment."""
         self._history.complete_deployment(
-            deployment_id, success, new_version, error_message, details
+            deployment_id,
+            success,
+            new_version,
+            error_message,
+            details,
+            strategy,
+            db_size_mb,
         )
 
     def mark_deployment_rolled_back(self, deployment_id: int) -> None:

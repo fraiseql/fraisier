@@ -134,6 +134,8 @@ class DeploymentHistoryManager:
         new_version: str | None = None,
         error_message: str | None = None,
         details: str | None = None,
+        strategy: str | None = None,
+        db_size_mb: int | None = None,
     ) -> None:
         """Record completion of a deployment (pk_deployment).
 
@@ -143,6 +145,9 @@ class DeploymentHistoryManager:
             new_version: New deployed version
             error_message: Error message if failed
             details: JSON details of deployment
+            strategy: Deploy strategy name (rebuild, restore_migrate, migrate),
+                      consumed by the duration estimator (#201).
+            db_size_mb: Database size at deploy time in megabytes (optional).
         """
         now = datetime.now().isoformat()
         status = "success" if success else "failed"
@@ -163,7 +168,8 @@ class DeploymentHistoryManager:
                 """
                 UPDATE tb_deployment
                 SET completed_at=?, status=?, new_version=?, duration_seconds=?,
-                    error_message=?, details=?, updated_at=?
+                    error_message=?, details=?, strategy=?, db_size_mb=?,
+                    updated_at=?
                 WHERE pk_deployment=?
                 """,
                 (
@@ -173,6 +179,8 @@ class DeploymentHistoryManager:
                     duration,
                     error_message,
                     details,
+                    strategy,
+                    db_size_mb,
                     now,
                     deployment_id,
                 ),

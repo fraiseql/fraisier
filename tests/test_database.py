@@ -217,6 +217,44 @@ class TestFraisierDB:
         assert deployment["duration_seconds"] is not None
         assert deployment["error_message"] is None
 
+    def test_complete_deployment_persists_strategy_and_db_size(self, test_db):
+        """#201: complete_deployment writes strategy + db_size_mb to tb_deployment."""
+        deployment_id = test_db.start_deployment(
+            fraise="my_api", environment="production"
+        )
+        test_db.complete_deployment(
+            deployment_id=deployment_id,
+            success=True,
+            new_version="v2",
+            strategy="rebuild",
+            db_size_mb=512,
+        )
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT strategy, db_size_mb FROM tb_deployment "
+                "WHERE pk_deployment=?",
+                (deployment_id,),
+            ).fetchone()
+        assert row["strategy"] == "rebuild"
+        assert row["db_size_mb"] == 512
+
+    def test_complete_deployment_strategy_optional(self, test_db):
+        """Omitting strategy/db_size_mb leaves them NULL — legacy callers unaffected."""
+        deployment_id = test_db.start_deployment(
+            fraise="my_api", environment="production"
+        )
+        test_db.complete_deployment(
+            deployment_id=deployment_id, success=True, new_version="v2"
+        )
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT strategy, db_size_mb FROM tb_deployment "
+                "WHERE pk_deployment=?",
+                (deployment_id,),
+            ).fetchone()
+        assert row["strategy"] is None
+        assert row["db_size_mb"] is None
+
     def test_complete_deployment_failure(self, test_db):
         """Test completing a failed deployment."""
         deployment_id = test_db.start_deployment(
