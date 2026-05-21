@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from fraisier.deployers.api import APIDeployer
+from fraisier.deployers.base import DeploymentResult, DeploymentStatus
 from fraisier.deployers.etl import ETLDeployer
 from fraisier.deployers.scheduled import ScheduledDeployer
 
@@ -322,3 +323,142 @@ class TestRecordingConsistency:
             assert len(deps) == 1
             assert deps[0]["duration_seconds"] is not None
             assert deps[0]["duration_seconds"] >= 0
+
+
+class TestCompleteDbRecordSizeSampling:
+    """`_complete_db_record` samples pg_database_size and forwards
+    db_size_mb to complete_deployment (#201 follow-up)."""
+
+    def _api_deployer(self, **db_overrides):
+        config = {
+            "fraise_name": "my_api",
+            "environment": "production",
+            "app_path": "/var/www/api",
+            "repos_base": "/tmp/repos",
+        }
+        if db_overrides is not None:
+            config["database"] = db_overrides
+        return APIDeployer(config)
+
+    def _success_result(self) -> DeploymentResult:
+        return DeploymentResult(
+            success=True,
+            status=DeploymentStatus.SUCCESS,
+            new_version="v2",
+        )
+
+    def _failure_result(self) -> DeploymentResult:
+        return DeploymentResult(
+            success=False,
+            status=DeploymentStatus.FAILED,
+            error_message="boom",
+        )
+
+    def test_passes_db_size_mb_on_success(self):
+        deployer = self._api_deployer(
+            database_url="postgresql://u@h/db", strategy="rebuild"
+        )
+        with (
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch(
+                "fraisier.dbops.sizing.query_database_size_mb", return_value=42
+            ) as mock_size,
+        ):
+            mock_db = MagicMock()
+            mock_get_db.return_value = mock_db
+            deployer._complete_db_record(123, self._success_result())
+
+        mock_size.assert_called_once()
+        kwargs = mock_db.complete_deployment.call_args.kwargs
+        assert kwargs["db_size_mb"] == 42
+        assert kwargs["strategy"] == "rebuild"
+        assert kwargs["success"] is True
+
+    def test_passes_none_when_url_missing(self):
+        # Fraise has database config (so strategy is recorded) but no
+        # database_url — the size lookup must not fire.
+        deployer = self._api_deployer(strategy="migrate")
+        with (
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch(
+                "fraisier.dbops.sizing.query_database_size_mb"
+            ) as mock_size,
+        ):
+            mock_db = MagicMock()
+            mock_get_db.return_value = mock_db
+            deployer._complete_db_record(123, self._success_result())
+
+        mock_size.assert_not_called()
+        kwargs = mock_db.complete_deployment.call_args.kwargs
+        assert kwargs["db_size_mb"] is None
+        assert kwargs["strategy"] == "migrate"
+
+    def test_passes_none_on_failure(self):
+        deployer = self._api_deployer(
+            database_url="postgresql://u@h/db", strategy="rebuild"
+        )
+        with (
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch(
+                "fraisier.dbops.sizing.query_database_size_mb"
+            ) as mock_size,
+        ):
+            mock_db = MagicMock()
+            mock_get_db.return_value = mock_db
+            deployer._complete_db_record(123, self._failure_result())
+
+        # A failed deploy may have left the DB in an intermediate state;
+        # do not sample its size.
+        mock_size.assert_not_called()
+        kwargs = mock_db.complete_deployment.call_args.kwargs
+        assert kwargs["db_size_mb"] is None
+
+    def test_swallows_sizing_exception(self):
+        # query_database_size_mb is best-effort and should never raise,
+        # but the recorder must remain robust if a future caller does.
+        deployer = self._api_deployer(
+            database_url="postgresql://u@h/db", strategy="rebuild"
+        )
+        with (
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch(
+                "fraisier.dbops.sizing.query_database_size_mb",
+                side_effect=RuntimeError("unexpected"),
+            ),
+        ):
+            mock_db = MagicMock()
+            mock_get_db.return_value = mock_db
+            # Must not raise.
+            deployer._complete_db_record(123, self._success_result())
+
+        kwargs = mock_db.complete_deployment.call_args.kwargs
+        assert kwargs["db_size_mb"] is None
+        # The strategy column must still record even when the size lookup
+        # blew up — inner try/except, not an outer wrap.
+        assert kwargs["strategy"] == "rebuild"
+
+    def test_passes_none_for_deployer_without_database_section(self):
+        # An ETL fraise without a `database` config — database_config is an
+        # empty dict, so neither strategy nor database_url is set, and the
+        # sizing helper must not fire.
+        deployer = ETLDeployer(
+            {
+                "fraise_name": "etl",
+                "environment": "production",
+                "app_path": "/var/etl",
+                "repos_base": "/tmp/repos",
+            }
+        )
+        with (
+            patch("fraisier.database.get_db") as mock_get_db,
+            patch(
+                "fraisier.dbops.sizing.query_database_size_mb"
+            ) as mock_size,
+        ):
+            mock_db = MagicMock()
+            mock_get_db.return_value = mock_db
+            deployer._complete_db_record(123, self._success_result())
+
+        mock_size.assert_not_called()
+        kwargs = mock_db.complete_deployment.call_args.kwargs
+        assert kwargs["db_size_mb"] is None
