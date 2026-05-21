@@ -4082,12 +4082,13 @@ scaffold:
 
         Bootstrap creates the deploy user's SSH keypair but does not populate
         ~/.ssh/known_hosts. Without StrictHostKeyChecking=accept-new the first
-        git fetch fails with SSH exit 255 (issue #116).
+        git fetch fails with SSH exit 255 (issue #116). The compact -oKey=Value
+        form is used so systemd parses it as one Environment= value (#152).
         """
         out = self._render(tmp_path)
         service = (out / "systemd" / "fraisier-api-production@.service").read_text()
         ssh_env = (
-            'Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"'
+            'Environment="GIT_SSH_COMMAND=ssh -oStrictHostKeyChecking=accept-new"'
         )
         assert ssh_env in service
 
