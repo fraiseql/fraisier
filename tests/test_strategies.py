@@ -804,7 +804,8 @@ class TestRestoreMigrateStrategy:
         strategy.execute(CONFIG, migrations_dir=MDIR)
 
         template_drop_calls = [
-            call for call in mock_drop.call_args_list
+            call
+            for call in mock_drop.call_args_list
             if call.args and call.args[0] == "tpl_staging"
         ]
         assert len(template_drop_calls) == 1

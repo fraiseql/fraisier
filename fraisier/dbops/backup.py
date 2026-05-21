@@ -66,9 +66,7 @@ def _previous_same_mode_backup(
     """
     current = Path(current_path).resolve()
     candidates = [
-        p
-        for p in output_dir.glob(f"{db_name}_{mode}_*.dump")
-        if p.resolve() != current
+        p for p in output_dir.glob(f"{db_name}_{mode}_*.dump") if p.resolve() != current
     ]
     if not candidates:
         return None

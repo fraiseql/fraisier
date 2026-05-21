@@ -379,8 +379,9 @@ class TestDropDb:
         assert "datistemplate=false" in update_cmd[update_cmd.index("-c") + 1]
         drop_cmd = mock_run.call_args_list[1][0][0]
         assert drop_cmd[0] == "psql"
-        assert "DROP DATABASE IF EXISTS mytpl WITH (FORCE)" in (
-            drop_cmd[drop_cmd.index("-c") + 1]
+        assert (
+            "DROP DATABASE IF EXISTS mytpl WITH (FORCE)"
+            in (drop_cmd[drop_cmd.index("-c") + 1])
         )
 
     def test_drop_db_default_does_not_unset_template(self):
@@ -406,10 +407,7 @@ class TestUnsetTemplateFlag:
         assert cmd[0] == "psql"
         assert "-c" in cmd
         sql = cmd[cmd.index("-c") + 1]
-        assert (
-            sql
-            == "UPDATE pg_database SET datistemplate=false WHERE datname='mytpl'"
-        )
+        assert sql == "UPDATE pg_database SET datistemplate=false WHERE datname='mytpl'"
 
     def test_unset_template_flag_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid database name"):

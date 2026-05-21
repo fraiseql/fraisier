@@ -281,9 +281,7 @@ class TestVerifyBackupToc:
     def test_calls_pg_restore_with_list_flag(self):
         with patch("fraisier.dbops.backup._pg_cmd") as mock_cmd:
             mock_cmd.return_value = (0, "", "")
-            _verify_backup_toc(
-                "/backups/proddb_full.dump", connection_url=_TEST_URL
-            )
+            _verify_backup_toc("/backups/proddb_full.dump", connection_url=_TEST_URL)
         cmd = mock_cmd.call_args[0][0]
         assert cmd[0] == "pg_restore"
         assert "--list" in cmd

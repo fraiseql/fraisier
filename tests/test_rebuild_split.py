@@ -376,9 +376,7 @@ class TestRebuildStrategyTemplateCreation:
         assert "template_myapp" in drop_calls
 
     @pytest.mark.usefixtures("_mock_rebuild_deps")
-    def test_execute_drops_template_with_clear_template_flag(
-        self, _mock_rebuild_deps
-    ):
+    def test_execute_drops_template_with_clear_template_flag(self, _mock_rebuild_deps):
         """Template drop passes clear_template_flag=True so Postgres allows it (#200)."""
         mocks = _mock_rebuild_deps
         builder_instance = mocks["builder_cls"].return_value
@@ -397,7 +395,8 @@ class TestRebuildStrategyTemplateCreation:
             strategy.execute(Path("confiture.yaml"))
 
         template_drop_calls = [
-            call for call in mock_drop.call_args_list
+            call
+            for call in mock_drop.call_args_list
             if call.args and call.args[0] == "template_myapp"
         ]
         assert len(template_drop_calls) == 1
@@ -417,9 +416,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch(
-                "fraisier.strategies._core.drop_db", side_effect=drop_side_effect
-            ),
+            patch("fraisier.strategies._core.drop_db", side_effect=drop_side_effect),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
         ):
             strategy = RebuildStrategy(
