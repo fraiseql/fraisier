@@ -8,6 +8,8 @@
 # {{ rule.description }}
 # Environments: {{ rule.environments | join(', ') }}
 {{ rule.from_user }} ALL=({{ rule.as_user }}) NOPASSWD: {{ rule.cmd }} *
+{% if not loop.last %}
 
+{% endif %}
 {% endfor %}
 {% endif %}

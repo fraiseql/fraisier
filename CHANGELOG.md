@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.6] - 2026-05-21
+
+### Fixed
+
+- **Scaffolded deploy service unit silently dropped `StrictHostKeyChecking`** ([#152](https://github.com/fraiseql/fraisier/issues/152)). The `Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"` line was tokenised by systemd before quote handling, so `-o` was rejected with `Invalid environment assignment, ignoring: -o` and the option silently dropped — first-time `git fetch` then failed with SSH exit 255 (the symptom #116 had originally tried to address). The template now uses the equivalent no-space form `-oStrictHostKeyChecking=accept-new`; existing installations need to re-scaffold to pick up the fix.
+- **Generated sudoers fragment ended with a double newline** ([#161](https://github.com/fraiseql/fraisier/issues/161)). `pre-commit-hooks/end-of-file-fixer` flagged the file on every commit. The blank-line separator between rules is now suppressed on the final iteration via `{% if not loop.last %}`, preserving readability between rules without trailing whitespace.
+- **`fraisier sync` aborted with "nothing to commit" when conflicts auto-resolved back to source HEAD** ([#164](https://github.com/fraiseql/fraisier/issues/164)). The clean-merge path already guarded its pre-merge commit with `git diff --cached --quiet`; the conflict-resolution path did not. When every conflicted file was a fraisier-owned file that resolved to source HEAD (which was already the sync branch's tip), the staged index ended byte-identical to HEAD and `git commit --no-edit` exited non-zero. Both paths now route through a single `_commit_if_staged(message)` helper.
+
 ## [0.16.5] - 2026-05-21
 
 ### Fixed

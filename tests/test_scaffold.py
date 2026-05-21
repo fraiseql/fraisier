@@ -2721,6 +2721,81 @@ fraises:
         assert "FRAISIER_PG_WRAPPER" not in content
         assert "pgadmin-myproj" not in content
 
+    def test_sudoers_ends_with_exactly_one_trailing_newline(self, tmp_path):
+        """Generated sudoers file ends with one \\n, not two.
+
+        Regression test for #161: the previous template emitted a blank line
+        after every rule including the last, leaving the file ending in
+        ``\\n\\n``. pre-commit's end-of-file-fixer flagged it on every run.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = _make_full_config(tmp_path)
+        renderer = ScaffoldRenderer(config)
+
+        rules = [
+            {
+                "from_user": "deployer",
+                "as_user": "root",
+                "cmd": "/usr/bin/apt-get install",
+                "environments": ["development", "production"],
+                "description": "Dependency install",
+            },
+            {
+                "from_user": "deployer",
+                "as_user": "postgres",
+                "cmd": "/usr/bin/createdb",
+                "environments": ["development"],
+                "description": "Dependency install",
+            },
+        ]
+
+        template = renderer.env.get_template("core/sudoers.j2")
+        content = template.render(
+            project_name="testproj",
+            sudoers_rules=rules,
+        )
+
+        assert content.endswith("\n"), "sudoers must end with a newline"
+        assert not content.endswith("\n\n"), (
+            "sudoers must not end with a blank line (pre-commit end-of-file-fixer flags it)"
+        )
+
+        body = content.split("# Dependency install rules (deduplicated)\n", 1)[1]
+        rule_blocks = [b for b in body.split("/usr/bin/") if b]
+        assert len(rule_blocks) >= 2, "expected both rules to render"
+        between = body.split("/usr/bin/apt-get install *", 1)[1]
+        between = between.split("# Dependency install", 1)[0]
+        assert "\n\n" in between, (
+            "blank line between rules should be preserved for human-readability"
+        )
+
+    def test_sudoers_single_rule_no_trailing_blank(self, tmp_path):
+        """Single-rule sudoers also ends cleanly with one \\n."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = _make_full_config(tmp_path)
+        renderer = ScaffoldRenderer(config)
+
+        rules = [
+            {
+                "from_user": "deployer",
+                "as_user": "root",
+                "cmd": "/usr/bin/apt-get install",
+                "environments": ["production"],
+                "description": "Dependency install",
+            },
+        ]
+
+        template = renderer.env.get_template("core/sudoers.j2")
+        content = template.render(
+            project_name="testproj",
+            sudoers_rules=rules,
+        )
+
+        assert content.endswith("\n")
+        assert not content.endswith("\n\n")
+
 
 class TestWebhookServerFiltering:
     """Webhook service filters ReadWritePaths by server (#62)."""
@@ -4007,13 +4082,12 @@ scaffold:
 
         Bootstrap creates the deploy user's SSH keypair but does not populate
         ~/.ssh/known_hosts. Without StrictHostKeyChecking=accept-new the first
-        git fetch fails with SSH exit 255 (issue #116).
+        git fetch fails with SSH exit 255 (issue #116). The compact -oKey=Value
+        form is used so systemd parses it as one Environment= value (#152).
         """
         out = self._render(tmp_path)
         service = (out / "systemd" / "fraisier-api-production@.service").read_text()
-        ssh_env = (
-            'Environment="GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new"'
-        )
+        ssh_env = 'Environment="GIT_SSH_COMMAND=ssh -oStrictHostKeyChecking=accept-new"'
         assert ssh_env in service
 
 

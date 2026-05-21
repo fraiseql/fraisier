@@ -509,6 +509,7 @@ class TestSyncConflicts:
                 _mk(),  # checkout origin/dev -- version.json
                 _mk(),  # git add version.json
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _mk(returncode=1),  # git diff --cached --quiet → something staged
                 _mk(),  # git commit
                 _mk(),  # git push
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -519,6 +520,52 @@ class TestSyncConflicts:
         commit_calls = [c[0][0] for c in m.call_args_list if "commit" in c[0][0]]
         assert commit_calls, "expected at least one commit call"
         assert all("--no-verify" in call for call in commit_calls)
+
+    def test_pre_merge_skips_commit_when_resolution_yields_no_diff(self, tmp_path):
+        """Conflict-resolution path skips pre-merge commit when nothing is staged.
+
+        Regression test for #164. When every conflicted file auto-resolves
+        back to source HEAD (the sync branch's tip), the index after
+        `git add` is byte-identical to HEAD. Git refused the empty commit
+        and sync aborted. The fix mirrors the clean-merge path's existing
+        `git diff --cached --quiet` guard.
+        """
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="main\n"),
+                _mk(),
+                _mk(stdout=self.SHA + "\n"),
+                _mk(stdout=self.MERGE_BASE + "\n"),
+                _mk(returncode=0, stdout='{"version": "1.1.0"}'),
+                _mk(returncode=0, stdout='{"version": "1.0.0"}'),
+                _mk(),  # git checkout -b
+                _mk(returncode=1),  # git merge (conflict)
+                _mk(stdout="pyproject.toml\n"),  # diff --filter=U
+                _mk(returncode=0),  # cat-file origin/dev:pyproject.toml (exists)
+                _mk(),  # checkout origin/dev -- pyproject.toml
+                _mk(),  # git add pyproject.toml
+                _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _mk(returncode=0),  # git diff --cached --quiet → nothing staged
+                _mk(),  # git push
+                _mk(stdout=self.PR_URL + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
+            ]
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        commands = [c[0][0] for c in m.call_args_list]
+        commit_calls = [c for c in commands if "commit" in c]
+        assert commit_calls == [], (
+            "no commit should be issued when conflict resolution staged no diff"
+        )
+        staged_checks = [
+            c for c in commands if c == ["git", "diff", "--cached", "--quiet"]
+        ]
+        assert len(staged_checks) == 1, (
+            "conflict-resolution path must guard the pre-merge commit"
+        )
 
     def test_source_deletion_auto_resolved(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])

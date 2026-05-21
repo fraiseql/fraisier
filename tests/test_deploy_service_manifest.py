@@ -208,6 +208,60 @@ fraises:
         # config_dir should be in ReadWritePaths
         assert "/opt/fraisier" in content
 
+    def test_deploy_service_emits_compact_ssh_option(self, tmp_path):
+        """GIT_SSH_COMMAND uses -oKey=Value form so systemd parses it as one value.
+
+        Regression test for #152: the space-separated `-o StrictHostKeyChecking=...`
+        form is tokenised by systemd before quote handling, so `-o` is rejected
+        with `Invalid environment assignment, ignoring: -o` and the option is
+        silently dropped — first-time host key acceptance never applied.
+        """
+        config = self._make_config(
+            tmp_path,
+            """
+name: myapp
+scaffold:
+  output_dir: scripts/generated
+  deploy_user: fraisier
+  config_path: /opt/fraisier/fraises.yaml
+
+fraises:
+  api:
+    type: api
+    environments:
+      dev:
+        app_path: /var/www/api
+        git_repo: /var/repos/api.git
+""",
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer._validate_names()
+
+        context = dict(renderer.context)
+        context["fraise_name"] = "api"
+        context["env_name"] = "dev"
+
+        fraise = config.get_fraise("api")
+        env_config = fraise.get("environments", {}).get("dev", {})
+        context["env_config"] = env_config
+
+        from fraisier.naming import deploy_socket_name
+
+        socket_unit = deploy_socket_name(env_config, "dev", "api")
+        socket_stem = socket_unit.removesuffix(".socket")
+        context["socket_stem"] = socket_stem
+        context["socket_unit_name"] = socket_unit
+
+        template = renderer.env.get_template("core/deploy-service.j2")
+        content = template.render(**context)
+
+        assert 'GIT_SSH_COMMAND=ssh -oStrictHostKeyChecking=accept-new"' in content, (
+            "expected compact -oKey=Value ssh option form"
+        )
+        assert (
+            "GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new" not in content
+        ), "space-separated -o form is tokenised by systemd and silently dropped"
+
     def test_deploy_service_no_hardcoded_readwrite_conditionals(self, tmp_path):
         """deploy-service.j2 has no hardcoded conditional ReadWritePaths blocks."""
         config = self._make_config(

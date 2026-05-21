@@ -127,6 +127,18 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _commit_if_staged(message: str) -> None:
+    """Commit the staged index with ``message`` only if there is something staged.
+
+    Git refuses an empty commit, so callers that may have staged no net change
+    (clean merges with no diverging tracked content, or conflict resolutions
+    that resolve back to HEAD) need a guard before invoking ``git commit``.
+    """
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
+    if staged.returncode != 0:
+        _run(["git", "commit", "--no-edit", "--no-verify", "-m", message])
+
+
 def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     """Print the shell commands that sync would execute, without running them."""
     auto_owned = ", ".join(_AUTO_RESOLVED)
@@ -339,30 +351,11 @@ def sync_cmd(
                 )
                 raise SystemExit(1)
 
-            _run(
-                [
-                    "git",
-                    "commit",
-                    "--no-edit",
-                    "--no-verify",
-                    "-m",
-                    f"Pre-merge {tgt} into sync branch (auto-resolved fraisier files)",
-                ]
+            _commit_if_staged(
+                f"Pre-merge {tgt} into sync branch (auto-resolved fraisier files)"
             )
         else:
-            # Clean merge — commit only if something was staged.
-            staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
-            if staged.returncode != 0:
-                _run(
-                    [
-                        "git",
-                        "commit",
-                        "--no-edit",
-                        "--no-verify",
-                        "-m",
-                        f"Pre-merge {tgt} into sync branch",
-                    ]
-                )
+            _commit_if_staged(f"Pre-merge {tgt} into sync branch")
 
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
         _run(["git", "push", "origin", sync_branch])
