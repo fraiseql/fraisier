@@ -88,6 +88,8 @@ def _tables_sql() -> str:
             git_branch TEXT,
             error_message TEXT,
             details TEXT,
+            strategy TEXT,
+            db_size_mb INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -237,10 +239,25 @@ def _indexes_sql() -> str:
     """
 
 
+def _ensure_deployment_columns(conn: sqlite3.Connection) -> None:
+    """Add nullable columns introduced after the initial schema.
+
+    SQLite's ``CREATE TABLE IF NOT EXISTS`` does not retro-add columns to
+    pre-existing tables, so legacy installs need explicit ``ADD COLUMN``
+    statements. Each addition is idempotent and column-scoped.
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(tb_deployment)")}
+    if "strategy" not in cols:
+        conn.execute("ALTER TABLE tb_deployment ADD COLUMN strategy TEXT")
+    if "db_size_mb" not in cols:
+        conn.execute("ALTER TABLE tb_deployment ADD COLUMN db_size_mb INTEGER")
+
+
 def init_database() -> None:
     """Initialize database schema following trinity pattern."""
     with get_connection() as conn:
         conn.executescript(_tables_sql())
+        _ensure_deployment_columns(conn)
         conn.executescript(_views_sql())
         conn.executescript(_indexes_sql())
         conn.commit()
@@ -322,10 +339,18 @@ class FraisierDB:
         new_version: str | None = None,
         error_message: str | None = None,
         details: str | None = None,
+        strategy: str | None = None,
+        db_size_mb: int | None = None,
     ) -> None:
         """Record completion of a deployment."""
         self._history.complete_deployment(
-            deployment_id, success, new_version, error_message, details
+            deployment_id,
+            success,
+            new_version,
+            error_message,
+            details,
+            strategy,
+            db_size_mb,
         )
 
     def mark_deployment_rolled_back(self, deployment_id: int) -> None:
@@ -335,6 +360,22 @@ class FraisierDB:
     def get_deployment(self, deployment_id: int) -> dict[str, Any] | None:
         """Get a specific deployment record."""
         return self._history.get_deployment(deployment_id)
+
+    def get_successful_deploy_durations(
+        self,
+        *,
+        fraise: str,
+        environment: str,
+        strategy: str,
+        limit: int = 5,
+    ) -> list[float]:
+        """Return the most recent successful deploy durations (seconds)."""
+        return self._history.get_successful_deploy_durations(
+            fraise=fraise,
+            environment=environment,
+            strategy=strategy,
+            limit=limit,
+        )
 
     def get_recent_deployments(
         self,

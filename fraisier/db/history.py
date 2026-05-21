@@ -134,6 +134,8 @@ class DeploymentHistoryManager:
         new_version: str | None = None,
         error_message: str | None = None,
         details: str | None = None,
+        strategy: str | None = None,
+        db_size_mb: int | None = None,
     ) -> None:
         """Record completion of a deployment (pk_deployment).
 
@@ -143,6 +145,9 @@ class DeploymentHistoryManager:
             new_version: New deployed version
             error_message: Error message if failed
             details: JSON details of deployment
+            strategy: Deploy strategy name (rebuild, restore_migrate, migrate),
+                      consumed by the duration estimator (#201).
+            db_size_mb: Database size at deploy time in megabytes (optional).
         """
         now = datetime.now().isoformat()
         status = "success" if success else "failed"
@@ -163,7 +168,8 @@ class DeploymentHistoryManager:
                 """
                 UPDATE tb_deployment
                 SET completed_at=?, status=?, new_version=?, duration_seconds=?,
-                    error_message=?, details=?, updated_at=?
+                    error_message=?, details=?, strategy=?, db_size_mb=?,
+                    updated_at=?
                 WHERE pk_deployment=?
                 """,
                 (
@@ -173,6 +179,8 @@ class DeploymentHistoryManager:
                     duration,
                     error_message,
                     details,
+                    strategy,
+                    db_size_mb,
                     now,
                     deployment_id,
                 ),
@@ -248,6 +256,33 @@ class DeploymentHistoryManager:
         with self._get_connection() as conn:
             rows = conn.execute(query, params).fetchall()
             return [self._normalize_deployment_dict(dict(row)) for row in rows]
+
+    def get_successful_deploy_durations(
+        self,
+        *,
+        fraise: str,
+        environment: str,
+        strategy: str,
+        limit: int = 5,
+    ) -> list[float]:
+        """Return the *limit* most recent successful deploy durations (seconds).
+
+        Filtered by (fraise, environment, strategy). Rows with NULL
+        ``duration_seconds`` are excluded. Used by the duration estimator
+        (#201) to compute a per-strategy median.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT duration_seconds FROM tb_deployment
+                WHERE fraise_name=? AND environment_name=? AND strategy=?
+                  AND status='success' AND duration_seconds IS NOT NULL
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (fraise, environment, strategy, limit),
+            ).fetchall()
+            return [float(row["duration_seconds"]) for row in rows]
 
     def get_deployment_stats(
         self, fraise: str | None = None, days: int = 30

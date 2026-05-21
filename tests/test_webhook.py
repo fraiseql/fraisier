@@ -683,6 +683,113 @@ class TestProcessWebhookEvent:
             assert result["branch"] == "main"
             assert result["provider"] == "github"
 
+    def test_dispatch_response_includes_estimate_for_fraise_with_database(
+        self, test_db
+    ):
+        """#201: dispatch response carries estimated_duration_s + estimated_ready_at
+        when the fraise has a `database` section with a strategy."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+            is_ping=False,
+        )
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                    "app_path": "/tmp/api",
+                    "database": {"strategy": "rebuild"},
+                }
+            ]
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            result = process_webhook_event(event, BackgroundTasks(), webhook_id=1)
+
+        assert result["status"] == "deployment_triggered"
+        assert "estimated_duration_s" in result
+        assert isinstance(result["estimated_duration_s"], int)
+        assert result["estimated_duration_s"] > 0
+        assert "estimated_ready_at" in result
+        assert result["estimated_ready_at"].endswith("Z")
+        assert result["estimate_confidence"] in {"history", "fallback"}
+
+    def test_dispatch_omits_estimate_for_fraise_without_database(self, test_db):
+        """ETL/docker_compose fraises (no database section) don't get an estimate."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+            is_ping=False,
+        )
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "etl_pipeline",
+                    "environment": "production",
+                    "type": "etl",
+                    "script_path": "scripts/pipeline.py",
+                }
+            ]
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            result = process_webhook_event(event, BackgroundTasks(), webhook_id=1)
+
+        assert result["status"] == "deployment_triggered"
+        assert "estimated_duration_s" not in result
+        assert "estimated_ready_at" not in result
+
+    def test_dispatch_estimate_failure_does_not_break_response(self, test_db):
+        """An estimator exception is swallowed; the deployment is still triggered."""
+        event = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+            is_ping=False,
+        )
+        with (
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch(
+                "fraisier.webhook.estimate_duration",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {
+                    "fraise_name": "my_api",
+                    "environment": "production",
+                    "type": "api",
+                    "app_path": "/tmp/api",
+                    "database": {"strategy": "rebuild"},
+                }
+            ]
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            result = process_webhook_event(event, BackgroundTasks(), webhook_id=1)
+
+        assert result["status"] == "deployment_triggered"
+        assert "estimated_duration_s" not in result
+
     def test_process_push_returns_skipped_when_deploy_locked(self, test_db):
         """Webhook returns 'skipped' when a deploy is already running."""
         event = WebhookEvent(

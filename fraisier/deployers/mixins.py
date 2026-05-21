@@ -398,11 +398,14 @@ class GitDeployMixin:
             from fraisier.database import get_db
 
             db = get_db()
+            database_config = getattr(self, "database_config", None) or {}
+            strategy = database_config.get("strategy")
             db.complete_deployment(
                 deployment_id=deployment_pk,
                 success=result.success,
                 new_version=result.new_version,
                 error_message=result.error_message,
+                strategy=strategy,
             )
             if result.status.value == "rolled_back":
                 db.mark_deployment_rolled_back(deployment_pk)
