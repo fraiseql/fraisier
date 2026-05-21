@@ -670,10 +670,15 @@ class ScaffoldRenderer:
         rendered_files.extend(self._collect_per_env_nginx(dry_run))
 
         # Systemd timer and backup service templates
+        project_name = self.context.get("project_name", "fraisier")
         for timer_tpl, timer_out in [
             ("core/deploy-checker.timer.j2", "systemd/deploy-checker.timer"),
             ("core/backup.timer.j2", "systemd/backup.timer"),
             ("core/backup.service.j2", "systemd/backup.service"),
+            (
+                "core/backup-alert@.service.j2",
+                f"systemd/fraisier-{project_name}-backup-alert@.service",
+            ),
         ]:
             rendered_files.append(timer_out)
             if not dry_run:

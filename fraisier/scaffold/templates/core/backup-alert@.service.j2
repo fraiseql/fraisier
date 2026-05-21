@@ -1,0 +1,7 @@
+[Unit]
+Description=Backup failure alert for {{ project_name }} (%i)
+Documentation=https://fraisier.readthedocs.io/
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo 'fraisier-{{ project_name }} backup failed: %i' | systemd-cat -t fraisier-backup-alert -p err"
