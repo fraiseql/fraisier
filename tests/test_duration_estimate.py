@@ -245,9 +245,7 @@ class TestBuildEstimate:
         def raises(*_a, **_kw):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(
-            "fraisier.duration_estimate.estimate_duration", raises
-        )
+        monkeypatch.setattr("fraisier.duration_estimate.estimate_duration", raises)
         db = MagicMock()
         assert (
             build_estimate(db, {"database": {"strategy": "rebuild"}}, "api", "prod")
@@ -302,7 +300,5 @@ class TestFormatEstimateLine:
         ],
     )
     def test_rounds_up_to_minutes(self, seconds: int, expected_minutes: int):
-        result = EstimateResult(
-            seconds=seconds, confidence="fallback", samples_used=0
-        )
+        result = EstimateResult(seconds=seconds, confidence="fallback", samples_used=0)
         assert f"~{expected_minutes}m" in format_estimate_line(result)

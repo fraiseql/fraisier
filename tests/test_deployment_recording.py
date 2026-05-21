@@ -380,9 +380,7 @@ class TestCompleteDbRecordSizeSampling:
         deployer = self._api_deployer(strategy="migrate")
         with (
             patch("fraisier.database.get_db") as mock_get_db,
-            patch(
-                "fraisier.dbops.sizing.query_database_size_mb"
-            ) as mock_size,
+            patch("fraisier.dbops.sizing.query_database_size_mb") as mock_size,
         ):
             mock_db = MagicMock()
             mock_get_db.return_value = mock_db
@@ -399,9 +397,7 @@ class TestCompleteDbRecordSizeSampling:
         )
         with (
             patch("fraisier.database.get_db") as mock_get_db,
-            patch(
-                "fraisier.dbops.sizing.query_database_size_mb"
-            ) as mock_size,
+            patch("fraisier.dbops.sizing.query_database_size_mb") as mock_size,
         ):
             mock_db = MagicMock()
             mock_get_db.return_value = mock_db
@@ -451,9 +447,7 @@ class TestCompleteDbRecordSizeSampling:
         )
         with (
             patch("fraisier.database.get_db") as mock_get_db,
-            patch(
-                "fraisier.dbops.sizing.query_database_size_mb"
-            ) as mock_size,
+            patch("fraisier.dbops.sizing.query_database_size_mb") as mock_size,
         ):
             mock_db = MagicMock()
             mock_get_db.return_value = mock_db
