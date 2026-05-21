@@ -257,6 +257,160 @@ class TestRunBackup:
         assert result.error == ""
 
 
+class TestRunBackupJobs:
+    """Test run_backup parallel/directory-format mode (#202 Phase 3)."""
+
+    def test_jobs_1_uses_Fc_format_and_file_output(self, tmp_path: Path):
+        """jobs=1 (default) preserves the single-stream -Fc behaviour byte-for-byte."""
+        captured: dict = {}
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[0] == "pg_dump":
+                captured["cmd"] = list(cmd)
+                out = cmd[cmd.index("-f") + 1]
+                Path(out).write_bytes(b"x" * 1000)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                jobs=1,
+            )
+
+        assert result.success is True
+        cmd = captured["cmd"]
+        assert "-Fc" in cmd
+        assert "-Fd" not in cmd
+        assert "-j" not in cmd
+        assert Path(result.backup_path).is_file()
+        assert not Path(result.backup_path).is_dir()
+
+    def test_jobs_default_matches_jobs_1(self, tmp_path: Path):
+        """Omitting jobs keeps the file-format behaviour."""
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[0] == "pg_dump":
+                out = cmd[cmd.index("-f") + 1]
+                Path(out).write_bytes(b"x" * 1000)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+            )
+
+        assert result.success is True
+        assert Path(result.backup_path).is_file()
+
+    def test_jobs_greater_than_1_uses_Fd_format_and_directory_output(
+        self, tmp_path: Path
+    ):
+        """jobs=4 switches to pg_dump -Fd -j 4 writing a directory dump."""
+        captured: dict = {}
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[0] == "pg_dump":
+                captured["cmd"] = list(cmd)
+                out = cmd[cmd.index("-f") + 1]
+                # pg_dump -Fd creates the directory and writes toc.dat + per-table blobs.
+                Path(out).mkdir(parents=False, exist_ok=False)
+                (Path(out) / "toc.dat").write_bytes(b"toc" * 100)
+                (Path(out) / "1.dat").write_bytes(b"data" * 250)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                jobs=4,
+            )
+
+        assert result.success is True, result.error
+        cmd = captured["cmd"]
+        assert "-Fd" in cmd
+        assert "-Fc" not in cmd
+        assert "-j" in cmd
+        assert cmd[cmd.index("-j") + 1] == "4"
+        path = Path(result.backup_path)
+        assert path.is_dir()
+        assert path.name.endswith(".dump")
+        assert (path / "toc.dat").exists()
+
+    def test_size_check_uses_directory_total_for_directory_dumps(self, tmp_path: Path):
+        """Size sanity check sums directory contents recursively (#202 Phase 3).
+
+        Without recursive sizing, a directory dump's bare inode size
+        (~4096 bytes) would falsely trigger the size sanity check
+        whenever a prior file dump existed of any meaningful size.
+        """
+        # Prior file dump: 10_000 bytes
+        prev = tmp_path / "proddb_full_20260520_1200_zstd.dump"
+        prev.write_bytes(b"x" * 10_000)
+        os.utime(prev, (1_000_000, 1_000_000))
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[0] == "pg_dump":
+                out = cmd[cmd.index("-f") + 1]
+                Path(out).mkdir(parents=False, exist_ok=False)
+                # New directory dump: 8_000 bytes total — 80% of prior, well above threshold.
+                (Path(out) / "toc.dat").write_bytes(b"t" * 2_000)
+                (Path(out) / "1.dat").write_bytes(b"d" * 6_000)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                jobs=4,
+            )
+
+        assert result.success is True, result.error
+        assert Path(result.backup_path).is_dir()
+
+    def test_size_check_fails_when_directory_dump_undersized(self, tmp_path: Path):
+        """A directory dump under 50% of the prior total is rejected."""
+        prev = tmp_path / "proddb_full_20260520_1200_zstd.dump"
+        prev.write_bytes(b"x" * 10_000)
+        os.utime(prev, (1_000_000, 1_000_000))
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[0] == "pg_dump":
+                out = cmd[cmd.index("-f") + 1]
+                Path(out).mkdir(parents=False, exist_ok=False)
+                # New directory dump: only 1_000 bytes — 10% of prior.
+                (Path(out) / "toc.dat").write_bytes(b"t" * 500)
+                (Path(out) / "1.dat").write_bytes(b"d" * 500)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                jobs=4,
+            )
+
+        assert result.success is False
+        assert "size sanity" in result.error
+
+    def test_jobs_rejects_zero_and_negative(self, tmp_path: Path):
+        """jobs must be a positive integer; 0 and negatives raise ValueError."""
+        for bad in (0, -1, -10):
+            with pytest.raises(ValueError, match="jobs"):
+                run_backup(
+                    db_name="proddb",
+                    output_dir=str(tmp_path),
+                    database_url=_TEST_URL,
+                    jobs=bad,
+                )
+
+
 class TestVerifyBackupToc:
     """Test _verify_backup_toc helper."""
 
@@ -367,3 +521,46 @@ class TestCleanupOldBackups:
         assert recent_file.exists()
         assert non_dump.exists()
         assert len(removed) == 1
+
+    def test_cleanup_removes_old_directory_dumps(self, tmp_path: Path):
+        """Old directory-format dumps (#202 Phase 3) are removed via rmtree."""
+        old_dir = tmp_path / "proddb_full_20250101_0000_zstd.dump"
+        old_dir.mkdir()
+        (old_dir / "toc.dat").write_text("toc")
+        (old_dir / "1.dat").write_text("data")
+        old_mtime = time.time() - 48 * 3600
+        os.utime(old_dir, (old_mtime, old_mtime))
+
+        recent_dir = tmp_path / "proddb_full_20250320_1200_zstd.dump"
+        recent_dir.mkdir()
+        (recent_dir / "toc.dat").write_text("toc")
+
+        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+
+        assert str(old_dir) in removed
+        assert not old_dir.exists()
+        assert recent_dir.exists()
+        assert (recent_dir / "toc.dat").exists()
+
+    def test_cleanup_mixed_files_and_directories(self, tmp_path: Path):
+        """Mixed file + directory dumps are both eligible for removal."""
+        old_mtime = time.time() - 48 * 3600
+
+        old_file = tmp_path / "proddb_full_20250101_0000.dump"
+        old_file.write_text("old file")
+        os.utime(old_file, (old_mtime, old_mtime))
+
+        old_dir = tmp_path / "proddb_full_20250101_0100_zstd.dump"
+        old_dir.mkdir()
+        (old_dir / "toc.dat").write_text("toc")
+        os.utime(old_dir, (old_mtime, old_mtime))
+
+        new_file = tmp_path / "proddb_full_20250320_1200.dump"
+        new_file.write_text("new file")
+
+        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+
+        assert sorted(removed) == sorted([str(old_file), str(old_dir)])
+        assert not old_file.exists()
+        assert not old_dir.exists()
+        assert new_file.exists()

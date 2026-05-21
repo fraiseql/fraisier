@@ -686,14 +686,26 @@ def db_restore(
     type=click.Choice(["full", "slim"]),
     help="Backup mode",
 )
+@click.option(
+    "--jobs",
+    type=int,
+    default=None,
+    help=(
+        "Number of parallel pg_dump workers (overrides config backup.jobs). "
+        "Values >1 switch to directory-format dumps."
+    ),
+)
 @click.pass_context
-def backup_cmd(ctx: click.Context, fraise: str, env: str, mode: str) -> None:
+def backup_cmd(
+    ctx: click.Context, fraise: str, env: str, mode: str, jobs: int | None
+) -> None:
     """Run database backup for a fraise.
 
     \b
     Examples:
         fraisier backup management -e production
         fraisier backup management -e production --mode slim
+        fraisier backup management -e production --jobs 4
     """
     from fraisier.dbops.backup import check_disk_space, run_backup
     from fraisier.dbops.guard import is_external_db
@@ -744,6 +756,8 @@ def backup_cmd(ctx: click.Context, fraise: str, env: str, mode: str) -> None:
         slim_cfg = backup_cfg.get("slim", {})
         excluded_tables = slim_cfg.get("excluded_tables", [])
 
+    effective_jobs = jobs if jobs is not None else int(backup_cfg.get("jobs", 1))
+
     result = run_backup(
         db_name=db_name,
         output_dir=output_dir,
@@ -751,6 +765,7 @@ def backup_cmd(ctx: click.Context, fraise: str, env: str, mode: str) -> None:
         compression=compression,
         mode=mode,
         excluded_tables=excluded_tables,
+        jobs=effective_jobs,
     )
 
     if result.success:
