@@ -4087,9 +4087,7 @@ scaffold:
         """
         out = self._render(tmp_path)
         service = (out / "systemd" / "fraisier-api-production@.service").read_text()
-        ssh_env = (
-            'Environment="GIT_SSH_COMMAND=ssh -oStrictHostKeyChecking=accept-new"'
-        )
+        ssh_env = 'Environment="GIT_SSH_COMMAND=ssh -oStrictHostKeyChecking=accept-new"'
         assert ssh_env in service
 
 
