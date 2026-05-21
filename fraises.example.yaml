@@ -21,23 +21,23 @@ git:
   # GitHub configuration (github.com or GitHub Enterprise)
   github:
     base_url: https://github.com  # or https://github.mycompany.com
-    webhook_secret: ${FRAISIER_WEBHOOK_SECRET}  # from environment
+    webhook_secret: !envvar FRAISIER_WEBHOOK_SECRET  # resolved from $FRAISIER_WEBHOOK_SECRET at load time
 
   # GitLab configuration (gitlab.com or self-hosted)
   gitlab:
     base_url: https://gitlab.com  # or https://gitlab.mycompany.com
-    secret_token: ${FRAISIER_WEBHOOK_SECRET}
+    secret_token: !envvar FRAISIER_WEBHOOK_SECRET
 
   # Gitea configuration (self-hosted, also works with Forgejo)
   gitea:
     base_url: https://gitea.mycompany.com
-    webhook_secret: ${FRAISIER_WEBHOOK_SECRET}
+    webhook_secret: !envvar FRAISIER_WEBHOOK_SECRET
 
   # Bitbucket configuration (Cloud or Server)
   bitbucket:
     base_url: https://bitbucket.org  # or https://bitbucket.mycompany.com
     server: false  # set to true for Bitbucket Server/Data Center
-    webhook_secret: ${FRAISIER_WEBHOOK_SECRET}
+    webhook_secret: !envvar FRAISIER_WEBHOOK_SECRET
 
 # ============================================================
 # FRAISES (Services)

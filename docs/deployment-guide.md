@@ -43,7 +43,7 @@ name: myapp
 git:
   provider: github
   github:
-    webhook_secret: ${FRAISIER_WEBHOOK_SECRET}
+    webhook_secret: !envvar FRAISIER_WEBHOOK_SECRET
 
 scaffold:
   deploy_user: fraisier       # system user that runs deployments
@@ -84,14 +84,20 @@ branch_mapping:
 
 ### How secrets work
 
-Use `${ENV_VAR}` syntax in `fraises.yaml`. Fraisier resolves these at runtime. Never commit
-actual secrets. A typical environment file at `/etc/myapp/prod.env`:
+Use the `!envvar VAR_NAME` YAML tag in `fraises.yaml`. The tag resolves to the contents of
+`os.environ['VAR_NAME']` when the config file is parsed; missing variables raise
+`ConfigurationError` immediately. Never commit actual secrets. A typical environment file at
+`/etc/myapp/prod.env`:
 
 ```bash
 FRAISIER_WEBHOOK_SECRET=<min 32 chars, random>
 DATABASE_URL=postgresql://myapp:pass@localhost/myapp_production
 DATABASE_ADMIN_URL=postgresql://postgres@/postgres?host=/var/run/postgresql
 ```
+
+`${VAR}` shell-style substitution is supported **only** inside the `notifications:` and
+`hooks:` blocks (expanded at fire time by their dispatchers). Use `!envvar` for everything
+else — most consumers read the YAML value literally and will not expand `${VAR}`.
 
 ---
 
