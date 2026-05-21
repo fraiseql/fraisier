@@ -247,6 +247,10 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
     if isinstance(db, dict) and db.get("post_migrate") is not None:
         errors.extend(_validate_post_migrate(fraise_name, db))
 
+    # smoke_tests validation (#204 PR B)
+    if env.get("smoke_tests") is not None:
+        errors.extend(_validate_smoke_tests(fraise_name, env))
+
     # ZFS configuration validation
     zfs_config = env.get("zfs")
     if zfs_config is not None:
@@ -402,6 +406,31 @@ def _validate_preflight(fraise_name: str, db: dict) -> list[str]:
 
 
 _VALID_POST_MIGRATE_ON_ERROR = frozenset({"halt", "warn"})
+
+
+def _validate_smoke_tests(fraise_name: str, env: dict) -> list[str]:
+    """Run the smoke_tests loader at config-load time to surface errors.
+
+    Defers to ``fraisier.smoke_tests.load_smoke_tests`` so the schema
+    (method, on_failure, JSONPath syntax) is enforced in one place. The
+    base_url is derived from the env's ``health_check.url`` if any.
+    """
+    from urllib.parse import urlparse
+
+    from fraisier.smoke_tests import load_smoke_tests
+
+    hc = env.get("health_check") or {}
+    hc_url = hc.get("url") if isinstance(hc, dict) else None
+    base_url: str | None = None
+    if hc_url:
+        parsed = urlparse(str(hc_url))
+        if parsed.scheme and parsed.netloc:
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        load_smoke_tests(env, base_url=base_url)
+    except ValueError as exc:
+        return [f"{fraise_name}: smoke_tests {exc}"]
+    return []
 
 
 def _validate_post_migrate(fraise_name: str, db: dict) -> list[str]:

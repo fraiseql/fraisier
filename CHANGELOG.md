@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-05-22
+
+### Added
+
+- **Authenticated smoke tests** ([#204](https://github.com/fraiseql/fraisier/issues/204) PR B). New `smoke_tests:` list runs configured HTTP requests with bearer credentials and JSONPath assertions immediately after the unauthenticated `/health` poll succeeds. Closes the class of regressions where a new table or `CREATE OR REPLACE VIEW` slips past unauthenticated `/health` and only fails when authenticated traffic hits. Each test takes `method`, `url` (absolute, or relative — joined onto `health_check.url`), `timeout`, `headers`, optional `body`, an `on_failure` policy (`rollback` default, `halt`, or `warn`), and a list of `assert` entries. JSONPath is the minimal `$.dotted.path` subset — no `$..foo` recursion, no array indexing, no wildcards (rejected at config-load time with a clear "use $.dotted.path only" message).
+- **`fraisier/smoke_tests.py`** — `Assertion`, `SmokeTest`, `SmokeTestError`, `_walk_json_path`, `load_smoke_tests`, `run_smoke_tests`. HTTP via `httpx.Client`. `Authorization`, `Cookie`, and `X-API-Key` header values are redacted in log output.
+- **`!envvar` YAML tag** in `fraises.yaml`. Values like `Authorization: !envvar SMOKE_TEST_JWT` are resolved from `os.environ` at config-load time; missing variables raise `ConfigurationError` immediately. Implemented as a `yaml.SafeLoader` subclass so safety guarantees are preserved.
+
+### Upgrade notes
+
+- Opt-in: a fraise without a `smoke_tests:` block is unchanged.
+- `rollback` is the default `on_failure`: an authenticated probe that fails after `/health` passes is by definition a regression the unauthenticated probe missed — the safest default is to restore the previous version.
+- `halt` is for cases where rolling back would be more disruptive than serving a partially-broken version (rare; typically only useful when the failure points to *external* state).
+- Smoke tests run before the success result is constructed, so a rollback or halt failure is recorded as `status=failed` in `tb_deployment` with the smoke-test error message.
+- See `fraises.example.yaml` for the config block shape.
+
 ## [0.20.0] - 2026-05-22
 
 ### Added

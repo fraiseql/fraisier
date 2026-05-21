@@ -123,6 +123,23 @@ fraises:
         health_check:
           url: https://api.myapp.io/health
           timeout: 30
+        # Optional authenticated smoke tests (#204). Run after the
+        # unauthenticated health_check passes. JSONPath is the minimal
+        # $.dotted.path subset — no $..foo, no array indexing, no wildcards.
+        # Authorization headers may be sourced from os.environ via !envvar.
+        # smoke_tests:
+        #   - name: authenticated_me
+        #     method: POST
+        #     url: /graphql          # relative — joined onto health_check.url
+        #     timeout: 5
+        #     headers:
+        #       Authorization: !envvar SMOKE_TEST_JWT
+        #     body: '{"query":"{ me { id role } }"}'
+        #     on_failure: rollback    # rollback (default) | halt | warn
+        #     assert:
+        #       - { json_path: $.data.me.id, not_null: true }
+        #       - { json_path: $.data.me.role, equals: admin }
+        #       - { json_path: $.errors, null: true }
         service:
           type: exec               # systemd Type= (default: exec)
           user: myapp              # app runs as myapp (least privilege)
