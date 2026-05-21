@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-05-21
+
+### Added
+
+- **Deployment duration estimates in webhook responses** ([#201](https://github.com/fraiseql/fraisier/issues/201)). Webhook dispatch responses now carry `estimated_duration_s`, `estimated_ready_at` (UTC), and `estimate_confidence` (`"history"` or `"fallback"`) for each triggered deployment that has a `database.strategy`. Agentic and human callers can use these to size their `sleep`/poll loops at trigger time instead of guessing.
+- **`tb_deployment.strategy` + `tb_deployment.db_size_mb` columns**. Recorded per successful deploy via `complete_deployment(..., strategy=..., db_size_mb=...)`. Legacy installs are migrated in place via idempotent `ALTER TABLE ... ADD COLUMN`. ETL and docker_compose fraises (no database section) record `strategy=NULL` and are excluded from the estimator.
+- **`FraisierDB.get_successful_deploy_durations(*, fraise, environment, strategy, limit)`**. New repository method consumed by the estimator; returns the most recent successful deploy durations filtered by the trinity, excluding NULL durations and non-success rows.
+- **`fraisier/duration_estimate.py`** — `estimate_duration(db, *, fraise, environment, strategy, db_size_mb)` returns an `EstimateResult(seconds, confidence, samples_used)`. Uses the median of the most recent up-to-5 successful runs (with a 1.20 buffer) when ≥3 samples exist, otherwise falls back to a per-strategy seconds-per-MB rate clamped to a per-strategy floor (180s rebuild, 120s restore_migrate, 30s migrate, 60s for unknown strategies). Wrapped in `try/except` so a flaky history store cannot block a deploy.
+
+### Upgrade notes
+
+- Schema additions are additive; no migration required beyond starting the upgraded fraisier process (which runs the `ALTER TABLE` step on first connect).
+- The CLI surface (`fraisier trigger-deploy` printing `Estimated completion: ~Nm`) is deferred to a follow-up PR — the webhook surface is the higher-value one for agentic callers and the CLI version can land independently once this lands.
+- `db_size_mb` is reserved for future use; values are recorded as NULL today. Plumbing it through requires a `pg_database_size()` query before each deploy.
+
 ## [0.18.0] - 2026-05-21
 
 ### Added

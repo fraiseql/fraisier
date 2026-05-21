@@ -43,8 +43,7 @@ class TestFraisierDB:
         _db = FraisierDB()
         with get_connection() as conn:
             cols = {
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(tb_deployment)")
+                row["name"] for row in conn.execute("PRAGMA table_info(tb_deployment)")
             }
         assert "strategy" in cols
         assert "db_size_mb" in cols
@@ -231,8 +230,7 @@ class TestFraisierDB:
         )
         with get_connection() as conn:
             row = conn.execute(
-                "SELECT strategy, db_size_mb FROM tb_deployment "
-                "WHERE pk_deployment=?",
+                "SELECT strategy, db_size_mb FROM tb_deployment WHERE pk_deployment=?",
                 (deployment_id,),
             ).fetchone()
         assert row["strategy"] == "rebuild"
@@ -248,8 +246,7 @@ class TestFraisierDB:
         )
         with get_connection() as conn:
             row = conn.execute(
-                "SELECT strategy, db_size_mb FROM tb_deployment "
-                "WHERE pk_deployment=?",
+                "SELECT strategy, db_size_mb FROM tb_deployment WHERE pk_deployment=?",
                 (deployment_id,),
             ).fetchone()
         assert row["strategy"] is None

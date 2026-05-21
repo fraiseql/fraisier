@@ -683,7 +683,9 @@ class TestProcessWebhookEvent:
             assert result["branch"] == "main"
             assert result["provider"] == "github"
 
-    def test_dispatch_response_includes_estimate_for_fraise_with_database(self, test_db):
+    def test_dispatch_response_includes_estimate_for_fraise_with_database(
+        self, test_db
+    ):
         """#201: dispatch response carries estimated_duration_s + estimated_ready_at
         when the fraise has a `database` section with a strategy."""
         event = WebhookEvent(
