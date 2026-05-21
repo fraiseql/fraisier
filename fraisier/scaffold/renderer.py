@@ -186,8 +186,10 @@ def _collect_allowed_services(
     """Collect all systemd service names from fraises and environments.
 
     Returns fully-qualified service names (e.g., 'project_fraise_env.service').
+    The webhook's own service unit is included so the #162 self-upgrade path
+    can restart the webhook via the systemctl-helper socket.
     """
-    services = []
+    services = [f"fraisier-{project_name}-webhook.service"]
     for fraise in fraises_list:
         fraise_name = fraise.get("name", "")
         if not fraise_name:
