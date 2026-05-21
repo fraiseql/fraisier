@@ -55,7 +55,7 @@ def _mock_rebuild_deps():
         patch("confiture.core.builder.SchemaBuilder") as mock_builder_cls,
         patch("confiture.core.migrator.Migrator.from_config") as mock_migrator,
         patch("fraisier.strategies._core.terminate_backends"),
-        patch("fraisier.strategies._core.drop_db"),
+        patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
         patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
         patch.object(RebuildStrategy, "_apply_sql") as mock_apply_sql,
         patch("tempfile.mkdtemp", return_value="/tmp/fraisier_rebuild_test"),
@@ -297,7 +297,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
             ) as mock_create,
@@ -330,7 +330,7 @@ class TestRebuildStrategyTemplateCreation:
                 "fraisier.strategies._core.terminate_backends",
                 side_effect=lambda db, **_kw: terminate_calls.append(db),
             ),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
         ):
             strategy = RebuildStrategy(
@@ -361,7 +361,7 @@ class TestRebuildStrategyTemplateCreation:
             patch("fraisier.strategies._core.terminate_backends"),
             patch(
                 "fraisier.strategies._core.drop_db",
-                side_effect=lambda db, **_kw: drop_calls.append(db),
+                side_effect=lambda db, **_kw: (drop_calls.append(db), (0, "", ""))[1],
             ),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
         ):
@@ -376,6 +376,57 @@ class TestRebuildStrategyTemplateCreation:
         assert "template_myapp" in drop_calls
 
     @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_drops_template_with_clear_template_flag(self, _mock_rebuild_deps):
+        """Template drop passes clear_template_flag=True so Postgres allows it (#200)."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db") as mock_drop,
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+        ):
+            mock_drop.return_value = (0, "", "")
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        template_drop_calls = [
+            call
+            for call in mock_drop.call_args_list
+            if call.args and call.args[0] == "template_myapp"
+        ]
+        assert len(template_drop_calls) == 1
+        assert template_drop_calls[0].kwargs.get("clear_template_flag") is True
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_execute_raises_when_template_drop_fails(self, _mock_rebuild_deps):
+        """Non-zero return from template drop_db is surfaced, not swallowed (#200)."""
+        mocks = _mock_rebuild_deps
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        def drop_side_effect(db, **_kw):
+            if db == "template_myapp":
+                return (1, "", "permission denied")
+            return (0, "", "")
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db", side_effect=drop_side_effect),
+            patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+            )
+            with pytest.raises(subprocess.CalledProcessError):
+                strategy.execute(Path("confiture.yaml"))
+
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
     def test_execute_with_default_template_name(self, _mock_rebuild_deps):
         """Default template name is template_<db_name>."""
         mocks = _mock_rebuild_deps
@@ -384,7 +435,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
             ) as mock_create,
@@ -407,7 +458,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
             ) as mock_create,
@@ -435,7 +486,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", side_effect=create_returns),
             pytest.raises(subprocess.CalledProcessError),
         ):
@@ -458,7 +509,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.run_psql",
@@ -491,7 +542,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.run_psql",
@@ -527,6 +578,7 @@ class TestRebuildStrategyVersionStamp:
 
         def _record_drop(db, **_kw):
             sequence.append(("drop", db))
+            return (0, "", "")
 
         def _record_create(db, **kw):
             template = kw.get("template")
@@ -580,7 +632,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.run_psql",
@@ -622,7 +674,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.run_psql",
@@ -664,7 +716,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.run_psql",
@@ -703,7 +755,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
             ) as mock_create,
@@ -745,7 +797,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
             ) as mock_create,
@@ -778,7 +830,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
             ) as mock_create,
@@ -819,7 +871,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
-            patch("fraisier.strategies._core.drop_db"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.run_psql",

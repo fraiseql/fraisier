@@ -608,7 +608,7 @@ class TestBackupRunner:
 
         assert result.success is True
         assert result.backup_path.endswith(".dump")
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_run.call_args_list[0][0][0]
         assert "pg_dump" in cmd
         assert "mydb" in cmd
 
@@ -627,7 +627,7 @@ class TestBackupRunner:
             )
 
         assert result.success is True
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_run.call_args_list[0][0][0]
         assert any("big_logs" in arg for arg in cmd)
         assert any("audit_trail" in arg for arg in cmd)
 
@@ -662,7 +662,7 @@ class TestBackupRunner:
                 mode="full",
             )
 
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_run.call_args_list[0][0][0]
         assert "-Fc" in cmd
 
 

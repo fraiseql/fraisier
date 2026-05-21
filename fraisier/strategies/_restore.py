@@ -237,9 +237,19 @@ class RestoreMigrateStrategy(Strategy):
         # Step 8: Create rollback template
         if cfg.create_template:
             template_name = self._resolved_template_name
-            # Drop existing template if any, disconnect from source, create
+            # Drop existing template if any, disconnect from source, create.
+            # clear_template_flag: Postgres refuses to drop a database with
+            # datistemplate=true (even WITH FORCE); fixes #200 re-deploys.
             terminate_backends(template_name, connection_url=self._admin_url)
-            drop_db(template_name, connection_url=self._admin_url)
+            code, _, stderr = drop_db(
+                template_name,
+                clear_template_flag=True,
+                connection_url=self._admin_url,
+            )
+            if code != 0:
+                raise DatabaseError(
+                    f"Failed to drop template {template_name}: {stderr.strip()}",
+                )
             terminate_backends(cfg.db_name, connection_url=self._admin_url)
             code, _, stderr = create_db(
                 template_name, template=cfg.db_name, connection_url=self._admin_url

@@ -154,19 +154,39 @@ def terminate_backends(
     )
 
 
+def unset_template_flag(
+    db_name: str,
+    *,
+    connection_url: str,
+) -> tuple[int, str, str]:
+    """Clear ``datistemplate`` on *db_name* so it can be dropped.
+
+    Postgres refuses to drop a database with ``datistemplate=true`` even with
+    ``WITH (FORCE)``; this helper resets the flag first.
+    """
+    validate_pg_identifier(db_name, "database name")
+    sql = f"UPDATE pg_database SET datistemplate=false WHERE datname='{db_name}'"
+    return _pg_cmd(["psql", "-c", sql], connection_url=connection_url)
+
+
 def drop_db(
     db_name: str,
     *,
     force_disconnect: bool = False,
     force: bool = False,
+    clear_template_flag: bool = False,
     connection_url: str,
 ) -> tuple[int, str, str]:
     """Drop database *db_name*.
 
     If *force_disconnect* is True, terminate all backends first.
+    If *clear_template_flag* is True, reset ``datistemplate=false`` first;
+    Postgres refuses to drop a database with that flag set, even WITH (FORCE).
     If *force* is True, use DROP DATABASE ... WITH (FORCE) via psql.
     """
     validate_pg_identifier(db_name, "database name")
+    if clear_template_flag:
+        unset_template_flag(db_name, connection_url=connection_url)
     if force_disconnect:
         terminate_backends(db_name, connection_url=connection_url)
     if force:

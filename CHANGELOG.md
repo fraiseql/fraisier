@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5] - 2026-05-21
+
+### Fixed
+
+- **`RebuildStrategy` / `RestoreMigrateStrategy` fail on re-deploy when template database already exists** ([#200](https://github.com/fraiseql/fraisier/issues/200)). Postgres refuses to drop a database with `datistemplate=true` (even `WITH (FORCE)`), so when `create_template=true` is configured, the drop step silently failed on every re-deploy and the subsequent `create_db` failed with "database already exists" until manual intervention. `drop_db` now accepts `clear_template_flag=True`, which issues `UPDATE pg_database SET datistemplate=false WHERE datname=...` before the drop. Both rebuild and restore-migrate strategies pass this flag when re-creating the template, and now check the drop return code so future failures surface immediately instead of cascading.
+
+### Added
+
+- **Post-dump backup verification** ([#202](https://github.com/fraiseql/fraisier/issues/202)). `run_backup()` now runs two cheap defences after `pg_dump` exits successfully:
+  - **TOC integrity check** via `pg_restore --list <path>`. Reads the archive header only — no database connection needed — and rejects the backup if the TOC fails to parse. Catches the truncation pattern seen in the recent prod incident (pg_dump SIGTERMed mid-write, leaving the TOC intact but data blocks truncated).
+  - **Size sanity check** vs the most recent same-mode dump in the output directory. A new dump under 50% of the previous one's size is rejected with a `BackupResult` that names the byte counts.
+  Both checks shrink the silent-truncation window from "until someone tries to restore" down to "next backup attempt." Implements step 1 of #202; parallel `pg_dump -Fd -j N` support and systemd `OnFailure=` scaffold hooks (steps 2 and 3) follow separately.
+
 ## [0.16.4] - 2026-05-19
 
 ### Added

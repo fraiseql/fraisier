@@ -12,6 +12,7 @@ from fraisier.dbops.operations import (
     run_psql,
     run_sql,
     terminate_backends,
+    unset_template_flag,
 )
 
 _TEST_URL = "postgresql://postgres:pass@localhost:5432/mydb"
@@ -341,6 +342,76 @@ class TestDropDb:
     def test_drop_db_rejects_injection(self):
         with pytest.raises(ValueError, match="Invalid database name"):
             drop_db("test; rm -rf /", connection_url=_TEST_URL)
+
+    def test_drop_db_clear_template_flag_runs_update_first(self):
+        """clear_template_flag=True clears datistemplate before dropping (#200)."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            code, _, _ = drop_db(
+                "mytpl", clear_template_flag=True, connection_url=_TEST_URL
+            )
+
+        assert code == 0
+        assert mock_run.call_count == 2
+        update_cmd = mock_run.call_args_list[0][0][0]
+        assert update_cmd[0] == "psql"
+        sql = update_cmd[update_cmd.index("-c") + 1]
+        assert sql == (
+            "UPDATE pg_database SET datistemplate=false WHERE datname='mytpl'"
+        )
+        drop_cmd = mock_run.call_args_list[1][0][0]
+        assert drop_cmd[0] == "dropdb"
+        assert "mytpl" in drop_cmd
+
+    def test_drop_db_clear_template_flag_with_force(self):
+        """clear_template_flag composes with force (UPDATE then DROP ... WITH FORCE)."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            drop_db(
+                "mytpl",
+                clear_template_flag=True,
+                force=True,
+                connection_url=_TEST_URL,
+            )
+
+        assert mock_run.call_count == 2
+        update_cmd = mock_run.call_args_list[0][0][0]
+        assert "datistemplate=false" in update_cmd[update_cmd.index("-c") + 1]
+        drop_cmd = mock_run.call_args_list[1][0][0]
+        assert drop_cmd[0] == "psql"
+        assert (
+            "DROP DATABASE IF EXISTS mytpl WITH (FORCE)"
+            in (drop_cmd[drop_cmd.index("-c") + 1])
+        )
+
+    def test_drop_db_default_does_not_unset_template(self):
+        """Without clear_template_flag, only dropdb runs (no extra UPDATE)."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            drop_db("testdb", connection_url=_TEST_URL)
+
+        assert mock_run.call_count == 1
+        assert mock_run.call_args_list[0][0][0][0] == "dropdb"
+
+
+class TestUnsetTemplateFlag:
+    """Test unset_template_flag (#200)."""
+
+    def test_unset_template_flag_runs_expected_sql(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            code, _, _ = unset_template_flag("mytpl", connection_url=_TEST_URL)
+
+        assert code == 0
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "psql"
+        assert "-c" in cmd
+        sql = cmd[cmd.index("-c") + 1]
+        assert sql == "UPDATE pg_database SET datistemplate=false WHERE datname='mytpl'"
+
+    def test_unset_template_flag_rejects_injection(self):
+        with pytest.raises(ValueError, match="Invalid database name"):
+            unset_template_flag("tpl'; DROP TABLE x;--", connection_url=_TEST_URL)
 
 
 class TestCreateDb:
