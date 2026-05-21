@@ -21,6 +21,7 @@ from .config import get_config
 if TYPE_CHECKING:
     from .config.loader import FraisierConfig
     from .database import FraisierDB
+from .duration_estimate import estimate_duration
 from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
 from .locking import deployment_lock, is_deployment_locked
@@ -287,6 +288,47 @@ def _get_lock_dir(config: "FraisierConfig") -> Path | None:
         return None
 
 
+# Maps the user-facing `database.strategy` value to the estimator's key.
+_STRATEGY_ALIASES: dict[str, str] = {"apply": "migrate"}
+
+
+def _build_estimate(
+    fraise_config: dict[str, Any], fraise_name: str, environment: str
+) -> dict[str, Any] | None:
+    """Return ``{estimated_duration_s, estimated_ready_at, estimate_confidence}``
+    or None if the fraise has no database section or the lookup fails."""
+    database_config = fraise_config.get("database") or {}
+    strategy = database_config.get("strategy")
+    if not strategy:
+        return None
+    strategy = _STRATEGY_ALIASES.get(strategy, strategy)
+    try:
+        from datetime import UTC, datetime, timedelta
+
+        from .database import get_db
+
+        result = estimate_duration(
+            get_db(),
+            fraise=fraise_name,
+            environment=environment,
+            strategy=strategy,
+            db_size_mb=None,
+        )
+        eta = datetime.now(tz=UTC) + timedelta(seconds=result.seconds)
+        return {
+            "estimated_duration_s": result.seconds,
+            "estimated_ready_at": eta.isoformat().replace("+00:00", "Z"),
+            "estimate_confidence": result.confidence,
+        }
+    except Exception:
+        logger.exception(
+            "estimate_duration: failed to build estimate for %s/%s",
+            fraise_name,
+            environment,
+        )
+        return None
+
+
 def _dispatch_deployment(
     event: WebhookEvent,
     background_tasks: BackgroundTasks,
@@ -339,13 +381,15 @@ def _dispatch_deployment(
             git_branch=event.branch,
             git_commit=event.commit_sha,
         )
-        deployments.append(
-            {
-                "status": "deployment_triggered",
-                "fraise": fraise_name,
-                "environment": environment,
-            }
-        )
+        deployment: dict[str, Any] = {
+            "status": "deployment_triggered",
+            "fraise": fraise_name,
+            "environment": environment,
+        }
+        estimate = _build_estimate(fraise_config, fraise_name, environment)
+        if estimate is not None:
+            deployment.update(estimate)
+        deployments.append(deployment)
 
     # Single-fraise backward compatibility: return flat response
     if len(fraise_configs) == 1:
