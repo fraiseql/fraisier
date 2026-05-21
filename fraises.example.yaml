@@ -287,3 +287,19 @@ branch_mapping:
   #     environment: production
   #   - fraise: worker
   #     environment: production
+
+# ============================================================
+# WEBHOOK BEHAVIOUR
+# ============================================================
+# webhook:
+#   # When true (default), after every successful deploy the webhook
+#   # checks whether the deployed pyproject.toml pins a newer fraisier
+#   # version than the webhook is running. If so, it detaches an
+#   # `uv tool install --force fraisier==<pinned>` and asks the
+#   # systemctl-helper socket to restart the webhook unit. See #162.
+#   #
+#   # Prerequisite: the webhook unit must appear in the systemctl-helper
+#   # allowlist. Re-scaffold and re-run install.sh after upgrading to
+#   # v0.18.0+ to pick it up. Until then the install succeeds but the
+#   # restart RPC fails (and is logged).
+#   self_upgrade: true

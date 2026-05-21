@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Webhook self-upgrade when deployed pyproject pins a newer fraisier** ([#162](https://github.com/fraiseql/fraisier/issues/162)). After every successful deploy the webhook inspects the deployed `pyproject.toml`. If `[project].dependencies` (or any `[project.optional-dependencies.*]` group) contains an exact `fraisier==X.Y.Z` pin newer than the running webhook, fraisier detaches a worker that runs `uv tool install --force --refresh-package fraisier fraisier==X.Y.Z` against the webhook user's own uv tool directory, then asks the systemctl-helper socket to restart the webhook unit. The current deploy is unaffected — the upgrade applies to the next deploy. Range-pinned (`>=`, `~=`, `!=`) and unpinned dependencies are intentionally skipped. Complements the bootstrap-side restart already shipped in [#156](https://github.com/fraiseql/fraisier/issues/156) by covering the deploy-driven path (the operator-driven path was already covered).
+- **`fraisier-{project}-webhook.service` in the systemctl-helper allowlist**. The self-upgrade above restarts the webhook via the existing root-privileged `fraisier-systemctl-helper.service` socket — the webhook process is not root, so it cannot `systemctl restart` itself directly. The helper rejects any service not in its compile-time allowlist; the webhook unit is now included by `_collect_allowed_services` in `fraisier/scaffold/renderer.py`.
+- **`webhook.self_upgrade` config knob**. Default: `true`. Set `webhook: { self_upgrade: false }` in `fraises.yaml` to opt out per webhook.
+
+### Upgrade notes
+
+- Existing installations must re-scaffold and re-run `install.sh` to add the webhook unit to the systemctl-helper allowlist. Until they do, the install side of the self-upgrade succeeds but the restart RPC is rejected (logged at `error` level, deploy is not affected).
+- Self-upgrade logs land in `/var/lib/fraisier/self-upgrade/{project}-{ts}.log` (one file per upgrade attempt). Inspect there when a self-upgrade does not seem to have taken effect.
+
 ## [0.17.0] - 2026-05-21
 
 ### Added
