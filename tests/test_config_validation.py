@@ -527,3 +527,104 @@ fraises:
             ValidationError, match=r"on_error.*'halt'.*'warn'"
         ):
             FraisierConfig(config_file)
+
+class TestSmokeTestsValidation:
+    """`smoke_tests` schema validation at config-load time (#204 PR B)."""
+
+    _BASE_CONFIG = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        health_check:
+          url: https://api.example.com/health
+        smoke_tests: {entries}
+"""
+
+    def _write(self, tmp_path, entries: str):
+        return _write_config(
+            tmp_path, self._BASE_CONFIG.format(entries=entries)
+        )
+
+    def test_smoke_tests_happy_path(self, tmp_path):
+        config_file = self._write(
+            tmp_path,
+            "[{name: me, method: GET, url: /me, "
+            "assert: [{json_path: $.id, not_null: true}]}]",
+        )
+        FraisierConfig(config_file)  # must not raise
+
+    def test_accepts_relative_url_when_health_check_configured(self, tmp_path):
+        config_file = self._write(
+            tmp_path, "[{name: t, method: GET, url: /me, assert: []}]"
+        )
+        FraisierConfig(config_file)
+
+    def test_rejects_relative_url_when_health_check_not_configured(
+        self, tmp_path
+    ):
+        # Drop health_check from the base config.
+        yaml = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        smoke_tests:
+          - {name: t, method: GET, url: /me, assert: []}
+"""
+        config_file = _write_config(tmp_path, yaml)
+        with pytest.raises(
+            ValidationError, match=r"smoke_tests.*relative.*health_check"
+        ):
+            FraisierConfig(config_file)
+
+    def test_accepts_absolute_url_without_health_check(self, tmp_path):
+        yaml = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        smoke_tests:
+          - {name: t, method: GET, url: "https://other.example/me",
+             assert: []}
+"""
+        config_file = _write_config(tmp_path, yaml)
+        FraisierConfig(config_file)
+
+    def test_rejects_unknown_method(self, tmp_path):
+        config_file = self._write(
+            tmp_path, "[{name: t, method: MERGE, url: /me, assert: []}]"
+        )
+        with pytest.raises(ValidationError, match=r"smoke_tests.*method"):
+            FraisierConfig(config_file)
+
+    def test_rejects_unknown_assertion_key(self, tmp_path):
+        config_file = self._write(
+            tmp_path,
+            "[{name: t, method: GET, url: /me, "
+            "assert: [{json_path: $.x, regex: '^a$'}]}]",
+        )
+        with pytest.raises(
+            ValidationError, match=r"smoke_tests.*unknown assertion key"
+        ):
+            FraisierConfig(config_file)
+
+    @pytest.mark.parametrize(
+        "bad_path", ["$..foo", "$.a[0]", "$.*", "$.@.x"]
+    )
+    def test_rejects_unsupported_jsonpath_syntax(self, tmp_path, bad_path):
+        config_file = self._write(
+            tmp_path,
+            "[{name: t, method: GET, url: /me, "
+            f"assert: [{{json_path: '{bad_path}', not_null: true}}]}}]",
+        )
+        with pytest.raises(
+            ValidationError, match=r"unsupported JSONPath"
+        ):
+            FraisierConfig(config_file)
