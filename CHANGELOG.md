@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-05-22
+
+### Added
+
+- **Post-migration SQL hooks** ([#204](https://github.com/fraiseql/fraisier/issues/204)). New `database.post_migrate:` list runs configurable SQL files between `confiture migrate up` and the service restart — typically the project's idempotent `db/7_grant/*.sql` sweep, but any cross-script reconciliation (post-migration ACL fixups, default-value sync) fits the slot. Each entry takes exactly one of `sql_dir` (runs all `*.sql` lexicographically) or `sql_file` (single file), plus an `on_error` knob (`halt`, default — raises `DeploymentError` and aborts before the service restart, so no rollback is needed; or `warn` — logs and continues). Closes the gap that lets a new table without grants slip past unauthenticated `/health` and fail under authenticated traffic.
+- **`fraisier/post_migrate.py`** — `PostMigrateStep`, `load_post_migrate_steps(database_config, *, app_path)`, `run_post_migrate_steps(steps, *, database_url, runner)`. psql shellout uses `["psql", database_url, "-v", "ON_ERROR_STOP=1", "-f", str(sql_file)]`.
+
+### Upgrade notes
+
+- Opt-in: a fraise without a `database.post_migrate` block is unchanged.
+- The hook runs **before** the service restart. A `halt` failure aborts the deploy with `status=failed` and leaves the previous service version serving — there is nothing to roll back because nothing was restarted yet.
+- The SQL files run under the `database.database_url` role (the same role confiture uses for the migration). This is intentional: drift from a non-owner `CREATE OR REPLACE` is the specific bug the hook closes.
+- See `fraises.example.yaml` for the config block shape.
+
 ## [0.19.1] - 2026-05-22
 
 ### Added

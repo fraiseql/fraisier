@@ -111,6 +111,15 @@ fraises:
           name: myapp_production
           strategy: apply  # safe migrations only, never drop
           backup_before_deploy: true
+          # Optional post-migration SQL hooks (#204). Each entry has
+          # exactly one of `sql_dir` or `sql_file`; on_error is `halt`
+          # (default — abort before restart) or `warn` (log + continue).
+          # Runs after confiture finishes and before the service restart.
+          # post_migrate:
+          #   - sql_dir: db/7_grant/   # idempotent grant sweep
+          #     on_error: halt
+          #   - sql_file: db/post_migrate.sql
+          #     on_error: warn
         health_check:
           url: https://api.myapp.io/health
           timeout: 30

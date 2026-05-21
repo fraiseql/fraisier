@@ -206,6 +206,33 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         logger.info("Running database migrations")
         self._run_strategy()
 
+    def _run_post_migrate(self) -> None:
+        """Run database.post_migrate SQL hooks (#204).
+
+        Best-effort scoping: a ``halt`` step raises ``DeploymentError``
+        and aborts the deploy before the service is restarted (nothing
+        is yet serving the new code, so no rollback is needed). A
+        ``warn`` step logs and continues. Skipped silently when the
+        ``post_migrate`` list is empty or ``database_url`` is missing —
+        no app DB to connect to.
+        """
+        database_url = self.database_config.get("database_url")
+        if not database_url:
+            return
+        from fraisier import post_migrate
+
+        steps = post_migrate.load_post_migrate_steps(
+            self.database_config,
+            app_path=Path(self.app_path) if self.app_path else Path(),
+        )
+        if not steps:
+            return
+        post_migrate.run_post_migrate_steps(
+            steps,
+            database_url=database_url,
+            runner=self.runner,
+        )
+
     def _check_health_or_rollback(
         self,
         start_time: float,
@@ -288,6 +315,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 # Step 3: Run database migrations via strategy if configured
                 if self.database_config:
                     self._run_database_migrations()
+                    self._run_post_migrate()
 
                 # Step 4: Restart service (unless strategy handles it)
                 if self.systemd_service and not self._is_restore_migrate_strategy():
