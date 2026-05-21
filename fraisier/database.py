@@ -361,6 +361,22 @@ class FraisierDB:
         """Get a specific deployment record."""
         return self._history.get_deployment(deployment_id)
 
+    def get_successful_deploy_durations(
+        self,
+        *,
+        fraise: str,
+        environment: str,
+        strategy: str,
+        limit: int = 5,
+    ) -> list[float]:
+        """Return the most recent successful deploy durations (seconds)."""
+        return self._history.get_successful_deploy_durations(
+            fraise=fraise,
+            environment=environment,
+            strategy=strategy,
+            limit=limit,
+        )
+
     def get_recent_deployments(
         self,
         limit: int = 20,

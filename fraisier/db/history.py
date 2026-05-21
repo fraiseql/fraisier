@@ -257,6 +257,33 @@ class DeploymentHistoryManager:
             rows = conn.execute(query, params).fetchall()
             return [self._normalize_deployment_dict(dict(row)) for row in rows]
 
+    def get_successful_deploy_durations(
+        self,
+        *,
+        fraise: str,
+        environment: str,
+        strategy: str,
+        limit: int = 5,
+    ) -> list[float]:
+        """Return the *limit* most recent successful deploy durations (seconds).
+
+        Filtered by (fraise, environment, strategy). Rows with NULL
+        ``duration_seconds`` are excluded. Used by the duration estimator
+        (#201) to compute a per-strategy median.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT duration_seconds FROM tb_deployment
+                WHERE fraise_name=? AND environment_name=? AND strategy=?
+                  AND status='success' AND duration_seconds IS NOT NULL
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (fraise, environment, strategy, limit),
+            ).fetchall()
+            return [float(row["duration_seconds"]) for row in rows]
+
     def get_deployment_stats(
         self, fraise: str | None = None, days: int = 30
     ) -> dict[str, Any]:
