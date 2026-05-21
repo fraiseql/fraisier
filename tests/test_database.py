@@ -38,6 +38,82 @@ class TestFraisierDB:
             assert "tb_deployment" in tables
             assert "tb_webhook_event" in tables
 
+    def test_deployment_table_has_strategy_and_db_size_columns(self):
+        """`tb_deployment` carries `strategy` and `db_size_mb` for #201 history."""
+        _db = FraisierDB()
+        with get_connection() as conn:
+            cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(tb_deployment)")
+            }
+        assert "strategy" in cols
+        assert "db_size_mb" in cols
+
+    def test_deployment_table_columns_added_on_legacy_install(self, tmp_path):
+        """On a pre-#201 database, init_database adds the missing columns
+        without re-creating the table or losing data."""
+        import fraisier.database as dbmod
+
+        legacy_path = tmp_path / "legacy.db"
+        # Build the table without the new columns.
+        import sqlite3
+
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE tb_deployment (
+                    id TEXT NOT NULL UNIQUE,
+                    identifier TEXT NOT NULL UNIQUE,
+                    pk_deployment INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fk_fraise_state INTEGER,
+                    fraise_name TEXT NOT NULL,
+                    environment_name TEXT NOT NULL,
+                    job_name TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    duration_seconds REAL,
+                    old_version TEXT,
+                    new_version TEXT,
+                    status TEXT NOT NULL,
+                    triggered_by TEXT,
+                    triggered_by_user TEXT,
+                    git_commit TEXT,
+                    git_branch TEXT,
+                    error_message TEXT,
+                    details TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO tb_deployment "
+                "(id, identifier, fraise_name, environment_name, started_at, "
+                "status, created_at, updated_at) "
+                "VALUES ('u1', 'i1', 'f', 'e', 'now', 'success', 'now', 'now')"
+            )
+            conn.commit()
+
+        # Re-init through fraisier; should ADD COLUMN, not DROP+CREATE.
+        original = dbmod.get_db_path
+        try:
+            dbmod.get_db_path = lambda: legacy_path
+            dbmod.init_database()
+            with dbmod.get_connection() as conn:
+                cols = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(tb_deployment)")
+                }
+                assert "strategy" in cols
+                assert "db_size_mb" in cols
+                # Legacy row preserved.
+                row = conn.execute(
+                    "SELECT id FROM tb_deployment WHERE id='u1'"
+                ).fetchone()
+                assert row is not None
+        finally:
+            dbmod.get_db_path = original
+
     def test_update_fraise_state_new(self, test_db):
         """Test updating fraise state for new fraise."""
         test_db.update_fraise_state(
