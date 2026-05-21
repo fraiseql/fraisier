@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-05-22
+
+### Added
+
+- **`fraisier trigger-deploy` prints the duration estimate before dispatching** ([#201](https://github.com/fraiseql/fraisier/issues/201) follow-up). Human operators now see `Estimated completion: ~Nm (history|fallback, N samples)` immediately above `Deployment triggered successfully`, closing the gap between the webhook surface (which already carried the estimate) and the CLI surface. Best-effort: any estimator failure (missing local fraisier DB, import error, etc.) is swallowed so the deploy still dispatches.
+- **`tb_deployment.db_size_mb` is now populated** ([#201](https://github.com/fraiseql/fraisier/issues/201) follow-up). After each successful deploy with a configured `database.database_url`, fraisier samples `SELECT pg_database_size(current_database())` via `psql` and stores the byte count converted to MB. Lights up the fallback path of the duration estimator (which already knew how to use `db_size_mb` — it just got `None` before). Best-effort: psql failures, missing `database_url`, or unparseable output leave the column NULL. The estimator continues to work via its per-strategy floor — only the size-aware scaling is lost. Debug-level log entries carry a password-redacted form of the URL so misconfigured deploy roles are diagnosable from logs.
+
+### Internal
+
+- **Shared estimate helpers in `fraisier/duration_estimate.py`** — `build_estimate`, `to_dispatch_dict`, `format_estimate_line`. The webhook surface (`webhook._build_estimate`) and the new CLI surface both consume these; the previous in-module copy in `webhook.py` is gone.
+- **`fraisier/dbops/sizing.py`** — `query_database_size_mb(database_url, *, runner)` standalone helper. One consumer (`_complete_db_record`); kept separate from `dbops/operations.py` for test focus.
+
+### Upgrade notes
+
+- No schema migration. The `db_size_mb` column already existed (introduced in v0.19.0); this release only changes the write path.
+- The new sampling adds one `psql` round-trip per successful deploy. On databases with millions of relations `pg_database_size` can take 1-2 seconds; on typical sizes the cost is negligible against a multi-minute deploy.
+- Deploy roles that cannot CONNECT to the **app DB** (only the maintenance DB) will see `db_size_mb` stay NULL silently. The estimator's fallback path still works, but the history-aware path never benefits. Check the debug log for `query_database_size_mb: psql failed` entries if estimates do not improve over time.
+
 ## [0.19.0] - 2026-05-21
 
 ### Added
