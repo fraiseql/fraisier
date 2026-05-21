@@ -1,5 +1,6 @@
 [Unit]
 Description=Database backup for {{ project_name }}
+OnFailure=fraisier-{{ project_name }}-backup-alert@%n.service
 
 [Service]
 Type=oneshot

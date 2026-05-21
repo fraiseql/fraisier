@@ -52,6 +52,21 @@ def _verify_backup_toc(
     return True, ""
 
 
+def _dump_size(path: Path) -> int:
+    """Return the on-disk byte total of a dump file or directory dump.
+
+    For a regular file dump (``pg_dump -Fc``), returns the file size.
+    For a directory dump (``pg_dump -Fd``), returns the recursive sum of
+    every contained file (``toc.dat`` plus every ``*.dat`` blob). Using
+    the directory's own ``stat().st_size`` would return the inode's
+    metadata size (typically 4096 bytes), which makes the size sanity
+    check meaningless for ``-Fd`` dumps.
+    """
+    if path.is_dir():
+        return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+    return path.stat().st_size
+
+
 def _previous_same_mode_backup(
     output_dir: Path,
     *,
@@ -90,6 +105,7 @@ def run_backup(
     compression: str = "zstd:9",
     mode: str = "full",
     excluded_tables: list[str] | None = None,
+    jobs: int = 1,
 ) -> BackupResult:
     """Run pg_dump with custom-format compression.
 
@@ -102,7 +118,16 @@ def run_backup(
         compression: Compression spec (e.g. "zstd:9").
         mode: "full" or "slim" (slim excludes tables).
         excluded_tables: Tables to exclude in slim mode.
+        jobs: Number of parallel pg_dump workers. When ``1`` (default),
+            uses the single-stream custom format (``-Fc``) writing one
+            ``.dump`` file. When ``>1``, switches to directory format
+            (``-Fd -j N``) writing a ``.dump/`` directory containing
+            ``toc.dat`` plus per-table ``*.dat`` blobs. Parallelism comes
+            from concurrent table COPYs.
     """
+    if not isinstance(jobs, int) or isinstance(jobs, bool) or jobs < 1:
+        msg = f"jobs must be a positive integer, got {jobs!r}"
+        raise ValueError(msg)
     validate_pg_identifier(db_name, "database name")
     _validate_compression(compression)
     validate_file_path(output_dir)
@@ -113,13 +138,13 @@ def run_backup(
     filename = f"{db_name}_{mode}_{timestamp}{suffix}.dump"
     backup_path = f"{output_dir}/{filename}"
 
-    cmd: list[str] = [
-        "pg_dump",
-        "-Fc",
-        f"--compress={compression}",
-        "-f",
-        backup_path,
-    ]
+    # pg_dump itself creates the directory for -Fd and refuses if it already exists.
+    cmd: list[str] = ["pg_dump"]
+    if jobs > 1:
+        cmd.extend(["-Fd", "-j", str(jobs)])
+    else:
+        cmd.append("-Fc")
+    cmd.extend([f"--compress={compression}", "-f", backup_path])
 
     if mode == "slim" and excluded_tables:
         for table in excluded_tables:
@@ -149,8 +174,8 @@ def run_backup(
         Path(output_dir), db_name=db_name, mode=mode, current_path=backup_path
     )
     if prev is not None:
-        prev_size = prev.stat().st_size
-        cur_size = Path(backup_path).stat().st_size
+        prev_size = _dump_size(prev)
+        cur_size = _dump_size(Path(backup_path))
         if prev_size > 0 and cur_size < prev_size * _SIZE_SANITY_RATIO:
             return BackupResult(
                 success=False,
@@ -177,17 +202,31 @@ def cleanup_old_backups(
     *,
     retention_hours: int,
 ) -> list[str]:
-    """Remove backup files older than *retention_hours*.
+    """Remove backup files and directory dumps older than *retention_hours*.
 
-    Returns list of removed file paths.
+    Handles both ``-Fc`` file dumps (one ``.dump`` file) and ``-Fd``
+    directory dumps (one ``.dump/`` directory tree). For each match,
+    ``rmtree`` is guarded by a resolved-path containment check against
+    ``backup_dir`` to ensure a glob result can't escape via a symlinked
+    entry.
+
+    Returns the list of removed paths (as strings).
     """
     cutoff = time.time() - retention_hours * 3600
+    resolved_root = backup_dir.resolve()
     removed: list[str] = []
 
     for f in backup_dir.glob("*.dump"):
-        if f.stat().st_mtime < cutoff:
+        if f.stat().st_mtime >= cutoff:
+            continue
+        resolved = f.resolve()
+        if not resolved.is_relative_to(resolved_root):
+            continue
+        if f.is_dir():
+            shutil.rmtree(f)
+        else:
             f.unlink()
-            removed.append(str(f))
+        removed.append(str(f))
 
     return removed
 

@@ -708,6 +708,66 @@ scaffold:
             assert directive in content, f"Missing directive: {directive}"
         assert "ReadWritePaths=/var/backups/" in content
 
+    def test_backup_service_has_on_failure_alert_hook(self, tmp_path):
+        """backup.service emits OnFailure= so operators see backup failures (#202 Phase 4)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        svc_path = tmp_path / "output" / "systemd" / "backup.service"
+        content = svc_path.read_text()
+
+        assert "OnFailure=fraisier-tp-backup-alert@%n.service" in content
+
+    def test_backup_alert_unit_is_scaffolded(self, tmp_path):
+        """backup-alert@.service template renders with a systemd-cat default (#202 Phase 4)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        alert_path = (
+            tmp_path / "output" / "systemd" / "fraisier-tp-backup-alert@.service"
+        )
+        assert alert_path.exists(), "backup-alert@.service must be scaffolded"
+        content = alert_path.read_text()
+
+        # Default action is passive — log to journal via systemd-cat.
+        assert "systemd-cat" in content
+        assert "fraisier-backup-alert" in content
+        # %i identifies the failing unit; OnFailure= passes the failing
+        # unit's name via %n which becomes the template instance.
+        assert "%i" in content
+
 
 class TestNginxTemplate:
     """Nginx reverse proxy template with SSL, CORS, security headers."""

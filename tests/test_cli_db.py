@@ -232,6 +232,7 @@ class TestBackup:
             compression="zstd:9",
             mode="full",
             excluded_tables=[],
+            jobs=1,
         )
 
     def test_backup_insufficient_disk_space_exits_1(self, runner, mock_config):
@@ -285,7 +286,42 @@ class TestBackup:
             compression="zstd:9",
             mode="slim",
             excluded_tables=["logs", "events"],
+            jobs=1,
         )
+
+    def test_backup_passes_jobs_from_config(self, runner, mock_config):
+        """backup reads backup.jobs from config and forwards to run_backup (#202)."""
+        mock_config._config = {"backup": {"jobs": 4}}
+        result_mock = MagicMock(success=True, backup_path="/backup/mydb.dump")
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch("fraisier.dbops.backup.check_disk_space", return_value=True),
+            patch(
+                "fraisier.dbops.backup.run_backup", return_value=result_mock
+            ) as mock_backup,
+        ):
+            result = runner.invoke(main, ["backup", "my_api", "-e", "production"])
+
+        assert result.exit_code == 0
+        assert mock_backup.call_args.kwargs["jobs"] == 4
+
+    def test_backup_jobs_flag_overrides_config(self, runner, mock_config):
+        """--jobs takes precedence over backup.jobs from config (#202)."""
+        mock_config._config = {"backup": {"jobs": 2}}
+        result_mock = MagicMock(success=True, backup_path="/backup/mydb.dump")
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch("fraisier.dbops.backup.check_disk_space", return_value=True),
+            patch(
+                "fraisier.dbops.backup.run_backup", return_value=result_mock
+            ) as mock_backup,
+        ):
+            result = runner.invoke(
+                main, ["backup", "my_api", "-e", "production", "--jobs", "8"]
+            )
+
+        assert result.exit_code == 0
+        assert mock_backup.call_args.kwargs["jobs"] == 8
 
 
 class TestDbRestore:

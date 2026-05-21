@@ -108,11 +108,20 @@ def find_latest_backup(
     pattern: str = "*.dump",
     preferred_compression: str | None = None,
 ) -> Path | None:
-    """Find the most recent backup file matching *pattern* in *backup_dir*.
+    """Find the most recent backup file or directory matching *pattern* in *backup_dir*.
+
+    Discovers both ``pg_dump -Fc`` file dumps (``*.dump``) and parallel
+    ``pg_dump -Fd`` directory dumps (``*.dump/`` containing ``toc.dat``
+    plus per-table ``*.dat`` blobs). The producer side names both forms
+    with the same ``<db>_<mode>_<ts>_<algo>.dump`` convention so a single
+    glob covers both; ordering is by mtime, with the directory's own
+    mtime reflecting the moment ``pg_dump`` finished writing the last
+    ``*.dat`` block.
 
     When *preferred_compression* is set (e.g. ``"lz4"``), tries to find
-    the newest dump whose filename contains ``_{algo}.dump`` first.
-    Falls back to the regular newest-dump selection if none match.
+    the newest dump whose filename contains ``_{algo}.dump`` first
+    (matching either form). Falls back to the regular newest-dump
+    selection if none match.
     """
     if preferred_compression:
         pref_pattern = f"*_{preferred_compression}.dump"

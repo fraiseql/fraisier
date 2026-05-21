@@ -55,6 +55,34 @@ class TestRestoreBackup:
         assert result.success is False
         assert "pg_restore: error" in result.error
 
+    def test_restore_backup_accepts_directory_dump_path(self, tmp_path: Path):
+        """restore_backup forwards a directory-format dump path to pg_restore unchanged.
+
+        pg_restore auto-detects ``-Fd`` from the positional path being a
+        directory. Lock-in for #202 Phase 3 — once parallel pg_dump
+        starts producing directory dumps, every existing restore caller
+        must work without further changes.
+        """
+        dir_dump = tmp_path / "mydb_full_20260520_1200_zstd.dump"
+        dir_dump.mkdir()
+        (dir_dump / "toc.dat").write_text("stub toc")
+
+        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+            mock_cmd.return_value = (0, "", "")
+            result = restore_backup(
+                backup_path=str(dir_dump),
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
+
+        assert result.success is True
+        cmd = mock_cmd.call_args[0][0]
+        assert cmd[0] == "pg_restore"
+        assert str(dir_dump) in cmd
+        assert not any(arg.startswith("-F") for arg in cmd), (
+            "pg_restore must auto-detect dump format; no -F flag override"
+        )
+
     def test_restore_with_owner_fix(self):
         with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
             mock_cmd.return_value = (0, "", "")
@@ -265,3 +293,79 @@ class TestFindLatestBackup:
 
         result = find_latest_backup(tmp_path)
         assert result == zstd
+
+    def test_find_latest_backup_returns_directory_dump(self, tmp_path: Path):
+        """find_latest_backup discovers pg_dump -Fd directory dumps (#202 Phase 2).
+
+        Parallel pg_dump produces a directory containing toc.dat + per-table
+        .dat files. Path.glob matches both files and directories, so the
+        function should locate it without special-casing.
+        """
+        import os
+
+        dir_dump = tmp_path / "mydb_full_20260520_1200_zstd.dump"
+        dir_dump.mkdir()
+        (dir_dump / "toc.dat").write_text("stub toc")
+        os.utime(dir_dump, (2000, 2000))
+
+        result = find_latest_backup(tmp_path)
+        assert result == dir_dump
+        assert result is not None and result.is_dir()
+
+    def test_find_latest_backup_picks_newer_directory_over_older_file(
+        self, tmp_path: Path
+    ):
+        """When a directory dump is newer than the latest file dump, it wins."""
+        import os
+
+        file_dump = tmp_path / "mydb_full_20260519_1200_zstd.dump"
+        file_dump.write_text("file dump bytes")
+        os.utime(file_dump, (1000, 1000))
+
+        dir_dump = tmp_path / "mydb_full_20260520_1200_zstd.dump"
+        dir_dump.mkdir()
+        (dir_dump / "toc.dat").write_text("stub toc")
+        os.utime(dir_dump, (2000, 2000))
+
+        result = find_latest_backup(tmp_path)
+        assert result == dir_dump
+
+    def test_find_latest_backup_picks_newer_file_over_older_directory(
+        self, tmp_path: Path
+    ):
+        """Symmetric case: newer file dump wins over older directory dump."""
+        import os
+
+        dir_dump = tmp_path / "mydb_full_20260519_1200_zstd.dump"
+        dir_dump.mkdir()
+        (dir_dump / "toc.dat").write_text("stub toc")
+        os.utime(dir_dump, (1000, 1000))
+
+        file_dump = tmp_path / "mydb_full_20260520_1200_zstd.dump"
+        file_dump.write_text("file dump bytes")
+        os.utime(file_dump, (2000, 2000))
+
+        result = find_latest_backup(tmp_path)
+        assert result == file_dump
+
+    def test_find_latest_backup_preferred_compression_matches_directory(
+        self, tmp_path: Path
+    ):
+        """preferred_compression matches directory dumps by filename suffix.
+
+        The producer (Phase 3) names directory dumps `<db>_<mode>_<ts>_<algo>.dump/`,
+        so the filename-suffix match used by file dumps works unchanged.
+        """
+        import os
+
+        zstd_file = tmp_path / "mydb_full_20260520_1300_zstd.dump"
+        zstd_file.write_text("zstd file dump")
+        os.utime(zstd_file, (2000, 2000))  # newer
+
+        lz4_dir = tmp_path / "mydb_full_20260520_1200_lz4.dump"
+        lz4_dir.mkdir()
+        (lz4_dir / "toc.dat").write_text("stub toc")
+        os.utime(lz4_dir, (1000, 1000))  # older
+
+        result = find_latest_backup(tmp_path, preferred_compression="lz4")
+        assert result == lz4_dir
