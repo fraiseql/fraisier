@@ -7,6 +7,7 @@ and database version derivation.
 import json
 import logging
 import re
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ log = logging.getLogger(__name__)
 _SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 APP_VERSION_RE = re.compile(r"^[A-Za-z0-9._+\-]+$")
+
+# Matches "fraisier" or "fraisier[extras]" as the dependency name,
+# followed by an exact == pin and a semver-shaped version.
+_FRAISIER_PIN_RE = re.compile(r"^\s*fraisier(?:\[[^\]]*\])?\s*==\s*(\d+\.\d+\.\d+)\s*$")
 
 
 def _validate_app_version(version: str, *, source: str) -> tuple[str, str] | None:
@@ -349,6 +354,37 @@ def read_pyproject_version(pyproject_path: Path) -> str:
     if not m:
         raise ValueError(f"No version field found in {pyproject_path}")
     return m.group(2)
+
+
+def detect_required_fraisier_version(app_path: Path) -> str | None:
+    """Return the exact fraisier version pinned in ``app_path/pyproject.toml``.
+
+    Walks ``[project].dependencies`` and every ``[project.optional-dependencies.*]``
+    group, returning the first ``X.Y.Z`` that follows a ``fraisier==`` (or
+    ``fraisier[extra]==``) exact pin. Returns ``None`` if fraisier is absent,
+    range-pinned (``>=``, ``~=``, ``!=``, etc.), or unpinned — the caller treats
+    ``None`` as "no upgrade decision can be made".
+    """
+    pyproject = app_path / "pyproject.toml"
+    if not pyproject.is_file():
+        return None
+    try:
+        data = tomllib.loads(pyproject.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    project = data.get("project", {})
+    candidates: list[str] = list(project.get("dependencies") or [])
+    optional = project.get("optional-dependencies") or {}
+    for group in optional.values():
+        if isinstance(group, list):
+            candidates.extend(group)
+    for dep in candidates:
+        if not isinstance(dep, str):
+            continue
+        match = _FRAISIER_PIN_RE.match(dep)
+        if match:
+            return match.group(1)
+    return None
 
 
 def generate_version_json(

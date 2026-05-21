@@ -168,6 +168,37 @@ class TestHandleConnection:
         assert result["ok"] is True
         assert result["returncode"] == 0
 
+    def test_restart_allowed_for_webhook_unit(self):
+        """Contract for #162: when the webhook unit is in the allowlist, the
+        helper accepts restart for it. Locks the wire-up that the self-upgrade
+        runner depends on."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        webhook = "fraisier-myproj-webhook.service"
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            result = self._call(
+                {"action": "restart", "service": webhook},
+                frozenset({webhook}),
+            )
+
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        assert args == ["/usr/bin/systemctl", "restart", webhook]
+        assert result["ok"] is True
+
+    def test_restart_rejected_for_webhook_when_not_in_allowlist(self):
+        """Regression guard: without #162's allowlist addition, a restart RPC
+        for the webhook unit must be rejected (not silently allowed)."""
+        result = self._call(
+            {"action": "restart", "service": "fraisier-myproj-webhook.service"},
+            frozenset({"some_other.service"}),
+        )
+        assert result["ok"] is False
+        assert "service not allowed" in result["error"]
+
     def test_systemctl_failure_returns_ok_false(self):
         mock_result = MagicMock()
         mock_result.returncode = 5

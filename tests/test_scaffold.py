@@ -2371,6 +2371,40 @@ fraises:
         assert "myproj_my_api_production.service" in wrapper_content
         assert "myproj_my_api_development.service" in wrapper_content
 
+    def test_allowed_services_includes_webhook_unit(self, tmp_path):
+        """Helper allowlist must include the webhook unit so #162 self-upgrade
+        can restart the webhook via the systemctl-helper socket."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        helper_svc = (
+            tmp_path / "output" / "systemd" / "fraisier-myproj-systemctl-helper.service"
+        )
+        helper_content = helper_svc.read_text()
+        assert "fraisier-myproj-webhook.service" in helper_content
+
+        # And the legacy wrapper carries it too, so rollbacks keep working.
+        wrapper_content = (tmp_path / "output" / "systemctl-wrapper.sh").read_text()
+        assert "fraisier-myproj-webhook.service" in wrapper_content
+
     def test_sudoers_no_db_admin_for_migrate_strategy(self, tmp_path):
         """Sudoers omits DB admin commands for migrate/apply strategies (#41)."""
         from fraisier.scaffold.renderer import ScaffoldRenderer

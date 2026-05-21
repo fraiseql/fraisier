@@ -26,6 +26,7 @@ from .git import GitProvider, WebhookEvent, get_provider
 from .locking import deployment_lock, is_deployment_locked
 from .status import read_status
 from .webhook_rate_limit import check_rate_limit
+from .webhook_self_upgrade import maybe_self_upgrade
 
 # Configure logging
 logging.basicConfig(
@@ -246,6 +247,14 @@ async def _run_deployment(
                 f"Deployment successful: {fraise_name}/{environment} "
                 f"({result.old_version} -> {result.new_version})"
             )
+            app_path = fraise_config.get("app_path")
+            if app_path:
+                webhook_cfg = config.webhook
+                maybe_self_upgrade(
+                    Path(app_path),
+                    project_name=config.project_name,
+                    enabled=bool(webhook_cfg.get("self_upgrade", True)),
+                )
         else:
             logger.error(
                 f"Deployment failed: {fraise_name}/{environment} "
