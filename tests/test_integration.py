@@ -284,7 +284,7 @@ class TestBackupRestoreCycle:
             assert result.success is True
             assert "test_db" in result.backup_path
             assert "full" in result.backup_path
-            cmd_args = mock_run.call_args[0][0]
+            cmd_args = mock_run.call_args_list[0][0][0]
             assert "pg_dump" in cmd_args
             assert "-Fc" in cmd_args
 
@@ -305,7 +305,7 @@ class TestBackupRestoreCycle:
 
             assert result.success is True
             assert "slim" in result.backup_path
-            cmd_args = mock_run.call_args[0][0]
+            cmd_args = mock_run.call_args_list[0][0][0]
             assert "-T" in cmd_args
             t_indices = [i for i, a in enumerate(cmd_args) if a == "-T"]
             excluded = [cmd_args[i + 1] for i in t_indices]
