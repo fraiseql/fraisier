@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-05-21
+
+### Added
+
+- **Parallel `pg_dump` via `backup.jobs`** ([#202](https://github.com/fraiseql/fraisier/issues/202)). Set `backup.jobs: N` in `fraises.yaml` or pass `--jobs N` to `fraisier db backup` to run pg_dump with N parallel workers. When `jobs == 1` (default), behaviour is byte-identical to today — a single-stream `pg_dump -Fc` producing one `.dump` file. When `jobs > 1`, fraisier switches to directory format (`pg_dump -Fd -j N`) producing a `<db>_<mode>_<ts>_<algo>.dump/` directory containing `toc.dat` plus per-table `*.dat` blobs. Parallelism comes from concurrent table COPYs.
+- **`find_latest_backup` discovers directory-format dumps**. All restore consumers (the CLI restore path, `RestoreMigrateStrategy`) now transparently locate either form. `Path.glob` matched both already; the change is in behaviour lock-in and tests. `pg_restore` auto-detects `-Fd` from the positional directory path, so no caller needed adjusting.
+- **`OnFailure=` hook on scaffolded backup units** ([#202](https://github.com/fraiseql/fraisier/issues/202) Phase 4). Closes the alerting gap that hid the original prod incident — when a backup exits non-zero (pg_dump SIGTERM, disk full, TOC verification rejection, size-sanity rejection), systemd now triggers `fraisier-<project>-backup-alert@%n.service`. The default alert is passive — pipes one line through `systemd-cat` into the journal. Operators who want real alerting can override the template with `systemctl edit fraisier-<project>-backup-alert@.service` or replace the file. fraisier ships no notifier choice to avoid lock-in.
+
+### Changed
+
+- **Size sanity check for directory dumps** uses recursive content size, not the directory inode's bare `stat().st_size` (~4096 bytes). Extracted as `_dump_size(path)` in `fraisier/dbops/backup.py`. Without this, a directory dump would falsely trigger the size check whenever a prior file dump existed.
+- **`cleanup_old_backups` removes both file and directory dumps** via `shutil.rmtree` for directories, guarded by a resolved-path containment check against `backup_dir` so a glob result cannot escape via a symlinked entry.
+
+### Upgrade notes
+
+- Existing single-file `.dump` backups remain readable; nothing in the v0.16.x line is invalidated.
+- Existing installations must re-run `install.sh` to pick up the new `fraisier-<project>-backup-alert@.service` unit and the `OnFailure=` line on the existing backup unit.
+- Setting `backup.jobs > 1` requires that the database disk, the backup target disk, and the network between them can sustain N parallel reads/writes; higher `jobs` does not always mean faster. Tune to your hardware.
+- The pre-deploy `BackupHook` (the `pg_dump | gzip > *.sql.gz` path in `fraisier/hooks/backup.py`) is intentionally unchanged — that code path is separate from `run_backup()` and does not benefit from parallelism in its current form.
+
 ## [0.16.6] - 2026-05-21
 
 ### Fixed
