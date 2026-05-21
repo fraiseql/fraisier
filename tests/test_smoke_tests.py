@@ -159,13 +159,7 @@ class TestLoadSmokeTests:
     def test_rejects_unknown_assertion_key(self):
         env_config = {
             "smoke_tests": [
-                self._entry(
-                    **{
-                        "assert": [
-                            {"json_path": "$.x", "regex": "^foo$"}
-                        ]
-                    }
-                )
+                self._entry(**{"assert": [{"json_path": "$.x", "regex": "^foo$"}]})
             ]
         }
         with pytest.raises(ValueError, match=r"unknown assertion key"):
@@ -175,13 +169,7 @@ class TestLoadSmokeTests:
     def test_rejects_unsupported_jsonpath_syntax(self, bad_path):
         env_config = {
             "smoke_tests": [
-                self._entry(
-                    **{
-                        "assert": [
-                            {"json_path": bad_path, "not_null": True}
-                        ]
-                    }
-                )
+                self._entry(**{"assert": [{"json_path": bad_path, "not_null": True}]})
             ]
         }
         with pytest.raises(
