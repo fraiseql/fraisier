@@ -7,7 +7,7 @@ Free functions that validate sections of the raw config dict loaded by
 """
 
 import re
-from typing import Any
+from typing import Any, cast
 
 from fraisier.config.schema import _UNIT_NAME_RE, _VALID_STRATEGIES
 from fraisier.dbops._strategies import ADMIN_STRATEGIES
@@ -243,6 +243,10 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
     if isinstance(db, dict) and db.get("preflight"):
         errors.extend(_validate_preflight(fraise_name, db))
 
+    # post_migrate hook validation (#204)
+    if isinstance(db, dict) and db.get("post_migrate") is not None:
+        errors.extend(_validate_post_migrate(fraise_name, db))
+
     # ZFS configuration validation
     zfs_config = env.get("zfs")
     if zfs_config is not None:
@@ -393,6 +397,52 @@ def _validate_preflight(fraise_name: str, db: dict) -> list[str]:
             f"{fraise_name}: database.preflight.timeout_seconds must be "
             f"a positive integer, got {timeout!r}"
         )
+
+    return errors
+
+
+_VALID_POST_MIGRATE_ON_ERROR = frozenset({"halt", "warn"})
+
+
+def _validate_post_migrate(fraise_name: str, db: dict) -> list[str]:
+    """Return validation errors for a database.post_migrate config block."""
+    errors: list[str] = []
+    entries: Any = db.get("post_migrate")
+    if not isinstance(entries, list):
+        errors.append(
+            f"{fraise_name}: database.post_migrate must be a list, "
+            f"got {type(entries).__name__}"
+        )
+        return errors
+
+    for index, raw_entry in enumerate(entries):
+        location = f"database.post_migrate[{index}]"
+        if not isinstance(raw_entry, dict):
+            errors.append(
+                f"{fraise_name}: {location} must be a mapping, "
+                f"got {type(raw_entry).__name__}"
+            )
+            continue
+
+        entry = cast("dict[str, Any]", raw_entry)
+        sql_dir = entry.get("sql_dir")
+        sql_file = entry.get("sql_file")
+        if sql_dir and sql_file:
+            errors.append(
+                f"{fraise_name}: {location} must specify either sql_dir "
+                "or sql_file, not both"
+            )
+        elif not sql_dir and not sql_file:
+            errors.append(
+                f"{fraise_name}: {location} must specify sql_dir or sql_file"
+            )
+
+        on_error = entry.get("on_error", "halt")
+        if on_error not in _VALID_POST_MIGRATE_ON_ERROR:
+            errors.append(
+                f"{fraise_name}: {location}.on_error must be 'halt' or "
+                f"'warn', got {on_error!r}"
+            )
 
     return errors
 
