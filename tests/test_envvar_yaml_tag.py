@@ -52,9 +52,7 @@ class TestEnvvarYamlTag:
         config_file = _write_config(
             tmp_path, _TEMPLATE.format(expr="!envvar MISSING_VAR")
         )
-        with pytest.raises(
-            ConfigurationError, match=r"!envvar.*MISSING_VAR.*not set"
-        ):
+        with pytest.raises(ConfigurationError, match=r"!envvar.*MISSING_VAR.*not set"):
             FraisierConfig(config_file)
 
     def test_empty_string_env_var_resolves(self, tmp_path, monkeypatch):

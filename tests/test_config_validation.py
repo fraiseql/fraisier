@@ -522,6 +522,7 @@ fraises:
         with pytest.raises(ValidationError, match=r"on_error.*'halt'.*'warn'"):
             FraisierConfig(config_file)
 
+
 class TestSmokeTestsValidation:
     """`smoke_tests` schema validation at config-load time (#204 PR B)."""
 
@@ -538,9 +539,7 @@ fraises:
 """
 
     def _write(self, tmp_path, entries: str):
-        return _write_config(
-            tmp_path, self._BASE_CONFIG.format(entries=entries)
-        )
+        return _write_config(tmp_path, self._BASE_CONFIG.format(entries=entries))
 
     def test_smoke_tests_happy_path(self, tmp_path):
         config_file = self._write(
@@ -556,9 +555,7 @@ fraises:
         )
         FraisierConfig(config_file)
 
-    def test_rejects_relative_url_when_health_check_not_configured(
-        self, tmp_path
-    ):
+    def test_rejects_relative_url_when_health_check_not_configured(self, tmp_path):
         # Drop health_check from the base config.
         yaml = """
 fraises:
@@ -609,16 +606,12 @@ fraises:
         ):
             FraisierConfig(config_file)
 
-    @pytest.mark.parametrize(
-        "bad_path", ["$..foo", "$.a[0]", "$.*", "$.@.x"]
-    )
+    @pytest.mark.parametrize("bad_path", ["$..foo", "$.a[0]", "$.*", "$.@.x"])
     def test_rejects_unsupported_jsonpath_syntax(self, tmp_path, bad_path):
         config_file = self._write(
             tmp_path,
             "[{name: t, method: GET, url: /me, "
             f"assert: [{{json_path: '{bad_path}', not_null: true}}]}}]",
         )
-        with pytest.raises(
-            ValidationError, match=r"unsupported JSONPath"
-        ):
+        with pytest.raises(ValidationError, match=r"unsupported JSONPath"):
             FraisierConfig(config_file)

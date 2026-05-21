@@ -390,9 +390,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                         return early
 
                 # Step 5.5: Authenticated smoke tests (#204 PR B)
-                smoke = self._run_smoke_tests_or_halt(
-                    start_time, old_version, db_pk
-                )
+                smoke = self._run_smoke_tests_or_halt(start_time, old_version, db_pk)
                 if smoke is not None:
                     return smoke
 

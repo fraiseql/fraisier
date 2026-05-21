@@ -138,8 +138,7 @@ def _parse_assertion(raw: dict) -> Assertion:
     json_path = raw["json_path"]
     if _UNSUPPORTED_JSONPATH_CHARS.search(json_path):
         raise ValueError(
-            "unsupported JSONPath syntax: use $.dotted.path only "
-            f"(got {json_path!r})"
+            f"unsupported JSONPath syntax: use $.dotted.path only (got {json_path!r})"
         )
     # Validate the walker can parse it (raises on missing $).
     _walk_json_path({}, json_path)
