@@ -40,7 +40,7 @@ from fraisier.config.schema import (
     SystemdScaffoldConfig,
     _config_search_locations,
 )
-from fraisier.errors import ValidationError
+from fraisier.errors import ConfigurationError, ValidationError
 
 _DEFAULT_TIMEOUT = 600  # 10 minutes
 _MEMORY_SIZE_RE = re.compile(r"^\d+[KMGT]$")
@@ -54,6 +54,36 @@ _VALID_SERVICE_TYPES = {
     "notify-reload",
     "idle",
 }
+
+
+class _FraisierYamlLoader(yaml.SafeLoader):
+    """SafeLoader subclass that resolves ``!envvar`` tags from os.environ.
+
+    Use:
+        headers:
+          Authorization: !envvar SMOKE_TEST_JWT
+
+    Missing variables raise ``ConfigurationError`` at load time so the
+    misconfig is visible immediately rather than at deploy time. Empty
+    strings are accepted: an env var set to ``""`` is still considered
+    "set" and resolves to the empty string.
+    """
+
+
+def _construct_envvar(loader: yaml.Loader, node: yaml.Node) -> str:
+    if not isinstance(node, yaml.ScalarNode):
+        raise ConfigurationError(
+            f"!envvar expects a scalar variable name, got {type(node).__name__}"
+        )
+    name = loader.construct_scalar(node)
+    if name not in os.environ:
+        raise ConfigurationError(
+            f"!envvar references environment variable {name!r} which is not set"
+        )
+    return os.environ[name]
+
+
+_FraisierYamlLoader.add_constructor("!envvar", _construct_envvar)
 
 
 class FraisierConfig:
@@ -100,7 +130,7 @@ class FraisierConfig:
     def _load(self) -> None:
         """Load configuration from YAML file."""
         with Path(self.config_path).open() as f:
-            self._config = yaml.safe_load(f)
+            self._config = yaml.load(f, Loader=_FraisierYamlLoader)
         validate_fraises(self._config.get("fraises", {}))
         validate_servers(self._config.get("servers", {}))
         validate_branch_mapping(
