@@ -10,7 +10,10 @@ from fraisier.duration_estimate import (
     STRATEGY_FALLBACK_SECONDS_PER_MB,
     STRATEGY_FLOOR_SECONDS,
     EstimateResult,
+    build_estimate,
     estimate_duration,
+    format_estimate_line,
+    to_dispatch_dict,
 )
 
 
@@ -196,3 +199,110 @@ class TestGetSuccessfulDeployDurations:
             fraise="ghost", environment="prod", strategy="rebuild", limit=10
         )
         assert result == []
+
+
+class TestBuildEstimate:
+    """`build_estimate` is the shared helper consumed by both the webhook and
+    CLI surfaces. Returns an `EstimateResult` dataclass or `None`."""
+
+    def test_returns_none_when_no_database_strategy(self):
+        db = MagicMock()
+        assert build_estimate(db, {}, "api", "production") is None
+
+    def test_returns_none_when_strategy_is_blank(self):
+        db = MagicMock()
+        assert build_estimate(db, {"database": {}}, "api", "production") is None
+
+    def test_aliases_apply_to_migrate(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        def fake_estimate_duration(_db, **kwargs):
+            captured.update(kwargs)
+            return EstimateResult(seconds=42, confidence="fallback", samples_used=0)
+
+        monkeypatch.setattr(
+            "fraisier.duration_estimate.estimate_duration", fake_estimate_duration
+        )
+        db = MagicMock()
+        result = build_estimate(
+            db, {"database": {"strategy": "apply"}}, "api", "production"
+        )
+        assert result is not None
+        assert captured["strategy"] == "migrate"
+
+    def test_returns_estimate_result_dataclass(self):
+        db = MagicMock()
+        db.get_successful_deploy_durations.return_value = []
+        result = build_estimate(
+            db, {"database": {"strategy": "rebuild"}}, "api", "production"
+        )
+        assert isinstance(result, EstimateResult)
+        assert result.confidence in {"history", "fallback"}
+        assert isinstance(result.seconds, int)
+        assert isinstance(result.samples_used, int)
+
+    def test_returns_none_on_exception(self, monkeypatch):
+        def raises(*_a, **_kw):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(
+            "fraisier.duration_estimate.estimate_duration", raises
+        )
+        db = MagicMock()
+        assert (
+            build_estimate(db, {"database": {"strategy": "rebuild"}}, "api", "prod")
+            is None
+        )
+
+
+class TestToDispatchDict:
+    def test_has_three_keys(self):
+        result = EstimateResult(seconds=180, confidence="history", samples_used=5)
+        out = to_dispatch_dict(result)
+        assert set(out.keys()) == {
+            "estimated_duration_s",
+            "estimated_ready_at",
+            "estimate_confidence",
+        }
+
+    def test_estimated_ready_at_is_iso_z_format(self):
+        result = EstimateResult(seconds=60, confidence="fallback", samples_used=0)
+        out = to_dispatch_dict(result)
+        assert isinstance(out["estimated_ready_at"], str)
+        assert out["estimated_ready_at"].endswith("Z")
+
+    def test_duration_and_confidence_passed_through(self):
+        result = EstimateResult(seconds=180, confidence="history", samples_used=5)
+        out = to_dispatch_dict(result)
+        assert out["estimated_duration_s"] == 180
+        assert out["estimate_confidence"] == "history"
+
+
+class TestFormatEstimateLine:
+    def test_history(self):
+        result = EstimateResult(seconds=180, confidence="history", samples_used=5)
+        assert format_estimate_line(result) == (
+            "Estimated completion: ~3m (history, 5 samples)"
+        )
+
+    def test_fallback_zero_samples(self):
+        result = EstimateResult(seconds=60, confidence="fallback", samples_used=0)
+        assert format_estimate_line(result) == (
+            "Estimated completion: ~1m (fallback, 0 samples)"
+        )
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected_minutes"),
+        [
+            (150, 3),  # math.ceil(150/60) == 3 (round-half-up would give 2)
+            (30, 1),
+            (1, 1),  # never print ~0m
+            (60, 1),
+            (61, 2),
+        ],
+    )
+    def test_rounds_up_to_minutes(self, seconds: int, expected_minutes: int):
+        result = EstimateResult(
+            seconds=seconds, confidence="fallback", samples_used=0
+        )
+        assert f"~{expected_minutes}m" in format_estimate_line(result)
