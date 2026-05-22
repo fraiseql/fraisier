@@ -38,7 +38,9 @@ from fraisier.errors import ConfigurationError, DeploymentError
 
 logger = logging.getLogger(__name__)
 
-_VALID_PROVIDER_TYPES: frozenset[str] = frozenset({"exec", "oauth2_client_credentials"})
+_VALID_PROVIDER_TYPES: frozenset[str] = frozenset(
+    {"exec", "oauth2_client_credentials", "oauth2_refresh_token"}
+)
 
 _DEFAULT_EXEC_TIMEOUT = 10
 _DEFAULT_OAUTH2_TIMEOUT = 10
@@ -76,6 +78,7 @@ class TokenProvider:
     client_secret: str | None = None
     audience: str | None = None
     scope: str | None = None
+    refresh_token: str | None = None
 
     def resolve(self) -> str:
         """Acquire the token from the underlying provider.
@@ -88,6 +91,8 @@ class TokenProvider:
             return _resolve_exec(self)
         if self.type == "oauth2_client_credentials":
             return _resolve_oauth2_client_credentials(self)
+        if self.type == "oauth2_refresh_token":
+            return _resolve_oauth2_refresh_token(self)
         # Unreachable — _VALID_PROVIDER_TYPES gates parse_token_provider,
         # which is the only constructor. New types must add a branch
         # here.
@@ -146,6 +151,19 @@ def parse_token_provider(raw: dict) -> TokenProvider:
             client_id=_require_str(raw, "client_id", provider_type),
             client_secret=_require_str(raw, "client_secret", provider_type),
             audience=raw.get("audience"),
+            scope=raw.get("scope"),
+        )
+
+    if provider_type == "oauth2_refresh_token":
+        oauth2_timeout = int(raw.get("timeout", _DEFAULT_OAUTH2_TIMEOUT))
+        return TokenProvider(
+            type=provider_type,
+            header=header,
+            format=fmt,
+            timeout=oauth2_timeout,
+            token_url=_require_str(raw, "token_url", provider_type),
+            client_id=_require_str(raw, "client_id", provider_type),
+            refresh_token=_require_str(raw, "refresh_token", provider_type),
             scope=raw.get("scope"),
         )
 
@@ -244,6 +262,32 @@ def _resolve_oauth2_client_credentials(provider: TokenProvider) -> str:
             "client_id": provider.client_id,
             "client_secret": provider.client_secret,
             "audience": provider.audience,
+            "scope": provider.scope,
+        },
+        timeout=provider.timeout,
+        provider_type=provider.type,
+    )
+
+
+def _resolve_oauth2_refresh_token(provider: TokenProvider) -> str:
+    """OIDC ``refresh_token`` grant.
+
+    POSTs ``grant_type=refresh_token`` with ``client_id`` and
+    ``refresh_token``. Returns the ``access_token`` from the JSON
+    response. Any rotated ``refresh_token`` in the response is
+    **discarded** — persisting it is out of scope for fraisier and
+    remains the operator's responsibility (e.g. a separate scheduled
+    rotator that updates the deploy user's secrets file).
+    """
+    assert provider.token_url is not None  # parser guarantee
+    assert provider.client_id is not None
+    assert provider.refresh_token is not None
+    return _post_oauth2_token(
+        token_url=provider.token_url,
+        form_body={
+            "grant_type": "refresh_token",
+            "client_id": provider.client_id,
+            "refresh_token": provider.refresh_token,
             "scope": provider.scope,
         },
         timeout=provider.timeout,

@@ -447,6 +447,127 @@ class TestOauth2ClientCredentialsProvider:
             )
 
 
+class TestOauth2RefreshTokenProvider:
+    """OIDC ``grant_type=refresh_token`` flow. Same failure modes as
+    client_credentials (shared helper). Any rotated ``refresh_token``
+    in the response is discarded — persistence is out of scope.
+    """
+
+    def _provider(self, **overrides) -> dict:
+        base = {
+            "type": "oauth2_refresh_token",
+            "token_url": "https://idp.example.com/oauth/token",
+            "client_id": "deploy-client",
+            "refresh_token": "rt-abc",
+        }
+        base.update(overrides)
+        return base
+
+    def test_posts_refresh_grant_and_returns_access_token(self, monkeypatch):
+        import httpx
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = request.content.decode()
+            return httpx.Response(200, json={"access_token": "new-access"})
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        provider = parse_token_provider(self._provider())
+        assert provider.resolve() == "new-access"
+        body = captured["body"]
+        assert "grant_type=refresh_token" in body
+        assert "client_id=deploy-client" in body
+        assert "refresh_token=rt-abc" in body
+
+    def test_rotated_refresh_token_in_response_is_discarded(self, caplog, monkeypatch):
+        import logging as _logging
+
+        import httpx
+
+        rotated = "rotated-rt-xyz"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "new-access",
+                    "refresh_token": rotated,
+                },
+            )
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        provider = parse_token_provider(self._provider())
+        with caplog.at_level(_logging.DEBUG, logger="fraisier.token_providers"):
+            assert provider.resolve() == "new-access"
+
+        # The rotated refresh token must not appear in any log line.
+        for rec in caplog.records:
+            assert rotated not in rec.getMessage(), (
+                f"rotated refresh_token leaked: {rec.getMessage()!r}"
+            )
+
+    def test_non_2xx_aborts(self, monkeypatch):
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"error": "invalid_grant"})
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        provider = parse_token_provider(self._provider())
+        with pytest.raises(DeploymentError, match=r"400"):
+            provider.resolve()
+
+    def test_refresh_token_never_leaks_to_logs(self, caplog, monkeypatch):
+        import logging as _logging
+
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"access_token": "ok"})
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        secret_rt = "RT-ULTRA-secret-9q"
+        provider = parse_token_provider(self._provider(refresh_token=secret_rt))
+        with caplog.at_level(_logging.DEBUG, logger="fraisier.token_providers"):
+            assert provider.resolve() == "ok"
+
+        for rec in caplog.records:
+            assert secret_rt not in rec.getMessage(), (
+                f"refresh_token leaked at level={rec.levelname}: {rec.getMessage()!r}"
+            )
+
+    def test_required_fields_validated_at_parse_time(self):
+        with pytest.raises(ConfigurationError, match=r"refresh_token"):
+            parse_token_provider(
+                {
+                    "type": "oauth2_refresh_token",
+                    "token_url": "https://idp/x",
+                    "client_id": "x",
+                }
+            )
+
+
 class TestProviderResolvesOncePerDeploy:
     """When N smoke tests share one ``token_provider`` config block,
     the provider's ``.resolve()`` runs exactly once and all N tests
