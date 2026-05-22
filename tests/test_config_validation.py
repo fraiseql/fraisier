@@ -464,3 +464,60 @@ fraises:
         )
         with pytest.raises(ValidationError, match=r"preferred_compression"):
             FraisierConfig(config_file)
+
+
+class TestPostMigrateValidation:
+    """`database.post_migrate` schema validation (#204 PR A)."""
+
+    _BASE_CONFIG = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: migrate
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          post_migrate: {entries}
+"""
+
+    def _write(self, tmp_path, entries: str):
+        return _write_config(tmp_path, self._BASE_CONFIG.format(entries=entries))
+
+    def test_accepts_entry_with_sql_dir_only(self, tmp_path):
+        config_file = self._write(tmp_path, "[{sql_dir: db/7_grant/}]")
+        FraisierConfig(config_file)  # must not raise
+
+    def test_accepts_entry_with_sql_file_only(self, tmp_path):
+        config_file = self._write(tmp_path, "[{sql_file: db/post_migrate.sql}]")
+        FraisierConfig(config_file)
+
+    def test_rejects_entry_with_both_sql_dir_and_sql_file(self, tmp_path):
+        config_file = self._write(
+            tmp_path,
+            "[{sql_dir: db/7_grant/, sql_file: db/post_migrate.sql}]",
+        )
+        with pytest.raises(
+            ValidationError, match=r"post_migrate.*either.*sql_dir.*or.*sql_file"
+        ):
+            FraisierConfig(config_file)
+
+    def test_rejects_entry_with_neither_sql_dir_nor_sql_file(self, tmp_path):
+        config_file = self._write(tmp_path, "[{on_error: warn}]")
+        with pytest.raises(
+            ValidationError, match=r"post_migrate.*sql_dir.*or.*sql_file"
+        ):
+            FraisierConfig(config_file)
+
+    def test_on_error_defaults_to_halt(self, tmp_path):
+        # No on_error key in the YAML — loader assigns "halt" at parse time.
+        # Validation passes; default behaviour is checked in test_post_migrate.py.
+        config_file = self._write(tmp_path, "[{sql_dir: db/7_grant/}]")
+        FraisierConfig(config_file)
+
+    def test_on_error_rejects_unknown_value(self, tmp_path):
+        config_file = self._write(tmp_path, "[{sql_dir: db/7_grant/, on_error: panic}]")
+        with pytest.raises(ValidationError, match=r"on_error.*'halt'.*'warn'"):
+            FraisierConfig(config_file)
