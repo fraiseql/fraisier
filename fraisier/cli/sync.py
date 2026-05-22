@@ -149,7 +149,7 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print()
     console.print("  Would run:")
     console.print(f"    git fetch origin {source} {tgt}")
-    console.print(f"    git checkout -b {sync_branch} origin/{source}")
+    console.print(f"    git checkout -B {sync_branch} origin/{source}")
     console.print(f"    git merge origin/{tgt} --no-edit --no-commit")
     console.print(
         f"    # conflicts in [{auto_owned}] auto-resolved from {source};"
@@ -276,7 +276,7 @@ def sync_cmd(
     branch_created = False
     try:
         console.print(f"  Creating [bold]{sync_branch}[/bold] from origin/{source}")
-        _run(["git", "checkout", "-b", sync_branch, f"origin/{source}"])
+        _run(["git", "checkout", "-B", sync_branch, f"origin/{source}"])
         branch_created = True
 
         console.print(f"  Pre-merging origin/{tgt} into {sync_branch}")

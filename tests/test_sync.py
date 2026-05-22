@@ -906,7 +906,7 @@ class TestSyncDryRun:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH):
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--dry-run"])
-        assert "git checkout -b sync/staging-from-dev origin/dev" in result.output
+        assert "git checkout -B sync/staging-from-dev origin/dev" in result.output
 
     def test_dry_run_shows_merge(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -948,3 +948,67 @@ class TestSyncDryRun:
         assert "staging" in result.output
         assert "prod" in result.output
         assert "git fetch origin staging prod" in result.output
+
+
+# ---------------------------------------------------------------------------
+# CLI: branch force-create (issue #213, fragility 1)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncBranchForceCreate:
+    """Sync branch is force-created (-B) so a stale local branch from an
+    interrupted prior run is silently overwritten on re-invocation."""
+
+    SHA = "deadbeef" * 5
+    MERGE_BASE = "cafe1234" * 5
+    PR_URL = "https://github.com/org/repo/pull/42"
+
+    def _side_effects(self):
+        return [
+            _mk(stdout="main\n"),  # git rev-parse HEAD
+            _mk(),  # git fetch
+            _mk(stdout=self.SHA + "\n"),  # git rev-parse origin/dev
+            _mk(stdout=self.MERGE_BASE + "\n"),  # git merge-base
+            _mk(returncode=0, stdout='{"version": "1.1.0"}'),  # version dev
+            _mk(returncode=0, stdout='{"version": "1.0.0"}'),  # version staging
+            _mk(),  # git checkout -B
+            _mk(),  # git merge (clean)
+            _mk(returncode=1),  # git diff --cached (staged)
+            _mk(),  # git commit pre-merge
+            _mk(),  # git push
+            _mk(stdout=self.PR_URL + "\n"),  # gh pr create
+            _mk(),  # gh pr merge
+            _mk(),  # git checkout main
+        ]
+
+    def test_uses_capital_B_to_force_create(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = self._side_effects()
+            CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        commands = [c[0][0] for c in m.call_args_list]
+        checkout_create = [
+            cmd
+            for cmd in commands
+            if len(cmd) >= 2 and cmd[0] == "git" and cmd[1] == "checkout" and "-B" in cmd
+        ]
+        assert checkout_create, (
+            "expected a `git checkout -B sync/...` call; got: "
+            f"{[c for c in commands if 'checkout' in c]}"
+        )
+
+    def test_does_not_use_lowercase_b(self, tmp_path):
+        """Regression guard: lowercase -b fails on a stale local branch."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = self._side_effects()
+            CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        commands = [c[0][0] for c in m.call_args_list]
+        lowercase = [
+            cmd
+            for cmd in commands
+            if len(cmd) >= 3 and cmd[:2] == ["git", "checkout"] and "-b" in cmd
+        ]
+        assert not lowercase, (
+            f"sync must not use `git checkout -b` (use -B); offenders: {lowercase}"
+        )
