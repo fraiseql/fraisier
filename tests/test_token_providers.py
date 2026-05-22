@@ -293,6 +293,160 @@ class TestHeaderCollisionRejection:
         assert tests[0].headers == {"X-Tenant": "abc"}
 
 
+class TestOauth2ClientCredentialsProvider:
+    """OIDC client-credentials grant: POST to token endpoint with
+    client_id+secret, use the returned ``access_token``.
+    """
+
+    def _provider(self, **overrides) -> dict:
+        base = {
+            "type": "oauth2_client_credentials",
+            "token_url": "https://idp.example.com/oauth/token",
+            "client_id": "deploy-client",
+            "client_secret": "shh",
+        }
+        base.update(overrides)
+        return base
+
+    def test_posts_form_body_and_returns_access_token(self, monkeypatch):
+        import httpx
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["body"] = request.content.decode()
+            captured["method"] = request.method
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "abc-token",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: transport,
+            raising=False,
+        )
+
+        provider = parse_token_provider(
+            self._provider(audience="https://api.example.com", scope="read write")
+        )
+        assert provider.resolve() == "abc-token"
+        assert captured["method"] == "POST"
+        assert captured["url"] == "https://idp.example.com/oauth/token"
+        # Form body is x-www-form-urlencoded.
+        body = captured["body"]
+        assert "grant_type=client_credentials" in body
+        assert "client_id=deploy-client" in body
+        assert "client_secret=shh" in body
+        assert "audience=https%3A%2F%2Fapi.example.com" in body
+        assert "scope=read+write" in body
+
+    def test_non_2xx_aborts_with_deployment_error(self, monkeypatch):
+        import httpx
+
+        captured_body: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_body["body"] = request.content.decode()
+            # Some IdPs echo client_secret in error responses — defend
+            # by including it in the body to confirm we do NOT surface
+            # it in the raised message.
+            return httpx.Response(
+                401,
+                json={
+                    "error": "invalid_client",
+                    "error_description": "client_secret was 'shh' (echoed)",
+                },
+            )
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        provider = parse_token_provider(self._provider())
+        with pytest.raises(DeploymentError) as exc_info:
+            provider.resolve()
+        msg = str(exc_info.value)
+        assert "401" in msg
+        assert "oauth2_client_credentials" in msg
+        # Body must not leak into the exception message.
+        assert "shh" not in msg
+
+    def test_missing_access_token_aborts_with_deployment_error(self, monkeypatch):
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"token_type": "Bearer"})
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        provider = parse_token_provider(self._provider())
+        with pytest.raises(DeploymentError, match=r"access_token"):
+            provider.resolve()
+
+    def test_client_secret_never_appears_in_logs(self, caplog, monkeypatch):
+        import logging as _logging
+
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"access_token": "ok"})
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        secret = "ULTRA-secret-7q"
+        provider = parse_token_provider(self._provider(client_secret=secret))
+        with caplog.at_level(_logging.DEBUG, logger="fraisier.token_providers"):
+            assert provider.resolve() == "ok"
+
+        for rec in caplog.records:
+            assert secret not in rec.getMessage(), (
+                f"client_secret leaked at level={rec.levelname}: {rec.getMessage()!r}"
+            )
+
+    def test_required_fields_validated_at_parse_time(self):
+        with pytest.raises(ConfigurationError, match=r"token_url"):
+            parse_token_provider(
+                {
+                    "type": "oauth2_client_credentials",
+                    "client_id": "x",
+                    "client_secret": "y",
+                }
+            )
+        with pytest.raises(ConfigurationError, match=r"client_id"):
+            parse_token_provider(
+                {
+                    "type": "oauth2_client_credentials",
+                    "token_url": "https://idp/x",
+                    "client_secret": "y",
+                }
+            )
+        with pytest.raises(ConfigurationError, match=r"client_secret"):
+            parse_token_provider(
+                {
+                    "type": "oauth2_client_credentials",
+                    "token_url": "https://idp/x",
+                    "client_id": "x",
+                }
+            )
+
+
 class TestProviderResolvesOncePerDeploy:
     """When N smoke tests share one ``token_provider`` config block,
     the provider's ``.resolve()`` runs exactly once and all N tests

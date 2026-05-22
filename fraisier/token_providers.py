@@ -32,13 +32,25 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
+import httpx
+
 from fraisier.errors import ConfigurationError, DeploymentError
 
 logger = logging.getLogger(__name__)
 
-_VALID_PROVIDER_TYPES: frozenset[str] = frozenset({"exec"})
+_VALID_PROVIDER_TYPES: frozenset[str] = frozenset({"exec", "oauth2_client_credentials"})
 
 _DEFAULT_EXEC_TIMEOUT = 10
+_DEFAULT_OAUTH2_TIMEOUT = 10
+
+
+def _oauth2_http_transport() -> httpx.BaseTransport | None:
+    """Hook for tests to substitute an ``httpx.MockTransport``.
+
+    Returns ``None`` in production — ``httpx.Client(transport=None)``
+    uses the real network transport, which is the desired default.
+    """
+    return None
 
 
 @dataclass(frozen=True)
@@ -58,6 +70,12 @@ class TokenProvider:
     timeout: int = _DEFAULT_EXEC_TIMEOUT
     # exec-specific
     command: tuple[str, ...] = field(default_factory=tuple)
+    # oauth2_*-specific
+    token_url: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    audience: str | None = None
+    scope: str | None = None
 
     def resolve(self) -> str:
         """Acquire the token from the underlying provider.
@@ -68,6 +86,8 @@ class TokenProvider:
         """
         if self.type == "exec":
             return _resolve_exec(self)
+        if self.type == "oauth2_client_credentials":
+            return _resolve_oauth2_client_credentials(self)
         # Unreachable — _VALID_PROVIDER_TYPES gates parse_token_provider,
         # which is the only constructor. New types must add a branch
         # here.
@@ -115,9 +135,119 @@ def parse_token_provider(raw: dict) -> TokenProvider:
             command=tuple(str(arg) for arg in command_raw),
         )
 
+    if provider_type == "oauth2_client_credentials":
+        oauth2_timeout = int(raw.get("timeout", _DEFAULT_OAUTH2_TIMEOUT))
+        return TokenProvider(
+            type=provider_type,
+            header=header,
+            format=fmt,
+            timeout=oauth2_timeout,
+            token_url=_require_str(raw, "token_url", provider_type),
+            client_id=_require_str(raw, "client_id", provider_type),
+            client_secret=_require_str(raw, "client_secret", provider_type),
+            audience=raw.get("audience"),
+            scope=raw.get("scope"),
+        )
+
     # Defensive — should not reach here given the type-gate above.
     raise ConfigurationError(  # pragma: no cover
         f"token_provider.type={provider_type!r} parser not implemented"
+    )
+
+
+def _require_str(raw: dict, field_name: str, provider_type: str) -> str:
+    value = raw.get(field_name)
+    if not value or not isinstance(value, str):
+        raise ConfigurationError(
+            f"token_provider.{field_name} must be a non-empty string for "
+            f"type={provider_type}, got {value!r}"
+        )
+    return value
+
+
+def _post_oauth2_token(
+    *,
+    token_url: str,
+    form_body: dict[str, str | None],
+    timeout: int,
+    provider_type: str,
+) -> str:
+    """Shared helper for OAuth2 token-endpoint POSTs.
+
+    Sends a form-encoded body to *token_url*, expects a JSON response
+    with ``access_token``. Drops ``None``-valued form keys. Failure
+    surfaces as ``DeploymentError`` with provider type + status code or
+    high-level reason — never the response body verbatim, because some
+    IdPs echo the client_secret in error responses.
+
+    The request body is logged with secret fields redacted: never the
+    raw form body.
+    """
+    body = {k: v for k, v in form_body.items() if v is not None}
+    redacted_body = {
+        k: ("***redacted***" if k in {"client_secret", "refresh_token"} else v)
+        for k, v in body.items()
+    }
+    logger.info(
+        "Requesting OAuth2 token from %s (grant=%s)",
+        token_url,
+        body.get("grant_type"),
+    )
+    logger.debug("OAuth2 form body (redacted): %s", redacted_body)
+    transport = _oauth2_http_transport()
+    try:
+        with httpx.Client(timeout=timeout, transport=transport) as client:
+            response = client.post(token_url, data=body)
+    except httpx.HTTPError as exc:
+        raise DeploymentError(
+            f"token_provider type={provider_type} network error talking "
+            f"to {token_url}: {type(exc).__name__}"
+        ) from exc
+
+    if not (200 <= response.status_code < 300):
+        raise DeploymentError(
+            f"token_provider type={provider_type} token endpoint "
+            f"{token_url} returned HTTP {response.status_code}"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise DeploymentError(
+            f"token_provider type={provider_type} token endpoint returned "
+            "non-JSON response body"
+        ) from exc
+
+    access_token = payload.get("access_token") if isinstance(payload, dict) else None
+    if not isinstance(access_token, str) or not access_token:
+        raise DeploymentError(
+            f"token_provider type={provider_type} token endpoint response "
+            "missing 'access_token' field"
+        )
+    return access_token
+
+
+def _resolve_oauth2_client_credentials(provider: TokenProvider) -> str:
+    """OIDC client-credentials grant.
+
+    POSTs ``grant_type=client_credentials`` with client_id, client_secret,
+    and the optional ``audience`` and ``scope`` to ``token_url``.
+    Returns the ``access_token`` from the JSON response.
+    """
+    assert provider.token_url is not None  # parser guarantee
+    assert provider.client_id is not None
+    assert provider.client_secret is not None
+    return _post_oauth2_token(
+        token_url=provider.token_url,
+        form_body={
+            "grant_type": "client_credentials",
+            "client_id": provider.client_id,
+            "client_secret": provider.client_secret,
+            "audience": provider.audience,
+            "scope": provider.scope,
+        },
+        timeout=provider.timeout,
+        provider_type=provider.type,
     )
 
 
