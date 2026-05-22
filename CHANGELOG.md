@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] - 2026-05-22
+
+### Fixed
+
+- **`fraisier sync` is now idempotent on retry** ([#213](https://github.com/fraiseql/fraisier/issues/213)). Re-running after a previous interrupted or completed sync no longer fails:
+  - The local sync branch is force-created (`git checkout -B`), so a stale branch from an interrupted prior run is silently overwritten by the fresh checkout. Sync branches are fraisier-owned end-to-end; any commits on them are re-derived from `origin/<source>` + pre-merge on every run.
+  - After pushing, fraisier checks for an existing PR for the sync branch via `gh pr view`. When the prior PR is OPEN, it re-enables auto-merge (idempotent for `--squash`) on the existing PR instead of failing on `gh pr create`. The PR URL appears in the success message as `PR updated and auto-merge enabled: <url>`.
+  - When the prior PR is CLOSED or MERGED, fraisier opens a fresh PR (GitHub allows reusing a head ref after closure). The prior PR URL is logged for operator context.
+
+### Upgrade notes
+
+- A user who has manually committed to a sync branch will lose those commits on the next `fraisier sync` invocation (the new `-B` overwrites the local branch). Sync branches were already documented as fraisier-owned; if you want to keep commits on a sync branch, push them to a non-sync ref.
+
 ## [0.21.0] - 2026-05-22
 
 ### Added
