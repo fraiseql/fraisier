@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fraisier.errors import ConfigurationError
 from fraisier.smoke_tests import (
     _MISSING,
     Assertion,
@@ -52,7 +53,7 @@ class TestWalkJsonPath:
         assert _walk_json_path(doc, "$") == doc
 
     def test_path_must_start_with_dollar(self):
-        with pytest.raises(ValueError, match=r"must start with \$"):
+        with pytest.raises(ConfigurationError, match=r"must start with \$"):
             _walk_json_path({}, "data.me")
 
 
@@ -134,6 +135,14 @@ class TestLoadSmokeTests:
         assert t.on_failure == "rollback"  # default
         assert len(t.assertions) == 2
 
+    def test_token_provider_defaults_to_none_when_absent(self):
+        env_config = {
+            "smoke_tests": [self._entry()],
+            "health_check": {"url": "https://api.example.com/health"},
+        }
+        tests = load_smoke_tests(env_config, base_url="https://api.example.com")
+        assert tests[0].token_provider is None
+
     def test_absolute_url_is_preserved(self):
         env_config = {
             "smoke_tests": [self._entry(url="https://other.example/api")],
@@ -143,17 +152,17 @@ class TestLoadSmokeTests:
 
     def test_relative_url_requires_base_url(self):
         env_config = {"smoke_tests": [self._entry(url="/graphql")]}
-        with pytest.raises(ValueError, match=r"relative.*health_check"):
+        with pytest.raises(ConfigurationError, match=r"relative.*health_check"):
             load_smoke_tests(env_config, base_url=None)
 
     def test_rejects_unknown_method(self):
         env_config = {"smoke_tests": [self._entry(method="MERGE")]}
-        with pytest.raises(ValueError, match=r"method.*MERGE"):
+        with pytest.raises(ConfigurationError, match=r"method.*MERGE"):
             load_smoke_tests(env_config, base_url="https://api.example.com")
 
     def test_rejects_unknown_on_failure(self):
         env_config = {"smoke_tests": [self._entry(on_failure="explode")]}
-        with pytest.raises(ValueError, match=r"on_failure"):
+        with pytest.raises(ConfigurationError, match=r"on_failure"):
             load_smoke_tests(env_config, base_url="https://api.example.com")
 
     def test_rejects_unknown_assertion_key(self):
@@ -162,7 +171,7 @@ class TestLoadSmokeTests:
                 self._entry(**{"assert": [{"json_path": "$.x", "regex": "^foo$"}]})
             ]
         }
-        with pytest.raises(ValueError, match=r"unknown assertion key"):
+        with pytest.raises(ConfigurationError, match=r"unknown assertion key"):
             load_smoke_tests(env_config, base_url="https://api.example.com")
 
     @pytest.mark.parametrize("bad_path", ["$..foo", "$.a[0]", "$.*", "$.@.x"])
@@ -173,7 +182,7 @@ class TestLoadSmokeTests:
             ]
         }
         with pytest.raises(
-            ValueError, match=r"unsupported JSONPath.*\$\.dotted\.path only"
+            ConfigurationError, match=r"unsupported JSONPath.*\$\.dotted\.path only"
         ):
             load_smoke_tests(env_config, base_url="https://api.example.com")
 

@@ -22,6 +22,9 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from fraisier.errors import ConfigurationError
+from fraisier.token_providers import TokenProvider, parse_token_provider
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,6 +103,7 @@ class SmokeTest:
     timeout: int
     on_failure: Literal["rollback", "halt", "warn"]
     assertions: list[Assertion]
+    token_provider: TokenProvider | None = None
 
 
 def _walk_json_path(doc: Any, path: str) -> Any:
@@ -110,11 +114,11 @@ def _walk_json_path(doc: Any, path: str) -> Any:
     ``_MISSING``.
     """
     if not path.startswith("$"):
-        raise ValueError(f"JSONPath must start with $: {path!r}")
+        raise ConfigurationError(f"JSONPath must start with $: {path!r}")
     if path == "$":
         return doc
     if not path.startswith("$."):
-        raise ValueError("unsupported JSONPath syntax: use $.dotted.path only")
+        raise ConfigurationError("unsupported JSONPath syntax: use $.dotted.path only")
     parts = path[2:].split(".")
     current: Any = doc
     for key in parts:
@@ -129,15 +133,15 @@ def _walk_json_path(doc: Any, path: str) -> Any:
 def _parse_assertion(raw: dict) -> Assertion:
     unknown = set(raw) - _VALID_ASSERTION_KEYS
     if unknown:
-        raise ValueError(
+        raise ConfigurationError(
             f"unknown assertion key(s): {sorted(unknown)!r}; valid: "
             f"{sorted(_VALID_ASSERTION_KEYS)!r}"
         )
     if "json_path" not in raw:
-        raise ValueError("assertion is missing required 'json_path'")
+        raise ConfigurationError("assertion is missing required 'json_path'")
     json_path = raw["json_path"]
     if _UNSUPPORTED_JSONPATH_CHARS.search(json_path):
-        raise ValueError(
+        raise ConfigurationError(
             f"unsupported JSONPath syntax: use $.dotted.path only (got {json_path!r})"
         )
     # Validate the walker can parse it (raises on missing $).
@@ -157,13 +161,13 @@ def _resolve_url(url: str, *, base_url: str | None) -> str:
         return url
     if url.startswith("/"):
         if base_url is None:
-            raise ValueError(
+            raise ConfigurationError(
                 "smoke_tests.url is relative but no health_check.url is "
                 "configured to resolve against — provide an absolute URL "
                 "or configure health_check"
             )
         return urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
-    raise ValueError(
+    raise ConfigurationError(
         f"smoke_tests.url must be absolute (scheme://host/...) or relative "
         f"with a leading '/', got {url!r}"
     )
@@ -177,22 +181,24 @@ def load_smoke_tests(
     """Parse ``smoke_tests:`` into a list of ``SmokeTest`` objects.
 
     *base_url* is the scheme+host of ``health_check.url`` (without path).
-    Relative entries (``url: /graphql``) are joined onto it. When
-    *base_url* is ``None`` and any entry is relative, raises ``ValueError``.
+    Relative entries (``url: /graphql``) are joined onto it. Any schema
+    error — unknown method, unknown ``on_failure``, malformed JSONPath,
+    relative URL without a base, unknown ``token_provider.type`` — raises
+    ``ConfigurationError``.
     """
     raw = env_config.get("smoke_tests") or []
     tests: list[SmokeTest] = []
     for entry in raw:
         method = (entry.get("method") or "GET").upper()
         if method not in _VALID_METHODS:
-            raise ValueError(
+            raise ConfigurationError(
                 f"smoke_tests.method must be one of {sorted(_VALID_METHODS)!r}, "
                 f"got {method!r}"
             )
 
         on_failure = entry.get("on_failure", "rollback")
         if on_failure not in _VALID_ON_FAILURE:
-            raise ValueError(
+            raise ConfigurationError(
                 f"smoke_tests.on_failure must be one of "
                 f"{sorted(_VALID_ON_FAILURE)!r}, got {on_failure!r}"
             )
@@ -201,16 +207,34 @@ def load_smoke_tests(
 
         assertions = [_parse_assertion(a) for a in entry.get("assert", [])]
 
+        provider_raw = entry.get("token_provider")
+        token_provider = (
+            parse_token_provider(provider_raw) if provider_raw is not None else None
+        )
+
+        headers = dict(entry.get("headers") or {})
+        if token_provider is not None:
+            provider_header_lower = token_provider.header.lower()
+            for existing_header in headers:
+                if existing_header.lower() == provider_header_lower:
+                    raise ConfigurationError(
+                        f"smoke_tests[{entry.get('name', url)!r}]: header "
+                        f"collision between static headers.{existing_header!r} "
+                        f"and token_provider.header={token_provider.header!r}; "
+                        "remove the static header or change the provider's target"
+                    )
+
         tests.append(
             SmokeTest(
                 name=entry.get("name", url),
                 method=method,
                 url=url,
-                headers=dict(entry.get("headers") or {}),
+                headers=headers,
                 body=entry.get("body"),
                 timeout=int(entry.get("timeout", 5)),
                 on_failure=on_failure,
                 assertions=assertions,
+                token_provider=token_provider,
             )
         )
     return tests

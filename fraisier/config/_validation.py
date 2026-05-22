@@ -417,6 +417,7 @@ def _validate_smoke_tests(fraise_name: str, env: dict) -> list[str]:
     """
     from urllib.parse import urlparse
 
+    from fraisier.errors import ConfigurationError
     from fraisier.smoke_tests import load_smoke_tests
 
     hc = env.get("health_check") or {}
@@ -428,7 +429,7 @@ def _validate_smoke_tests(fraise_name: str, env: dict) -> list[str]:
             base_url = f"{parsed.scheme}://{parsed.netloc}"
     try:
         load_smoke_tests(env, base_url=base_url)
-    except ValueError as exc:
+    except (ValueError, ConfigurationError) as exc:
         return [f"{fraise_name}: smoke_tests {exc}"]
     return []
 
