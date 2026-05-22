@@ -127,6 +127,28 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _find_existing_pr(sync_branch: str) -> dict | None:
+    """Return PR head-ref lookup result, or None if no PR exists for the branch.
+
+    Result shape: ``{"url": str, "state": "OPEN" | "CLOSED" | "MERGED"}``.
+    Uses ``check=False`` because ``gh`` exits non-zero when no PR matches
+    the head ref — a normal "nothing here yet" signal, not an error.
+    Drafts are reported as state OPEN (the ``isDraft`` bit lives in a
+    separate field we don't query); re-enabling auto-merge on a draft is
+    the desired behavior — GitHub queues the merge for when the PR is
+    marked ready.
+    """
+    result = subprocess.run(
+        ["gh", "pr", "view", sync_branch, "--json", "url,state"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return json.loads(result.stdout)
+
+
 def _commit_if_staged(message: str) -> None:
     """Commit the staged index with ``message`` only if there is something staged.
 
@@ -149,7 +171,7 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print()
     console.print("  Would run:")
     console.print(f"    git fetch origin {source} {tgt}")
-    console.print(f"    git checkout -b {sync_branch} origin/{source}")
+    console.print(f"    git checkout -B {sync_branch} origin/{source}")
     console.print(f"    git merge origin/{tgt} --no-edit --no-commit")
     console.print(
         f"    # conflicts in [{auto_owned}] auto-resolved from {source};"
@@ -276,7 +298,7 @@ def sync_cmd(
     branch_created = False
     try:
         console.print(f"  Creating [bold]{sync_branch}[/bold] from origin/{source}")
-        _run(["git", "checkout", "-b", sync_branch, f"origin/{source}"])
+        _run(["git", "checkout", "-B", sync_branch, f"origin/{source}"])
         branch_created = True
 
         console.print(f"  Pre-merging origin/{tgt} into {sync_branch}")
@@ -359,6 +381,22 @@ def sync_cmd(
 
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
         _run(["git", "push", "origin", sync_branch])
+
+        existing = _find_existing_pr(sync_branch)
+        if existing and existing["state"] == "OPEN":
+            pr_url = existing["url"]
+            console.print(f"  Existing open PR found, updating: [bold]{pr_url}[/bold]")
+            _run(["gh", "pr", "merge", "--auto", "--squash", pr_url])
+            subprocess.run(["git", "checkout", original_branch], check=False)
+            console.print(
+                f"==> [green]Done.[/green] PR updated and auto-merge enabled: {pr_url}"
+            )
+            return
+        if existing:
+            console.print(
+                f"  Prior PR for {sync_branch} was {existing['state'].lower()}: "
+                f"{existing['url']} — opening a new one"
+            )
 
         console.print(f"  Creating PR: [bold]{sync_branch}[/bold] → [bold]{tgt}[/bold]")
         pr_result = subprocess.run(
