@@ -143,6 +143,15 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=6.3.0",
     "ruff>=0.15.12",
+    # Optional integration targets — tests for these strategies/servers
+    # are gated by importorskip; installing them in the dev group lets
+    # the CI suite cover the integration code paths.
+    "alembic>=1.13.0",
+    "django>=4.2.0",
+    "mcp[cli]>=1.9.0",
+    # Spins up disposable Postgres containers for integration tests
+    # under tests/integration/. Requires Docker daemon running.
+    "testcontainers[postgres]>=4.0.0",
 ]
 
 [tool.ty.rules]

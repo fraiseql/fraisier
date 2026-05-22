@@ -61,7 +61,7 @@ class TestDjangoMigrateStrategyMigrateUp:
             patch("os.chdir"),
             patch("pathlib.Path.cwd", return_value=tmp_path),
             patch(
-                "fraisier.strategies._django.execute_from_command_line"
+                "django.core.management.execute_from_command_line"
             ) as mock_execute,
         ):
             result = strategy.migrate_up(tmp_path)
@@ -74,7 +74,7 @@ class TestDjangoMigrateStrategyMigrateUp:
         strategy = DjangoMigrateStrategy("settings")
 
         with patch(
-            "fraisier.strategies._django.execute_from_command_line",
+            "django.core.management.execute_from_command_line",
             side_effect=Exception("migrate failed"),
         ):
             result = strategy.migrate_up(tmp_path)
@@ -94,7 +94,7 @@ class TestDjangoMigrateStrategyMigrateDown:
             patch("os.chdir"),
             patch("pathlib.Path.cwd", return_value=tmp_path),
             patch(
-                "fraisier.strategies._django.execute_from_command_line"
+                "django.core.management.execute_from_command_line"
             ) as mock_execute,
         ):
             result = strategy.migrate_down(tmp_path, "0001")
@@ -106,13 +106,18 @@ class TestDjangoMigrateStrategyMigrateDown:
 class TestDjangoMigrateStrategyGetCurrentVersion:
     """Test Django get current version."""
 
-    def test_get_current_version_returns_none_on_exception(self, tmp_path):
-        """get_current_version returns None when showmigrations fails."""
+    def test_get_current_version_returns_none_on_expected_failure(self, tmp_path):
+        """get_current_version returns None on the narrow set of
+        failures the production catch covers — ImportError / AttributeError
+        / OSError. An OSError models the realistic 'manage.py couldn't
+        spawn' case; broader exceptions (e.g. Django CommandError)
+        intentionally propagate so real bugs aren't silently masked.
+        """
         strategy = DjangoMigrateStrategy("settings")
 
         with patch(
-            "fraisier.strategies._django.execute_from_command_line",
-            side_effect=Exception("showmigrations failed"),
+            "django.core.management.execute_from_command_line",
+            side_effect=OSError("manage.py spawn failed"),
         ):
             result = strategy.get_current_version(tmp_path)
 

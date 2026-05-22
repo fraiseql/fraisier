@@ -136,14 +136,23 @@ class TestAlembicMigrateStrategyGetCurrentVersion:
         # Should either return None (due to empty output) or parsed revision
         assert result is None or isinstance(result, str)
 
-    def test_get_current_version_returns_none_on_error(self, tmp_path):
-        """get_current_version returns None when command.current raises."""
+    def test_get_current_version_returns_none_on_expected_failure(self, tmp_path):
+        """get_current_version returns None on the narrow set of
+        failures the production catch covers — ImportError / AttributeError
+        / OSError. An OSError models the realistic 'alembic.ini
+        unreadable' case; broader exceptions (e.g. alembic CommandError)
+        intentionally propagate so real misconfigurations aren't
+        silently masked.
+        """
         ini_path = tmp_path / "alembic.ini"
         ini_path.write_text("")
 
         strategy = AlembicMigrateStrategy("alembic", str(ini_path))
 
-        with patch("alembic.command.current", side_effect=Exception("current failed")):
+        with patch(
+            "alembic.command.current",
+            side_effect=OSError("alembic.ini read failed"),
+        ):
             result = strategy.get_current_version(tmp_path)
 
         assert result is None
