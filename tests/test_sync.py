@@ -1002,7 +1002,10 @@ class TestSyncBranchForceCreate:
         checkout_create = [
             cmd
             for cmd in commands
-            if len(cmd) >= 2 and cmd[0] == "git" and cmd[1] == "checkout" and "-B" in cmd
+            if len(cmd) >= 2
+            and cmd[0] == "git"
+            and cmd[1] == "checkout"
+            and "-B" in cmd
         ]
         assert checkout_create, (
             "expected a `git checkout -B sync/...` call; got: "
@@ -1092,9 +1095,9 @@ class TestSyncExistingPR:
         assert result.exit_code == 0, result.output
         commands = [c[0][0] for c in m.call_args_list]
         # gh pr create must NOT be called for an existing OPEN PR
-        assert not any(
-            cmd[:3] == ["gh", "pr", "create"] for cmd in commands
-        ), f"gh pr create was called; commands: {commands}"
+        assert not any(cmd[:3] == ["gh", "pr", "create"] for cmd in commands), (
+            f"gh pr create was called; commands: {commands}"
+        )
         # gh pr merge --auto --squash <existing-url> IS called
         assert [
             "gh",
@@ -1122,7 +1125,9 @@ class TestSyncExistingPR:
         commands = [c[0][0] for c in m.call_args_list]
         # gh pr create IS called for a CLOSED prior PR
         create_calls = [cmd for cmd in commands if cmd[:3] == ["gh", "pr", "create"]]
-        assert len(create_calls) == 1, f"expected 1 gh pr create call; got {create_calls}"
+        assert len(create_calls) == 1, (
+            f"expected 1 gh pr create call; got {create_calls}"
+        )
         # New PR URL is the one in the success message
         assert self.NEW_PR_URL in result.output
         # Prior PR URL is surfaced as informational context

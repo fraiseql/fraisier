@@ -385,9 +385,7 @@ def sync_cmd(
         existing = _find_existing_pr(sync_branch)
         if existing and existing["state"] == "OPEN":
             pr_url = existing["url"]
-            console.print(
-                f"  Existing open PR found, updating: [bold]{pr_url}[/bold]"
-            )
+            console.print(f"  Existing open PR found, updating: [bold]{pr_url}[/bold]")
             _run(["gh", "pr", "merge", "--auto", "--squash", pr_url])
             subprocess.run(["git", "checkout", original_branch], check=False)
             console.print(
