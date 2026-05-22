@@ -101,6 +101,111 @@ else — most consumers read the YAML value literally and will not expand `${VAR
 
 ---
 
+## Token providers for authenticated smoke tests
+
+`smoke_tests` (introduced in #204) probes the freshly-deployed service with bearer
+credentials after `/health` passes. The v0.21 shape sources the token from
+`os.environ` via `!envvar`:
+
+```yaml
+smoke_tests:
+  - name: authenticated_me
+    url: /graphql
+    headers:
+      Authorization: !envvar SMOKE_TEST_JWT
+```
+
+This works when the operator can hold a long-lived JWT in a secrets manager and
+export it to the deploy user. It does not work for IdPs that hand out short-lived
+tokens that must be acquired at deploy time.
+
+`token_provider:` (introduced in #215, v0.22.0) declares how to acquire the token.
+**Absence of the block keeps the v0.21 behavior** — static headers flow through
+unchanged. The provider runs exactly once per deploy (cached by object identity);
+N smoke tests sharing one provider config get the same token. Provider failure
+raises `DeploymentError` and aborts the deploy before smoke tests run.
+
+### `exec` — run a script
+
+The most common shape: a shell script that knows how to mint a token (vault CLI,
+federated assume-role wrapper, internal IdP helper) and prints it on stdout.
+
+```yaml
+smoke_tests:
+  - name: vault_authenticated
+    url: /graphql
+    token_provider:
+      type: exec
+      command: ["/opt/myapp/bin/get-deploy-token.sh"]
+      timeout: 10               # seconds; default 10
+      # header: Authorization   # default; case-insensitive
+      # format: "Bearer {token}" # default
+    assert:
+      - { json_path: $.data.me.id, not_null: true }
+```
+
+The subprocess runs as the deploy user. `argv[0]` is logged at INFO; full argv is
+logged only at DEBUG. The resolved token never appears in any log line at any
+level. Non-zero exit or timeout raises `DeploymentError` with the exit code and a
+truncated stderr tail. `cwd` and `env_passthrough` are deferred — the subprocess
+inherits the deploy user's environment, same as the `post_migrate` hook.
+
+### `oauth2_client_credentials`
+
+OIDC machine-to-machine grant. Posts `grant_type=client_credentials` to
+`token_url`:
+
+```yaml
+smoke_tests:
+  - name: oidc_machine
+    url: /graphql
+    token_provider:
+      type: oauth2_client_credentials
+      token_url: https://idp.example.com/oauth/token
+      client_id: !envvar SMOKE_CLIENT_ID
+      client_secret: !envvar SMOKE_CLIENT_SECRET
+      audience: https://api.myapp.io  # optional
+      scope: "read:me"                # optional
+      timeout: 10                     # optional; default 10
+```
+
+The `client_secret` is redacted in all log lines (the request URL and grant type
+are logged at INFO; a redacted form-body shape at DEBUG). Non-2xx, missing
+`access_token`, or network errors raise `DeploymentError`. The token endpoint's
+response body is **not** echoed in the error message — some IdPs include the
+client_secret in their error envelopes.
+
+### `oauth2_refresh_token`
+
+OIDC refresh-grant. Posts `grant_type=refresh_token`:
+
+```yaml
+smoke_tests:
+  - name: oidc_refresh
+    url: /graphql
+    token_provider:
+      type: oauth2_refresh_token
+      token_url: https://idp.example.com/oauth/token
+      client_id: !envvar SMOKE_CLIENT_ID
+      refresh_token: !envvar SMOKE_REFRESH_TOKEN
+```
+
+**Rotated refresh tokens are discarded.** If the IdP returns a fresh
+`refresh_token` in its response, fraisier ignores it. Persisting rotated refresh
+tokens is out of scope — the operator owns rotation (e.g. a separate scheduled
+rotator that updates the deploy user's secrets file). Fraisier will not write to
+your secrets store.
+
+### Header collisions
+
+A smoke test that declares both `headers.<X>` and a `token_provider` whose
+`header` is `<X>` is rejected at config-load time with `ConfigurationError`.
+Comparison is case-insensitive per RFC 7230 (`Authorization` and `authorization`
+collide). Either drop the static header, or change the provider's target with
+`token_provider.header:`.
+
+---
+
 ## Server Setup (one-time)
 
 You have two paths depending on whether the server is completely fresh or already partially

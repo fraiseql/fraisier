@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-05-22
+
+### Added
+
+- **Pluggable token providers for `smoke_tests`** ([#215](https://github.com/fraiseql/fraisier/issues/215)). New optional `token_provider:` block per smoke test acquires a short-lived bearer credential at deploy time, then injects it into the configured `header` using `format` (default `"Bearer {token}"`). Closes the gap where a long-lived JWT in `os.environ` doesn't fit — vault-issued tokens, OIDC machine clients, federated assume-role workflows. Three provider types are built in:
+  - **`exec`** — runs a configured `command` (typed as a list of strings, invoked with no shell) and uses stdout (trailing newline stripped). Non-zero exit, timeout, or unexpected failure raises `DeploymentError` with a truncated stderr tail. `argv[0]` logs at INFO; full argv at DEBUG; the resolved token never appears in any log line. `cwd` and `env_passthrough` are deferred to a later release — the subprocess inherits the deploy user's environment (same envelope as `post_migrate`).
+  - **`oauth2_client_credentials`** — POSTs `grant_type=client_credentials` to `token_url` with `client_id`, `client_secret`, and optional `audience` / `scope`. Returns the response's `access_token`. Non-2xx, missing `access_token`, or network errors raise `DeploymentError`; the response body is never echoed in the error message (some IdPs include the `client_secret` in error envelopes). `client_secret` is redacted in all log lines.
+  - **`oauth2_refresh_token`** — POSTs `grant_type=refresh_token` with `client_id` and `refresh_token`. Rotated `refresh_token`s in the response are **discarded** — fraisier never writes to your secrets store; rotation is the operator's responsibility.
+- **`fraisier/token_providers.py`** — `TokenProvider` (frozen dataclass) and `parse_token_provider(raw)`. Pure-structural parse, never shells out or hits the network at config-load time. `materialize_test_headers(tests)` in `fraisier/smoke_tests.py` resolves each provider exactly once per deploy (cache keyed on `id(provider)`); N smoke tests sharing one provider config get the same token.
+- **Header collision check.** A smoke test that declares both `headers.<X>` and a `token_provider.header=<X>` is rejected at config-load time with `ConfigurationError`. Comparison is case-insensitive per RFC 7230.
+
+### Changed
+
+- **`load_smoke_tests` now raises `ConfigurationError` instead of `ValueError`** for all schema errors (unknown `method`, unknown `on_failure`, malformed JSONPath, relative URL without base, unknown `token_provider.type`). The `_validate_smoke_tests` wrapper in `fraisier/config/_validation.py` catches both classes during the transition. Brings `smoke_tests.py` in line with the rest of `fraisier/config/`, which has always raised `ConfigurationError`. Callers catching `ValueError` from `load_smoke_tests` should switch to `ConfigurationError`.
+
+### Upgrade notes
+
+- Opt-in: a smoke test without a `token_provider:` block keeps v0.21.x behavior — the static `Authorization: !envvar X` header flows through verbatim. No deployment changes for users not using the new feature.
+- A v0.22.0 fraises.yaml that uses `token_provider:` requires v0.22.0+ fraisier to parse. Roll forward, not back, once a provider is configured.
+- Provider runtime failures (exec script crash, IdP 401, network error) raise `DeploymentError` and abort the deploy before smoke tests run. No rollback — there is nothing to restore yet because nothing has changed.
+- See `fraises.example.yaml` and `docs/deployment-guide.md` for worked examples.
+
 ## [0.21.1] - 2026-05-22
 
 ### Fixed

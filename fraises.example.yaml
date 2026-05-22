@@ -126,8 +126,16 @@ fraises:
         # Optional authenticated smoke tests (#204). Run after the
         # unauthenticated health_check passes. JSONPath is the minimal
         # $.dotted.path subset — no $..foo, no array indexing, no wildcards.
-        # Authorization headers may be sourced from os.environ via !envvar.
+        #
+        # Each entry may declare a `token_provider:` block (#215) to
+        # acquire a short-lived bearer at deploy time. Three provider
+        # types are built in: `exec`, `oauth2_client_credentials`, and
+        # `oauth2_refresh_token`. Absence of the block keeps today's
+        # static-header behavior — `Authorization: !envvar X` flows
+        # through unchanged.
+        #
         # smoke_tests:
+        #   # 1. Static token from the deploy user's environment (v0.21+).
         #   - name: authenticated_me
         #     method: POST
         #     url: /graphql          # relative — joined onto health_check.url
@@ -140,6 +148,49 @@ fraises:
         #       - { json_path: $.data.me.id, not_null: true }
         #       - { json_path: $.data.me.role, equals: admin }
         #       - { json_path: $.errors, null: true }
+        #
+        #   # 2. Exec provider: runs a script that prints the token on stdout.
+        #   #    Script runs as the deploy user; argv is logged at INFO with
+        #   #    only argv[0]; the resolved token never appears in any log.
+        #   #    A non-zero exit or timeout aborts the deploy with
+        #   #    DeploymentError. `cwd` and `env_passthrough` are not
+        #   #    supported in v0.22.0 — subprocess inherits the deploy
+        #   #    user's env.
+        #   - name: vault_authenticated
+        #     url: /graphql
+        #     token_provider:
+        #       type: exec
+        #       command: ["/opt/myapp/bin/get-deploy-token.sh"]
+        #       timeout: 10           # seconds; default 10
+        #       # header: Authorization   # default
+        #       # format: "Bearer {token}" # default
+        #     assert:
+        #       - { json_path: $.data.me.id, not_null: true }
+        #
+        #   # 3. OAuth2 client_credentials grant.
+        #   - name: oidc_machine
+        #     url: /graphql
+        #     token_provider:
+        #       type: oauth2_client_credentials
+        #       token_url: https://idp.example.com/oauth/token
+        #       client_id: !envvar SMOKE_CLIENT_ID
+        #       client_secret: !envvar SMOKE_CLIENT_SECRET
+        #       audience: https://api.myapp.io  # optional
+        #       scope: "read:me"                # optional
+        #     assert:
+        #       - { json_path: $.data.me.id, not_null: true }
+        #
+        #   # 4. OAuth2 refresh_token grant. Any rotated refresh_token in
+        #   #    the response is discarded — rotation is the operator's job.
+        #   - name: oidc_refresh
+        #     url: /graphql
+        #     token_provider:
+        #       type: oauth2_refresh_token
+        #       token_url: https://idp.example.com/oauth/token
+        #       client_id: !envvar SMOKE_CLIENT_ID
+        #       refresh_token: !envvar SMOKE_REFRESH_TOKEN
+        #     assert:
+        #       - { json_path: $.data.me.id, not_null: true }
         service:
           type: exec               # systemd Type= (default: exec)
           user: myapp              # app runs as myapp (least privilege)

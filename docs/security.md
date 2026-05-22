@@ -67,6 +67,28 @@ Sensitive values are automatically redacted in structured JSON logs. Any dict ke
 
 Safe keys that would otherwise match (like `primary_key`, `foreign_key`, `sort_key`, `cache_key`) are explicitly excluded.
 
+### Token providers (`smoke_tests.token_provider`)
+
+Token providers acquire short-lived bearer credentials at deploy time. They share
+the same trust envelope as `post_migrate`'s `psql -f` — the resolved value is
+sensitive and the subprocess (for `exec`) runs as the deploy user. The
+implementation guards against accidental leakage:
+
+- **Resolved tokens never appear in logs** at any level (DEBUG included).
+  Verified by `tests/test_token_providers.py::TestExecProvider::test_resolved_token_never_appears_in_logs`
+  and the analogous OAuth2 cases.
+- **`exec` subprocess argv** logs only `argv[0]` at INFO. Full argv (which may
+  contain `--client-id` and similar non-token but operationally interesting
+  args) is DEBUG-only.
+- **`exec` subprocess is invoked with a list**, never `shell=True`.
+- **OAuth2 `client_secret` and `refresh_token`** are redacted in the form-body
+  log line at DEBUG. The token endpoint's error response body is never echoed in
+  the raised `DeploymentError` — some IdPs include the client_secret in error
+  envelopes.
+- **Rotated OAuth2 refresh tokens** returned in the response are discarded.
+  Fraisier does not write to your secrets store; rotation is the operator's
+  responsibility.
+
 ## Rate Limiting
 
 The webhook endpoint enforces rate limiting:
