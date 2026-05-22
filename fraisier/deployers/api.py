@@ -47,6 +47,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.health_check_timeout = hc.get("timeout", 30)
         self.health_check_retries = hc.get("retries", 5)
         self.database_config = config.get("database", {})
+        self.smoke_tests_config = config.get("smoke_tests")
         self.allow_irreversible = config.get("allow_irreversible", False)
         self.lock_timeout = config.get("lock_timeout", 300)
         self._migrations_applied: int = 0
@@ -206,6 +207,64 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         logger.info("Running database migrations")
         self._run_strategy()
 
+    def _run_smoke_tests_or_halt(
+        self,
+        start_time: float,
+        old_version: str | None,
+        db_pk: int | None,
+    ) -> DeploymentResult | None:
+        """Run configured smoke tests post-health; return a failed result if any fail.
+
+        Returns ``None`` when no smoke tests are configured or all pass.
+        On failure: if the failing test's ``on_failure`` is ``rollback``,
+        invoke the existing rollback path and return a rolled-back result.
+        If ``halt``, return a failed result without rollback. ``warn``
+        failures are absorbed by ``run_smoke_tests`` itself and never
+        reach this method.
+        """
+        if not self.smoke_tests_config:
+            return None
+        from fraisier import smoke_tests
+
+        # Health check URL provides the scheme+host base for relative
+        # smoke_test URLs. Stripped to scheme://host (no path).
+        base_url: str | None = None
+        if self.health_check_url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self.health_check_url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+        tests = smoke_tests.load_smoke_tests(
+            {"smoke_tests": self.smoke_tests_config, "health_check": {}},
+            base_url=base_url,
+        )
+        if not tests:
+            return None
+        try:
+            smoke_tests.run_smoke_tests(tests)
+        except smoke_tests.SmokeTestError as exc:
+            duration = time.time() - start_time
+            logger.warning("Smoke test failed: %s", exc)
+            if exc.rollback and self._previous_sha:
+                rollback_result = self.rollback()
+                result = self._build_rollback_result(
+                    rollback_result, old_version, duration
+                )
+                self._complete_db_record(db_pk, result)
+                return result
+            # halt: abort without rollback.
+            self._write_status("failed", error_message=str(exc))
+            result = DeploymentResult(
+                success=False,
+                status=DeploymentStatus.FAILED,
+                old_version=old_version,
+                duration_seconds=duration,
+                error_message=str(exc),
+            )
+            self._complete_db_record(db_pk, result)
+            return result
+        return None
+
     def _run_post_migrate(self) -> None:
         """Run database.post_migrate SQL hooks (#204).
 
@@ -329,6 +388,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     )
                     if early is not None:
                         return early
+
+                # Step 5.5: Authenticated smoke tests (#204 PR B)
+                smoke = self._run_smoke_tests_or_halt(start_time, old_version, db_pk)
+                if smoke is not None:
+                    return smoke
 
                 new_version = new_sha[:8] if new_sha else None
                 duration = time.time() - start_time

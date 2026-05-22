@@ -127,4 +127,6 @@ This avoids granting the deploy user OS-level sudo access to the postgres accoun
 - **Host compromise**: If an attacker has shell access to the deployment server, fraisier cannot protect against them.
 - **Network MitM**: Fraisier does not manage TLS. Use a reverse proxy (nginx, Caddy) with TLS termination.
 - **Config file tampering**: If an attacker can write to `fraises.yaml`, command validation reduces but does not eliminate risk. Protect the config file with filesystem permissions.
-- **Secrets in config**: Fraisier does not encrypt secrets at rest. Use environment variables for sensitive values (`${VAR}` syntax in YAML).
+- **Secrets in config**: Fraisier does not encrypt secrets at rest. Source secrets from environment variables instead of embedding them in `fraises.yaml`:
+  - **`!envvar VAR_NAME`** (load-time, recommended): a custom YAML tag that resolves to `os.environ['VAR_NAME']` when `fraises.yaml` is parsed. Missing variables raise `ConfigurationError` immediately. Works anywhere in `fraises.yaml`, including `git.<provider>.webhook_secret`, `smoke_tests.headers`, and `database.database_url`.
+  - **`${VAR_NAME}`** (runtime): scoped to the `notifications:` and `hooks:` blocks only. Expanded by the dispatcher at fire time. Do not use elsewhere — most consumers read the YAML value literally and will not expand it.
