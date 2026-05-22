@@ -153,9 +153,10 @@ fraises:
         #   #    Script runs as the deploy user; argv is logged at INFO with
         #   #    only argv[0]; the resolved token never appears in any log.
         #   #    A non-zero exit or timeout aborts the deploy with
-        #   #    DeploymentError. `cwd` and `env_passthrough` are not
-        #   #    supported in v0.22.0 — subprocess inherits the deploy
-        #   #    user's env.
+        #   #    DeploymentError (no rollback — halt only). `cwd` and
+        #   #    `env_passthrough` are not supported in v0.22.0 — setting
+        #   #    them raises ConfigurationError at parse time. The
+        #   #    subprocess inherits the deploy user's env.
         #   - name: vault_authenticated
         #     url: /graphql
         #     token_provider:

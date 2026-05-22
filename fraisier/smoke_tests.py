@@ -352,3 +352,26 @@ def run_smoke_tests(tests: list[SmokeTest]) -> None:
                 logger.warning("smoke test %s failed (warn): %s", test.name, exc)
                 continue
             raise
+
+
+def resolve_and_run(tests: list[SmokeTest]) -> None:
+    """Resolve token providers and run each smoke test.
+
+    Single entry point for the deploy pipeline: materializes any
+    ``token_provider`` blocks, then runs the tests. Either step can
+    raise — and the two failure modes have different deploy policies:
+
+    - ``DeploymentError`` from ``materialize_test_headers`` means the
+      provider couldn't deliver a token (script crash, IdP 401,
+      network error). The deployer halts without rollback — a
+      transient IdP issue isn't a code regression.
+    - ``SmokeTestError`` from ``run_smoke_tests`` means the probe ran
+      but the response failed an assertion or returned non-2xx. The
+      deployer reads ``exc.rollback`` and either rolls back or halts
+      per the test's ``on_failure`` policy.
+
+    The deployer disambiguates by catching the two exception classes
+    in order.
+    """
+    materialized = materialize_test_headers(tests)
+    run_smoke_tests(materialized)

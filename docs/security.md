@@ -81,6 +81,20 @@ implementation guards against accidental leakage:
   contain `--client-id` and similar non-token but operationally interesting
   args) is DEBUG-only.
 - **`exec` subprocess is invoked with a list**, never `shell=True`.
+- **`exec` subprocess `stderr` is not included in the raised
+  `DeploymentError` message** — a wrapper with `set -x` enabled (or a
+  helper that echoes its output to stderr) would otherwise have the token
+  surface in the deploy journal via the outer `logger.exception(...)`.
+  The stderr tail is emitted at DEBUG only; re-run with
+  `FRAISIER_LOG_LEVEL=DEBUG` when triaging.
+- **`format` placeholder validation.** A `format` string without
+  `{token}` would silently drop the resolved value; a typo placeholder
+  (`{access_token}`) would `KeyError` mid-deploy. Both shapes are
+  rejected at config-load time.
+- **Unknown keys in `token_provider:`** are rejected at config-load
+  time. Operators who set the deferred `cwd` or `env_passthrough`
+  options, or who typo a field name, learn at parse time rather than
+  observing a silent no-op at deploy time.
 - **OAuth2 `client_secret` and `refresh_token`** are redacted in the form-body
   log line at DEBUG. The token endpoint's error response body is never echoed in
   the raised `DeploymentError` — some IdPs include the client_secret in error

@@ -121,9 +121,16 @@ tokens that must be acquired at deploy time.
 
 `token_provider:` (introduced in #215, v0.22.0) declares how to acquire the token.
 **Absence of the block keeps the v0.21 behavior** — static headers flow through
-unchanged. The provider runs exactly once per deploy (cached by object identity);
-N smoke tests sharing one provider config get the same token. Provider failure
-raises `DeploymentError` and aborts the deploy before smoke tests run.
+unchanged. Each provider instance resolves at most once per deploy: smoke tests
+that share the same `token_provider:` mapping via a YAML anchor (`&p` / `*p`)
+get the same token. Smoke tests that duplicate the block in plain YAML each get
+their own resolution call — use anchors when sharing matters. Provider failure
+(script crash, IdP 401, network error) raises `DeploymentError` and aborts the
+deploy with `status=failed`. **No rollback** is attempted on a token-provider
+failure: by this point migrations have run and the service has restarted on the
+new code, but a transient IdP issue is not a code regression — rolling back the
+whole deploy on every IdP hiccup is the wrong default. Operators investigate
+and re-deploy.
 
 ### `exec` — run a script
 

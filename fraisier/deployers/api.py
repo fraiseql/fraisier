@@ -240,12 +240,29 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         )
         if not tests:
             return None
-        # Resolve each test's token_provider exactly once and inject
-        # the result into the test's headers. Tests without a provider
-        # pass through unchanged.
-        tests = smoke_tests.materialize_test_headers(tests)
+        # resolve_and_run materializes each test's token_provider then
+        # runs the smoke tests. The two failure modes have distinct
+        # policies. A DeploymentError means a token_provider failed
+        # (script crash, IdP 401, network error) — halt without
+        # rollback, since a transient IdP hiccup is not a code
+        # regression. A SmokeTestError means a probe ran but failed
+        # the test's on_failure policy decides rollback vs halt.
         try:
-            smoke_tests.run_smoke_tests(tests)
+            smoke_tests.resolve_and_run(tests)
+        except DeploymentError as exc:
+            duration = time.time() - start_time
+            logger.warning("Token provider failed: %s", exc)
+            self._write_status("failed", error_message=str(exc))
+            result = DeploymentResult(
+                success=False,
+                status=DeploymentStatus.FAILED,
+                old_version=old_version,
+                duration_seconds=duration,
+                error_message=str(exc),
+                error=exc,
+            )
+            self._complete_db_record(db_pk, result)
+            return result
         except smoke_tests.SmokeTestError as exc:
             duration = time.time() - start_time
             logger.warning("Smoke test failed: %s", exc)

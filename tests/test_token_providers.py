@@ -16,6 +16,9 @@ from fraisier.errors import ConfigurationError, DeploymentError
 from fraisier.smoke_tests import load_smoke_tests
 from fraisier.token_providers import (
     _VALID_PROVIDER_TYPES,
+    ExecTokenProvider,
+    Oauth2ClientCredentialsTokenProvider,
+    Oauth2RefreshTokenProvider,
     TokenProvider,
     parse_token_provider,
 )
@@ -34,12 +37,255 @@ class TestParseTokenProvider:
         with pytest.raises(ConfigurationError, match=r"token_provider.*type"):
             parse_token_provider({"command": ["echo", "x"]})
 
+
+class TestParseDispatchesToTypedSubclass:
+    """``parse_token_provider`` returns one of the three concrete
+    subclasses, never the abstract base. Each subclass carries only
+    its own type-specific fields — no ``None``-typed leftovers from a
+    sibling type — and reports its YAML ``type`` via the ``type``
+    property. Subclasses remain instances of the base ``TokenProvider``
+    for back-compat with ``isinstance`` checks and annotations.
+    """
+
+    def test_exec_returns_exec_subclass(self):
+        provider = parse_token_provider({"type": "exec", "command": ["printf", "x"]})
+        assert isinstance(provider, ExecTokenProvider)
+        assert isinstance(provider, TokenProvider)
+        assert provider.type == "exec"
+        assert provider.command == ("printf", "x")
+
+    def test_oauth2_client_credentials_returns_typed_subclass(self):
+        provider = parse_token_provider(
+            {
+                "type": "oauth2_client_credentials",
+                "token_url": "https://idp/x",
+                "client_id": "a",
+                "client_secret": "b",
+            }
+        )
+        assert isinstance(provider, Oauth2ClientCredentialsTokenProvider)
+        assert provider.type == "oauth2_client_credentials"
+        # Required fields land as plain strings, not Optionals — this is
+        # what frees the resolver from None-checking the parser-guaranteed
+        # fields.
+        assert provider.token_url == "https://idp/x"
+        assert provider.client_id == "a"
+        assert provider.client_secret == "b"
+        # Optional fields default to None.
+        assert provider.audience is None
+        assert provider.scope is None
+
+    def test_oauth2_refresh_token_returns_typed_subclass(self):
+        provider = parse_token_provider(
+            {
+                "type": "oauth2_refresh_token",
+                "token_url": "https://idp/x",
+                "client_id": "a",
+                "refresh_token": "rt",
+            }
+        )
+        assert isinstance(provider, Oauth2RefreshTokenProvider)
+        assert provider.type == "oauth2_refresh_token"
+        assert provider.refresh_token == "rt"
+
+    def test_exec_subclass_lacks_oauth2_fields(self):
+        # Exec provider does not carry token_url / client_id / etc. —
+        # the field set is type-specific, no inherited None-soup from
+        # other provider types.
+        provider = parse_token_provider({"type": "exec", "command": ["printf", "x"]})
+        for sibling_field in (
+            "token_url",
+            "client_id",
+            "client_secret",
+            "refresh_token",
+            "audience",
+            "scope",
+        ):
+            assert not hasattr(provider, sibling_field), (
+                f"ExecTokenProvider should not carry {sibling_field!r} — "
+                "that's a different provider type's field"
+            )
+
+    def test_subclasses_are_frozen(self):
+        from dataclasses import FrozenInstanceError
+
+        provider = parse_token_provider({"type": "exec", "command": ["printf", "x"]})
+        with pytest.raises(FrozenInstanceError):
+            provider.command = ("evil",)  # type: ignore[misc]
+
+    def test_base_class_resolve_raises_not_implemented(self):
+        # The base class is abstract-by-convention — instantiating it
+        # bypasses parse_token_provider and lands on the NotImplemented
+        # branch.
+        base = TokenProvider()
+        with pytest.raises(NotImplementedError):
+            base.resolve()
+        # And its `type` is the empty sentinel.
+        assert base.type == ""
+
     def test_valid_types_include_all_built_in_providers(self):
         # The unknown-type error message lists the valid set, so every
         # built-in provider type must be registered.
         assert "exec" in _VALID_PROVIDER_TYPES
         assert "oauth2_client_credentials" in _VALID_PROVIDER_TYPES
         assert "oauth2_refresh_token" in _VALID_PROVIDER_TYPES
+
+
+class TestUnknownKeysRejected:
+    """Unknown keys in a ``token_provider:`` block (typos, deferred
+    options, copy-paste from issue body) must surface at parse time
+    rather than silently no-op at deploy time.
+
+    Specifically: ``cwd`` and ``env_passthrough`` were listed in the
+    #215 issue body as optional and *deliberately deferred* in
+    v0.22.0. Setting them in YAML expecting them to work is the most
+    likely typo path for new users.
+    """
+
+    def test_exec_rejects_unknown_key(self):
+        with pytest.raises(ConfigurationError, match=r"unknown key"):
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "cwd": "/opt/myapp",
+                }
+            )
+
+    def test_exec_rejects_env_passthrough_deferred_option(self):
+        with pytest.raises(ConfigurationError, match=r"env_passthrough"):
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "env_passthrough": True,
+                }
+            )
+
+    def test_exec_rejects_typo(self):
+        with pytest.raises(ConfigurationError, match=r"tiemout"):
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "tiemout": 30,
+                }
+            )
+
+    def test_oauth2_client_credentials_rejects_unknown_key(self):
+        with pytest.raises(ConfigurationError, match=r"refresh_token"):
+            parse_token_provider(
+                {
+                    "type": "oauth2_client_credentials",
+                    "token_url": "https://idp/x",
+                    "client_id": "x",
+                    "client_secret": "y",
+                    # refresh_token only valid on the other oauth2 type
+                    "refresh_token": "wrong-type",
+                }
+            )
+
+    def test_oauth2_refresh_token_rejects_client_secret(self):
+        # client_secret is only valid for client_credentials, never for
+        # refresh_token. Pasting it in by mistake should not silently
+        # succeed.
+        with pytest.raises(ConfigurationError, match=r"client_secret"):
+            parse_token_provider(
+                {
+                    "type": "oauth2_refresh_token",
+                    "token_url": "https://idp/x",
+                    "client_id": "x",
+                    "refresh_token": "rt",
+                    "client_secret": "should-not-be-here",
+                }
+            )
+
+    def test_error_message_lists_valid_keys(self):
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "cwd": "/tmp",
+                }
+            )
+        msg = str(exc_info.value)
+        # Operator should learn what's allowed.
+        assert "command" in msg
+        assert "timeout" in msg
+        assert "type" in msg
+
+
+class TestFormatPlaceholderValidation:
+    """``format`` must contain ``{token}`` (the only substituted
+    placeholder). Any other shape is rejected at parse time.
+
+    - Missing ``{token}`` silently drops the resolved value and ships
+      a constant header value, which 401s every smoke test with a
+      confusing diagnostic — fail loudly at parse instead.
+    - Wrong placeholder name (e.g. ``{access_token}``) would raise
+      ``KeyError`` at deploy time, escaping the deployer's
+      ``DeploymentError`` halt path; reject at parse instead.
+    """
+
+    def test_default_format_passes(self):
+        # Sanity: the default "Bearer {token}" must parse without raising.
+        provider = parse_token_provider({"type": "exec", "command": ["printf", "x"]})
+        assert provider.format == "Bearer {token}"
+
+    def test_missing_token_placeholder_rejected(self):
+        with pytest.raises(ConfigurationError, match=r"\{token\}"):
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "format": "Bearer ABC",
+                }
+            )
+
+    def test_wrong_placeholder_name_rejected(self):
+        with pytest.raises(ConfigurationError, match=r"access_token"):
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "format": "Bearer {access_token}",
+                }
+            )
+
+    def test_extra_placeholder_alongside_token_rejected(self):
+        with pytest.raises(ConfigurationError, match=r"client_id"):
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "format": "Bearer {token} for {client_id}",
+                }
+            )
+
+    def test_malformed_format_string_rejected(self):
+        # An unbalanced brace makes the string un-parseable by
+        # str.format — surface this at config-load, not deploy.
+        with pytest.raises(ConfigurationError):
+            parse_token_provider(
+                {
+                    "type": "exec",
+                    "command": ["printf", "x"],
+                    "format": "Bearer {token",
+                }
+            )
+
+    def test_custom_valid_format_accepted(self):
+        # Non-default but valid: tests that the validator does not
+        # over-fit to the "Bearer " prefix.
+        provider = parse_token_provider(
+            {
+                "type": "exec",
+                "command": ["printf", "x"],
+                "format": "Token {token}",
+            }
+        )
+        assert provider.format == "Token {token}"
 
 
 class TestExecProviderParseSideEffects:
@@ -128,8 +374,14 @@ class TestExecProvider:
         # /warn), which is the wrong response to a token-fetch failure.
         assert not isinstance(exc_info.value, SmokeTestError)
 
-    def test_non_zero_exit_includes_stderr_tail(self):
+    def test_non_zero_exit_stderr_only_at_debug_not_in_exception(self, caplog):
         # A script that writes context to stderr and exits non-zero.
+        # Stderr must reach the operator at DEBUG, but must NOT appear
+        # in the exception message — a `set -x` wrapper can echo the
+        # token to stderr, and the outer `logger.exception(...)` in the
+        # deployer would otherwise drop it into the journal.
+        import logging as _logging
+
         provider = parse_token_provider(
             {
                 "type": "exec",
@@ -140,8 +392,51 @@ class TestExecProvider:
                 ],
             }
         )
-        with pytest.raises(DeploymentError, match=r"something went wrong"):
+        with (
+            caplog.at_level(_logging.DEBUG, logger="fraisier.token_providers"),
+            pytest.raises(DeploymentError) as exc_info,
+        ):
             provider.resolve()
+
+        msg = str(exc_info.value)
+        assert "exit 7" not in msg  # exit code rendered as "exited 7"
+        assert "exited 7" in msg
+        assert "something went wrong" not in msg, (
+            "stderr leaked into DeploymentError message — "
+            "set -x wrappers would expose the token"
+        )
+
+        debug_blob = "\n".join(
+            rec.getMessage() for rec in caplog.records if rec.levelno == _logging.DEBUG
+        )
+        assert "something went wrong" in debug_blob
+
+    def test_stderr_with_set_x_does_not_leak_token_to_exception(self, tmp_path):
+        # The realistic regression: `set -x` echoes every command, and
+        # if the script reads the token then exits non-zero, the token
+        # ends up in stderr. The exception message must not echo it.
+        import textwrap
+
+        token = "leaky-secret-jwt-abc123"
+        # Build a small wrapper script: enables set -x, echoes the
+        # token to stdout (the legit channel), then explicitly fails.
+        script = textwrap.dedent(
+            f"""\
+            #!/bin/sh
+            set -x
+            echo '{token}'
+            exit 1
+            """
+        )
+        script_path = tmp_path / "leaky.sh"
+        script_path.write_text(script)
+        script_path.chmod(0o700)
+        provider = parse_token_provider({"type": "exec", "command": [str(script_path)]})
+        with pytest.raises(DeploymentError) as exc_info:
+            provider.resolve()
+        assert token not in str(exc_info.value), (
+            f"token leaked into DeploymentError: {exc_info.value!s}"
+        )
 
     @pytest.mark.skipif(
         __import__("sys").platform.startswith("win"), reason="POSIX-only signals"
@@ -382,7 +677,7 @@ class TestOauth2ClientCredentialsProvider:
         with pytest.raises(DeploymentError) as exc_info:
             provider.resolve()
         msg = str(exc_info.value)
-        assert "401" in msg
+        assert "HTTP 401" in msg
         assert "oauth2_client_credentials" in msg
         # Body must not leak into the exception message.
         assert "shh" not in msg
@@ -537,7 +832,7 @@ class TestOauth2RefreshTokenProvider:
         )
 
         provider = parse_token_provider(self._provider())
-        with pytest.raises(DeploymentError, match=r"400"):
+        with pytest.raises(DeploymentError, match=r"HTTP 400"):
             provider.resolve()
 
     def test_refresh_token_never_leaks_to_logs(self, caplog, monkeypatch):
@@ -708,6 +1003,258 @@ class TestProviderHeaderSubstitution:
         assert req.headers["Authorization"] == "Bearer fresh-jwt-from-script"
         # Static header preserved alongside.
         assert req.headers["X-Tenant"] == "abc"
+
+
+class TestProviderFailureHaltsWithoutRollback:
+    """A ``DeploymentError`` from ``materialize_test_headers`` must
+    surface as a failed ``DeploymentResult`` (halt) — it must NOT
+    trigger ``_restore_previous_state``, which would roll back the DB
+    + git + service restart that already happened earlier in the
+    pipeline.
+
+    This contract is what the issue body, plan, CHANGELOG, docs, and
+    module docstring all promise — a transient IdP 401 or a script
+    crash should not undo the entire deploy. The fix lives at
+    ``fraisier/deployers/api.py::_run_smoke_tests_or_halt``: the call
+    to ``materialize_test_headers`` is wrapped in ``try/except
+    DeploymentError`` so the failure is recorded but rollback is not
+    invoked.
+    """
+
+    def test_failing_exec_provider_halts_without_rollback(self):
+        from unittest.mock import patch
+
+        from fraisier.deployers.api import APIDeployer
+        from fraisier.deployers.base import DeploymentStatus
+
+        config = {
+            "fraise_name": "myapi",
+            "environment": "production",
+            "app_path": "/srv/myapi",
+            "clone_url": "git@github.com:org/myapi.git",
+            "branch": "main",
+            "systemd_service": "myapi.service",
+            "health_check": {
+                "url": "https://api.example.com/health",
+                "timeout": 5,
+            },
+            "repos_base": "/tmp/repos",
+            "smoke_tests": [
+                {
+                    "name": "auth",
+                    "url": "/me",
+                    "token_provider": {
+                        # `false` exits 1 — provider resolution fails.
+                        "type": "exec",
+                        "command": ["false"],
+                    },
+                    "assert": [],
+                }
+            ],
+        }
+        deployer = APIDeployer(config)
+
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=("old-sha", "new-sha"),
+            ),
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_wait_for_health", return_value=True),
+            patch.object(deployer, "_restore_previous_state") as restore_mock,
+        ):
+            result = deployer.execute()
+
+        # Halt: failed result, no rollback called.
+        assert result.success is False
+        assert result.status == DeploymentStatus.FAILED
+        restore_mock.assert_not_called()
+        assert "token_provider" in (result.error_message or "")
+        # The exception object is carried for upstream consumers
+        # (notifications, db record) — verify it isn't a generic
+        # Exception wrapping.
+        from fraisier.errors import DeploymentError as _DE
+
+        assert isinstance(result.error, _DE)
+
+    def test_failing_oauth2_provider_halts_without_rollback(self, monkeypatch):
+        from unittest.mock import patch
+
+        import httpx
+
+        from fraisier.deployers.api import APIDeployer
+        from fraisier.deployers.base import DeploymentStatus
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"error": "invalid_client"})
+
+        monkeypatch.setattr(
+            "fraisier.token_providers._oauth2_http_transport",
+            lambda: httpx.MockTransport(handler),
+            raising=False,
+        )
+
+        config = {
+            "fraise_name": "myapi",
+            "environment": "production",
+            "app_path": "/srv/myapi",
+            "clone_url": "git@github.com:org/myapi.git",
+            "branch": "main",
+            "systemd_service": "myapi.service",
+            "health_check": {
+                "url": "https://api.example.com/health",
+                "timeout": 5,
+            },
+            "repos_base": "/tmp/repos",
+            "smoke_tests": [
+                {
+                    "name": "oidc",
+                    "url": "/me",
+                    "token_provider": {
+                        "type": "oauth2_client_credentials",
+                        "token_url": "https://idp.example.com/oauth/token",
+                        "client_id": "x",
+                        "client_secret": "y",
+                    },
+                    "assert": [],
+                }
+            ],
+        }
+        deployer = APIDeployer(config)
+
+        with (
+            patch("fraisier.deployers.mixins.clone_bare_repo"),
+            patch(
+                "fraisier.deployers.mixins.fetch_and_checkout",
+                return_value=("old-sha", "new-sha"),
+            ),
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_wait_for_health", return_value=True),
+            patch.object(deployer, "_restore_previous_state") as restore_mock,
+        ):
+            result = deployer.execute()
+
+        assert result.success is False
+        assert result.status == DeploymentStatus.FAILED
+        restore_mock.assert_not_called()
+        assert "HTTP 401" in (result.error_message or "")
+
+
+class TestResolveAndRunWrapper:
+    """``smoke_tests.resolve_and_run`` is the single deploy-pipeline
+    entry point. It materializes token providers and runs the smoke
+    tests in sequence, surfacing the two distinct failure modes via
+    distinct exception classes so the deployer can apply the right
+    halt/rollback policy without inspecting the same exception twice.
+    """
+
+    def test_runs_smoke_tests_with_resolved_headers(self):
+        import httpx
+
+        from fraisier.smoke_tests import SmokeTest, resolve_and_run
+
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(200, json={"ok": True})
+
+        transport = httpx.MockTransport(handler)
+
+        provider = parse_token_provider(
+            {"type": "exec", "command": ["printf", "tok-from-script"]}
+        )
+        test = SmokeTest(
+            name="t",
+            method="GET",
+            url="https://api.example.com/me",
+            headers={},
+            body=None,
+            timeout=5,
+            on_failure="rollback",
+            assertions=[],
+            token_provider=provider,
+        )
+
+        original_client = httpx.Client
+
+        def make_client(*args, **kwargs):
+            kwargs["transport"] = transport
+            return original_client(*args, **kwargs)
+
+        from unittest.mock import patch
+
+        with patch("fraisier.smoke_tests.httpx.Client", side_effect=make_client):
+            resolve_and_run([test])
+
+        assert len(captured) == 1
+        assert captured[0].headers["Authorization"] == "Bearer tok-from-script"
+
+    def test_provider_failure_surfaces_as_deployment_error(self):
+        # The wrapper preserves the exception class so the deployer can
+        # tell "token provider failed" (halt without rollback) from
+        # "smoke test failed" (policy-driven).
+        from fraisier.smoke_tests import SmokeTest, SmokeTestError, resolve_and_run
+
+        provider = parse_token_provider({"type": "exec", "command": ["false"]})
+        test = SmokeTest(
+            name="t",
+            method="GET",
+            url="https://api.example.com/me",
+            headers={},
+            body=None,
+            timeout=5,
+            on_failure="rollback",
+            assertions=[],
+            token_provider=provider,
+        )
+
+        with pytest.raises(DeploymentError) as exc_info:
+            resolve_and_run([test])
+        # Critically NOT a SmokeTestError — that would put the deployer
+        # on the policy-driven rollback path.
+        assert not isinstance(exc_info.value, SmokeTestError)
+
+    def test_smoke_test_failure_surfaces_as_smoke_test_error(self):
+        # And conversely: when the provider resolves but the probe
+        # itself fails, SmokeTestError is what flows up.
+        import httpx
+
+        from fraisier.smoke_tests import SmokeTest, SmokeTestError, resolve_and_run
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, json={"error": "boom"})
+
+        transport = httpx.MockTransport(handler)
+        provider = parse_token_provider({"type": "exec", "command": ["printf", "x"]})
+        test = SmokeTest(
+            name="t",
+            method="GET",
+            url="https://api.example.com/me",
+            headers={},
+            body=None,
+            timeout=5,
+            on_failure="rollback",
+            assertions=[],
+            token_provider=provider,
+        )
+
+        original_client = httpx.Client
+
+        def make_client(*args, **kwargs):
+            kwargs["transport"] = transport
+            return original_client(*args, **kwargs)
+
+        from unittest.mock import patch
+
+        with (
+            patch("fraisier.smoke_tests.httpx.Client", side_effect=make_client),
+            pytest.raises(SmokeTestError) as exc_info,
+        ):
+            resolve_and_run([test])
+        # The rollback flag flows through so the deployer can act on it.
+        assert exc_info.value.rollback is True
 
 
 class TestBackCompatNoProvider:
