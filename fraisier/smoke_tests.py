@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
@@ -303,6 +303,37 @@ def _run_one(test: SmokeTest) -> None:
                 f"{assertion.json_path}={actual!r} did not satisfy {assertion!r}",
                 rollback=_should_rollback(test),
             )
+
+
+def materialize_test_headers(tests: list[SmokeTest]) -> list[SmokeTest]:
+    """Resolve each test's ``token_provider`` and inject the result.
+
+    Distinct providers are resolved exactly once per call — multiple
+    tests sharing one provider config get the same token. The cache key
+    is ``id(provider)``: providers are constructed once during config
+    load (by ``load_smoke_tests``), so identity is stable for the
+    duration of this call. ``TokenProvider`` holds a tuple-typed
+    ``command`` so it could be made hashable, but ``id()`` works
+    regardless of future field additions (e.g. lists of scopes) and
+    sidesteps the question.
+
+    Tests without a ``token_provider`` are returned unchanged.
+    """
+    cache: dict[int, str] = {}
+    materialized: list[SmokeTest] = []
+    for test in tests:
+        provider = test.token_provider
+        if provider is None:
+            materialized.append(test)
+            continue
+        token = cache.get(id(provider))
+        if token is None:
+            token = provider.resolve()
+            cache[id(provider)] = token
+        rendered = provider.format.format(token=token)
+        new_headers = {**test.headers, provider.header: rendered}
+        materialized.append(replace(test, headers=new_headers))
+    return materialized
 
 
 def run_smoke_tests(tests: list[SmokeTest]) -> None:

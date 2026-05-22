@@ -240,6 +240,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         )
         if not tests:
             return None
+        # Resolve each test's token_provider exactly once and inject
+        # the result into the test's headers. Tests without a provider
+        # pass through unchanged.
+        tests = smoke_tests.materialize_test_headers(tests)
         try:
             smoke_tests.run_smoke_tests(tests)
         except smoke_tests.SmokeTestError as exc:
