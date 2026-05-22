@@ -400,12 +400,30 @@ class GitDeployMixin:
             db = get_db()
             database_config = getattr(self, "database_config", None) or {}
             strategy = database_config.get("strategy")
+            database_url = database_config.get("database_url")
+            db_size_mb: int | None = None
+            if database_url and result.success:
+                try:
+                    from fraisier.dbops.sizing import query_database_size_mb
+
+                    db_size_mb = query_database_size_mb(
+                        database_url, runner=self.runner
+                    )
+                except Exception:
+                    # Defence-in-depth: the helper is already best-effort,
+                    # but never let a sizing failure block the recorder.
+                    logger.debug(
+                        "query_database_size_mb raised; leaving db_size_mb=None",
+                        exc_info=True,
+                    )
+                    db_size_mb = None
             db.complete_deployment(
                 deployment_id=deployment_pk,
                 success=result.success,
                 new_version=result.new_version,
                 error_message=result.error_message,
                 strategy=strategy,
+                db_size_mb=db_size_mb,
             )
             if result.status.value == "rolled_back":
                 db.mark_deployment_rolled_back(deployment_pk)

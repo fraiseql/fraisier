@@ -151,6 +151,21 @@ def trigger_deploy(
         )
         raise SystemExit(1)
 
+    # Print duration estimate before dispatch (#201 follow-up). Best-effort:
+    # any failure (no DB, no history, importable but raises) is swallowed so
+    # the deploy still goes through.
+    try:
+        from fraisier import duration_estimate
+        from fraisier.database import get_db
+
+        estimate = duration_estimate.build_estimate(
+            get_db(), fraise_config, fraise, environment
+        )
+        if estimate is not None:
+            console.print(duration_estimate.format_estimate_line(estimate))
+    except Exception:
+        pass
+
     # Validate flags
     if follow:
         wait = True  # --follow implies --wait

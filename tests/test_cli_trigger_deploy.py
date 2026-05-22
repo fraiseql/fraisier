@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from fraisier.cli.main import main
+from fraisier.duration_estimate import EstimateResult
 
 
 class TestTriggerDeployWait:
@@ -199,3 +200,135 @@ class TestTriggerDeployWait:
         assert args[0] == "journalctl"
         assert "-f" in args[1]  # follow flag
         assert "fraisier-api-prod@*.service" in args[1]
+
+
+class TestTriggerDeployEstimate:
+    """`fraisier trigger-deploy` prints an estimated completion line before
+    dispatching, when a `database.strategy` is configured (#201 follow-up)."""
+
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_prints_estimate_when_database_strategy_present(
+        self, mock_get_config, mock_path_class, mock_socket_class
+    ):
+        runner = CliRunner()
+
+        config = MagicMock()
+        config.project_name = "myproject"
+        config.get_fraise_environment.return_value = {
+            "type": "api",
+            "database": {"strategy": "rebuild"},
+        }
+        mock_get_config.return_value = config
+
+        mock_path = MagicMock()
+        mock_path_class.return_value = mock_path
+        mock_socket_path = MagicMock()
+        mock_path.__truediv__.return_value = mock_socket_path
+        mock_socket_path.__str__.return_value = (
+            "/run/fraisier/myproject-prod/deploy.sock"
+        )
+
+        mock_sock = MagicMock()
+        mock_socket_class.return_value = mock_sock
+        mock_sock.connect.return_value = None
+        mock_sock.sendall.return_value = None
+        mock_sock.shutdown.return_value = None
+
+        with patch(
+            "fraisier.duration_estimate.build_estimate",
+            return_value=EstimateResult(
+                seconds=180, confidence="history", samples_used=5
+            ),
+        ):
+            result = runner.invoke(
+                main,
+                ["trigger-deploy", "api", "prod"],
+                obj={"skip_health": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Estimated completion: ~3m (history," in result.output
+        assert "Deployment triggered successfully" in result.output
+
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_prints_no_estimate_for_etl_fraise(
+        self, mock_get_config, mock_path_class, mock_socket_class
+    ):
+        runner = CliRunner()
+
+        config = MagicMock()
+        config.project_name = "myproject"
+        # No `database` section — ETL fraises return None from build_estimate.
+        config.get_fraise_environment.return_value = {"type": "etl"}
+        mock_get_config.return_value = config
+
+        mock_path = MagicMock()
+        mock_path_class.return_value = mock_path
+        mock_socket_path = MagicMock()
+        mock_path.__truediv__.return_value = mock_socket_path
+        mock_socket_path.__str__.return_value = (
+            "/run/fraisier/myproject-prod/deploy.sock"
+        )
+
+        mock_sock = MagicMock()
+        mock_socket_class.return_value = mock_sock
+        mock_sock.connect.return_value = None
+        mock_sock.sendall.return_value = None
+        mock_sock.shutdown.return_value = None
+
+        result = runner.invoke(
+            main,
+            ["trigger-deploy", "api", "prod"],
+            obj={"skip_health": False},
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Estimated completion:" not in result.output
+
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_swallows_estimate_errors(
+        self, mock_get_config, mock_path_class, mock_socket_class
+    ):
+        runner = CliRunner()
+
+        config = MagicMock()
+        config.project_name = "myproject"
+        config.get_fraise_environment.return_value = {
+            "type": "api",
+            "database": {"strategy": "rebuild"},
+        }
+        mock_get_config.return_value = config
+
+        mock_path = MagicMock()
+        mock_path_class.return_value = mock_path
+        mock_socket_path = MagicMock()
+        mock_path.__truediv__.return_value = mock_socket_path
+        mock_socket_path.__str__.return_value = (
+            "/run/fraisier/myproject-prod/deploy.sock"
+        )
+
+        mock_sock = MagicMock()
+        mock_socket_class.return_value = mock_sock
+        mock_sock.connect.return_value = None
+        mock_sock.sendall.return_value = None
+        mock_sock.shutdown.return_value = None
+
+        with patch(
+            "fraisier.duration_estimate.build_estimate",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = runner.invoke(
+                main,
+                ["trigger-deploy", "api", "prod"],
+                obj={"skip_health": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Deployment triggered successfully" in result.output
+        mock_sock.sendall.assert_called_once()

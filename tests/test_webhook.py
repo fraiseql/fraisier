@@ -767,7 +767,7 @@ class TestProcessWebhookEvent:
         with (
             patch("fraisier.webhook.get_config") as mock_config,
             patch(
-                "fraisier.webhook.estimate_duration",
+                "fraisier.webhook.build_estimate",
                 side_effect=RuntimeError("boom"),
             ),
         ):

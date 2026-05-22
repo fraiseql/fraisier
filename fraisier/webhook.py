@@ -21,7 +21,7 @@ from .config import get_config
 if TYPE_CHECKING:
     from .config.loader import FraisierConfig
     from .database import FraisierDB
-from .duration_estimate import estimate_duration
+from .duration_estimate import build_estimate, to_dispatch_dict
 from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
 from .locking import deployment_lock, is_deployment_locked
@@ -288,45 +288,25 @@ def _get_lock_dir(config: "FraisierConfig") -> Path | None:
         return None
 
 
-# Maps the user-facing `database.strategy` value to the estimator's key.
-_STRATEGY_ALIASES: dict[str, str] = {"apply": "migrate"}
-
-
 def _build_estimate(
     fraise_config: dict[str, Any], fraise_name: str, environment: str
 ) -> dict[str, Any] | None:
     """Return ``{estimated_duration_s, estimated_ready_at, estimate_confidence}``
     or None if the fraise has no database section or the lookup fails."""
-    database_config = fraise_config.get("database") or {}
-    strategy = database_config.get("strategy")
-    if not strategy:
-        return None
-    strategy = _STRATEGY_ALIASES.get(strategy, strategy)
     try:
-        from datetime import UTC, datetime, timedelta
-
         from .database import get_db
 
-        result = estimate_duration(
-            get_db(),
-            fraise=fraise_name,
-            environment=environment,
-            strategy=strategy,
-            db_size_mb=None,
-        )
-        eta = datetime.now(tz=UTC) + timedelta(seconds=result.seconds)
-        return {
-            "estimated_duration_s": result.seconds,
-            "estimated_ready_at": eta.isoformat().replace("+00:00", "Z"),
-            "estimate_confidence": result.confidence,
-        }
+        result = build_estimate(get_db(), fraise_config, fraise_name, environment)
     except Exception:
         logger.exception(
-            "estimate_duration: failed to build estimate for %s/%s",
+            "build_estimate: failed to build estimate for %s/%s",
             fraise_name,
             environment,
         )
         return None
+    if result is None:
+        return None
+    return to_dispatch_dict(result)
 
 
 def _dispatch_deployment(

@@ -12,14 +12,19 @@ agentic callers a "wait ~Nm" signal at trigger time.
 from __future__ import annotations
 
 import logging
+import math
 import statistics
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:  # pragma: no cover
     from fraisier.database import FraisierDB
 
 log = logging.getLogger(__name__)
+
+# Maps the user-facing `database.strategy` value to the estimator's key.
+_STRATEGY_ALIASES: dict[str, str] = {"apply": "migrate"}
 
 # Median-buffer factor applied to history-based estimates.
 _HISTORY_BUFFER = 1.20
@@ -118,4 +123,62 @@ def estimate_duration(
         seconds=_fallback_seconds(strategy, db_size_mb),
         confidence="fallback",
         samples_used=sample_count,
+    )
+
+
+def build_estimate(
+    db: FraisierDB,
+    fraise_config: dict[str, Any],
+    fraise_name: str,
+    environment: str,
+) -> EstimateResult | None:
+    """Return an estimate for a fraise/environment, or ``None`` to skip.
+
+    Returns ``None`` when the fraise has no ``database.strategy`` (ETL,
+    docker_compose) or when the underlying lookup raises. Otherwise
+    returns the ``EstimateResult`` produced by ``estimate_duration``.
+    """
+    database_config = fraise_config.get("database") or {}
+    strategy = database_config.get("strategy")
+    if not strategy:
+        return None
+    strategy = _STRATEGY_ALIASES.get(strategy, strategy)
+    try:
+        return estimate_duration(
+            db,
+            fraise=fraise_name,
+            environment=environment,
+            strategy=strategy,
+            db_size_mb=None,
+        )
+    except Exception:
+        log.exception(
+            "build_estimate: failed for %s/%s",
+            fraise_name,
+            environment,
+        )
+        return None
+
+
+def to_dispatch_dict(result: EstimateResult) -> dict[str, Any]:
+    """Shape an ``EstimateResult`` into the webhook dispatch response keys."""
+    eta = datetime.now(tz=UTC) + timedelta(seconds=result.seconds)
+    return {
+        "estimated_duration_s": result.seconds,
+        "estimated_ready_at": eta.isoformat().replace("+00:00", "Z"),
+        "estimate_confidence": result.confidence,
+    }
+
+
+def format_estimate_line(result: EstimateResult) -> str:
+    """Format an estimate as a single line for human (CLI) output.
+
+    Rounds up to the next whole minute (``math.ceil``) — friendlier than
+    ``round`` for "wait time" framing and avoids banker's-rounding
+    surprises (``round(2.5) == 2``). Never prints ``~0m``.
+    """
+    minutes = max(1, math.ceil(result.seconds / 60))
+    return (
+        f"Estimated completion: ~{minutes}m "
+        f"({result.confidence}, {result.samples_used} samples)"
     )
