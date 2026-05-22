@@ -433,9 +433,7 @@ def _validate_post_migrate(fraise_name: str, db: dict) -> list[str]:
                 "or sql_file, not both"
             )
         elif not sql_dir and not sql_file:
-            errors.append(
-                f"{fraise_name}: {location} must specify sql_dir or sql_file"
-            )
+            errors.append(f"{fraise_name}: {location} must specify sql_dir or sql_file")
 
         on_error = entry.get("on_error", "halt")
         if on_error not in _VALID_POST_MIGRATE_ON_ERROR:

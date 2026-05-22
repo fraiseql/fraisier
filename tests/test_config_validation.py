@@ -484,9 +484,7 @@ fraises:
 """
 
     def _write(self, tmp_path, entries: str):
-        return _write_config(
-            tmp_path, self._BASE_CONFIG.format(entries=entries)
-        )
+        return _write_config(tmp_path, self._BASE_CONFIG.format(entries=entries))
 
     def test_accepts_entry_with_sql_dir_only(self, tmp_path):
         config_file = self._write(tmp_path, "[{sql_dir: db/7_grant/}]")
@@ -520,10 +518,6 @@ fraises:
         FraisierConfig(config_file)
 
     def test_on_error_rejects_unknown_value(self, tmp_path):
-        config_file = self._write(
-            tmp_path, "[{sql_dir: db/7_grant/, on_error: panic}]"
-        )
-        with pytest.raises(
-            ValidationError, match=r"on_error.*'halt'.*'warn'"
-        ):
+        config_file = self._write(tmp_path, "[{sql_dir: db/7_grant/, on_error: panic}]")
+        with pytest.raises(ValidationError, match=r"on_error.*'halt'.*'warn'"):
             FraisierConfig(config_file)

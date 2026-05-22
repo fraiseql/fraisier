@@ -209,9 +209,7 @@ class TestRunPostMigrateStepsOnError:
             subprocess.CalledProcessError(
                 returncode=1, cmd=["psql"], stderr="WARNING-ish failure"
             ),
-            subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            ),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
         ]
 
         with caplog.at_level(logging.WARNING, logger="fraisier.post_migrate"):

@@ -155,7 +155,8 @@ class TestPostMigrateFailureSemantics:
 
 
 @pytest.mark.parametrize(
-    "missing_field", ["database_url"],
+    "missing_field",
+    ["database_url"],
 )
 class TestPostMigrateGuards:
     def test_skips_when_database_url_missing(self, missing_field):
@@ -164,9 +165,7 @@ class TestPostMigrateGuards:
         deployer = _make_deployer(post_migrate=[{"sql_file": "db/grant.sql"}])
         # Remove the database_url key.
         deployer.database_config = {
-            k: v
-            for k, v in deployer.database_config.items()
-            if k != missing_field
+            k: v for k, v in deployer.database_config.items() if k != missing_field
         }
 
         with (
