@@ -1,8 +1,11 @@
 """Tests for the pluggable token-provider config layer (#215).
 
-Phase 1 covers the parse skeleton: unknown ``type`` rejection and the
-back-compat default (absence of ``token_provider:`` means today's
-behavior).
+Covers the parse skeleton (unknown ``type`` rejection, back-compat
+default of absence), the three built-in provider types (``exec``,
+``oauth2_client_credentials``, ``oauth2_refresh_token``), the
+once-per-deploy caching contract, end-to-end header substitution
+through ``_run_smoke_tests_or_halt``, and the no-leak guarantees for
+resolved tokens and OAuth2 secrets.
 """
 
 from __future__ import annotations
@@ -31,8 +34,12 @@ class TestParseTokenProvider:
         with pytest.raises(ConfigurationError, match=r"token_provider.*type"):
             parse_token_provider({"command": ["echo", "x"]})
 
-    def test_phase2_valid_types_include_exec(self):
+    def test_valid_types_include_all_built_in_providers(self):
+        # The unknown-type error message lists the valid set, so every
+        # built-in provider type must be registered.
         assert "exec" in _VALID_PROVIDER_TYPES
+        assert "oauth2_client_credentials" in _VALID_PROVIDER_TYPES
+        assert "oauth2_refresh_token" in _VALID_PROVIDER_TYPES
 
 
 class TestExecProviderParseSideEffects:

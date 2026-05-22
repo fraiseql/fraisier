@@ -123,7 +123,6 @@ def parse_token_provider(raw: dict) -> TokenProvider:
 
     header = raw.get("header", "Authorization")
     fmt = raw.get("format", "Bearer {token}")
-    timeout = int(raw.get("timeout", _DEFAULT_EXEC_TIMEOUT))
 
     if provider_type == "exec":
         command_raw = raw.get("command")
@@ -136,17 +135,16 @@ def parse_token_provider(raw: dict) -> TokenProvider:
             type=provider_type,
             header=header,
             format=fmt,
-            timeout=timeout,
+            timeout=int(raw.get("timeout", _DEFAULT_EXEC_TIMEOUT)),
             command=tuple(str(arg) for arg in command_raw),
         )
 
     if provider_type == "oauth2_client_credentials":
-        oauth2_timeout = int(raw.get("timeout", _DEFAULT_OAUTH2_TIMEOUT))
         return TokenProvider(
             type=provider_type,
             header=header,
             format=fmt,
-            timeout=oauth2_timeout,
+            timeout=int(raw.get("timeout", _DEFAULT_OAUTH2_TIMEOUT)),
             token_url=_require_str(raw, "token_url", provider_type),
             client_id=_require_str(raw, "client_id", provider_type),
             client_secret=_require_str(raw, "client_secret", provider_type),
@@ -155,12 +153,11 @@ def parse_token_provider(raw: dict) -> TokenProvider:
         )
 
     if provider_type == "oauth2_refresh_token":
-        oauth2_timeout = int(raw.get("timeout", _DEFAULT_OAUTH2_TIMEOUT))
         return TokenProvider(
             type=provider_type,
             header=header,
             format=fmt,
-            timeout=oauth2_timeout,
+            timeout=int(raw.get("timeout", _DEFAULT_OAUTH2_TIMEOUT)),
             token_url=_require_str(raw, "token_url", provider_type),
             client_id=_require_str(raw, "client_id", provider_type),
             refresh_token=_require_str(raw, "refresh_token", provider_type),

@@ -193,7 +193,7 @@ class TestLoadSmokeTests:
 
 
 def _smoke_test(**overrides) -> SmokeTest:
-    base = {
+    base: dict[str, Any] = {
         "name": "t",
         "method": "POST",
         "url": "https://api.example.com/graphql",
