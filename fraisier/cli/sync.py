@@ -127,6 +127,28 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _find_existing_pr(sync_branch: str) -> dict | None:
+    """Return PR head-ref lookup result, or None if no PR exists for the branch.
+
+    Result shape: ``{"url": str, "state": "OPEN" | "CLOSED" | "MERGED"}``.
+    Uses ``check=False`` because ``gh`` exits non-zero when no PR matches
+    the head ref — a normal "nothing here yet" signal, not an error.
+    Drafts are reported as state OPEN (the ``isDraft`` bit lives in a
+    separate field we don't query); re-enabling auto-merge on a draft is
+    the desired behavior — GitHub queues the merge for when the PR is
+    marked ready.
+    """
+    result = subprocess.run(
+        ["gh", "pr", "view", sync_branch, "--json", "url,state"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return json.loads(result.stdout)
+
+
 def _commit_if_staged(message: str) -> None:
     """Commit the staged index with ``message`` only if there is something staged.
 
@@ -359,6 +381,24 @@ def sync_cmd(
 
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
         _run(["git", "push", "origin", sync_branch])
+
+        existing = _find_existing_pr(sync_branch)
+        if existing and existing["state"] == "OPEN":
+            pr_url = existing["url"]
+            console.print(
+                f"  Existing open PR found, updating: [bold]{pr_url}[/bold]"
+            )
+            _run(["gh", "pr", "merge", "--auto", "--squash", pr_url])
+            subprocess.run(["git", "checkout", original_branch], check=False)
+            console.print(
+                f"==> [green]Done.[/green] PR updated and auto-merge enabled: {pr_url}"
+            )
+            return
+        if existing:
+            console.print(
+                f"  Prior PR for {sync_branch} was {existing['state'].lower()}: "
+                f"{existing['url']} — opening a new one"
+            )
 
         console.print(f"  Creating PR: [bold]{sync_branch}[/bold] → [bold]{tgt}[/bold]")
         pr_result = subprocess.run(

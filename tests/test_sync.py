@@ -378,6 +378,7 @@ class TestSyncHappyPath:
             _mk(returncode=1),  # git diff --cached (staged)
             _mk(),  # git commit pre-merge
             _mk(),  # git push
+            _mk(returncode=1),  # gh pr view (no existing PR)
             _mk(stdout=self.PR_URL + "\n"),  # gh pr create
             _mk(),  # gh pr merge
             _mk(),  # git checkout main
@@ -430,6 +431,7 @@ class TestSyncHappyPath:
                 _mk(),  # git merge (clean)
                 _mk(returncode=0),  # git diff --cached --quiet (nothing staged)
                 _mk(),  # git push (no commit)
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),
                 _mk(),
                 _mk(),  # git checkout main
@@ -483,6 +485,7 @@ class TestSyncConflicts:
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -512,6 +515,7 @@ class TestSyncConflicts:
                 _mk(returncode=1),  # git diff --cached --quiet → something staged
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -548,6 +552,7 @@ class TestSyncConflicts:
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(returncode=0),  # git diff --cached --quiet → nothing staged
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -587,6 +592,7 @@ class TestSyncConflicts:
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -674,6 +680,7 @@ class TestSyncConflicts:
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -708,6 +715,7 @@ class TestSyncConflicts:
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -743,6 +751,7 @@ class TestSyncConflicts:
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -776,6 +785,7 @@ class TestSyncConflicts:
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -828,6 +838,7 @@ class TestSyncConfirmation:
                 _mk(returncode=1),  # git diff --cached (staged)
                 _mk(),  # git commit
                 _mk(),  # git push
+                _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=pr_url + "\n"),  # gh pr create
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
@@ -976,6 +987,7 @@ class TestSyncBranchForceCreate:
             _mk(returncode=1),  # git diff --cached (staged)
             _mk(),  # git commit pre-merge
             _mk(),  # git push
+            _mk(returncode=1),  # gh pr view (no existing PR)
             _mk(stdout=self.PR_URL + "\n"),  # gh pr create
             _mk(),  # gh pr merge
             _mk(),  # git checkout main
@@ -1011,4 +1023,167 @@ class TestSyncBranchForceCreate:
         ]
         assert not lowercase, (
             f"sync must not use `git checkout -b` (use -B); offenders: {lowercase}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI: existing-PR detection (issue #213, fragility 2)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncExistingPR:
+    """After pushing, sync looks up an existing PR for the sync branch via
+    `gh pr view`. OPEN → update + re-enable auto-merge + exit; CLOSED or
+    MERGED → log the prior URL and open a fresh PR; absent → unchanged
+    behavior (open a new PR)."""
+
+    SHA = "deadbeef" * 5
+    MERGE_BASE = "cafe1234" * 5
+    EXISTING_PR_URL = "https://github.com/org/repo/pull/40"
+    NEW_PR_URL = "https://github.com/org/repo/pull/42"
+
+    def _calls_up_to_push(self):
+        """Mocked subprocess calls from sync start through `git push`."""
+        return [
+            _mk(stdout="main\n"),  # git rev-parse HEAD
+            _mk(),  # git fetch
+            _mk(stdout=self.SHA + "\n"),  # git rev-parse origin/dev
+            _mk(stdout=self.MERGE_BASE + "\n"),  # git merge-base
+            _mk(returncode=0, stdout='{"version": "1.1.0"}'),  # version dev
+            _mk(returncode=0, stdout='{"version": "1.0.0"}'),  # version staging
+            _mk(),  # git checkout -B
+            _mk(),  # git merge (clean)
+            _mk(returncode=1),  # git diff --cached (staged)
+            _mk(),  # git commit pre-merge
+            _mk(),  # git push
+        ]
+
+    def _pr_view_open(self):
+        return _mk(
+            returncode=0,
+            stdout=f'{{"url":"{self.EXISTING_PR_URL}","state":"OPEN"}}',
+        )
+
+    def _pr_view_closed(self):
+        return _mk(
+            returncode=0,
+            stdout=f'{{"url":"{self.EXISTING_PR_URL}","state":"CLOSED"}}',
+        )
+
+    def _pr_view_merged(self):
+        return _mk(
+            returncode=0,
+            stdout=f'{{"url":"{self.EXISTING_PR_URL}","state":"MERGED"}}',
+        )
+
+    def _pr_view_absent(self):
+        return _mk(returncode=1, stderr="no pull requests found for branch")
+
+    def test_updates_existing_open_pr_instead_of_creating(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                *self._calls_up_to_push(),
+                self._pr_view_open(),
+                _mk(),  # gh pr merge --auto --squash
+                _mk(),  # git checkout main
+            ]
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        commands = [c[0][0] for c in m.call_args_list]
+        # gh pr create must NOT be called for an existing OPEN PR
+        assert not any(
+            cmd[:3] == ["gh", "pr", "create"] for cmd in commands
+        ), f"gh pr create was called; commands: {commands}"
+        # gh pr merge --auto --squash <existing-url> IS called
+        assert [
+            "gh",
+            "pr",
+            "merge",
+            "--auto",
+            "--squash",
+            self.EXISTING_PR_URL,
+        ] in commands
+        assert "updated" in result.output
+        assert self.EXISTING_PR_URL in result.output
+
+    def test_creates_new_pr_when_existing_is_closed(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                *self._calls_up_to_push(),
+                self._pr_view_closed(),
+                _mk(stdout=self.NEW_PR_URL + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
+            ]
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        commands = [c[0][0] for c in m.call_args_list]
+        # gh pr create IS called for a CLOSED prior PR
+        create_calls = [cmd for cmd in commands if cmd[:3] == ["gh", "pr", "create"]]
+        assert len(create_calls) == 1, f"expected 1 gh pr create call; got {create_calls}"
+        # New PR URL is the one in the success message
+        assert self.NEW_PR_URL in result.output
+        # Prior PR URL is surfaced as informational context
+        assert self.EXISTING_PR_URL in result.output
+        assert "closed" in result.output.lower()
+
+    def test_creates_new_pr_when_existing_is_merged(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                *self._calls_up_to_push(),
+                self._pr_view_merged(),
+                _mk(stdout=self.NEW_PR_URL + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
+            ]
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        commands = [c[0][0] for c in m.call_args_list]
+        assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in commands)
+        assert self.NEW_PR_URL in result.output
+        assert self.EXISTING_PR_URL in result.output
+        assert "merged" in result.output.lower()
+
+    def test_creates_new_pr_when_no_existing_pr(self, tmp_path):
+        """No PR exists for the sync branch → behavior unchanged: create one."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                *self._calls_up_to_push(),
+                self._pr_view_absent(),
+                _mk(stdout=self.NEW_PR_URL + "\n"),  # gh pr create
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
+            ]
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        commands = [c[0][0] for c in m.call_args_list]
+        assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in commands)
+        assert self.NEW_PR_URL in result.output
+        # No prior PR mentioned
+        assert self.EXISTING_PR_URL not in result.output
+
+    def test_existing_open_pr_url_on_final_done_line(self, tmp_path):
+        """Operators grep the final `==> Done.` line for the PR URL — it
+        must be on the same line as 'Done.' even on the retry path."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                *self._calls_up_to_push(),
+                self._pr_view_open(),
+                _mk(),  # gh pr merge
+                _mk(),  # git checkout main
+            ]
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        done_lines = [
+            line
+            for line in result.output.splitlines()
+            if "Done." in line and self.EXISTING_PR_URL in line
+        ]
+        assert done_lines, (
+            "expected the existing PR URL on the final `==> Done.` line; "
+            f"output:\n{result.output}"
         )
