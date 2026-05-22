@@ -60,9 +60,7 @@ class TestDjangoMigrateStrategyMigrateUp:
         with (
             patch("os.chdir"),
             patch("pathlib.Path.cwd", return_value=tmp_path),
-            patch(
-                "django.core.management.execute_from_command_line"
-            ) as mock_execute,
+            patch("django.core.management.execute_from_command_line") as mock_execute,
         ):
             result = strategy.migrate_up(tmp_path)
 
@@ -93,9 +91,7 @@ class TestDjangoMigrateStrategyMigrateDown:
         with (
             patch("os.chdir"),
             patch("pathlib.Path.cwd", return_value=tmp_path),
-            patch(
-                "django.core.management.execute_from_command_line"
-            ) as mock_execute,
+            patch("django.core.management.execute_from_command_line") as mock_execute,
         ):
             result = strategy.migrate_down(tmp_path, "0001")
 
