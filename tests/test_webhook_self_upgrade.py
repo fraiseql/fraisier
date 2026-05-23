@@ -12,6 +12,7 @@ import pytest
 
 from fraisier.webhook_self_upgrade import (
     _build_install_cmd,
+    _preflight_helper_allowlist,
     _run_upgrade,
     _spawn_upgrade,
     maybe_self_upgrade,
@@ -102,6 +103,143 @@ class TestMaybeSelfUpgrade:
             maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
         # Conservative: skip when we can't compare.
         spawn.assert_not_called()
+
+    def test_preflight_rejection_skips_spawn_and_warns(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """When the helper rejects the pre-flight (#218), don't spawn the worker.
+
+        Without this, ``_spawn_upgrade`` installs the new binary in a detached
+        subprocess whose restart RPC then fails silently in a per-event log
+        under /var/lib/fraisier/self-upgrade/, leaving the webhook process on
+        the old code with no signal in its journal.
+        """
+        import logging
+
+        _write_pyproject(tmp_path, "2.0.0")
+        monkeypatch.setenv("FRAISIER_SYSTEMCTL_SOCKET", "/run/x.sock")
+        spawn = MagicMock()
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.importlib_metadata.version",
+                return_value="1.2.3",
+            ),
+            patch(
+                "fraisier.webhook_self_upgrade._call_via_socket",
+                side_effect=subprocess.CalledProcessError(
+                    1,
+                    "is-active",
+                    stderr="service not allowed: fraisier-foo-webhook.service",
+                ),
+            ),
+            caplog.at_level(logging.WARNING, logger="fraisier.webhook_self_upgrade"),
+        ):
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
+        spawn.assert_not_called()
+        assert "service not allowed" in caplog.text
+        assert "scaffold-install" in caplog.text
+
+    def test_preflight_pass_still_spawns(self, tmp_path, monkeypatch):
+        """A clean pre-flight must not block the upgrade."""
+        _write_pyproject(tmp_path, "2.0.0")
+        monkeypatch.setenv("FRAISIER_SYSTEMCTL_SOCKET", "/run/x.sock")
+        spawn = MagicMock()
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.importlib_metadata.version",
+                return_value="1.2.3",
+            ),
+            patch(
+                "fraisier.webhook_self_upgrade._call_via_socket",
+                return_value=SimpleNamespace(stdout="active", stderr="", returncode=0),
+            ),
+        ):
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
+        spawn.assert_called_once_with("2.0.0", "foo")
+
+    def test_preflight_unreachable_socket_still_spawns(self, tmp_path, monkeypatch):
+        """A transient socket failure must not punish the upgrade.
+
+        ConnectionRefusedError can happen during webhook/helper startup races.
+        Falling through to the worker preserves the existing install-anyway
+        behaviour; the worker will log its own per-event failure if restart
+        also fails.
+        """
+        _write_pyproject(tmp_path, "2.0.0")
+        monkeypatch.setenv("FRAISIER_SYSTEMCTL_SOCKET", "/run/x.sock")
+        spawn = MagicMock()
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.importlib_metadata.version",
+                return_value="1.2.3",
+            ),
+            patch(
+                "fraisier.webhook_self_upgrade._call_via_socket",
+                side_effect=ConnectionRefusedError("socket missing"),
+            ),
+        ):
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
+        spawn.assert_called_once_with("2.0.0", "foo")
+
+    def test_preflight_no_socket_env_still_spawns(self, tmp_path, monkeypatch):
+        """install-only mode (no helper configured) keeps working."""
+        _write_pyproject(tmp_path, "2.0.0")
+        monkeypatch.delenv("FRAISIER_SYSTEMCTL_SOCKET", raising=False)
+        spawn = MagicMock()
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.importlib_metadata.version",
+                return_value="1.2.3",
+            ),
+            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+        ):
+            maybe_self_upgrade(tmp_path, project_name="foo", enabled=True, spawn=spawn)
+        spawn.assert_called_once_with("2.0.0", "foo")
+        mock_socket.assert_not_called()
+
+
+class TestPreflightHelperAllowlist:
+    def test_empty_socket_returns_none(self):
+        assert _preflight_helper_allowlist("", "any.service") is None
+
+    def test_rejection_returns_stderr(self):
+        with patch(
+            "fraisier.webhook_self_upgrade._call_via_socket",
+            side_effect=subprocess.CalledProcessError(
+                1, "is-active", stderr="service not allowed: x.service"
+            ),
+        ):
+            result = _preflight_helper_allowlist("/run/x.sock", "x.service")
+        assert result == "service not allowed: x.service"
+
+    def test_inactive_service_is_not_a_rejection(self):
+        """`systemctl is-active` returning exit 3 (inactive) is not an allowlist
+        problem — the helper accepted the call, the service just isn't running.
+        """
+        with patch(
+            "fraisier.webhook_self_upgrade._call_via_socket",
+            side_effect=subprocess.CalledProcessError(
+                3, "is-active", stderr="unknown error from systemctl helper"
+            ),
+        ):
+            result = _preflight_helper_allowlist("/run/x.sock", "x.service")
+        assert result is None
+
+    def test_connection_refused_returns_none(self):
+        with patch(
+            "fraisier.webhook_self_upgrade._call_via_socket",
+            side_effect=ConnectionRefusedError("nope"),
+        ):
+            result = _preflight_helper_allowlist("/run/x.sock", "x.service")
+        assert result is None
+
+    def test_clean_response_returns_none(self):
+        with patch(
+            "fraisier.webhook_self_upgrade._call_via_socket",
+            return_value=SimpleNamespace(stdout="active", stderr="", returncode=0),
+        ):
+            result = _preflight_helper_allowlist("/run/x.sock", "x.service")
+        assert result is None
 
 
 class TestSpawnUpgrade:
