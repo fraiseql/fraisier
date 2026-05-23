@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
+import os
 import shutil
 import socket as _socket_mod
+import sys
 import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -14,6 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Iterator
+
     from fraisier.errors import FrameworkError
     from fraisier.runners import CommandRunner
 
@@ -23,6 +28,137 @@ logger = logging.getLogger("fraisier")
 def _get_scaffold_socket_path(project_name: str) -> str:
     """Return the Unix socket path for the scaffold-install-helper of *project_name*."""
     return f"/run/fraisier/scaffold-install-{project_name}.sock"
+
+
+def _is_executable_file(path: Path) -> bool:
+    """True iff *path* is a regular file (or a symlink to one) with +x set.
+
+    Stricter than :meth:`Path.exists`: rejects directories, sockets, broken
+    symlinks, and non-executable text files so the deploy daemon never
+    hands the runner a path that would later fail :func:`os.execvp`.
+    """
+    try:
+        return path.is_file() and os.access(path, os.X_OK)
+    except OSError:
+        return False
+
+
+def _iter_candidates() -> Iterator[tuple[str, Path | None]]:
+    """Yield (label, candidate) probes lazily, most-correct first.
+
+    Lazy iteration matters: the happy path (sys.executable sibling) must
+    short-circuit before $PATH is consulted. Otherwise the daemon stats
+    every PATH entry on every deploy even when the answer is one stat
+    call away.
+    """
+    # 1. sibling of the running Python (strongest correctness guarantee)
+    if sys.executable:
+        yield "sys.executable sibling", Path(sys.executable).parent / "fraisier"
+    else:
+        # Frozen / embedded interpreters may leave sys.executable empty.
+        yield "sys.executable sibling", None
+
+    # 2. $PATH lookup
+    which_path = shutil.which("fraisier")
+    yield "$PATH", Path(which_path) if which_path else None
+
+    # 3. Hardcoded fallbacks. Home-anchored entries first so the daemon's
+    #    actual install (under uv tool) is preferred over machine-wide
+    #    leftovers when both happen to exist.
+    try:
+        home: Path | None = Path.home()
+    except (RuntimeError, KeyError):
+        home = None
+    if home is not None:
+        yield "~/.local/bin/fraisier", home / ".local" / "bin" / "fraisier"
+        yield (
+            "~/.local/share/uv/tools/fraisier/bin/fraisier",
+            home
+            / ".local"
+            / "share"
+            / "uv"
+            / "tools"
+            / "fraisier"
+            / "bin"
+            / "fraisier",
+        )
+    yield "/usr/local/bin/fraisier", Path("/usr/local/bin/fraisier")
+    yield "/usr/bin/fraisier", Path("/usr/bin/fraisier")
+    yield "/opt/fraisier/bin/fraisier", Path("/opt/fraisier/bin/fraisier")
+
+
+@functools.cache
+def _resolve_fraisier_executable() -> str:
+    """Locate the fraisier executable across supported install layouts.
+
+    Layered resolution, most-correct first:
+
+    1. **sys.executable sibling** — the console script next to the running
+       Python. By construction it is the same install as the deploy daemon
+       itself, so for any standard layout (``uv tool install``, venv, pipx,
+       system packaging) this is correct without further lookup.
+    2. **$PATH** via :func:`shutil.which` — covers daemons launched through
+       a wrapper that uses a different Python (e.g. ``python -m fraisier``
+       from outside the venv).
+    3. **Hardcoded fallbacks** — ``~/.local/bin/fraisier`` and
+       ``~/.local/share/uv/tools/fraisier/bin/fraisier`` (the ``uv tool
+       install`` layout — see issue #216), then the historical
+       ``/usr/local/bin``, ``/usr/bin``, ``/opt/fraisier/bin`` paths.
+
+    A candidate must be a regular file (or symlink to one) with the
+    executable bit set; missing files, directories, broken symlinks, and
+    non-executable matches are skipped.
+
+    The result is cached for the lifetime of the process. Operationally,
+    the deploy daemon restarts after every self-upgrade, so the cache
+    cannot outlive a relocation of the binary it points at.
+
+    Returns:
+        Absolute path to the fraisier executable.
+
+    Raises:
+        RuntimeError: With every probed location plus a remediation hint,
+            so the journald entry is self-diagnosing — operators do not
+            need to re-run with ``-v`` or instrument the daemon to know
+            which strategy failed.
+    """
+    tried: list[tuple[str, Path | None]] = []
+    for source, candidate in _iter_candidates():
+        tried.append((source, candidate))
+        if candidate is None or not _is_executable_file(candidate):
+            continue
+        if source == "sys.executable sibling":
+            logger.debug("Resolved fraisier executable via %s: %s", source, candidate)
+        else:
+            # Falling back past the sibling means the deploy daemon's Python
+            # does not own a fraisier console script. The deploy still works,
+            # but a `uv tool install fraisier` re-run will bring them back
+            # into lockstep — log once per process (the cache pins this) so
+            # operators see it without having to instrument anything.
+            logger.info(
+                "fraisier executable resolved via %s (%s); the deploy "
+                "daemon's sys.executable=%r has no fraisier sibling. "
+                "Run `uv tool install fraisier` to align them.",
+                source,
+                candidate,
+                sys.executable,
+            )
+        return str(candidate)
+
+    rendered = "\n  ".join(
+        f"- {source}: {candidate if candidate is not None else '(skipped)'}"
+        for source, candidate in tried
+    )
+    raise RuntimeError(
+        "fraisier executable not found.\n"
+        f"Probed locations (none were an executable regular file):\n  {rendered}\n\n"
+        "Remediation:\n"
+        "  - Recommended: re-install with `uv tool install fraisier` and "
+        "start the deploy daemon under the same user, so its sys.executable "
+        "sits next to the fraisier console script.\n"
+        "  - Workaround: symlink the binary into /usr/local/bin/fraisier.\n"
+        f"  - Current sys.executable: {sys.executable or '(unset)'}"
+    )
 
 
 class DeploymentStatus(Enum):
@@ -256,37 +392,13 @@ class BaseDeployer(ABC):
 
     @staticmethod
     def _get_fraisier_executable() -> str:
-        """Get the full path to the fraisier executable.
+        """Return the absolute path to the fraisier executable.
 
-        Uses shutil.which() to locate the fraisier command, falling back to
-        standard system locations if not found in PATH. This is critical for
-        webhook services that may not have fraisier in their PATH.
-
-        Returns:
-            Full path to fraisier executable
-
-        Raises:
-            RuntimeError: If fraisier executable cannot be found
+        Delegates to the module-level cached resolver. See
+        :func:`_resolve_fraisier_executable` for the resolution order and
+        the diagnostic raised on failure.
         """
-        # Try to find fraisier in the current PATH
-        fraisier_path = shutil.which("fraisier")
-        if fraisier_path:
-            return fraisier_path
-
-        # Fall back to standard system locations
-        standard_paths = [
-            "/usr/local/bin/fraisier",
-            "/usr/bin/fraisier",
-            "/opt/fraisier/bin/fraisier",
-        ]
-        for path in standard_paths:
-            if Path(path).exists():
-                return path
-
-        raise RuntimeError(
-            "fraisier executable not found. Checked PATH and standard locations: "
-            f"{standard_paths}"
-        )
+        return _resolve_fraisier_executable()
 
     def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
         """Regenerate scaffold files based on current fraises.yaml.

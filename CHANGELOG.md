@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1] - 2026-05-23
+
+### Fixed
+
+- **Deploy daemon now finds `fraisier` under `uv tool install`** ([#216](https://github.com/fraiseql/fraisier/issues/216)). `BaseDeployer._get_fraisier_executable()` is replaced by a layered, cached resolver (`fraisier/deployers/base.py:_resolve_fraisier_executable`) that probes, in order: the `sys.executable` sibling (correct by construction for `uv tool install`, venv, pipx, and system-package layouts), `shutil.which("fraisier")`, then a hardcoded fallback list expanded to cover `~/.local/bin/fraisier` and `~/.local/share/uv/tools/fraisier/bin/fraisier`. Candidates are accepted only when they are regular files (or symlinks to one) with the executable bit set, so directories and broken symlinks no longer slip through. Lazy probe iteration means the happy path resolves with a single `stat(2)` — `$PATH` is not consulted when the sibling matches. The resolver is cached for the process lifetime (`functools.cache`); since the deploy daemon restarts after every self-upgrade, the cache cannot outlive a relocation of the binary it points at.
+- **Self-diagnosing failure mode.** When no candidate resolves, the raised `RuntimeError` lists every probed location by name (`sys.executable sibling`, `$PATH`, each fallback path) plus the current `sys.executable` and a remediation hint (`uv tool install fraisier`, or symlink workaround). The journald entry is now actionable without re-running with `-v`.
+- **Operator observability when the sibling probe misses.** When resolution falls back past the sibling, an `INFO` line is emitted once per process naming the strategy that succeeded and instructing the operator to re-run `uv tool install fraisier` to bring the daemon's Python and the `fraisier` CLI back into lockstep. The `ERROR` swallowing in `APIDeployer._sync_config_if_needed` is unchanged, so transient discovery anomalies still do not fail the deploy.
+
 ## [0.22.0] - 2026-05-22
 
 ### Added
