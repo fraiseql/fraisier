@@ -62,6 +62,34 @@ def _parse_semver(version: str) -> tuple[int, int, int]:
     return (int(parts[0]), int(parts[1]), int(parts[2]))
 
 
+def _preflight_helper_allowlist(socket_path: str, service: str) -> str | None:
+    """Detect a known-bad systemctl-helper allowlist before spawning the worker.
+
+    Sends a read-only ``is-active`` RPC; if the helper rejects with
+    ``service not allowed``, returns the rejection reason. All other outcomes
+    (no socket configured, connection refused, service inactive, etc.) return
+    None — those are non-actionable here and let the worker proceed with its
+    own logging.
+
+    This pre-flight exists because ``_spawn_upgrade`` detaches the worker that
+    actually does the restart RPC, so its failure is recorded only under
+    ``/var/lib/fraisier/self-upgrade/`` and never reaches the webhook's main
+    journal (issue #218). Hoisting the allowlist check into the parent surfaces
+    the most common scaffold-staleness case where operators are looking.
+    """
+    if not socket_path:
+        return None
+    try:
+        _call_via_socket(socket_path, "is-active", service, check=True)
+    except ConnectionRefusedError:
+        return None
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        if "not allowed" in stderr.lower():
+            return stderr
+    return None
+
+
 def maybe_self_upgrade(
     app_path: Path,
     *,
@@ -91,6 +119,21 @@ def maybe_self_upgrade(
                 "(required=%s installed=%s)",
                 required,
                 installed,
+            )
+            return
+        socket_path = os.environ.get("FRAISIER_SYSTEMCTL_SOCKET", "")
+        service = f"fraisier-{project_name}-webhook.service"
+        rejection = _preflight_helper_allowlist(socket_path, service)
+        if rejection is not None:
+            log.warning(
+                "self-upgrade: skipping upgrade to %s — systemctl helper "
+                "rejected pre-flight: %s. The webhook unit is missing from "
+                "the helper allowlist (typically because this host was "
+                "scaffolded before fraisier 0.18.0). Re-run "
+                "`fraisier scaffold && fraisier scaffold-install --yes` to "
+                "refresh it, then the next deploy will self-upgrade.",
+                required,
+                rejection,
             )
             return
         log.info(

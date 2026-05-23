@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.2] - 2026-05-23
+
+### Fixed
+
+- **Webhook self-upgrade now surfaces helper allowlist rejections in the journal** ([#218](https://github.com/fraiseql/fraisier/issues/218)). The scaffold-template fix landed in 0.18.0 (`fraisier-{project}-webhook.service` is unconditionally prepended to the helper allowlist by `_collect_allowed_services`), so any host re-scaffolded on 0.18.0+ already self-upgrades end-to-end. Hosts originally bootstrapped before 0.18.0 still carry a stale `/etc/systemd/system/fraisier-{project}-systemctl-helper.service` whose `ExecStart` argv omits the webhook unit — `uv tool install` upgrading the binary doesn't rewrite that file — so the detached worker's restart RPC silently fails, recorded only in `/var/lib/fraisier/self-upgrade/<project>-<ts>.log`.
+- **Pre-flight check in `maybe_self_upgrade`.** Before spawning the detached worker, the parent webhook now sends a read-only `is-active` RPC for its own service unit (`fraisier/webhook_self_upgrade.py:_preflight_helper_allowlist`). On a `service not allowed` rejection the webhook logs a WARNING **in its own journal** naming the cause and the remediation — `fraisier scaffold && fraisier scaffold-install --yes` — and skips the upgrade entirely (avoiding the half-state where the binary is upgraded but the process isn't). Operators watching `journalctl -u fraisier-<project>-webhook.service` see the actionable error on the next deploy attempt instead of having to discover the per-event log file.
+- **Narrow scope.** Empty `FRAISIER_SYSTEMCTL_SOCKET` (install-only mode) and transient `ConnectionRefusedError` (startup races) fall through unchanged — those are non-actionable here and let the existing worker behaviour log its own per-event failure.
+
 ## [0.22.1] - 2026-05-23
 
 ### Fixed
