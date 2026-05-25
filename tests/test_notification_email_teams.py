@@ -329,8 +329,8 @@ fraises:
     def test_teams_missing_webhook_url(self, tmp_path):
         import pytest
 
-        from fraisier.config import FraisierConfig
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
@@ -347,7 +347,7 @@ fraises:
         app_path: /tmp/api
 """)
         with pytest.raises(ValidationError, match="webhook_url"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))
 
     def test_valid_email_config(self, tmp_path):
         from fraisier.config import FraisierConfig
@@ -375,8 +375,8 @@ fraises:
     def test_email_missing_from_email(self, tmp_path):
         import pytest
 
-        from fraisier.config import FraisierConfig
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
@@ -395,13 +395,13 @@ fraises:
         app_path: /tmp/api
 """)
         with pytest.raises(ValidationError, match="from_email"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))
 
     def test_email_missing_to_emails(self, tmp_path):
         import pytest
 
-        from fraisier.config import FraisierConfig
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
@@ -419,4 +419,4 @@ fraises:
         app_path: /tmp/api
 """)
         with pytest.raises(ValidationError, match="to_emails"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))

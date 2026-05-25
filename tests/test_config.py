@@ -589,9 +589,11 @@ class TestRestoreMigrateValidation:
     """Validation for restore_migrate strategy config."""
 
     def _make_config(self, tmp_path, yaml_content: str) -> FraisierConfig:
+        from tests._eager_load import eager_load
+
         p = tmp_path / "fraises.yaml"
         p.write_text(yaml_content)
-        return FraisierConfig(str(p))
+        return eager_load(str(p))
 
     def test_restore_migrate_requires_backup_dir(self, tmp_path):
         with pytest.raises(ValidationError, match="backup_dir"):

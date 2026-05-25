@@ -469,8 +469,8 @@ fraises:
         assert config._config.get("hooks") is not None
 
     def test_invalid_hook_type(self, tmp_path):
-        from fraisier.config import FraisierConfig
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
@@ -487,11 +487,11 @@ fraises:
         app_path: /tmp/api
 """)
         with pytest.raises(ValidationError, match="fax_machine"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))
 
     def test_invalid_hook_phase(self, tmp_path):
-        from fraisier.config import FraisierConfig
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
@@ -510,11 +510,11 @@ fraises:
         app_path: /tmp/api
 """)
         with pytest.raises(ValidationError, match="during_deploy"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))
 
     def test_backup_missing_required_fields(self, tmp_path):
-        from fraisier.config import FraisierConfig
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
@@ -531,11 +531,11 @@ fraises:
         app_path: /tmp/api
 """)
         with pytest.raises(ValidationError, match="backup_dir"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))
 
     def test_audit_missing_signing_key(self, tmp_path):
-        from fraisier.config import FraisierConfig
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text("""
@@ -553,7 +553,7 @@ fraises:
         app_path: /tmp/api
 """)
         with pytest.raises(ValidationError, match="signing_key"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))
 
     def test_no_hooks_section_is_valid(self, tmp_path):
         from fraisier.config import FraisierConfig

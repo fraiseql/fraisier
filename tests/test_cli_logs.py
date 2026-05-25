@@ -237,11 +237,11 @@ fraises:
 """
 
     def _load(self, tmp_path, ssh_yaml: str):
-        from fraisier.config.loader import FraisierConfig
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text(self._BASE_YAML + "        ssh:\n" + ssh_yaml)
-        return FraisierConfig(str(cfg))
+        return eager_load(str(cfg))
 
     def test_valid_ssh_block_passes(self, tmp_path):
         self._load(
@@ -264,13 +264,13 @@ fraises:
 
     def test_non_dict_ssh_raises(self, tmp_path):
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text(self._BASE_YAML + "        ssh: prod.example.com\n")
-        from fraisier.config.loader import FraisierConfig
 
         with pytest.raises(ValidationError, match="'ssh' must be a mapping"):
-            FraisierConfig(str(cfg))
+            eager_load(str(cfg))
 
     def test_invalid_port_type_raises(self, tmp_path):
         from fraisier.errors import ValidationError

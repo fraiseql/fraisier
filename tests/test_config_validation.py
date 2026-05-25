@@ -4,6 +4,7 @@ import pytest
 
 from fraisier.config import FraisierConfig
 from fraisier.errors import ValidationError
+from tests._eager_load import eager_load
 
 
 def _write_config(tmp_path, content):
@@ -30,7 +31,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"timeout.*must be.*number"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_rejects_non_numeric_retries(self, tmp_path):
         config_file = _write_config(
@@ -47,7 +48,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"retries.*must be.*number"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_rejects_missing_app_path_with_health_check(self, tmp_path):
         config_file = _write_config(
@@ -63,7 +64,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"app_path.*required"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_valid_config(self, tmp_path):
         config_file = _write_config(
@@ -97,7 +98,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"clone_url.*valid git URL"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_ssh_clone_url(self, tmp_path):
         config_file = _write_config(
@@ -163,7 +164,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"database_url.*must be a string"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_rejects_invalid_database_url_scheme(self, tmp_path):
         config_file = _write_config(
@@ -183,7 +184,7 @@ fraises:
         with pytest.raises(
             ValidationError, match=r"database\.database_url.*PostgreSQL URL"
         ):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_valid_database_url(self, tmp_path):
         config_file = _write_config(
@@ -240,7 +241,7 @@ fraises:
             ValidationError,
             match=r"strategy 'rebuild' requires database\.admin_url",
         ):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_rejects_restore_migrate_without_admin_url(self, tmp_path):
         config_file = _write_config(
@@ -264,7 +265,7 @@ fraises:
             ValidationError,
             match=r"strategy 'restore_migrate' requires database\.admin_url",
         ):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_rebuild_with_admin_url(self, tmp_path):
         config_file = _write_config(
@@ -300,7 +301,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"strategy.*canary"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_valid_service_manager_systemd(self, tmp_path):
         config_file = _write_config(
@@ -348,7 +349,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"Invalid service_manager"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_restore_jobs(self, tmp_path):
         config_file = _write_config(
@@ -394,7 +395,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"jobs.*must be.*positive"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_rejects_restore_jobs_negative(self, tmp_path):
         config_file = _write_config(
@@ -417,7 +418,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"jobs.*must be.*positive"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_restore_preferred_compression(self, tmp_path):
         config_file = _write_config(
@@ -463,7 +464,7 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"preferred_compression"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
 
 class TestPostMigrateValidation:
@@ -502,14 +503,14 @@ fraises:
         with pytest.raises(
             ValidationError, match=r"post_migrate.*either.*sql_dir.*or.*sql_file"
         ):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_rejects_entry_with_neither_sql_dir_nor_sql_file(self, tmp_path):
         config_file = self._write(tmp_path, "[{on_error: warn}]")
         with pytest.raises(
             ValidationError, match=r"post_migrate.*sql_dir.*or.*sql_file"
         ):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_on_error_defaults_to_halt(self, tmp_path):
         # No on_error key in the YAML — loader assigns "halt" at parse time.
@@ -520,7 +521,7 @@ fraises:
     def test_on_error_rejects_unknown_value(self, tmp_path):
         config_file = self._write(tmp_path, "[{sql_dir: db/7_grant/, on_error: panic}]")
         with pytest.raises(ValidationError, match=r"on_error.*'halt'.*'warn'"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
 
 class TestSmokeTestsValidation:
@@ -571,7 +572,7 @@ fraises:
         with pytest.raises(
             ValidationError, match=r"smoke_tests.*relative.*health_check"
         ):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_accepts_absolute_url_without_health_check(self, tmp_path):
         yaml = """
@@ -593,7 +594,7 @@ fraises:
             tmp_path, "[{name: t, method: MERGE, url: /me, assert: []}]"
         )
         with pytest.raises(ValidationError, match=r"smoke_tests.*method"):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     def test_rejects_unknown_assertion_key(self, tmp_path):
         config_file = self._write(
@@ -604,7 +605,7 @@ fraises:
         with pytest.raises(
             ValidationError, match=r"smoke_tests.*unknown assertion key"
         ):
-            FraisierConfig(config_file)
+            eager_load(config_file)
 
     @pytest.mark.parametrize("bad_path", ["$..foo", "$.a[0]", "$.*", "$.@.x"])
     def test_rejects_unsupported_jsonpath_syntax(self, tmp_path, bad_path):
@@ -614,4 +615,4 @@ fraises:
             f"assert: [{{json_path: '{bad_path}', not_null: true}}]}}]",
         )
         with pytest.raises(ValidationError, match=r"unsupported JSONPath"):
-            FraisierConfig(config_file)
+            eager_load(config_file)

@@ -4301,7 +4301,8 @@ scaffold:
         """Invalid systemd_service raises ValidationError at config load."""
         import pytest
 
-        from fraisier.config import FraisierConfig, ValidationError
+        from fraisier.config import ValidationError
+        from tests._eager_load import eager_load
 
         p = tmp_path / "fraises.yaml"
         p.write_text(f"""
@@ -4318,7 +4319,7 @@ scaffold:
   output_dir: {tmp_path / "output"}
 """)
         with pytest.raises(ValidationError, match="systemd_service"):
-            FraisierConfig(p)
+            eager_load(p)
 
     def test_default_env_still_uses_generated_name(self, tmp_path):
         """Environments without systemd_service use the default pattern."""

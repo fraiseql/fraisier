@@ -72,6 +72,7 @@ fraises:
         import pytest
 
         from fraisier.errors import ValidationError
+        from tests._eager_load import eager_load
 
         cfg_file = tmp_path / "fraises.yaml"
         cfg_file.write_text("""
@@ -86,4 +87,4 @@ fraises:
         lock_timeout: "not_a_number"
 """)
         with pytest.raises(ValidationError, match="lock_timeout"):
-            FraisierConfig(str(cfg_file))
+            eager_load(str(cfg_file))
