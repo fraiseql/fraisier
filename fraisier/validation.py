@@ -17,10 +17,41 @@ from typing import Any
 
 from fraisier import ssh
 from fraisier.config import FraisierConfig
+from fraisier.errors import ConfigurationError, ValidationError
 
 logger = logging.getLogger(__name__)
 
 VALID_STRATEGIES = {"rebuild", "migrate", "apply", "restore_migrate"}
+
+
+def _collect_all_validation_errors(
+    config: FraisierConfig,
+) -> list[tuple[str, Exception]]:
+    """Force-traverse every Stage-2 config section, collect raised errors.
+
+    Returns a list of ``(yaml_path, exception)`` pairs. Empty list means
+    every section validated cleanly. The traversal continues past
+    failures so callers see EVERY broken section in one pass.
+    """
+    errors: list[tuple[str, Exception]] = []
+
+    section_getters: list[tuple[str, Any]] = [
+        ("notifications", lambda: config.notifications),
+    ]
+    for path, getter in section_getters:
+        try:
+            getter()
+        except (ValidationError, ConfigurationError) as exc:
+            errors.append((path, exc))
+
+    for fraise_name in config.list_fraises():
+        for env_name in config.list_environments(fraise_name):
+            try:
+                config.get_fraise_environment(fraise_name, env_name)
+            except (ValidationError, ConfigurationError) as exc:
+                errors.append((f"fraises.{fraise_name}.{env_name}", exc))
+
+    return errors
 
 
 @dataclass
@@ -57,6 +88,7 @@ class ValidationRunner:
         """Execute all checks and return results."""
         results: list[ValidationCheckResult] = []
         basic_checks = [
+            self._check_section_traversal,
             self._check_config_valid,
             self._check_deploy_user,
             self._check_fraises_have_environments,
@@ -72,6 +104,34 @@ class ValidationRunner:
             else:
                 results.append(outcome)
         return results
+
+    def _check_section_traversal(self) -> list[ValidationCheckResult]:
+        """Force-traverse every Stage-2 section so all section errors surface."""
+        errors = _collect_all_validation_errors(self.config)
+        if not errors:
+            return [ValidationCheckResult(name="section_traversal", passed=True)]
+        return [
+            ValidationCheckResult(
+                name=f"section:{path}",
+                passed=False,
+                message=str(exc),
+                severity="error",
+            )
+            for path, exc in errors
+        ]
+
+    def _safe_get_environment(
+        self, fraise_name: str, env_name: str
+    ) -> dict[str, Any] | None:
+        """Return the validated env config, or ``None`` if Stage-2 fails.
+
+        Stage-2 errors are already surfaced by ``_check_section_traversal``;
+        downstream checks just skip the broken env quietly.
+        """
+        try:
+            return self.config.get_fraise_environment(fraise_name, env_name)
+        except (ValidationError, ConfigurationError):
+            return None
 
     def _check_config_valid(self) -> ValidationCheckResult:
         """Check that config loads and has fraises."""
@@ -128,7 +188,7 @@ class ValidationRunner:
         # Per-environment users
         for fraise_name in self.config.list_fraises():
             for env_name in self.config.list_environments(fraise_name):
-                env = self.config.get_fraise_environment(fraise_name, env_name)
+                env = self._safe_get_environment(fraise_name, env_name)
                 if not env:
                     continue
                 env_deploy = env.get("deploy_user")
@@ -171,7 +231,7 @@ class ValidationRunner:
                     )
                 )
             for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name) or {}
                 if not env.get("app_path"):
                     results.append(
                         ValidationCheckResult(
@@ -196,7 +256,7 @@ class ValidationRunner:
         results: list[ValidationCheckResult] = []
         for name in self.config.list_fraises():
             for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name) or {}
                 hc = env.get("health_check")
                 if not hc:
                     continue
@@ -224,7 +284,7 @@ class ValidationRunner:
         results: list[ValidationCheckResult] = []
         for name in self.config.list_fraises():
             for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name) or {}
                 db = env.get("database")
                 if not db:
                     continue
@@ -272,7 +332,7 @@ class ValidationRunner:
         seen_urls: set[str] = set()
         for name in self.config.list_fraises():
             for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name) or {}
                 url = env.get("clone_url")
                 if not url or url in seen_urls:
                     continue
@@ -321,7 +381,7 @@ class ValidationRunner:
         seen_hosts: set[str] = set()
         for name in self.config.list_fraises():
             for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name) or {}
                 ssh_cfg = env.get("ssh")
                 if not isinstance(ssh_cfg, dict) or not ssh_cfg.get("host"):
                     continue
@@ -359,7 +419,7 @@ class ValidationRunner:
         results: list[ValidationCheckResult] = []
         for name in self.config.list_fraises():
             for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name) or {}
                 db = env.get("database")
                 if not db:
                     continue
@@ -404,7 +464,7 @@ class ValidationRunner:
             if fraise.get("type") != "api":
                 continue
             for env_name in self.config.list_environments(name):
-                env = self.config.get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name) or {}
                 if not env.get("health_check"):
                     results.append(
                         ValidationCheckResult(
