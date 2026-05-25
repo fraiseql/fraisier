@@ -47,6 +47,7 @@ from typing import ClassVar, TypedDict
 
 import httpx
 
+from fraisier.config._lazy_env import LazyEnv, is_string_like, to_str
 from fraisier.errors import ConfigurationError, DeploymentError
 
 logger = logging.getLogger(__name__)
@@ -182,9 +183,9 @@ class Oauth2ClientCredentialsTokenProvider(TokenProvider):
     envelopes).
     """
 
-    token_url: str
-    client_id: str
-    client_secret: str
+    token_url: str | LazyEnv
+    client_id: str | LazyEnv
+    client_secret: str | LazyEnv
     audience: str | None = None
     scope: str | None = None
 
@@ -199,11 +200,11 @@ class Oauth2ClientCredentialsTokenProvider(TokenProvider):
 
     def resolve(self) -> str:
         return _post_oauth2_token(
-            token_url=self.token_url,
+            token_url=to_str(self.token_url),
             form_body={
                 "grant_type": "client_credentials",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
+                "client_id": to_str(self.client_id),
+                "client_secret": to_str(self.client_secret),
                 "audience": self.audience,
                 "scope": self.scope,
             },
@@ -235,9 +236,9 @@ class Oauth2RefreshTokenProvider(TokenProvider):
     the deploy user's secrets file).
     """
 
-    token_url: str
-    client_id: str
-    refresh_token: str
+    token_url: str | LazyEnv
+    client_id: str | LazyEnv
+    refresh_token: str | LazyEnv
     scope: str | None = None
 
     TYPE: ClassVar[str] = "oauth2_refresh_token"
@@ -250,11 +251,11 @@ class Oauth2RefreshTokenProvider(TokenProvider):
 
     def resolve(self) -> str:
         return _post_oauth2_token(
-            token_url=self.token_url,
+            token_url=to_str(self.token_url),
             form_body={
                 "grant_type": "refresh_token",
-                "client_id": self.client_id,
-                "refresh_token": self.refresh_token,
+                "client_id": to_str(self.client_id),
+                "refresh_token": to_str(self.refresh_token),
                 "scope": self.scope,
             },
             timeout=self.timeout,
@@ -343,9 +344,16 @@ def _parse_common(raw: dict, default_timeout: int) -> _CommonFields:
     }
 
 
-def _require_str(raw: dict, field_name: str, provider_type: str) -> str:
+def _require_str(raw: dict, field_name: str, provider_type: str) -> str | LazyEnv:
+    """Return the value of ``raw[field_name]``, accepting ``str | LazyEnv``.
+
+    Truthy check survives — ``LazyEnv`` is always truthy by design, so
+    an unresolved env-var reference counts as "configured." The actual
+    env lookup is deferred to provider ``.resolve()`` time via
+    ``to_str()``.
+    """
     value = raw.get(field_name)
-    if not value or not isinstance(value, str):
+    if not value or not is_string_like(value):
         raise ConfigurationError(
             f"token_provider.{field_name} must be a non-empty string for "
             f"type={provider_type}, got {value!r}"
