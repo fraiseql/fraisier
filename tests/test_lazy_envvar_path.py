@@ -89,6 +89,47 @@ fraises:
             to_str(env["smoke_tests"][0]["headers"]["Authorization"])
 
 
+class TestAnchorAliasFirstSeen:
+    def test_anchored_lazyenv_keeps_first_path(self, tmp_path, monkeypatch):
+        # PyYAML constructs each anchored node once and resolves aliases
+        # by reference, so a YAML anchor + alias produces ONE shared
+        # LazyEnv instance reachable from two YAML paths. The walker's
+        # first-seen guard must stick the *first* path (dict-insertion
+        # order in Python 3.7+) and not overwrite it on the alias visit.
+        monkeypatch.delenv("SHARED_VAR", raising=False)
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        secret_one: &shared !envvar SHARED_VAR
+        secret_two: *shared
+""",
+        )
+        config = FraisierConfig(config_file)
+        env = config.get_fraise_environment("my_api", "production")
+        assert env is not None
+        # Sanity check the anchor-alias gives a shared instance.
+        assert env["secret_one"] is env["secret_two"]
+        # First-seen wins: the path is secret_one's, not secret_two's.
+        with pytest.raises(
+            ConfigurationError,
+            match=r"fraises\.my_api\.environments\.production\.secret_one",
+        ):
+            to_str(env["secret_one"])
+        # The shared instance carries the same first-seen path even
+        # when accessed via the alias key.
+        with pytest.raises(
+            ConfigurationError,
+            match=r"fraises\.my_api\.environments\.production\.secret_one",
+        ):
+            to_str(env["secret_two"])
+
+
 class TestPathFromMapping:
     def test_path_in_nested_mapping(self, tmp_path, monkeypatch):
         monkeypatch.delenv("MISSING", raising=False)
