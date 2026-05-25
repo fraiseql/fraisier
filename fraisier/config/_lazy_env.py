@@ -31,7 +31,7 @@ class LazyEnv:
 
     __slots__ = ("name", "yaml_path")
 
-    def __init__(self, name: str, yaml_path: str) -> None:
+    def __init__(self, name: str, yaml_path: str | None = None) -> None:
         self.name = name
         self.yaml_path = yaml_path
 
@@ -40,9 +40,10 @@ class LazyEnv:
         try:
             return os.environ[self.name]
         except KeyError:
+            path = self.yaml_path or "<unknown>"
             raise ConfigurationError(
                 f"!envvar references environment variable {self.name!r} "
-                f"which is not set (at {self.yaml_path})"
+                f"which is not set (at {path})"
             ) from None
 
     def __str__(self) -> str:

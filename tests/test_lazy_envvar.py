@@ -178,6 +178,23 @@ class TestIsStringLike:
         assert is_string_like(["foo"]) is False
 
 
+class TestPathFallback:
+    def test_resolve_with_none_path(self, monkeypatch):
+        # A LazyEnv constructed outside the loader (e.g. directly in
+        # tests) may have yaml_path=None. resolve() must not crash on
+        # NoneType and must surface "<unknown>" instead.
+        monkeypatch.delenv("V", raising=False)
+        x = LazyEnv("V", yaml_path=None)
+        with pytest.raises(ConfigurationError, match=r"V.*<unknown>"):
+            x.resolve()
+
+    def test_resolve_with_empty_path(self, monkeypatch):
+        monkeypatch.delenv("V", raising=False)
+        x = LazyEnv("V", yaml_path="")
+        with pytest.raises(ConfigurationError, match=r"V.*<unknown>"):
+            x.resolve()
+
+
 class TestReadEachAccess:
     def test_resolve_reads_each_call(self, monkeypatch):
         # The contract: no caching. Each to_str() / resolve() consults
