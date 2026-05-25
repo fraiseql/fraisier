@@ -43,18 +43,50 @@ fraises:
         assert env is not None
         with pytest.raises(
             ConfigurationError,
-            match=(
-                r"fraises\.my_api\.environments\.production\.secrets\[0\]"
-            ),
+            match=(r"fraises\.my_api\.environments\.production\.secrets\[0\]"),
         ):
             to_str(env["secrets"][0])
         with pytest.raises(
             ConfigurationError,
-            match=(
-                r"fraises\.my_api\.environments\.production\.secrets\[1\]"
-            ),
+            match=(r"fraises\.my_api\.environments\.production\.secrets\[1\]"),
         ):
             to_str(env["secrets"][1])
+
+
+class TestPathDeepNesting:
+    def test_full_smoke_test_path(self, tmp_path, monkeypatch):
+        # Full reproduction from issue #220: an !envvar lives under a
+        # mapping under a list under a mapping under the smoke_tests
+        # block. The walker has to recurse through all four layers and
+        # land on the exact dotted-indexed path.
+        monkeypatch.delenv("SMOKE_TEST_JWT", raising=False)
+        config_file = _write_config(
+            tmp_path,
+            """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        smoke_tests:
+          - name: auth
+            url: https://example.com/me
+            headers:
+              Authorization: !envvar SMOKE_TEST_JWT
+""",
+        )
+        config = FraisierConfig(config_file)
+        env = config.get_fraise_environment("my_api", "production")
+        assert env is not None
+        with pytest.raises(
+            ConfigurationError,
+            match=(
+                r"fraises\.my_api\.environments\.production"
+                r"\.smoke_tests\[0\]\.headers\.Authorization"
+            ),
+        ):
+            to_str(env["smoke_tests"][0]["headers"]["Authorization"])
 
 
 class TestPathFromMapping:
