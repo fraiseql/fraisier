@@ -22,6 +22,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from fraisier.config._lazy_env import LazyEnv, to_str
 from fraisier.errors import ConfigurationError
 from fraisier.token_providers import TokenProvider, parse_token_provider
 
@@ -93,17 +94,35 @@ class Assertion:
 
 @dataclass(frozen=True)
 class SmokeTest:
-    """One smoke-test entry."""
+    """One smoke-test entry.
+
+    ``url`` is the raw form from YAML (``str`` or :class:`LazyEnv`);
+    ``base_url`` is the load-time ``health_check.url`` prefix used to
+    resolve relative URLs. Consumers call :func:`resolve_test_url` (or
+    inline ``_resolve_url(test.url, base_url=test.base_url)``) at HTTP
+    boundary to get a concrete URL string.
+    """
 
     name: str
     method: str
-    url: str
+    url: str | LazyEnv
     headers: dict[str, str]
     body: str | None
     timeout: int
     on_failure: Literal["rollback", "halt", "warn"]
     assertions: list[Assertion]
     token_provider: TokenProvider | None = None
+    base_url: str | None = None
+
+
+def resolve_test_url(test: SmokeTest) -> str:
+    """Resolve ``test.url`` (possibly a ``LazyEnv``) against ``base_url``.
+
+    Boundary helper for HTTP-time consumption — performs the env-var
+    read and the relative→absolute urljoin in one step. The validator
+    path never calls this so :func:`load_smoke_tests` stays env-free.
+    """
+    return _resolve_url(test.url, base_url=test.base_url)
 
 
 def _walk_json_path(doc: Any, path: str) -> Any:
@@ -154,7 +173,11 @@ def _parse_assertion(raw: dict) -> Assertion:
     )
 
 
-def _resolve_url(url: str, *, base_url: str | None) -> str:
+def _resolve_url(url: str | LazyEnv, *, base_url: str | None) -> str:
+    # Resolve !envvar references at consumption time. The validator
+    # path (load_smoke_tests) goes through here too, but with
+    # base_url provided and content-shape checks deferred — Phase 3.
+    url = to_str(url)
     parsed = urlparse(url)
     if parsed.scheme and parsed.netloc:
         # Absolute URL.
@@ -203,7 +226,16 @@ def load_smoke_tests(
                 f"{sorted(_VALID_ON_FAILURE)!r}, got {on_failure!r}"
             )
 
-        url = _resolve_url(entry["url"], base_url=base_url)
+        # For plain str URLs we eagerly urljoin at load time so a
+        # typo or scheme error surfaces here (preserves the historical
+        # semantics). For LazyEnv URLs we defer everything to HTTP
+        # time via resolve_test_url() — env resolution + urljoin.
+        raw_url = entry["url"]
+        url: str | LazyEnv
+        if isinstance(raw_url, LazyEnv):
+            url = raw_url
+        else:
+            url = _resolve_url(raw_url, base_url=base_url)
 
         assertions = [_parse_assertion(a) for a in entry.get("assert", [])]
 
@@ -226,7 +258,7 @@ def load_smoke_tests(
 
         tests.append(
             SmokeTest(
-                name=entry.get("name", url),
+                name=entry.get("name", str(url) if isinstance(url, str) else url.name),
                 method=method,
                 url=url,
                 headers=headers,
@@ -235,6 +267,7 @@ def load_smoke_tests(
                 on_failure=on_failure,
                 assertions=assertions,
                 token_provider=token_provider,
+                base_url=base_url,
             )
         )
     return tests
@@ -255,18 +288,19 @@ def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _run_one(test: SmokeTest) -> None:
+    final_url = resolve_test_url(test)
     logger.info(
         "Running smoke test %s: %s %s (headers=%s)",
         test.name,
         test.method,
-        test.url,
+        final_url,
         _redacted_headers(test.headers),
     )
     try:
         with httpx.Client(timeout=test.timeout) as client:
             response = client.request(
                 test.method,
-                test.url,
+                final_url,
                 headers=test.headers,
                 content=test.body,
             )
