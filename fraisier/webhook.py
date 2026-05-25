@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from ._env import get_int_env
 from .config import get_config
+from .config._lazy_env import LazyEnv, to_str
 
 if TYPE_CHECKING:
     from .config.loader import FraisierConfig
@@ -103,6 +104,21 @@ def _structured_error(
     )
 
 
+def _resolve_provider_config(raw: dict[str, Any]) -> dict[str, Any]:
+    """Materialize every ``LazyEnv`` value in a provider-config mapping.
+
+    Git provider config carries secrets (``webhook_secret``, API
+    ``token``, app key) that are commonly ``!envvar``-tagged in
+    fraises.yaml. Provider constructors expect ``str`` for these
+    fields and call ``.encode()`` on them; a raw ``LazyEnv`` would
+    raise ``AttributeError`` deep inside ``hmac.new``. This helper
+    resolves every ``LazyEnv`` once at the consumer boundary (Phase 5
+    Cycle 5.7). Non-LazyEnv values (``bool`` / ``int`` / ``None`` /
+    nested dicts) pass through untouched.
+    """
+    return {k: (to_str(v) if isinstance(v, LazyEnv) else v) for k, v in raw.items()}
+
+
 def get_git_provider() -> GitProvider:
     """Get configured Git provider from environment or config."""
     config = get_config()
@@ -112,11 +128,13 @@ def get_git_provider() -> GitProvider:
         "provider", "github"
     )
 
-    provider_config = {
-        "webhook_secret": os.getenv("FRAISIER_WEBHOOK_SECRET"),
-        "base_url": os.getenv("FRAISIER_GIT_URL"),
-        **git_config.get(provider_name, {}),
-    }
+    provider_config = _resolve_provider_config(
+        {
+            "webhook_secret": os.getenv("FRAISIER_WEBHOOK_SECRET"),
+            "base_url": os.getenv("FRAISIER_GIT_URL"),
+            **git_config.get(provider_name, {}),
+        }
+    )
 
     return get_provider(provider_name, provider_config)
 
@@ -512,10 +530,12 @@ def _verify_signature(
 
     for secret in candidates:
         try:
-            provider_config = {
-                "webhook_secret": secret,
-                **git_config.get(provider_name, {}),
-            }
+            provider_config = _resolve_provider_config(
+                {
+                    "webhook_secret": secret,
+                    **git_config.get(provider_name, {}),
+                }
+            )
             provider = get_provider(provider_name, provider_config)
         except ValueError as e:
             raise _structured_error(400, "validation_error", str(e)) from e
