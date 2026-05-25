@@ -9,6 +9,7 @@ Free functions that validate sections of the raw config dict loaded by
 import re
 from typing import Any, cast
 
+from fraisier.config._lazy_env import LazyEnv, is_string_like
 from fraisier.config.schema import _UNIT_NAME_RE, _VALID_STRATEGIES
 from fraisier.dbops._strategies import ADMIN_STRATEGIES
 from fraisier.errors import ConfigurationError, ValidationError
@@ -287,14 +288,31 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
 
 
 def _validate_pg_url(fraise_name: str, field: str, value: Any) -> list[str]:
-    """Return validation errors for a PostgreSQL URL field."""
+    """Return validation errors for a PostgreSQL URL field.
+
+    ``LazyEnv`` values are accepted without inspecting the URL scheme
+    — the scheme check is deferred to consumers, which call
+    :func:`validate_pg_url_string` on the resolved value at use time.
+    """
     if value is None:
+        return []
+    if isinstance(value, LazyEnv):
         return []
     if not isinstance(value, str):
         return [
             f"{fraise_name}: database.{field} must be a string, "
             f"got {type(value).__name__}"
         ]
+    return validate_pg_url_string(fraise_name, field, value)
+
+
+def validate_pg_url_string(fraise_name: str, field: str, value: str) -> list[str]:
+    """Return scheme-check errors for a resolved PostgreSQL URL string.
+
+    Consumer-side helper: call after :func:`fraisier.config.to_str` if the
+    YAML field was sourced from ``!envvar`` and the URL scheme needs
+    enforcement (database connection time).
+    """
     if not value.startswith(("postgresql://", "postgres://")):
         return [
             f"{fraise_name}: database.{field} must be a PostgreSQL URL "
