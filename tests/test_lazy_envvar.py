@@ -127,3 +127,26 @@ class TestLazyEnvSafety:
     def test_iter_is_typeerror(self):
         with pytest.raises(TypeError):
             iter(LazyEnv("V", "p"))
+
+
+class TestToStr:
+    def test_passes_str_through(self):
+        assert to_str("foo") == "foo"
+
+    def test_resolves_lazyenv(self, monkeypatch):
+        monkeypatch.setenv("V", "bar")
+        assert to_str(LazyEnv("V", "p")) == "bar"
+
+    def test_raises_on_unset_lazyenv(self, monkeypatch):
+        monkeypatch.delenv("V", raising=False)
+        with pytest.raises(ConfigurationError, match=r"V.*not set"):
+            to_str(LazyEnv("V", "p"))
+
+    def test_reexported_from_config_package(self):
+        # The boundary helper is part of fraisier.config's public surface
+        # so consumers can import it without reaching into _lazy_env.
+        from fraisier.config import LazyEnv as PkgLazyEnv
+        from fraisier.config import to_str as pkg_to_str
+
+        assert pkg_to_str is to_str
+        assert PkgLazyEnv is LazyEnv

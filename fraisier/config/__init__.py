@@ -8,6 +8,7 @@ This package splits the monolithic config.py into:
 All public APIs are re-exported here for backwards compatibility.
 """
 
+from fraisier.config._lazy_env import LazyEnv, to_str
 from fraisier.config.loader import (
     FraisierConfig,
     _config,  # noqa: F401 — exposed for test singleton reset
@@ -64,6 +65,7 @@ __all__ = [
     "GithubActionsScaffoldConfig",
     "HealthConfig",
     "HealthResponseConfig",
+    "LazyEnv",
     "MigrationHooksConfig",
     "NginxEnvConfig",
     "NginxScaffoldConfig",
@@ -81,4 +83,5 @@ __all__ = [
     "ValidationError",
     "get_config",
     "reset_config",
+    "to_str",
 ]
