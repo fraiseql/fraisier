@@ -105,3 +105,176 @@ fraises:
         config = FraisierConfig(config_file)
         with pytest.raises(ValidationError, match=r"PostgreSQL URL"):
             config.get_fraise_environment("my_api", "production")
+
+
+_SVC_TEMPLATE = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        systemd_service: {expr}
+"""
+
+
+class TestSystemdServiceAcceptsLazyEnv:
+    def test_unset_envvar_loads(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SVC", raising=False)
+        config_file = _write_config(
+            tmp_path, _SVC_TEMPLATE.format(expr="!envvar SVC")
+        )
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        assert isinstance(fraise["systemd_service"], LazyEnv)
+
+    def test_str_invalid_still_fails(self, tmp_path):
+        config_file = _write_config(
+            tmp_path, _SVC_TEMPLATE.format(expr='"bad name"')
+        )
+        config = FraisierConfig(config_file)
+        with pytest.raises(ValidationError, match=r"systemd_service.*invalid"):
+            config.get_fraise_environment("my_api", "production")
+
+
+_SOCKET_TEMPLATE = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        systemd_deploy_socket: {expr}
+"""
+
+
+class TestSystemdSocketAcceptsLazyEnv:
+    def test_unset_envvar_loads(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SOCK", raising=False)
+        config_file = _write_config(
+            tmp_path, _SOCKET_TEMPLATE.format(expr="!envvar SOCK")
+        )
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        assert isinstance(fraise["systemd_deploy_socket"], LazyEnv)
+
+
+_SSH_TEMPLATE = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        ssh:
+          host: {expr}
+"""
+
+
+class TestSshFieldsAcceptLazyEnv:
+    def test_unset_host_envvar_loads(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SSH_HOST", raising=False)
+        config_file = _write_config(
+            tmp_path, _SSH_TEMPLATE.format(expr="!envvar SSH_HOST")
+        )
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        assert isinstance(fraise["ssh"]["host"], LazyEnv)
+
+
+_CLONE_URL_TEMPLATE = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        clone_url: {expr}
+"""
+
+
+class TestCloneUrlAcceptsLazyEnv:
+    def test_unset_envvar_loads(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLONE", raising=False)
+        config_file = _write_config(
+            tmp_path, _CLONE_URL_TEMPLATE.format(expr="!envvar CLONE")
+        )
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        assert isinstance(fraise["clone_url"], LazyEnv)
+
+    def test_str_bad_url_still_fails(self, tmp_path):
+        config_file = _write_config(
+            tmp_path, _CLONE_URL_TEMPLATE.format(expr='"not-a-git-url"')
+        )
+        config = FraisierConfig(config_file)
+        with pytest.raises(ValidationError, match=r"clone_url.*git URL"):
+            config.get_fraise_environment("my_api", "production")
+
+
+_ZFS_TEMPLATE = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        zfs:
+          enabled: true
+          pool: {pool}
+          data_dataset: {data}
+"""
+
+
+class TestZfsAcceptsLazyEnv:
+    def test_unset_envvar_loads(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("Z_POOL", raising=False)
+        monkeypatch.delenv("Z_DATA", raising=False)
+        config_file = _write_config(
+            tmp_path,
+            _ZFS_TEMPLATE.format(pool="!envvar Z_POOL", data="!envvar Z_DATA"),
+        )
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        assert isinstance(fraise["zfs"]["pool"], LazyEnv)
+        assert isinstance(fraise["zfs"]["data_dataset"], LazyEnv)
+
+
+_RESTORE_TEMPLATE = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/myapi
+        database:
+          strategy: restore_migrate
+          name: mydb
+          admin_url: postgresql:///postgres
+          restore:
+            backup_dir: /tmp/backups
+            preferred_compression: {expr}
+"""
+
+
+class TestRestoreCompressionAcceptsLazyEnv:
+    def test_unset_envvar_loads(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("COMP", raising=False)
+        config_file = _write_config(
+            tmp_path, _RESTORE_TEMPLATE.format(expr="!envvar COMP")
+        )
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        assert isinstance(
+            fraise["database"]["restore"]["preferred_compression"], LazyEnv
+        )
+
+    def test_str_bogus_still_fails(self, tmp_path):
+        config_file = _write_config(
+            tmp_path, _RESTORE_TEMPLATE.format(expr="bogus")
+        )
+        config = FraisierConfig(config_file)
+        with pytest.raises(
+            ValidationError, match=r"preferred_compression must be one of"
+        ):
+            config.get_fraise_environment("my_api", "production")

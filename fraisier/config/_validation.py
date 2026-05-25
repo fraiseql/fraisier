@@ -169,9 +169,10 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
                 f"{fraise_name}: '{field}' must be a number, got {type(val).__name__}"
             )
 
-    # systemd_service name validation
+    # systemd_service name validation — defers content check on LazyEnv;
+    # consumers re-check after to_str() at unit-file emission time.
     systemd_service = env.get("systemd_service")
-    if systemd_service is not None:
+    if systemd_service is not None and not isinstance(systemd_service, LazyEnv):
         base = str(systemd_service)
         base = base.removesuffix(".service")
         if not base or not _UNIT_NAME_RE.match(base):
@@ -180,9 +181,11 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
                 f"{systemd_service!r}"
             )
 
-    # systemd_deploy_socket name validation
+    # systemd_deploy_socket name validation — same LazyEnv deferral.
     systemd_deploy_socket = env.get("systemd_deploy_socket")
-    if systemd_deploy_socket is not None:
+    if systemd_deploy_socket is not None and not isinstance(
+        systemd_deploy_socket, LazyEnv
+    ):
         base = str(systemd_deploy_socket)
         base = base.removesuffix(".socket")
         if not base or not _UNIT_NAME_RE.match(base):
@@ -203,7 +206,7 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
                 errors.append(f"{fraise_name}: ssh.host is required")
             for str_field in ("host", "user", "key_path"):
                 val = ssh.get(str_field)
-                if val is not None and not isinstance(val, str):
+                if val is not None and not is_string_like(val):
                     errors.append(
                         f"{fraise_name}: ssh.{str_field} must be a string, "
                         f"got {type(val).__name__}"
@@ -237,9 +240,13 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
                     f"or 'any', got {address_family!r}"
                 )
 
-    # clone_url format validation
+    # clone_url format validation — deferred for LazyEnv.
     clone_url = env.get("clone_url")
-    if clone_url and not _GIT_URL_RE.match(str(clone_url)):
+    if (
+        clone_url
+        and not isinstance(clone_url, LazyEnv)
+        and not _GIT_URL_RE.match(str(clone_url))
+    ):
         errors.append(
             f"{fraise_name}: clone_url must be a valid git URL "
             f"(SSH, HTTPS, or absolute path), got: {clone_url!r}"
@@ -338,27 +345,32 @@ def _validate_zfs_config(fraise_name: str, zfs: Any) -> list[str]:
         errors.append(f"{fraise_name}: zfs.enabled must be a boolean, got {got}")
 
     if enabled:
-        # Required fields when enabled
+        # Required fields when enabled. LazyEnv is truthy and string-like,
+        # so the "missing/empty" + type checks pass; the content shape
+        # check is deferred (no regex on a deferred value).
         for field in ["pool", "data_dataset"]:
             value = zfs.get(field)
             if not value:
                 errors.append(
                     f"{fraise_name}: zfs.{field} is required when ZFS is enabled"
                 )
-            elif not isinstance(value, str):
+            elif not is_string_like(value):
                 got = type(value).__name__
                 errors.append(f"{fraise_name}: zfs.{field} must be a string, got {got}")
 
-        # Optional string fields
+        # Optional string fields — alphanumeric regex check defers for
+        # LazyEnv. Consumers re-validate the resolved value.
         for field in ["snapshot_prefix", "clone_prefix"]:
             value = zfs.get(field)
             if value is not None:
-                if not isinstance(value, str):
+                if not is_string_like(value):
                     got = type(value).__name__
                     errors.append(
                         f"{fraise_name}: zfs.{field} must be a string, got {got}"
                     )
-                elif not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", value):
+                elif isinstance(value, str) and not re.match(
+                    r"^[a-zA-Z_][a-zA-Z0-9_]*$", value
+                ):
                     errors.append(
                         f"{fraise_name}: zfs.{field} '{value}'"
                         " must contain only alphanumeric characters"
@@ -410,7 +422,7 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
                     f"got {jobs!r}"
                 )
         pref = restore.get("preferred_compression")
-        if pref is not None:
+        if pref is not None and not isinstance(pref, LazyEnv):
             valid_algos = {"zstd", "lz4", "gzip", "none"}
             if not isinstance(pref, str) or pref not in valid_algos:
                 errors.append(
