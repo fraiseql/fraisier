@@ -150,3 +150,17 @@ class TestToStr:
 
         assert pkg_to_str is to_str
         assert PkgLazyEnv is LazyEnv
+
+
+class TestReadEachAccess:
+    def test_resolve_reads_each_call(self, monkeypatch):
+        # The contract: no caching. Each to_str() / resolve() consults
+        # os.environ fresh, so mid-process env mutations are observed.
+        env = LazyEnv("V", "p")
+        monkeypatch.setenv("V", "x")
+        assert to_str(env) == "x"
+        monkeypatch.setenv("V", "y")
+        assert to_str(env) == "y"
+        # And via .resolve() directly.
+        monkeypatch.setenv("V", "z")
+        assert env.resolve() == "z"
