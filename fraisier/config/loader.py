@@ -110,6 +110,10 @@ def _attach_paths(obj: Any, prefix: str = "") -> None:
         for key, value in obj.items():
             child = f"{prefix}.{key}" if prefix else str(key)
             _attach_paths(value, child)
+        return
+    if isinstance(obj, list):
+        for i, value in enumerate(obj):
+            _attach_paths(value, f"{prefix}[{i}]")
 
 
 class FraisierConfig:
