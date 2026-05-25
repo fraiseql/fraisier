@@ -92,6 +92,26 @@ def _construct_envvar(loader: yaml.Loader, node: yaml.Node) -> LazyEnv:
 _FraisierYamlLoader.add_constructor("!envvar", _construct_envvar)
 
 
+def _attach_paths(obj: Any, prefix: str = "") -> None:
+    """Stamp every ``LazyEnv`` reachable from *obj* with its YAML key path.
+
+    Walks the structure produced by ``yaml.load`` once after parsing.
+    The ``LazyEnv.yaml_path`` is mutated in place so deferred resolution
+    failures can name the offending YAML location.
+
+    First-seen wins for YAML anchors / aliases that share a single
+    ``LazyEnv`` instance across multiple locations.
+    """
+    if isinstance(obj, LazyEnv):
+        if obj.yaml_path in (None, "<unknown>"):
+            obj.yaml_path = prefix or "<root>"
+        return
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            _attach_paths(value, child)
+
+
 class FraisierConfig:
     """Load and manage deployment configuration from fraises.yaml.
 
@@ -142,6 +162,7 @@ class FraisierConfig:
         """
         with Path(self.config_path).open() as f:
             self._config = yaml.load(f, Loader=_FraisierYamlLoader)
+        _attach_paths(self._config)
         # Stage 1: cross-reference + shape checks only.
         validate_servers(self._config.get("servers", {}))
         validate_branch_mapping(
