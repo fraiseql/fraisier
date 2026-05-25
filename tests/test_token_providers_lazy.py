@@ -41,3 +41,19 @@ class TestRequireStrAcceptsLazyEnv:
     def test_wrong_type_still_raises(self):
         with pytest.raises(ConfigurationError, match=r"client_secret"):
             _require_str({"client_secret": 42}, "client_secret", "oauth2")
+
+
+class TestValidateFormatRejectsLazyEnv:
+    def test_lazyenv_is_rejected(self):
+        # format is code-shape ("Bearer {token}"), not config — !envvar
+        # here is a foot-gun (the env var would have to contain a
+        # well-formed format string, uncheckable at load).
+        with pytest.raises(
+            ConfigurationError,
+            match=r"format must be a literal string, not !envvar",
+        ):
+            _validate_format(LazyEnv("FMT", "p"))
+
+    def test_str_still_accepted(self):
+        # Sanity: literal-string formats still parse fine.
+        _validate_format("Bearer {token}")

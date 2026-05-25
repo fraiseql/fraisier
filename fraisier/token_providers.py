@@ -370,7 +370,19 @@ def _validate_format(fmt: str) -> None:
     a format with no field at all would silently drop the resolved
     token and ship a constant header value (often "Bearer XYZ") to
     every smoke test. Both shapes fail closed at parse time instead.
+
+    ``!envvar`` references (``LazyEnv``) are explicitly rejected here:
+    the format string is code-shape, not config. Allowing an env var
+    here would mean an unconfigurable code path (the env var would
+    need to contain a well-formed format string with exactly one
+    ``{token}`` placeholder, which can't be validated at load).
     """
+    if isinstance(fmt, LazyEnv):
+        raise ConfigurationError(
+            "token_provider.format must be a literal string, not !envvar "
+            f"(saw reference to {fmt.name!r}); the format is code-shape, "
+            'not config — use a literal like "Bearer {token}"'
+        )
     if not isinstance(fmt, str):
         raise ConfigurationError(
             f"token_provider.format must be a string, got {type(fmt).__name__}"
