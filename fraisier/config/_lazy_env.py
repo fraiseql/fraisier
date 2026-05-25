@@ -16,6 +16,7 @@ isinstance audit small at consumer sites.
 from __future__ import annotations
 
 import os
+from typing import Any, TypeGuard
 
 from fraisier.errors import ConfigurationError
 
@@ -80,3 +81,13 @@ def to_str(value: str | LazyEnv) -> str:
     if isinstance(value, LazyEnv):
         return value.resolve()
     return value
+
+
+def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
+    """Return True iff *value* is a ``str`` or ``LazyEnv``.
+
+    The replacement for ``isinstance(value, str)`` at config-validator
+    inspection sites. Searchable by name so future contributors can
+    grep all the places that widen the type for env-var deferral.
+    """
+    return isinstance(value, str | LazyEnv)

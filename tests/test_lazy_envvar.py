@@ -13,7 +13,7 @@ import pickle
 
 import pytest
 
-from fraisier.config._lazy_env import LazyEnv, to_str
+from fraisier.config._lazy_env import LazyEnv, is_string_like, to_str
 from fraisier.errors import ConfigurationError
 
 
@@ -150,6 +150,32 @@ class TestToStr:
 
         assert pkg_to_str is to_str
         assert PkgLazyEnv is LazyEnv
+
+
+class TestIsStringLike:
+    def test_str_is_string_like(self):
+        assert is_string_like("foo") is True
+
+    def test_lazyenv_is_string_like(self):
+        # No resolve() call — check is purely structural.
+        assert is_string_like(LazyEnv("FOO_UNSET", "p")) is True
+
+    def test_empty_str_is_string_like(self):
+        # Type widening doesn't add a truthy requirement.
+        assert is_string_like("") is True
+
+    def test_int_is_not_string_like(self):
+        assert is_string_like(42) is False
+
+    def test_none_is_not_string_like(self):
+        assert is_string_like(None) is False
+
+    def test_bytes_is_not_string_like(self):
+        # bytes deliberately excluded — too easy to confuse with str.
+        assert is_string_like(b"foo") is False
+
+    def test_list_is_not_string_like(self):
+        assert is_string_like(["foo"]) is False
 
 
 class TestReadEachAccess:

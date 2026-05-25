@@ -8,7 +8,7 @@ This package splits the monolithic config.py into:
 All public APIs are re-exported here for backwards compatibility.
 """
 
-from fraisier.config._lazy_env import LazyEnv, to_str
+from fraisier.config._lazy_env import LazyEnv, is_string_like, to_str
 from fraisier.config.loader import (
     FraisierConfig,
     _config,  # noqa: F401 — exposed for test singleton reset
@@ -82,6 +82,7 @@ __all__ = [
     "TeamsHookConfig",
     "ValidationError",
     "get_config",
+    "is_string_like",
     "reset_config",
     "to_str",
 ]
