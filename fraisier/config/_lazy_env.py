@@ -44,6 +44,25 @@ class LazyEnv:
                 f"which is not set (at {self.yaml_path})"
             ) from None
 
+    def __str__(self) -> str:
+        return self.resolve()
+
+    def __format__(self, format_spec: str) -> str:
+        return format(self.resolve(), format_spec)
+
+    def __fspath__(self) -> str:
+        return self.resolve()
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, LazyEnv):
+            return self.resolve() == other.resolve()
+        if isinstance(other, str):
+            return self.resolve() == other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.resolve())
+
 
 def to_str(value: str | LazyEnv) -> str:
     """Boundary helper: resolve a ``LazyEnv`` or pass through a ``str``."""
