@@ -278,6 +278,11 @@ def _should_rollback(test: SmokeTest) -> bool:
 
 
 def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
+    # Redact by key NAME, before touching the value. This is critical
+    # for the LazyEnv safety invariant: if a raw LazyEnv ever bypassed
+    # materialize_test_headers and reached the log site, redacting by
+    # name means we never call resolve()/__str__/__format__ on an
+    # auth-shaped header — the secret cannot leak even via accident.
     redacted = {}
     for k, v in headers.items():
         if k.lower() in {"authorization", "cookie", "x-api-key"}:
@@ -288,6 +293,19 @@ def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _run_one(test: SmokeTest) -> None:
+    # LazyEnv logging-safety invariant (Phase 5 Cycle 5.3):
+    #   - final_url is a plain str — resolve_test_url() called to_str()
+    #     on test.url at line above, so logging it via %s is safe.
+    #   - Auth-shaped header values are redacted by key name before any
+    #     value-side resolution; the secret cannot leak.
+    #   - Non-auth header values flow through _redacted_headers
+    #     unchanged, then the resulting dict is logged via %s. dict.__str__
+    #     calls repr() on each value, and LazyEnv.__repr__ does NOT
+    #     resolve — so even a raw LazyEnv prints as the placeholder
+    #     "LazyEnv(name='X', yaml_path='Y')" rather than the resolved
+    #     value. Do NOT change this log line to interpolate a single
+    #     bare LazyEnv via %s (that triggers __str__ → resolve);
+    #     containers only.
     final_url = resolve_test_url(test)
     logger.info(
         "Running smoke test %s: %s %s (headers=%s)",

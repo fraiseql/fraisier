@@ -3,12 +3,21 @@
 Phase 5 Cycle 5.1 adds explicit header materialization at the
 materialize_test_headers boundary so the value type reaching httpx is
 a concrete ``str`` and never relies on httpx's implicit ``str()``.
+
+Phase 5 Cycle 5.3 locks in the logging-safety invariant: even if a
+LazyEnv slipped past materialization, the smoke-test log line cannot
+leak the resolved secret. Two defenses combine: ``_redacted_headers``
+substitutes by key name BEFORE touching the value, and ``%s``-style
+dict logging routes through ``repr()`` on each value, hitting the
+non-resolving ``LazyEnv.__repr__``.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import cast
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,6 +27,7 @@ from fraisier.errors import ConfigurationError
 from fraisier.smoke_tests import (
     SmokeTest,
     _resolve_url,
+    _run_one,
     load_smoke_tests,
     materialize_test_headers,
     resolve_test_url,
@@ -210,3 +220,67 @@ class TestMaterializeTestHeaders:
         assert materialized.headers["X-Extra"] == "xvalue"
         assert materialized.headers["Authorization"] == "Bearer static-token"
         assert all(isinstance(v, str) for v in materialized.headers.values())
+
+
+def _stub_httpx_client():
+    """Return an httpx.Client patch context that yields a 200/JSON response."""
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {}
+    mock_client = MagicMock()
+    mock_client.__enter__.return_value = mock_client
+    mock_client.request.return_value = mock_resp
+    return mock_client
+
+
+class TestLoggingSafetyForLazyHeaders:
+    """Defense-in-depth: even if materialization is bypassed and a raw
+    LazyEnv flows into ``_run_one``, the log line cannot leak the
+    resolved secret.
+
+    Two defenses combine:
+      1. ``_redacted_headers`` substitutes auth-shaped values by key
+         name BEFORE touching the value — for Authorization/Cookie/
+         X-API-Key the value never gets converted to a string.
+      2. The redacted dict is logged via ``%s`` formatting, which
+         routes through ``repr()`` on each value. ``LazyEnv.__repr__``
+         does NOT resolve (Cycle 2.3), so non-redacted LazyEnvs render
+         as ``LazyEnv(name='X', yaml_path='Y')`` placeholders — never
+         the resolved secret.
+    """
+
+    def test_logging_redacts_lazy_authorization(self, monkeypatch, caplog):
+        # Authorization is redacted by key name; even though TOK is set,
+        # the resolved value must NEVER appear in the log line.
+        monkeypatch.setenv("TOK", "topsecret")
+        t = _smoke_test_with_headers({"Authorization": LazyEnv("TOK", "p")})
+        with (
+            patch(
+                "fraisier.smoke_tests.httpx.Client",
+                return_value=_stub_httpx_client(),
+            ),
+            caplog.at_level(logging.INFO, logger="fraisier.smoke_tests"),
+        ):
+            _run_one(t)
+        joined = "\n".join(rec.getMessage() for rec in caplog.records)
+        assert "topsecret" not in joined
+        assert "***redacted***" in joined
+
+    def test_logging_does_not_resolve_non_redacted_lazy_value(
+        self, monkeypatch, caplog
+    ):
+        # Non-redacted header: the LazyEnv is logged via dict repr →
+        # safe placeholder, never the resolved "customvalue".
+        monkeypatch.setenv("CUSTOM", "customvalue")
+        t = _smoke_test_with_headers({"X-Custom": LazyEnv("CUSTOM", "p")})
+        with (
+            patch(
+                "fraisier.smoke_tests.httpx.Client",
+                return_value=_stub_httpx_client(),
+            ),
+            caplog.at_level(logging.INFO, logger="fraisier.smoke_tests"),
+        ):
+            _run_one(t)
+        joined = "\n".join(rec.getMessage() for rec in caplog.records)
+        assert "customvalue" not in joined
+        # Repr-based placeholder is what the dict-format produces.
+        assert "LazyEnv(name='CUSTOM'" in joined
