@@ -71,12 +71,36 @@ def validate_fraises(fraises: dict) -> None:
     if not fraises:
         return
     for name, fraise in fraises.items():
-        if not isinstance(fraise, dict):
+        validate_one_fraise(name, fraise)
+
+
+def validate_one_fraise(name: str, fraise: Any) -> None:
+    """Validate a single fraise (all of its environments).
+
+    Used both by :func:`validate_fraises` (bulk path, e.g. ``fraisier
+    validate``'s full traversal) and by the lazy per-section validator
+    behind :meth:`FraisierConfig.get_fraise_environment`.
+    """
+    if not isinstance(fraise, dict):
+        return
+    for env_config in fraise.get("environments", {}).values():
+        if not isinstance(env_config, dict):
             continue
-        for env_config in fraise.get("environments", {}).values():
-            if not isinstance(env_config, dict):
-                continue
-            _validate_environment(name, env_config)
+        _validate_environment(name, env_config)
+
+
+def validate_one_fraise_environment(name: str, env_name: str, env_config: Any) -> None:
+    """Validate a single fraise environment.
+
+    Single point of entry for Stage-2 per-env validation behind
+    ``FraisierConfig._get_validated_env``. ``env_name`` is unused by the
+    underlying validator today but accepted so the call signature carries
+    the natural ``(fraise, environment)`` key.
+    """
+    del env_name  # currently unused — kept for call-site readability
+    if not isinstance(env_config, dict):
+        return
+    _validate_environment(name, env_config)
 
 
 def validate_servers(servers: dict) -> None:

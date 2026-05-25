@@ -19,6 +19,7 @@ import yaml
 from fraisier.config._validation import (
     validate_branch_mapping,
     validate_notifications,
+    validate_one_fraise_environment,
     validate_servers,
     validate_service_manager,
 )
@@ -146,6 +147,7 @@ class FraisierConfig:
         # Drop any cached Stage-2 results from a prior load.
         for prop in ("notifications",):
             self.__dict__.pop(prop, None)
+        self._get_validated_env.cache_clear()
 
     def _validate_then_return(
         self,
@@ -409,6 +411,9 @@ class FraisierConfig:
     ) -> dict[str, Any] | None:
         """Get configuration for a specific fraise + environment.
 
+        Triggers Stage-2 validation of that env on first access and
+        memoizes the result keyed on ``(fraise_name, environment)``.
+
         Args:
             fraise_name: e.g., "my_api", "etl", "backup"
             environment: e.g., "development", "staging", "production"
@@ -416,15 +421,23 @@ class FraisierConfig:
         Returns:
             Merged config with fraise-level and environment-level settings
         """
-        fraise = self.fraises.get(fraise_name)
-        if not fraise:
+        return self._get_validated_env(fraise_name, environment)
+
+    @functools.cache  # noqa: B019  — cleared explicitly by _load(); FraisierConfig is hashable
+    def _get_validated_env(
+        self, fraise_name: str, environment: str
+    ) -> dict[str, Any] | None:
+        """Validated, merged env config. Memoized per ``(fraise, env)``."""
+        fraise = self._config.get("fraises", {}).get(fraise_name)
+        if not isinstance(fraise, dict):
             return None
 
         env_config = fraise.get("environments", {}).get(environment)
-        if not env_config:
+        if not isinstance(env_config, dict) or not env_config:
             return None
 
-        # Merge fraise-level config with environment-specific config
+        validate_one_fraise_environment(fraise_name, environment, env_config)
+
         merged = {
             "fraise_name": fraise_name,
             "environment": environment,
@@ -432,7 +445,6 @@ class FraisierConfig:
             "description": fraise.get("description"),
             **env_config,
         }
-        # Inherit fraise-level install if environment doesn't override it
         if "install" not in merged and "install" in fraise:
             merged["install"] = fraise["install"]
         return merged
