@@ -37,6 +37,7 @@ def _collect_all_validation_errors(
 
     section_getters: list[tuple[str, Any]] = [
         ("notifications", lambda: config.notifications),
+        ("hooks", lambda: config.hooks),
     ]
     for path, getter in section_getters:
         try:

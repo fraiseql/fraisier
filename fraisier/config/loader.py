@@ -18,6 +18,7 @@ import yaml
 
 from fraisier.config._validation import (
     validate_branch_mapping,
+    validate_hooks,
     validate_notifications,
     validate_one_fraise_environment,
     validate_servers,
@@ -145,7 +146,7 @@ class FraisierConfig:
         )
         validate_service_manager(self._config.get("service_manager"))
         # Drop any cached Stage-2 results from a prior load.
-        for prop in ("notifications",):
+        for prop in ("notifications", "hooks"):
             self.__dict__.pop(prop, None)
         self._get_validated_env.cache_clear()
 
@@ -170,6 +171,14 @@ class FraisierConfig:
         return self._validate_then_return(
             validate_notifications,
             self._config.get("notifications", {}),
+        )
+
+    @functools.cached_property
+    def hooks(self) -> dict[str, Any]:
+        """Lifecycle hooks configuration, validated on first access."""
+        return self._validate_then_return(
+            validate_hooks,
+            self._config.get("hooks", {}),
         )
 
     def reload(self) -> None:

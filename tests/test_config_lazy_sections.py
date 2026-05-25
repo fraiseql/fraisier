@@ -105,6 +105,28 @@ fraises:
         second = config.get_fraise_environment("api", "prod")
         assert first == second
 
+    def test_init_does_not_validate_hooks(self, tmp_path):
+        """A structurally-broken hooks block must not break __init__."""
+        cfg = _write(
+            tmp_path,
+            """
+git:
+  provider: github
+hooks:
+  before_deploy:
+    - type: fax_machine
+fraises:
+  api:
+    type: api
+    environments:
+      prod:
+        app_path: /tmp/api
+""",
+        )
+        config = FraisierConfig(str(cfg))
+        with pytest.raises(ValidationError, match="fax_machine"):
+            _ = config.hooks
+
     def test_valid_notifications_is_memoized(self, tmp_path):
         """Repeated access validates exactly once."""
         cfg = _write(
