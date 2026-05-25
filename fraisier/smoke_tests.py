@@ -351,22 +351,28 @@ def materialize_test_headers(tests: list[SmokeTest]) -> list[SmokeTest]:
     regardless of future field additions (e.g. lists of scopes) and
     sidesteps the question.
 
-    Tests without a ``token_provider`` are returned unchanged.
+    Static header values that are :class:`LazyEnv` placeholders are
+    resolved here too — this is the boundary between the lazy config
+    layer and httpx, which only deals in concrete strings. The output
+    is a ``dict[str, str]`` regardless of whether a token_provider is
+    present.
     """
     cache: dict[int, str] = {}
     materialized: list[SmokeTest] = []
     for test in tests:
+        static_headers = {k: to_str(v) for k, v in test.headers.items()}
         provider = test.token_provider
         if provider is None:
-            materialized.append(test)
+            materialized.append(replace(test, headers=static_headers))
             continue
         token = cache.get(id(provider))
         if token is None:
             token = provider.resolve()
             cache[id(provider)] = token
         rendered = provider.format.format(token=token)
-        new_headers = {**test.headers, provider.header: rendered}
-        materialized.append(replace(test, headers=new_headers))
+        materialized.append(
+            replace(test, headers={**static_headers, provider.header: rendered})
+        )
     return materialized
 
 

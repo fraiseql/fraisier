@@ -1,13 +1,27 @@
-"""Phase 3 — smoke_tests tolerates LazyEnv (#220)."""
+"""Phase 3 — smoke_tests tolerates LazyEnv (#220).
+
+Phase 5 Cycle 5.1 adds explicit header materialization at the
+materialize_test_headers boundary so the value type reaching httpx is
+a concrete ``str`` and never relies on httpx's implicit ``str()``.
+"""
 
 from __future__ import annotations
+
+from dataclasses import replace
+from typing import cast
 
 import pytest
 
 from fraisier.config import FraisierConfig
 from fraisier.config._lazy_env import LazyEnv
 from fraisier.errors import ConfigurationError
-from fraisier.smoke_tests import _resolve_url, load_smoke_tests, resolve_test_url
+from fraisier.smoke_tests import (
+    SmokeTest,
+    _resolve_url,
+    load_smoke_tests,
+    materialize_test_headers,
+    resolve_test_url,
+)
 
 
 def _write_config(tmp_path, content):
@@ -100,3 +114,99 @@ fraises:
         tests = load_smoke_tests(fraise, base_url="https://api.x")
         with pytest.raises(ConfigurationError, match=r"SMOKE_URL.*not set"):
             resolve_test_url(tests[0])
+
+
+def _smoke_test_with_headers(headers: dict[str, object]) -> SmokeTest:
+    """Construct a minimal SmokeTest with the given headers dict.
+
+    SmokeTest's declared header type is ``dict[str, str]``, but at
+    runtime ``LazyEnv`` values flow through here before
+    materialization. The cast widens the test fixture without
+    propagating the union into the production dataclass annotation.
+    """
+    return SmokeTest(
+        name="t",
+        method="GET",
+        url="https://api.x/",
+        headers=cast("dict[str, str]", headers),
+        body=None,
+        timeout=5,
+        on_failure="halt",
+        assertions=[],
+        token_provider=None,
+        base_url=None,
+    )
+
+
+class TestMaterializeTestHeaders:
+    def test_headers_resolved_to_str(self, monkeypatch):
+        # A LazyEnv header value must reach httpx as a concrete str —
+        # materialize_test_headers is the boundary.
+        monkeypatch.setenv("X_CUSTOM", "abc")
+        t = _smoke_test_with_headers({"X-Custom": LazyEnv("X_CUSTOM", "p")})
+        [materialized] = materialize_test_headers([t])
+        assert materialized.headers == {"X-Custom": "abc"}
+        assert isinstance(materialized.headers["X-Custom"], str)
+        assert not isinstance(materialized.headers["X-Custom"], LazyEnv)
+
+    def test_static_str_headers_pass_through(self):
+        t = _smoke_test_with_headers({"X-Plain": "literal"})
+        [materialized] = materialize_test_headers([t])
+        assert materialized.headers == {"X-Plain": "literal"}
+
+    def test_mixed_lazy_and_static_headers(self, monkeypatch):
+        monkeypatch.setenv("TOK", "secret123")
+        t = _smoke_test_with_headers(
+            {
+                "Authorization": LazyEnv("TOK", "p"),
+                "X-Plain": "literal",
+            }
+        )
+        [materialized] = materialize_test_headers([t])
+        assert materialized.headers == {
+            "Authorization": "secret123",
+            "X-Plain": "literal",
+        }
+
+    def test_unset_lazy_header_raises_with_path(self, monkeypatch):
+        # The error must surface from materialize_test_headers, not
+        # later from httpx — and must carry the YAML path (Phase 4).
+        monkeypatch.delenv("TOK", raising=False)
+        t = _smoke_test_with_headers(
+            {"Authorization": LazyEnv("TOK", "fraises.api.prod.smoke[0].headers.A")}
+        )
+        with pytest.raises(
+            ConfigurationError,
+            match=r"TOK.*fraises\.api\.prod\.smoke\[0\]\.headers\.A",
+        ):
+            materialize_test_headers([t])
+
+    def test_token_provider_path_also_materializes_static(self, monkeypatch):
+        # When a token_provider injects its own header, the existing
+        # static headers must also be materialized — they were just
+        # being passed through before.
+        from fraisier.token_providers import ExecTokenProvider
+
+        monkeypatch.setenv("EXTRA", "xvalue")
+
+        # Subclass-with-overridden-resolve avoids spawning a subprocess
+        # in this unit test; we only care that the static headers get
+        # materialized alongside the injected provider header.
+        class _StubProvider(ExecTokenProvider):
+            def resolve(self) -> str:
+                return "static-token"
+
+        provider = _StubProvider(
+            header="Authorization",
+            format="Bearer {token}",
+            command=("/bin/true",),
+        )
+        t = replace(
+            _smoke_test_with_headers({"X-Extra": LazyEnv("EXTRA", "p")}),
+            token_provider=provider,
+        )
+        [materialized] = materialize_test_headers([t])
+        # Static LazyEnv header resolved AND provider header injected.
+        assert materialized.headers["X-Extra"] == "xvalue"
+        assert materialized.headers["Authorization"] == "Bearer static-token"
+        assert all(isinstance(v, str) for v in materialized.headers.values())
