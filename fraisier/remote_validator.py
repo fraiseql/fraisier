@@ -299,7 +299,9 @@ class RemoteDeploymentValidator:
         )
 
     def _check_systemd_service(self) -> ValidationCheckResult:
-        service_name = self.fraise_config.get("systemd_service")
+        from fraisier.naming import resolve_systemd_service
+
+        service_name = resolve_systemd_service(self.fraise_config)
         if not service_name:
             return ValidationCheckResult(
                 name="systemd_service",

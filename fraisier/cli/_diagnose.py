@@ -49,10 +49,12 @@ def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> 
     project_name = config.project_name
     run_dir = Path("/run/fraisier")
     socket_unit = deploy_socket_name(fraise_config, environment, fraise)
+    from fraisier.naming import resolve_systemd_service
+
     socket_stem = socket_unit.removesuffix(".socket")
     socket_path = run_dir / socket_stem / "deploy.sock"
     status_path = run_dir / f"{project_name}-{environment}.last_deployment"
-    service_name = fraise_config.get("systemd_service")
+    service_name = resolve_systemd_service(fraise_config)
 
     socket_check = _diagnose_socket_connectivity(socket_path)
     status_check = _diagnose_deployment_status(status_path)
@@ -96,7 +98,7 @@ def _build_diagnostic_issues(
     status_check: dict,
     systemd_check: dict,
     socket_unit_check: dict,
-    service_name: str,
+    service_name: str | None,
     socket_unit: str,
     socket_path: Path,
     ctx: click.Context,
@@ -311,7 +313,7 @@ def _diagnose_deployment_status(status_path: Path) -> dict:
     return result
 
 
-def _diagnose_systemd_service(service_name: str) -> dict:
+def _diagnose_systemd_service(service_name: str | None) -> dict:
     """Check systemd service status."""
     if not service_name:
         return {"service_name": None, "service_exists": False, "service_running": False}

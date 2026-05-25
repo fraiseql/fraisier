@@ -693,7 +693,9 @@ class DeploymentReadinessValidator:
 
     def _check_systemd_service_exists(self) -> ValidationCheckResult:
         """Check systemd service is installed and active."""
-        service_name = self.fraise_config.get("systemd_service")
+        from fraisier.naming import resolve_systemd_service
+
+        service_name = resolve_systemd_service(self.fraise_config)
 
         if not service_name:
             return ValidationCheckResult(

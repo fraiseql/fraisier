@@ -565,8 +565,9 @@ def db_restore(
         if confiture_config_rel.is_absolute()
         else app_path / confiture_config_rel
     )
-    _raw_svc = env_config.get("systemd_service")
-    systemd_service: str | None = str(_raw_svc) if _raw_svc else None
+    from fraisier.naming import resolve_systemd_service
+
+    systemd_service: str | None = resolve_systemd_service(env_config)
     admin_url = db_cfg.get("admin_url")
     if not admin_url:
         console.print(

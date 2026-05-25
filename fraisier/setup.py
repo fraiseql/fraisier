@@ -332,12 +332,14 @@ class ServerSetup:
         ]
 
     def _plan_app_services(self) -> list[SetupAction]:
+        from fraisier.naming import resolve_systemd_service
+
         output_dir = self.config.scaffold.output_dir
         project = self.config.project_name
         actions: list[SetupAction] = []
         for fraise_name, env_name, env_config in self._iter_fraise_environments():
             generated = f"{project}_{fraise_name}_{env_name}.service"
-            svc = env_config.get("systemd_service", generated)
+            svc = resolve_systemd_service(env_config) or generated
             src = f"{output_dir}/systemd/{generated}"
             dst = f"/etc/systemd/system/{svc}"
             actions.append(
@@ -458,10 +460,12 @@ class ServerSetup:
                 category="systemd",
             ),
         ]
+        from fraisier.naming import resolve_systemd_service
+
         project = self.config.project_name
         for fraise_name, env_name, env_config in self._iter_fraise_environments():
             generated = f"{project}_{fraise_name}_{env_name}.service"
-            svc = env_config.get("systemd_service", generated)
+            svc = resolve_systemd_service(env_config) or generated
             actions.append(
                 SetupAction(
                     description=f"Enable {svc}",

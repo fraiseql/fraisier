@@ -1,6 +1,46 @@
-"""Centralised naming helpers for systemd unit names."""
+"""Centralised naming helpers for systemd unit names.
+
+Resolution of ``!envvar``-tagged ``systemd_service`` /
+``systemd_deploy_socket`` fields happens here, at the read boundary
+(Phase 5 Cycle 5.8). Downstream consumers (validation,
+remote_validator, setup, cli helpers, cli/db, cli/_diagnose) call
+:func:`resolve_systemd_service` and :func:`resolve_systemd_deploy_socket`
+to get a concrete ``str | None`` — never a ``LazyEnv`` — before
+shelling out to ``systemctl`` (which won't autocoerce) or computing
+string-method names like ``.removesuffix(".service")``.
+"""
 
 from __future__ import annotations
+
+from fraisier.config._lazy_env import LazyEnv, to_str
+
+
+def resolve_systemd_service(env_config: dict) -> str | None:
+    """Return ``env_config['systemd_service']`` resolved to a ``str | None``.
+
+    A ``LazyEnv`` value is materialized at this boundary, surfacing
+    unset-env-var errors with their YAML path. ``None`` and missing
+    keys both return ``None`` so callers can use a single truthy check.
+    """
+    value = env_config.get("systemd_service")
+    if value is None:
+        return None
+    if isinstance(value, LazyEnv):
+        return to_str(value)
+    return str(value)
+
+
+def resolve_systemd_deploy_socket(env_config: dict) -> str | None:
+    """Return ``env_config['systemd_deploy_socket']`` resolved to a ``str | None``.
+
+    See :func:`resolve_systemd_service` for the contract.
+    """
+    value = env_config.get("systemd_deploy_socket")
+    if value is None:
+        return None
+    if isinstance(value, LazyEnv):
+        return to_str(value)
+    return str(value)
 
 
 def deploy_socket_name(
@@ -14,7 +54,7 @@ def deploy_socket_name(
     3. f"fraisier-{fraise_name}-{env_key}.socket" (fraise + env key, unique per fraise)
     4. f"fraisier-{env_key}.socket" (env key only, legacy fallback)
     """
-    if override := env_config.get("systemd_deploy_socket"):
+    if override := resolve_systemd_deploy_socket(env_config):
         return override if override.endswith(".socket") else f"{override}.socket"
     if name := env_config.get("name"):
         return f"fraisier-{name}.socket"
@@ -36,9 +76,9 @@ def app_service_name(
     2. ``service.service_name`` (nested under the service: key)
     3. Default: ``{project_name}_{fraise_name}_{env_name}.service``
     """
-    systemd_service = env_config.get("systemd_service")
+    systemd_service = resolve_systemd_service(env_config)
     if systemd_service:
-        base = str(systemd_service).removesuffix(".service")
+        base = systemd_service.removesuffix(".service")
         return f"{base}.service"
 
     override = (env_config.get("service") or {}).get("service_name")

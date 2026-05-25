@@ -166,9 +166,11 @@ def _print_dry_run(
         or config.deployment.get_strategy(environment)
         or "basic"
     )
+    from fraisier.naming import resolve_systemd_service
+
     db = fraise_config.get("database")
     hc = fraise_config.get("health_check")
-    service = fraise_config.get("systemd_service")
+    service = resolve_systemd_service(fraise_config)
     app_path = fraise_config.get("app_path", "")
 
     table = Table(show_header=False, box=None, padding=(0, 2))
