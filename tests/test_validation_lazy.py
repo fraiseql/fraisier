@@ -61,9 +61,7 @@ fraises:
           database_url: {expr}
 """
 
-    def test_unset_envvar_database_url_loads_and_validates(
-        self, tmp_path, monkeypatch
-    ):
+    def test_unset_envvar_database_url_loads_and_validates(self, tmp_path, monkeypatch):
         # !envvar DB unset → load OK, get_fraise_environment OK.
         # No URL scheme check fires at validation time.
         monkeypatch.delenv("DB", raising=False)
@@ -94,9 +92,7 @@ fraises:
         errors = validate_pg_url_string("my_api", "database_url", resolved)
         assert errors and "PostgreSQL URL" in errors[0]
 
-    def test_str_database_url_with_non_pg_scheme_still_fails_at_load(
-        self, tmp_path
-    ):
+    def test_str_database_url_with_non_pg_scheme_still_fails_at_load(self, tmp_path):
         # Plain (non-!envvar) string values still get the scheme check.
         config_file = _write_config(
             tmp_path,
@@ -121,17 +117,13 @@ fraises:
 class TestSystemdServiceAcceptsLazyEnv:
     def test_unset_envvar_loads(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SVC", raising=False)
-        config_file = _write_config(
-            tmp_path, _SVC_TEMPLATE.format(expr="!envvar SVC")
-        )
+        config_file = _write_config(tmp_path, _SVC_TEMPLATE.format(expr="!envvar SVC"))
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
         assert isinstance(fraise["systemd_service"], LazyEnv)
 
     def test_str_invalid_still_fails(self, tmp_path):
-        config_file = _write_config(
-            tmp_path, _SVC_TEMPLATE.format(expr='"bad name"')
-        )
+        config_file = _write_config(tmp_path, _SVC_TEMPLATE.format(expr='"bad name"'))
         config = FraisierConfig(config_file)
         with pytest.raises(ValidationError, match=r"systemd_service.*invalid"):
             config.get_fraise_environment("my_api", "production")
@@ -270,9 +262,7 @@ class TestRestoreCompressionAcceptsLazyEnv:
         )
 
     def test_str_bogus_still_fails(self, tmp_path):
-        config_file = _write_config(
-            tmp_path, _RESTORE_TEMPLATE.format(expr="bogus")
-        )
+        config_file = _write_config(tmp_path, _RESTORE_TEMPLATE.format(expr="bogus"))
         config = FraisierConfig(config_file)
         with pytest.raises(
             ValidationError, match=r"preferred_compression must be one of"

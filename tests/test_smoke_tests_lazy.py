@@ -80,9 +80,7 @@ fraises:
         assert isinstance(tests[0].url, LazyEnv)
         assert tests[0].base_url == "https://api.x"
 
-    def test_resolve_test_url_runs_urljoin_at_http_time(
-        self, tmp_path, monkeypatch
-    ):
+    def test_resolve_test_url_runs_urljoin_at_http_time(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SMOKE_URL", "/graphql")
         config_file = _write_config(
             tmp_path, self._TEMPLATE.format(expr="!envvar SMOKE_URL")
@@ -92,9 +90,7 @@ fraises:
         tests = load_smoke_tests(fraise, base_url="https://api.x")
         assert resolve_test_url(tests[0]) == "https://api.x/graphql"
 
-    def test_resolve_test_url_raises_when_envvar_missing(
-        self, tmp_path, monkeypatch
-    ):
+    def test_resolve_test_url_raises_when_envvar_missing(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SMOKE_URL", raising=False)
         config_file = _write_config(
             tmp_path, self._TEMPLATE.format(expr="!envvar SMOKE_URL")
