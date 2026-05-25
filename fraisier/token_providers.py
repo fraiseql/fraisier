@@ -201,13 +201,15 @@ class Oauth2ClientCredentialsTokenProvider(TokenProvider):
     def resolve(self) -> str:
         return _post_oauth2_token(
             token_url=to_str(self.token_url),
-            form_body={
-                "grant_type": "client_credentials",
-                "client_id": to_str(self.client_id),
-                "client_secret": to_str(self.client_secret),
-                "audience": self.audience,
-                "scope": self.scope,
-            },
+            form_body=_resolve_form_body(
+                {
+                    "grant_type": "client_credentials",
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "audience": self.audience,
+                    "scope": self.scope,
+                }
+            ),
             timeout=self.timeout,
             provider_type=self.TYPE,
         )
@@ -252,12 +254,14 @@ class Oauth2RefreshTokenProvider(TokenProvider):
     def resolve(self) -> str:
         return _post_oauth2_token(
             token_url=to_str(self.token_url),
-            form_body={
-                "grant_type": "refresh_token",
-                "client_id": to_str(self.client_id),
-                "refresh_token": to_str(self.refresh_token),
-                "scope": self.scope,
-            },
+            form_body=_resolve_form_body(
+                {
+                    "grant_type": "refresh_token",
+                    "client_id": self.client_id,
+                    "refresh_token": self.refresh_token,
+                    "scope": self.scope,
+                }
+            ),
             timeout=self.timeout,
             provider_type=self.TYPE,
         )
@@ -407,6 +411,24 @@ def _validate_format(fmt: str) -> None:
             f"token_provider.format contains unsupported placeholder(s) "
             f"{other!r}; only '{{token}}' is substituted (got {fmt!r})"
         )
+
+
+def _resolve_form_body(
+    body: dict[str, str | LazyEnv | None],
+) -> dict[str, str | None]:
+    """Materialize every ``LazyEnv`` value in *body* via :func:`to_str`.
+
+    The token-endpoint POST is the boundary where the form body
+    becomes URL-encoded wire bytes; httpx does not call ``str()`` on
+    placeholder objects, so any unresolved ``LazyEnv`` would leak as a
+    repr into the request body. This helper consolidates the per-field
+    ``to_str`` calls that each ``resolve()`` method used to do inline,
+    keeping the resolution boundary in one searchable place.
+
+    ``None`` values pass through unchanged (consumed downstream as the
+    "drop this key" sentinel).
+    """
+    return {k: (to_str(v) if v is not None else None) for k, v in body.items()}
 
 
 def _post_oauth2_token(
