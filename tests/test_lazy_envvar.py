@@ -82,3 +82,48 @@ class TestLazyEnvStrParity:
         monkeypatch.setenv("V", "abc")
         x = LazyEnv("V", "p")
         assert hash(x) == hash("abc")
+
+
+class TestLazyEnvSafety:
+    def test_repr_does_not_resolve_when_unset(self, monkeypatch):
+        monkeypatch.delenv("V", raising=False)
+        x = LazyEnv("V", "p")
+        r = repr(x)
+        assert "V" in r
+        assert "p" in r
+
+    def test_repr_does_not_leak_value_when_set(self, monkeypatch):
+        monkeypatch.setenv("V", "TOPSECRET")
+        x = LazyEnv("V", "p")
+        assert "TOPSECRET" not in repr(x)
+
+    def test_repr_is_deterministic(self, monkeypatch):
+        monkeypatch.delenv("V", raising=False)
+        x = LazyEnv("V", "a.b")
+        assert repr(x) == "LazyEnv(name='V', yaml_path='a.b')"
+
+    def test_bool_is_true_without_resolving(self, monkeypatch):
+        monkeypatch.delenv("V", raising=False)
+        x = LazyEnv("V", "p")
+        # No ConfigurationError despite V being unset.
+        assert bool(x) is True
+
+    def test_pickle_round_trip(self, monkeypatch):
+        monkeypatch.delenv("V", raising=False)
+        x = LazyEnv("V", "p")
+        y = pickle.loads(pickle.dumps(x))
+        assert isinstance(y, LazyEnv)
+        assert y.name == "V"
+        assert y.yaml_path == "p"
+
+    def test_ordering_is_typeerror(self):
+        with pytest.raises(TypeError):
+            _ = LazyEnv("V", "p") < LazyEnv("W", "p")
+
+    def test_containment_is_typeerror(self):
+        with pytest.raises(TypeError):
+            _ = "a" in LazyEnv("V", "p")
+
+    def test_iter_is_typeerror(self):
+        with pytest.raises(TypeError):
+            iter(LazyEnv("V", "p"))

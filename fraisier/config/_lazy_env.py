@@ -63,6 +63,17 @@ class LazyEnv:
     def __hash__(self) -> int:
         return hash(self.resolve())
 
+    def __repr__(self) -> str:
+        # Never calls resolve(): repr is safe to log even when the env
+        # var carries a secret, and works fine when the var is unset.
+        return f"LazyEnv(name={self.name!r}, yaml_path={self.yaml_path!r})"
+
+    def __bool__(self) -> bool:
+        # A configured env-var reference is meaningfully different
+        # from an absent value; truthy without resolving. This makes
+        # `if value:` checks in validators safe (Phase 3).
+        return True
+
 
 def to_str(value: str | LazyEnv) -> str:
     """Boundary helper: resolve a ``LazyEnv`` or pass through a ``str``."""
