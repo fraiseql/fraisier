@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from fraisier.config import FraisierConfig, LazyEnv
+from fraisier.config import FraisierConfig, LazyEnv, to_str
 from fraisier.errors import ConfigurationError
 
 
@@ -48,12 +48,16 @@ class TestEnvvarYamlTag:
         assert fraise["secret"] == "eyJsuper-secret"
 
     def test_raises_when_env_var_missing(self, tmp_path, monkeypatch):
+        # Phase 2: load no longer raises; the error surfaces at the
+        # boundary where a consumer coerces the LazyEnv to a str.
         monkeypatch.delenv("MISSING_VAR", raising=False)
         config_file = _write_config(
             tmp_path, _TEMPLATE.format(expr="!envvar MISSING_VAR")
         )
-        with pytest.raises(ConfigurationError, match=r"!envvar.*MISSING_VAR.*not set"):
-            FraisierConfig(config_file)
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        with pytest.raises(ConfigurationError, match=r"MISSING_VAR.*not set"):
+            to_str(fraise["secret"])
 
     def test_unset_envvar_loads_without_raise(self, tmp_path, monkeypatch):
         # Phase 2: !envvar resolution is deferred to consumption.
