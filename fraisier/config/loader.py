@@ -4,11 +4,13 @@ Loads fraise definitions from fraises.yaml.
 Supports hierarchical fraise -> environment structure.
 """
 
+import functools
 import logging
 import os
 import re
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +18,6 @@ import yaml
 
 from fraisier.config._validation import (
     validate_branch_mapping,
-    validate_fraises,
-    validate_hooks,
     validate_notifications,
     validate_servers,
     validate_service_manager,
@@ -128,23 +128,47 @@ class FraisierConfig:
         raise FileNotFoundError(f"fraises.yaml not found in any of: {locations_str}")
 
     def _load(self) -> None:
-        """Load configuration from YAML file."""
+        """Load configuration from YAML file.
+
+        Stage 1 only: cheap, contentless structural checks. Deep section
+        validators (``fraises``, ``notifications``, ``hooks``) run lazily
+        on first access of the matching property.
+        """
         with Path(self.config_path).open() as f:
             self._config = yaml.load(f, Loader=_FraisierYamlLoader)
-        validate_fraises(self._config.get("fraises", {}))
+        # Stage 1: cross-reference + shape checks only.
         validate_servers(self._config.get("servers", {}))
         validate_branch_mapping(
             self._config.get("branch_mapping", {}),
             self._config.get("fraises", {}),
         )
-        validate_notifications(self._config.get("notifications", {}))
-        validate_hooks(self._config.get("hooks", {}))
         validate_service_manager(self._config.get("service_manager"))
+        # Drop any cached Stage-2 results from a prior load.
+        for prop in ("notifications",):
+            self.__dict__.pop(prop, None)
 
-    @property
+    def _validate_then_return(
+        self,
+        validator: Callable[[Any], None],
+        raw: Any,
+    ) -> Any:
+        """Run a Stage-2 validator, then return the raw value unchanged.
+
+        Used by ``@cached_property`` accessors so a section's deep
+        validation runs on first access and is memoized via the standard
+        ``functools`` cache (which does NOT cache exceptions — failed
+        validations re-raise on every subsequent access).
+        """
+        validator(raw)
+        return raw
+
+    @functools.cached_property
     def notifications(self) -> dict[str, Any]:
-        """Get notifications configuration."""
-        return self._config.get("notifications", {})
+        """Notifications configuration, validated on first access."""
+        return self._validate_then_return(
+            validate_notifications,
+            self._config.get("notifications", {}),
+        )
 
     def reload(self) -> None:
         """Reload configuration from file."""
