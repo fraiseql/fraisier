@@ -17,6 +17,86 @@ def _write(tmp_path, content):
     return path
 
 
+class TestCachingExceptionSemantics:
+    """Stage-2 caches must NOT remember exceptions.
+
+    A failed validation on first access must re-raise on every
+    subsequent access — otherwise an operator who edits the file to
+    fix the error would still see the cached failure.
+    """
+
+    def test_notifications_raises_on_each_failed_access(self, tmp_path):
+        cfg = _write(
+            tmp_path,
+            """
+git:
+  provider: github
+notifications:
+  on_failure:
+    - type: fax_machine
+fraises:
+  api:
+    type: api
+    environments:
+      prod:
+        app_path: /tmp/api
+""",
+        )
+        config = FraisierConfig(str(cfg))
+        with pytest.raises(ValidationError, match="fax_machine"):
+            _ = config.notifications
+        # functools.cached_property does NOT cache exceptions —
+        # the second access must also raise.
+        with pytest.raises(ValidationError, match="fax_machine"):
+            _ = config.notifications
+
+    def test_hooks_raises_on_each_failed_access(self, tmp_path):
+        cfg = _write(
+            tmp_path,
+            """
+git:
+  provider: github
+hooks:
+  before_deploy:
+    - type: fax_machine
+fraises:
+  api:
+    type: api
+    environments:
+      prod:
+        app_path: /tmp/api
+""",
+        )
+        config = FraisierConfig(str(cfg))
+        with pytest.raises(ValidationError, match="fax_machine"):
+            _ = config.hooks
+        with pytest.raises(ValidationError, match="fax_machine"):
+            _ = config.hooks
+
+    def test_fraise_env_raises_on_each_failed_access(self, tmp_path):
+        cfg = _write(
+            tmp_path,
+            """
+git:
+  provider: github
+fraises:
+  api:
+    type: api
+    environments:
+      prod:
+        app_path: /tmp/api
+        health_check:
+          timeout: "not-a-number"
+""",
+        )
+        config = FraisierConfig(str(cfg))
+        with pytest.raises(ValidationError, match="timeout"):
+            config.get_fraise_environment("api", "prod")
+        # functools.cache also does NOT cache exceptions.
+        with pytest.raises(ValidationError, match="timeout"):
+            config.get_fraise_environment("api", "prod")
+
+
 class TestStage1Budget:
     """Stage 1 must not trigger deep validators."""
 
