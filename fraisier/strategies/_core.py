@@ -5,8 +5,12 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from fraisier.dbops._url import resolve_db_url
+
+if TYPE_CHECKING:
+    from fraisier.config._lazy_env import LazyEnv
 from fraisier.dbops._validation import validate_pg_identifier
 from fraisier.dbops.confiture import (
     migrate_down,
@@ -41,14 +45,17 @@ class MigrateStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
-        database_url: str | None = None,
+        database_url: str | LazyEnv | None = None,
         hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
+        # Resolve LazyEnv at the strategy boundary so every downstream
+        # dbops call receives a concrete `str` (Phase 5 Cycle 5.5).
+        db_url = resolve_db_url(database_url, role="database_url")
         preflight(
             confiture_config,
             migrations_dir=migrations_dir,
             allow_irreversible=allow_irreversible,
-            database_url=database_url,
+            database_url=db_url,
         )
 
         result = migrate_up(
@@ -56,7 +63,7 @@ class MigrateStrategy(Strategy):
             migrations_dir=migrations_dir,
             pre_migrate_verify=pre_migrate_verify,
             require_reversible=not allow_irreversible,
-            database_url=database_url,
+            database_url=db_url,
             hooks_config=hooks_config,
         )
         return StrategyResult(success=True, migrations_applied=result.steps_applied)
@@ -67,14 +74,15 @@ class MigrateStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         steps: int,
-        database_url: str | None = None,
+        database_url: str | LazyEnv | None = None,
         hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
+        db_url = resolve_db_url(database_url, role="database_url")
         result = migrate_down(
             confiture_config,
             migrations_dir=migrations_dir,
             steps=steps,
-            database_url=database_url,
+            database_url=db_url,
             hooks_config=hooks_config,
         )
         return StrategyResult(
@@ -105,7 +113,7 @@ class RebuildStrategy(Strategy):
         *,
         required_roles: list[str] | None = None,
         project_dir: Path | None = None,
-        admin_url: str | None = None,
+        admin_url: str | LazyEnv | None = None,
         create_template: bool = False,
         template_name: str | None = None,
         app_version: str | None = None,
@@ -272,7 +280,7 @@ class RebuildStrategy(Strategy):
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
         pre_migrate_verify: bool = False,
-        database_url: str | None = None,
+        database_url: str | LazyEnv | None = None,
         hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         import tempfile
@@ -282,12 +290,17 @@ class RebuildStrategy(Strategy):
         from confiture.config.environment import Environment
         from confiture.core.builder import SchemaBuilder
 
+        # Resolve LazyEnv inputs at the strategy boundary so pydantic
+        # validation of the confiture Environment and every downstream
+        # dbops call receives concrete `str` URLs (Phase 5 Cycle 5.5).
+        db_url = resolve_db_url(database_url, role="database_url")
+
         # Load environment from config YAML.
         raw: dict = yaml.safe_load(  # type: ignore[assignment]
             Path(confiture_config).read_text()
         )
-        if database_url:
-            raw["database_url"] = database_url
+        if db_url:
+            raw["database_url"] = db_url
         env = Environment.model_validate(raw)
 
         # Parse database name and owner from the connection URL.
@@ -299,7 +312,7 @@ class RebuildStrategy(Strategy):
         # Priority: explicit admin_url > derived from database_url.
         from fraisier.dbops._url import replace_db_name
 
-        admin_url: str | None = self._admin_url
+        admin_url: str | None = resolve_db_url(self._admin_url, role="admin_url")
         if not admin_url:
             admin_url = replace_db_name(env.database_url, "postgres")
         if not admin_url:  # pragma: no cover - defensive
