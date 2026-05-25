@@ -92,3 +92,110 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
     grep all the places that widen the type for env-var deferral.
     """
     return isinstance(value, str | LazyEnv)
+
+
+# Inventory of remaining ``isinstance(x, str)`` sites (Phase 5 Cycle 5.9).
+#
+# Audit conclusion: every remaining ``isinstance(_, str)`` call in
+# ``fraisier/`` is either (a) already LazyEnv-aware, (b) operates on a
+# non-config value (subprocess output, IPC payload, IdP response, public
+# API argument), or (c) lives in an else-branch after a LazyEnv
+# isinstance check has already widened the type. None of them need
+# ``is_string_like``.
+#
+#   File:Line                                Status      Reason
+#   ───────────────────────────────────────  ──────────  ─────────────────
+#   _lazy_env.py:61                          internal    LazyEnv.__eq__
+#                                                        comparing to a str
+#                                                        peer; not a
+#                                                        consumer site.
+#
+#   _validation.py:158 (health_check.field)  not-eligible
+#                                                        version_field /
+#                                                        migration_field
+#                                                        are response-shape
+#                                                        identifiers, not
+#                                                        !envvar-eligible.
+#
+#   _validation.py:308 (validate_pg_url)     after-LazyEnv
+#                                                        Line 306 returns
+#                                                        early on LazyEnv;
+#                                                        line 308 validates
+#                                                        a concrete str.
+#
+#   _validation.py:371 (zfs.<field>)         after-LazyEnv
+#                                                        Pre-checked via
+#                                                        is_string_like at
+#                                                        line 366; line 371
+#                                                        is the str-branch.
+#
+#   _validation.py:427 (preferred_compression) after-LazyEnv
+#                                                        Line 425 short-
+#                                                        circuits on
+#                                                        LazyEnv; line 427
+#                                                        is the str branch.
+#
+#   schema.py:294 (restricted_paths[])       not-eligible
+#                                                        Element-shape
+#                                                        union of str|dict
+#                                                        in the nginx
+#                                                        restricted_paths
+#                                                        list — items are
+#                                                        literal paths, not
+#                                                        secrets.
+#
+#   install_helper.py:91,94                  non-config  Validates an IPC
+#                                                        request payload
+#                                                        received over a
+#                                                        Unix socket; the
+#                                                        bytes never come
+#                                                        from fraises.yaml.
+#
+#   providers/docker_compose/provider.py:166 non-config  Branch on whether
+#                                                        the runtime
+#                                                        ``command`` arg
+#                                                        is a str (shlex-
+#                                                        split) or a list.
+#                                                        Caller passes a
+#                                                        plain str.
+#
+#   smoke_tests.py:261 (load_smoke_tests)    LazyEnv-aware
+#                                                        Phase 3: branches
+#                                                        on str vs LazyEnv
+#                                                        for the URL-based
+#                                                        default-name
+#                                                        derivation.
+#
+#   token_providers.py:390 (_validate_format) not-eligible
+#                                                        Phase 3 explicitly
+#                                                        rejects !envvar
+#                                                        for `format` —
+#                                                        the str check is
+#                                                        the post-rejection
+#                                                        guard.
+#
+#   token_providers.py:488 (access_token)    non-config  IdP response body
+#                                                        field; not a
+#                                                        fraises.yaml
+#                                                        value.
+#
+#   validation.py:875 (dependency_command)   not-eligible
+#                                                        health_check
+#                                                        dependency command
+#                                                        is `str | list`
+#                                                        per schema; not
+#                                                        !envvar-eligible.
+#
+#   versioning.py:382 (dep)                  non-config  Parses
+#                                                        pyproject.toml
+#                                                        dependency entries.
+#
+#   zfs/operations.py:41,50                  non-config  Public API
+#                                                        argument checks on
+#                                                        dataset / snapshot
+#                                                        names supplied by
+#                                                        callers, not from
+#                                                        fraises.yaml.
+#
+# If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
+# with ``is_string_like`` and add a row above.
