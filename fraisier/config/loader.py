@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from fraisier.config._lazy_env import LazyEnv
 from fraisier.config._validation import (
     validate_branch_mapping,
     validate_hooks,
@@ -59,30 +60,33 @@ _VALID_SERVICE_TYPES = {
 
 
 class _FraisierYamlLoader(yaml.SafeLoader):
-    """SafeLoader subclass that resolves ``!envvar`` tags from os.environ.
+    """SafeLoader subclass that materializes ``!envvar`` tags as ``LazyEnv``.
 
     Use:
         headers:
           Authorization: !envvar SMOKE_TEST_JWT
 
-    Missing variables raise ``ConfigurationError`` at load time so the
-    misconfig is visible immediately rather than at deploy time. Empty
-    strings are accepted: an env var set to ``""`` is still considered
-    "set" and resolves to the empty string.
+    Resolution is deferred: parsing produces a :class:`LazyEnv`
+    placeholder; the ``os.environ`` lookup happens at consumption time
+    via :func:`to_str` (or any of the str-parity dunders on the
+    placeholder). Empty strings are still "set" and resolve to ``""``.
     """
 
 
-def _construct_envvar(loader: yaml.Loader, node: yaml.Node) -> str:
+def _construct_envvar(loader: yaml.Loader, node: yaml.Node) -> LazyEnv:
+    """Construct a :class:`LazyEnv` for a ``!envvar`` YAML tag.
+
+    No ``os.environ`` lookup happens here. The placeholder carries the
+    env var ``name``; ``yaml_path`` is set to ``"<unknown>"`` for now —
+    Phase 4 walks the parse tree to attach real YAML paths so error
+    messages can point operators at the offending line.
+    """
     if not isinstance(node, yaml.ScalarNode):
         raise ConfigurationError(
             f"!envvar expects a scalar variable name, got {type(node).__name__}"
         )
     name = loader.construct_scalar(node)
-    if name not in os.environ:
-        raise ConfigurationError(
-            f"!envvar references environment variable {name!r} which is not set"
-        )
-    return os.environ[name]
+    return LazyEnv(name, yaml_path="<unknown>")
 
 
 _FraisierYamlLoader.add_constructor("!envvar", _construct_envvar)

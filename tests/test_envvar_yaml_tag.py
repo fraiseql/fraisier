@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from fraisier.config import FraisierConfig
+from fraisier.config import FraisierConfig, LazyEnv
 from fraisier.errors import ConfigurationError
 
 
@@ -54,6 +54,19 @@ class TestEnvvarYamlTag:
         )
         with pytest.raises(ConfigurationError, match=r"!envvar.*MISSING_VAR.*not set"):
             FraisierConfig(config_file)
+
+    def test_unset_envvar_loads_without_raise(self, tmp_path, monkeypatch):
+        # Phase 2: !envvar resolution is deferred to consumption.
+        # Loading a YAML that references an unset env var no longer
+        # raises at parse time — the value materializes as a LazyEnv.
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        config_file = _write_config(
+            tmp_path, _TEMPLATE.format(expr="!envvar MISSING_VAR")
+        )
+        config = FraisierConfig(config_file)
+        fraise = config.get_fraise_environment("my_api", "production")
+        assert isinstance(fraise["secret"], LazyEnv)
+        assert fraise["secret"].name == "MISSING_VAR"
 
     def test_empty_string_env_var_resolves(self, tmp_path, monkeypatch):
         # An empty string is still a "set" env var; resolves to "".
