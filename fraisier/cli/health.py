@@ -84,10 +84,10 @@ def health(
     result = checker.check_all()
 
     if as_json:
-        import json
+        from ._json import dumps as json_dumps
 
         data = result.to_dict(response_config=health_config.response)
-        click.echo(json.dumps(data, indent=2))
+        click.echo(json_dumps(data, indent=2))
         return
 
     # Rich table output
@@ -150,9 +150,9 @@ def validate(ctx: click.Context, as_json: bool) -> None:
         fraisier validate
         fraisier validate --json
     """
-    import json
-
     from fraisier.validation import ValidationRunner
+
+    from ._json import dumps as json_dumps
 
     config = ctx.obj["config"]
     runner = ValidationRunner(config)
@@ -165,7 +165,7 @@ def validate(ctx: click.Context, as_json: bool) -> None:
             "passed": all_passed,
             "checks": [r.to_dict() for r in results],
         }
-        click.echo(json.dumps(data, indent=2))
+        click.echo(json_dumps(data, indent=2))
     else:
         errors = [r for r in results if not r.passed and r.severity == "error"]
         warnings = [r for r in results if not r.passed and r.severity == "warning"]
@@ -212,9 +212,9 @@ def validate_deployment(
         fraisier validate-deployment my_api production
         fraisier validate-deployment my_api staging --json
     """
-    import json
-
     from fraisier.validation import DeploymentReadinessValidator
+
+    from ._json import dumps as json_dumps
 
     config = ctx.obj["config"]
 
@@ -236,7 +236,7 @@ def validate_deployment(
             "passed": all_passed,
             "checks": [r.to_dict() for r in results],
         }
-        click.echo(json.dumps(data, indent=2))
+        click.echo(json_dumps(data, indent=2))
     else:
         # Rich table output
         console.print(
