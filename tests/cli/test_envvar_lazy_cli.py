@@ -316,3 +316,28 @@ def test_validate_no_resolve_envvars_default(tmp_path, monkeypatch):
     assert "SMOKE_CLIENT_SECRET" not in result.output, (
         f"validate must not resolve !envvar by default:\n{result.output}"
     )
+
+
+# Cycle 6.5 — `--resolve-envvars` is the opt-in eager-fail mode for the
+# pre-deploy CI gate. With the flag, every reachable !envvar is
+# resolved and unset references surface with the env var name AND the
+# YAML path. Without the flag, behavior matches the default validate.
+
+
+def test_validate_resolve_envvars_opt_in(tmp_path, monkeypatch):
+    monkeypatch.delenv("SMOKE_CLIENT_SECRET", raising=False)
+    cfg = _write(tmp_path, _CONFIG_WITH_SMOKE_SECRET)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-c", str(cfg), "validate", "--resolve-envvars"])
+
+    assert result.exit_code != 0, (
+        f"--resolve-envvars should fail when !envvar is unset:\n{result.output}"
+    )
+    assert "SMOKE_CLIENT_SECRET" in result.output, (
+        f"error should name the env var:\n{result.output}"
+    )
+    assert (
+        "fraises.api.environments.prod.smoke_tests[0].token_provider.client_secret"
+        in result.output
+    ), f"error should name the YAML path:\n{result.output}"

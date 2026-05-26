@@ -17,6 +17,7 @@ from typing import Any
 
 from fraisier import ssh
 from fraisier.config import FraisierConfig
+from fraisier.config._lazy_env import LazyEnv
 from fraisier.errors import ConfigurationError, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,49 @@ def _collect_all_validation_errors(
             except (ValidationError, ConfigurationError) as exc:
                 errors.append((f"fraises.{fraise_name}.{env_name}", exc))
 
+    return errors
+
+
+def _force_resolve_all_envvars(
+    config: FraisierConfig,
+) -> list[ConfigurationError]:
+    """Walk every reachable ``LazyEnv`` in *config* and resolve it.
+
+    Backs ``fraisier validate --resolve-envvars`` — the pre-deploy gate
+    that promotes the default lazy traversal back to the historical
+    eager-fail invariant. The walker mirrors the shape of
+    ``fraisier.config.loader._attach_paths``; kept separate so each
+    can evolve independently. Each unset ``!envvar`` produces one
+    :class:`ConfigurationError` whose message already names the YAML
+    path (stamped by the loader walker in Phase 4).
+
+    Shared LazyEnv instances reachable from multiple YAML paths
+    (anchors / aliases) are resolved exactly once — collecting them
+    twice would inflate the error list without telling the operator
+    anything new about why a variable is unset.
+    """
+    errors: list[ConfigurationError] = []
+    seen: set[int] = set()
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, LazyEnv):
+            if id(obj) in seen:
+                return
+            seen.add(id(obj))
+            try:
+                obj.resolve()
+            except ConfigurationError as exc:
+                errors.append(exc)
+            return
+        if isinstance(obj, dict):
+            for value in obj.values():
+                walk(value)
+            return
+        if isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(config._config)
     return errors
 
 

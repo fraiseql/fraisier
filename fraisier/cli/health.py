@@ -139,8 +139,19 @@ def health(
 
 @main.command(name="validate")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option(
+    "--resolve-envvars",
+    "resolve_envvars",
+    is_flag=True,
+    help=(
+        "Force-resolve every !envvar reference. Fails with the YAML path "
+        "of any unset variable. Recommended for pre-deploy CI gates; "
+        "default validate skips resolution so structural lint can run "
+        "without secrets."
+    ),
+)
 @click.pass_context
-def validate(ctx: click.Context, as_json: bool) -> None:
+def validate(ctx: click.Context, as_json: bool, resolve_envvars: bool) -> None:
     """Run pre-deploy validation checks.
 
     Checks: config validity, deploy user, fraise environments.
@@ -149,14 +160,28 @@ def validate(ctx: click.Context, as_json: bool) -> None:
     Examples:
         fraisier validate
         fraisier validate --json
+        fraisier validate --resolve-envvars
     """
-    from fraisier.validation import ValidationRunner
+    from fraisier.validation import ValidationRunner, _force_resolve_all_envvars
 
     from ._json import dumps as json_dumps
 
     config = ctx.obj["config"]
     runner = ValidationRunner(config)
     results = runner.run_all()
+
+    if resolve_envvars:
+        from fraisier.validation import ValidationCheckResult
+
+        for exc in _force_resolve_all_envvars(config):
+            results.append(
+                ValidationCheckResult(
+                    name="envvar_resolution",
+                    passed=False,
+                    message=str(exc),
+                    severity="error",
+                )
+            )
 
     all_passed = all(r.passed for r in results)
 
