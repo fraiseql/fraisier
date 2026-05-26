@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Lazy `!envvar` resolution** ([#220](https://github.com/fraiseql/fraisier/issues/220)). Env vars referenced via `!envvar` are now resolved at consumption time, not at config load. Subcommands that don't enter a section (`fraisier --help`, `fraisier --version`, `fraisier ship --help`, `fraisier ship patch --pr ...`, `fraisier list`) no longer require those env vars to be set. Resolution failures raise `ConfigurationError` (or the consumer's wrapping exception, e.g. `SmokeTestError` for smoke probes) with a message that names the full dotted YAML key path of the offending placeholder — `fraises.<name>.environments.<env>.smoke_tests[0].headers.Authorization` instead of an opaque `KeyError: 'SMOKE_TEST_JWT'`.
+- **Read-each-access semantics for `!envvar`.** Each consumption of a `!envvar` field re-reads `os.environ`; there is no resolution cache. Previously the value was baked into the loaded config dict at parse time. The one-shot CLI invocation is unaffected; long-running consumers (the webhook daemon, tests using `monkeypatch.setenv`) now observe env-var mutations made after `FraisierConfig` construction.
+- **Section-lazy validation.** Deep section validators (`fraises`, `notifications`, `hooks`) now run on first access of the matching property, not at `FraisierConfig.__init__`. Stage 1 of load is restricted to cheap structural / cross-reference checks (`servers`, `branch_mapping`, `service_manager`). Callers that depended on eager load failure for a specific section should use `fraisier validate` or access the relevant property explicitly.
+- **`fraisier validate` semantics.** Default validate traverses every section and reports structural errors but does NOT resolve `!envvar` references — CI workflows that lint YAML shape without secrets are first-class. Pass `--resolve-envvars` to opt into the previous eager-resolution behavior (recommended for pre-deploy CI gates that need every secret materialized).
+- **`fraisier validate --json` placeholder output.** Unresolved `!envvar` fields in dump output now appear as `"<envvar:NAME>"` placeholders rather than resolved values. Downstream JSON parsers should not assume resolved secrets in `validate --json` output.
+- **YAML anchor / alias path tracking.** When an `!envvar` node is anchored and reused (`&shared !envvar X` … `*shared`), the resolution error names the *first* location encountered during the depth-first walk, not all of them. Operators diagnosing a shared anchor see only one of the use sites. PyYAML constructs each anchored node once, so this is the only stable single-path attribution available.
+
+### Added
+
+- **`fraisier validate --resolve-envvars` flag.** Walks the parsed config tree, resolves every reachable `LazyEnv`, and collects errors. Each unset variable surfaces with its env var name AND the YAML key path where it was declared. Shared LazyEnv instances (anchors / aliases) are resolved once per invocation.
+- **`LazyEnv` placeholder and `to_str()` boundary helper** exported from `fraisier.config`. Plugin and external-callsite authors handling config values should call `to_str()` at any non-trivial consumer boundary (subprocess argv, HTTP headers, file paths). `LazyEnv` carries the env var name and YAML path for diagnostics; its `__repr__` never resolves, so logging a raw placeholder cannot leak the secret.
+
+### Breaking
+
+- **`format: !envvar X` rejected for token providers.** The token-provider `format` field must now be a literal string. Migration: replace `format: !envvar BEARER_FORMAT` with the literal pattern, e.g. `format: "Bearer {token}"`. Rationale: `format` is a `str.format`-style template whose `{token}` placeholder must be visible at config-load time for the placeholder-validity check; lazy resolution would defer that check until deploy time, by which point the template error is harder to diagnose.
+
 ## [0.22.2] - 2026-05-23
 
 ### Fixed
@@ -1070,8 +1090,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Enterprise-grade reliability** with proper error handling and timeouts
 
 ---
-
-## [Unreleased]
 
 ## [1.0.0] - 2026-03-15
 

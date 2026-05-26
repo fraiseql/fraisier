@@ -84,9 +84,12 @@ branch_mapping:
 
 ### How secrets work
 
-Use the `!envvar VAR_NAME` YAML tag in `fraises.yaml`. The tag resolves to the contents of
-`os.environ['VAR_NAME']` when the config file is parsed; missing variables raise
-`ConfigurationError` immediately. Never commit actual secrets. A typical environment file at
+Use the `!envvar VAR_NAME` YAML tag in `fraises.yaml`. The tag parses into a placeholder
+whose `os.environ['VAR_NAME']` lookup is deferred to consumption time; subcommands that do not
+enter the relevant section run without the env tag set. Missing variables raise
+`ConfigurationError` at the consumer boundary, naming the full YAML key path of the placeholder.
+For a pre-deploy CI gate that wants every variable materialized in one pass, run
+`fraisier validate --resolve-envvars`. Never commit actual secrets. A typical environment file at
 `/etc/myapp/prod.env`:
 
 ```bash

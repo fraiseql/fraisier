@@ -2,6 +2,24 @@
 
 Loads fraise definitions from fraises.yaml.
 Supports hierarchical fraise -> environment structure.
+
+Loading is split into two stages:
+
+* **Stage 1** — cheap, contentless structural checks run in
+  :meth:`FraisierConfig._load`: ``servers``, ``branch_mapping``, and
+  ``service_manager``. Stage 1 never reads :mod:`os.environ` and never
+  invokes a deep section validator.
+* **Stage 2** — deep validators for ``fraises``, ``notifications``, and
+  ``hooks`` run on first access of the matching property (e.g.
+  :meth:`FraisierConfig.notifications`,
+  :meth:`FraisierConfig.get_fraise_environment`) and memoize via
+  :func:`functools.cached_property` / :func:`functools.cache`.
+
+``!envvar`` references parse into :class:`fraisier.config.LazyEnv`
+placeholders; the :func:`os.environ` lookup is deferred to consumption
+time (``to_str(value)`` at consumer boundaries) and re-reads on every
+access. ``fraisier validate --resolve-envvars`` forces a one-shot walk
+that resolves every reachable placeholder for the pre-deploy CI gate.
 """
 
 import functools
