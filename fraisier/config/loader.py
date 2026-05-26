@@ -95,9 +95,9 @@ def _construct_envvar(loader: yaml.Loader, node: yaml.Node) -> LazyEnv:
     """Construct a :class:`LazyEnv` for a ``!envvar`` YAML tag.
 
     No ``os.environ`` lookup happens here. The placeholder carries the
-    env var ``name``; ``yaml_path`` is set to ``"<unknown>"`` for now —
-    Phase 4 walks the parse tree to attach real YAML paths so error
-    messages can point operators at the offending line.
+    env var ``name``; ``yaml_path`` is set to ``"<unknown>"`` and
+    overwritten by :func:`_attach_paths` once the parse tree is fully
+    built, so resolution failures can name the offending YAML line.
     """
     if not isinstance(node, yaml.ScalarNode):
         raise ConfigurationError(

@@ -8,9 +8,9 @@ The requirement that strategies provide an ``admin_url`` (and therefore a
 ``connection_url`` at this layer) is enforced at config-load time by
 ``fraisier.validation``.
 
-Contract: ``connection_url`` is always a concrete ``str`` here, never a
-``fraisier.config.LazyEnv`` (Phase 5 Cycle 5.5). Resolution happens once
-at strategy boundary via :func:`fraisier.dbops._url.resolve_db_url`; the
+Contract: ``connection_url`` is always a concrete ``str`` here, never
+a :class:`fraisier.config.LazyEnv`. Resolution happens once at the
+strategy boundary via :func:`fraisier.dbops._url.resolve_db_url`; the
 ~70 propagation sites in this module and ``strategies/`` stay typed
 ``str`` so a stray ``LazyEnv`` is a type error, never a silent
 ``str()``-via-``urlparse`` at the wrong layer.

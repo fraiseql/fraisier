@@ -1,13 +1,11 @@
-"""Phase 3 — config validators tolerate LazyEnv (#220).
+"""Config validators tolerate LazyEnv (#220).
 
 Stage-2 validators (those that run lazily behind ``@cached_property``
-or per-(fraise, env) caching) historically used ``isinstance(x, str)``
-to type-check string-typed YAML fields, which rejected ``LazyEnv``
-placeholders and defeated lazy resolution.
-
-After Phase 3 they widen to ``is_string_like()`` and defer
-content-shape checks (URL schemes, unit-name regexes, enum
-membership) past the validator boundary — consumers re-run the check
+or per-(fraise, env) caching) widen the legacy ``isinstance(x, str)``
+type checks to :func:`fraisier.config.is_string_like` so ``LazyEnv``
+placeholders are accepted without defeating lazy resolution. Content-
+shape checks (URL schemes, unit-name regexes, enum membership) are
+deferred past the validator boundary — consumers re-run the check
 after ``to_str()``.
 """
 

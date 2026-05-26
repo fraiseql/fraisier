@@ -1,11 +1,25 @@
 """Lazy ``!envvar`` placeholder for fraises.yaml (#220).
 
-A ``LazyEnv`` records the name of an environment variable referenced in
-YAML and defers the ``os.environ`` lookup until a consumer (or
+A ``LazyEnv`` records the name of an environment variable referenced
+in YAML and defers the ``os.environ`` lookup until a consumer (or
 validator) actually inspects the value. Each inspection performs a
-fresh lookup — there is no resolution cache. See the cycle plan for
-the rationale (test ergonomics, picklability, and the ability for
-long-running processes to observe env mutations between commands).
+fresh lookup — there is no resolution cache. The rationale:
+
+* **Subcommands stay env-free.** ``fraisier --help`` and any command
+  that doesn't enter a section never has to materialize secrets it
+  doesn't use.
+* **Long-running processes observe mutations.** The webhook daemon
+  and ``monkeypatch.setenv``-driven tests see env changes between
+  consumer calls in the same process.
+* **Test ergonomics.** No singleton resolution state to flush.
+* **Picklability.** ``__slots__``-only, no captured os.environ snapshot.
+
+A ``LazyEnv`` is NOT a ``str`` subclass: subclassing ``str`` would
+silently leak the resolved value into every implicit coercion site
+(``%s`` formatting, log records, hash keys) without giving the
+audit grep ``isinstance(x, str)`` a chance to flag the boundary.
+Keeping it a distinct class makes the consumer-side ``to_str()``
+boundary searchable and the unresolved-state visible at every site.
 
 ``to_str(value)`` is the boundary helper: pass any ``str | LazyEnv``
 and receive a concrete ``str``. The two-symbol surface — ``LazyEnv``
@@ -24,8 +38,8 @@ from fraisier.errors import ConfigurationError
 class LazyEnv:
     """Placeholder for ``!envvar NAME`` deferring ``os.environ`` lookup.
 
-    Holds ``name`` (env var) and ``yaml_path`` (where it appeared in
-    fraises.yaml, populated in Phase 4). ``resolve()`` consults
+    Holds ``name`` (env var) and ``yaml_path`` (the dotted-indexed YAML
+    location, stamped by the loader walker). ``resolve()`` consults
     ``os.environ`` on every call; there is no cache.
     """
 
@@ -73,7 +87,8 @@ class LazyEnv:
     def __bool__(self) -> bool:
         # A configured env-var reference is meaningfully different
         # from an absent value; truthy without resolving. This makes
-        # `if value:` checks in validators safe (Phase 3).
+        # ``if value:`` checks in validators safe even when the var
+        # is unset.
         return True
 
 
@@ -94,14 +109,14 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
     return isinstance(value, str | LazyEnv)
 
 
-# Inventory of remaining ``isinstance(x, str)`` sites (Phase 5 Cycle 5.9).
+# Inventory of remaining ``isinstance(x, str)`` sites (#220).
 #
 # Audit conclusion: every remaining ``isinstance(_, str)`` call in
 # ``fraisier/`` is either (a) already LazyEnv-aware, (b) operates on a
 # non-config value (subprocess output, IPC payload, IdP response, public
 # API argument), or (c) lives in an else-branch after a LazyEnv
 # isinstance check has already widened the type. None of them need
-# ``is_string_like``.
+# ``is_string_like``. Locked in by ``tests/test_isinstance_str_inventory.py``.
 #
 #   File:Line                                Status      Reason
 #   ───────────────────────────────────────  ──────────  ─────────────────
@@ -160,18 +175,17 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        plain str.
 #
 #   smoke_tests.py:261 (load_smoke_tests)    LazyEnv-aware
-#                                                        Phase 3: branches
-#                                                        on str vs LazyEnv
-#                                                        for the URL-based
-#                                                        default-name
-#                                                        derivation.
+#                                                        Branches on str vs
+#                                                        LazyEnv for the
+#                                                        URL-based default-
+#                                                        name derivation.
 #
 #   token_providers.py:390 (_validate_format) not-eligible
-#                                                        Phase 3 explicitly
-#                                                        rejects !envvar
-#                                                        for `format` —
-#                                                        the str check is
-#                                                        the post-rejection
+#                                                        ``format`` rejects
+#                                                        ``!envvar``
+#                                                        explicitly; the
+#                                                        str check is the
+#                                                        post-rejection
 #                                                        guard.
 #
 #   token_providers.py:488 (access_token)    non-config  IdP response body

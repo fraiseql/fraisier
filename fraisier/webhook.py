@@ -112,9 +112,9 @@ def _resolve_provider_config(raw: dict[str, Any]) -> dict[str, Any]:
     fraises.yaml. Provider constructors expect ``str`` for these
     fields and call ``.encode()`` on them; a raw ``LazyEnv`` would
     raise ``AttributeError`` deep inside ``hmac.new``. This helper
-    resolves every ``LazyEnv`` once at the consumer boundary (Phase 5
-    Cycle 5.7). Non-LazyEnv values (``bool`` / ``int`` / ``None`` /
-    nested dicts) pass through untouched.
+    resolves every ``LazyEnv`` once at the consumer boundary.
+    Non-LazyEnv values (``bool`` / ``int`` / ``None`` / nested dicts)
+    pass through untouched.
     """
     return {k: (to_str(v) if isinstance(v, LazyEnv) else v) for k, v in raw.items()}
 

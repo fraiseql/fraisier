@@ -1,7 +1,7 @@
-"""Subprocess audit — LazyEnv never reaches argv (#220 Phase 5 Cycle 5.6).
+"""Subprocess audit — LazyEnv never reaches argv (#220).
 
-Audit summary (the 31 source files containing ``subprocess.run`` or
-``subprocess.Popen`` calls, surveyed during Phase 5):
+Audit summary across the 31 source files containing ``subprocess.run``
+or ``subprocess.Popen`` calls:
 
   Category                           Risk     Coverage
   --------------------------------   ------   ----------------------------
@@ -9,14 +9,14 @@ Audit summary (the 31 source files containing ``subprocess.run`` or
    (bootstrap, ship/, git/, ssh*,            launched by literal argv;
    versioning, scaffold/, etc.)               no config-derived args.
 
-  Strategy → dbops chain             handled  Cycle 5.5: resolve_db_url
-   (strategies/_core, dbops/*)                at strategy entry; the
-                                              connection_url contract
-                                              past that point is `str`.
+  Strategy → dbops chain             handled  resolve_db_url at strategy
+   (strategies/_core, dbops/*)                entry; the connection_url
+                                              contract past that point
+                                              is `str`.
 
-  Token provider OAuth2 HTTP POST    handled  Cycle 5.2: _resolve_form_body
-   (token_providers._post_oauth2_*)           coerces all form values
-                                              before httpx encodes them.
+  Token provider OAuth2 HTTP POST    handled  _resolve_form_body coerces
+   (token_providers._post_oauth2_*)           all form values before
+                                              httpx encodes them.
 
   ExecTokenProvider command argv     handled  Parser at
    (token_providers._parse)                   `ExecTokenProvider._parse`
@@ -26,11 +26,13 @@ Audit summary (the 31 source files containing ``subprocess.run`` or
                                               type-safe; LazyEnv never
                                               reaches the subprocess.
 
-  systemd_service name consumers     deferred Cycle 5.8 covers naming.py,
-   (naming.py, validation.py,                 validation.py,
-   remote_validator.py, setup.py,             remote_validator.py,
-   cli/_helpers.py, cli/_diagnose.py,         setup.py, cli/_helpers.py,
-   cli/db.py)                                 cli/_diagnose.py, cli/db.py
+  systemd_service name consumers     handled  ``fraisier.naming``
+   (naming.py, validation.py,                 resolves LazyEnv at the
+   remote_validator.py, setup.py,             read boundary for
+   cli/_helpers.py, cli/_diagnose.py,         validation.py,
+   cli/db.py)                                 remote_validator.py,
+                                              setup.py, cli/_helpers.py,
+                                              cli/_diagnose.py, cli/db.py
                                               before they shell out to
                                               ``systemctl``.
 

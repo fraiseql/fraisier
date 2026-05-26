@@ -1,4 +1,4 @@
-"""Webhook consumer audit — LazyEnv in provider config (#220 Phase 5 Cycle 5.7).
+"""Webhook consumer audit — LazyEnv in provider config (#220).
 
 The git provider config block (``git.github`` / ``git.gitlab`` / etc.)
 typically carries secrets — webhook_secret, API tokens, app keys — and

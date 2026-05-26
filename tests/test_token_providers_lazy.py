@@ -1,17 +1,16 @@
-"""Phase 3 + Phase 5 — token_providers tolerate LazyEnv (#220).
+"""token_providers tolerate LazyEnv (#220).
 
-Phase 3 (parsers): the field-shape checks in ``token_providers``
-historically required plain ``str`` for ``client_secret`` and friends,
-which rejected ``LazyEnv`` placeholders. After Phase 3 the secret-ish
-fields accept ``LazyEnv`` and propagate it; only ``format`` is
-rejected because the format string is code-shape, not config.
+Parser tolerance: the field-shape checks in ``token_providers`` accept
+``LazyEnv`` placeholders for the secret-ish fields (``client_secret``
+and friends) and propagate them. Only ``format`` is rejected because
+the format string is code-shape, not config.
 
-Phase 5 Cycle 5.2 (consumer boundary): the OAuth2 ``resolve()`` path
-must materialize LazyEnv form-body fields to plain ``str`` before the
-httpx POST, never relying on httpx's URL-encoder to call ``str()``
-implicitly on a placeholder. The form-body wire bytes are the audit
-surface — if a LazyEnv leaked through, the request body would contain
-the ``LazyEnv(name=..., yaml_path=...)`` repr, not the secret.
+Consumer boundary: the OAuth2 ``resolve()`` path materializes
+LazyEnv form-body fields to plain ``str`` before the httpx POST,
+never relying on httpx's URL-encoder to call ``str()`` implicitly on
+a placeholder. The form-body wire bytes are the audit surface — if a
+LazyEnv leaked through, the request body would contain the
+``LazyEnv(name=..., yaml_path=...)`` repr, not the secret.
 """
 
 from __future__ import annotations

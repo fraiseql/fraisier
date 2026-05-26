@@ -1,7 +1,7 @@
-"""Tests that ``fraisier validate`` forces a full Stage-2 traversal.
+"""Tests that ``fraisier validate`` forces a full Stage-2 traversal (#220).
 
-Phase 1, Cycle 1.3 — after the eager-load split, ``__init__`` no longer
-catches deep section errors. ``fraisier validate`` must compensate by
+After the lazy-load split, ``FraisierConfig.__init__`` no longer
+catches deep section errors. ``fraisier validate`` compensates by
 explicitly accessing every section so it remains the "one command to
 surface every problem at once" entry point.
 """

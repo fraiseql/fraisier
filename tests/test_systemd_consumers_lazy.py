@@ -1,6 +1,6 @@
-"""systemd-name consumer audit — LazyEnv resolution (#220 Phase 5 Cycle 5.8).
+"""systemd-name consumer audit — LazyEnv resolution (#220).
 
-`systemd_service` and `systemd_deploy_socket` fields can be
+``systemd_service`` and ``systemd_deploy_socket`` fields can be
 ``!envvar``-tagged in fraises.yaml. These names then flow into
 multiple consumer paths that either: shell out to ``systemctl`` (where
 a bare LazyEnv raises TypeError or silently resolves via
@@ -11,7 +11,8 @@ The audit boundary is the read site. Each consumer reads
 ``systemd_service`` / ``systemd_deploy_socket`` via the central helpers
 ``naming.resolve_systemd_service`` and ``naming.resolve_systemd_deploy_socket``,
 which run ``to_str`` once and surface unset-var errors with the YAML
-path (Phase 4) instead of as a deep subprocess TypeError.
+path stamped by the loader walker, instead of as a deep subprocess
+TypeError.
 """
 
 from __future__ import annotations

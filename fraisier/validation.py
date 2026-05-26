@@ -67,7 +67,7 @@ def _force_resolve_all_envvars(
     ``fraisier.config.loader._attach_paths``; kept separate so each
     can evolve independently. Each unset ``!envvar`` produces one
     :class:`ConfigurationError` whose message already names the YAML
-    path (stamped by the loader walker in Phase 4).
+    path (stamped by the loader walker).
 
     Shared LazyEnv instances reachable from multiple YAML paths
     (anchors / aliases) are resolved exactly once — collecting them
@@ -417,7 +417,7 @@ class ValidationRunner:
         ``fraisier.ssh.short_cmd`` so the defensive flag set
         (BatchMode, ConnectTimeout, AddressFamily, StrictHostKeyChecking,
         ``-n``) and the per-fraise ``key_path`` / ``strict_host_key``
-        knobs are honoured. This closes LB-6 from the Phase 1 inventory.
+        knobs are honoured.
 
         The 5-second connect timeout is intentionally tighter than the
         30-second default — a preflight should fail fast.

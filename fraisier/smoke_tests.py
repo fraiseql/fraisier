@@ -176,7 +176,7 @@ def _parse_assertion(raw: dict) -> Assertion:
 def _resolve_url(url: str | LazyEnv, *, base_url: str | None) -> str:
     # Resolve !envvar references at consumption time. The validator
     # path (load_smoke_tests) goes through here too, but with
-    # base_url provided and content-shape checks deferred — Phase 3.
+    # base_url provided and content-shape checks deferred.
     url = to_str(url)
     parsed = urlparse(url)
     if parsed.scheme and parsed.netloc:
@@ -293,7 +293,7 @@ def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _run_one(test: SmokeTest) -> None:
-    # LazyEnv logging-safety invariant (Phase 5 Cycle 5.3):
+    # LazyEnv logging-safety invariant:
     #   - final_url is a plain str — resolve_test_url() called to_str()
     #     on test.url at line above, so logging it via %s is safe.
     #   - Auth-shaped header values are redacted by key name before any

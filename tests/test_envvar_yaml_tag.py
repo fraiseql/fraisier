@@ -48,8 +48,8 @@ class TestEnvvarYamlTag:
         assert fraise["secret"] == "eyJsuper-secret"
 
     def test_raises_when_env_var_missing(self, tmp_path, monkeypatch):
-        # Phase 2: load no longer raises; the error surfaces at the
-        # boundary where a consumer coerces the LazyEnv to a str.
+        # Load does not raise; the error surfaces at the boundary
+        # where a consumer coerces the LazyEnv to a str.
         monkeypatch.delenv("MISSING_VAR", raising=False)
         config_file = _write_config(
             tmp_path, _TEMPLATE.format(expr="!envvar MISSING_VAR")
@@ -60,9 +60,9 @@ class TestEnvvarYamlTag:
             to_str(fraise["secret"])
 
     def test_unset_envvar_loads_without_raise(self, tmp_path, monkeypatch):
-        # Phase 2: !envvar resolution is deferred to consumption.
-        # Loading a YAML that references an unset env var no longer
-        # raises at parse time — the value materializes as a LazyEnv.
+        # ``!envvar`` resolution is deferred to consumption. Loading a
+        # YAML that references an unset env var no longer raises at
+        # parse time — the value materializes as a LazyEnv.
         monkeypatch.delenv("MISSING_VAR", raising=False)
         config_file = _write_config(
             tmp_path, _TEMPLATE.format(expr="!envvar MISSING_VAR")

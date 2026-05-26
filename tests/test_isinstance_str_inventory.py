@@ -1,8 +1,8 @@
-"""Inventory guard for ``isinstance(x, str)`` sites (#220 Phase 5 Cycle 5.9).
+"""Inventory guard for ``isinstance(x, str)`` sites (#220).
 
-Phase 5 audited every ``isinstance(_, str)`` site in ``fraisier/`` and
-documented each one's status (LazyEnv-aware / not-eligible / non-config
-/ after-LazyEnv) in the inventory at the bottom of
+The audit catalogues every ``isinstance(_, str)`` site in ``fraisier/``
+and documents each one's status (LazyEnv-aware / not-eligible /
+non-config / after-LazyEnv) in the inventory at the bottom of
 ``fraisier/config/_lazy_env.py``.
 
 This test pins the COUNT of those sites. If a contributor adds a new

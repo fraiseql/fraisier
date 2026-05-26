@@ -1,8 +1,8 @@
-"""Tests for the two-stage validation split.
+"""Tests for the two-stage validation split (#220).
 
-Phase 1 of issue #220 — Stage 1 runs in ``FraisierConfig.__init__`` and is
-cheap (shape only). Stage 2 (deep validation per section) runs on first
-access of the matching property.
+Stage 1 runs in ``FraisierConfig.__init__`` and is cheap (shape
+only). Stage 2 (deep validation per section) runs on first access of
+the matching property.
 """
 
 import pytest

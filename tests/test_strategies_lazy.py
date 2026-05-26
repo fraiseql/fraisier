@@ -1,4 +1,4 @@
-"""Strategy entry-point LazyEnv resolution (#220 Phase 5 Cycle 5.5).
+"""Strategy entry-point LazyEnv resolution (#220).
 
 `database_url` and `admin_url` are resolved at strategy `.execute()`
 entry — once, into a concrete ``str`` — so the ~70 downstream

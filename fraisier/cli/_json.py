@@ -1,4 +1,4 @@
-"""LazyEnv-aware JSON serialization for CLI diagnostic output (#220 Phase 5).
+"""LazyEnv-aware JSON serialization for CLI diagnostic output (#220).
 
 CLI commands serialize state with ``json.dumps`` for ``--json`` flags
 and structured logging. Diagnostic output should NEVER resolve a

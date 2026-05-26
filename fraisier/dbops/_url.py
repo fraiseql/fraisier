@@ -5,9 +5,9 @@ preserving the triple-slash syntax required for Unix socket connections
 (e.g. ``postgresql:///dbname?host=/var/run/postgresql``).
 
 Contract for ``connection_url`` parameters in ``dbops/`` and
-``strategies/`` (Phase 5 Cycle 5.5): every ``connection_url`` (or
-``database_url`` / ``admin_url``) parameter is a concrete ``str``,
-never a :class:`fraisier.config.LazyEnv`. Resolution happens at strategy
+``strategies/``: every ``connection_url`` (or ``database_url`` /
+``admin_url``) parameter is a concrete ``str``, never a
+:class:`fraisier.config.LazyEnv`. Resolution happens at strategy
 entry via :func:`resolve_db_url`; downstream signatures stay typed
 ``str`` so a stray ``LazyEnv`` is a type error, not a silent
 ``str()``-via-coercion at the wrong layer.

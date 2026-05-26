@@ -120,12 +120,12 @@ def test_list_with_unset_smoke_secret(tmp_path, monkeypatch):
 
 
 def test_validate_does_not_complain_about_unset_envvar(tmp_path, monkeypatch):
-    # Issue-220 policy (Phase 1 + Phase 3): `validate` walks every
-    # section but does NOT resolve env vars. The output may flag other
-    # unrelated environment-state issues (e.g. missing system users)
-    # — what matters is that the SMOKE_CLIENT_SECRET !envvar reference
-    # is NOT surfaced as a config error. Phase 6 layers a
-    # --resolve-envvars opt-in for the eager-fail workflow.
+    # Issue-220 policy: `validate` walks every section but does NOT
+    # resolve env vars. The output may flag other unrelated
+    # environment-state issues (e.g. missing system users) — what
+    # matters is that the SMOKE_CLIENT_SECRET !envvar reference is NOT
+    # surfaced as a config error. The eager-fail workflow is opt-in
+    # via ``--resolve-envvars``.
     monkeypatch.delenv("SMOKE_CLIENT_SECRET", raising=False)
     cfg = _write(tmp_path, _CONFIG_WITH_SMOKE_SECRET)
 
@@ -137,10 +137,10 @@ def test_validate_does_not_complain_about_unset_envvar(tmp_path, monkeypatch):
     )
 
 
-# Cycle 6.1 — `--help` / `--version` with !envvar references in every
-# section. These paths never read a config section, so they MUST exit 0
-# regardless of env state. A failure here points at Phase 1 (Stage 1
-# doing too much).
+# `--help` / `--version` with !envvar references in every section.
+# These paths never read a config section, so they MUST exit 0
+# regardless of env state. A failure here points at Stage 1 doing
+# too much during ``FraisierConfig.__init__``.
 
 
 def test_help_with_unset_envvars_everywhere(tmp_path, _delenv_all):
@@ -167,10 +167,10 @@ def test_version_with_unset_envvars_everywhere(tmp_path, _delenv_all):
     )
 
 
-# Cycle 6.2 — `fraisier ship patch --pr` is the issue's verbatim
-# reproduction. The flag set never enters the smoke-test consumer
-# path; it must not require SMOKE_CLIENT_SECRET. Uses --dry-run to
-# avoid the git push / GitHub PR side-effects.
+# `fraisier ship patch --pr` is issue #220's verbatim reproduction.
+# The flag set never enters the smoke-test consumer path; it must not
+# require SMOKE_CLIENT_SECRET. Uses --dry-run to avoid the git push
+# and GitHub PR side-effects.
 
 
 def test_ship_patch_pr_with_unset_smoke_vars(tmp_path, _delenv_all):
@@ -202,12 +202,12 @@ def test_ship_patch_pr_with_unset_smoke_vars(tmp_path, _delenv_all):
     )
 
 
-# Cycle 6.3 — when an actual smoke-test consumer runs with an unset
-# `!envvar`, the error must name the full YAML path. The smoke consumer
-# entry point is ``materialize_test_headers``: the deployer calls it
-# right before the HTTP probe, and Phase 5 made it the consumer-side
-# resolution boundary. Exercising it directly avoids spinning up the
-# deploy pipeline while still hitting the production code path.
+# When an actual smoke-test consumer runs with an unset ``!envvar``,
+# the error must name the full YAML path. The smoke consumer entry
+# point is ``materialize_test_headers`` — the deployer calls it right
+# before the HTTP probe, and it is the consumer-side resolution
+# boundary. Exercising it directly avoids spinning up the deploy
+# pipeline while still hitting the production code path.
 
 
 def test_deploy_smoke_envvar_unset_names_yaml_path(tmp_path, _delenv_all):
@@ -232,9 +232,9 @@ def test_deploy_smoke_envvar_unset_names_yaml_path(tmp_path, _delenv_all):
     )
 
 
-# Cycle 6.4 — `fraisier validate` (no flag) traverses every section.
-# Three independent structural errors in one YAML must all surface in
-# a single invocation, while ``!envvar UNSET_VAR`` references coexist
+# ``fraisier validate`` (no flag) traverses every section. Three
+# independent structural errors in one YAML must all surface in a
+# single invocation, while ``!envvar UNSET_VAR`` references coexist
 # in the same file without being resolved.
 
 _CONFIG_THREE_SECTIONS_BROKEN = """
@@ -306,7 +306,7 @@ def test_validate_reports_all_sections(tmp_path, monkeypatch):
 def test_validate_no_resolve_envvars_default(tmp_path, monkeypatch):
     # A config whose ONLY "issue" is an unset !envvar must NOT surface
     # any envvar-related diagnostic under the default validate.
-    # Resolution is opt-in via --resolve-envvars (Cycle 6.5).
+    # Resolution is opt-in via ``--resolve-envvars``.
     monkeypatch.delenv("SMOKE_CLIENT_SECRET", raising=False)
     cfg = _write(tmp_path, _CONFIG_WITH_SMOKE_SECRET)
 
@@ -318,8 +318,8 @@ def test_validate_no_resolve_envvars_default(tmp_path, monkeypatch):
     )
 
 
-# Cycle 6.5 — `--resolve-envvars` is the opt-in eager-fail mode for the
-# pre-deploy CI gate. With the flag, every reachable !envvar is
+# ``--resolve-envvars`` is the opt-in eager-fail mode for the
+# pre-deploy CI gate. With the flag, every reachable ``!envvar`` is
 # resolved and unset references surface with the env var name AND the
 # YAML path. Without the flag, behavior matches the default validate.
 

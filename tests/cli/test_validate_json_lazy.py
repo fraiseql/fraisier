@@ -1,4 +1,4 @@
-"""LazyEnv safety in CLI JSON output (#220 Phase 5 Cycle 5.4).
+"""LazyEnv safety in CLI JSON output (#220).
 
 CLI commands serialize diagnostic data with ``json.dumps``. A bare
 ``LazyEnv`` reaching ``json.dumps`` would either: (a) ``TypeError`` (no

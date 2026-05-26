@@ -1,4 +1,4 @@
-"""Tests for LazyEnv.yaml_path attached by the loader walker (#220 Phase 4).
+"""Tests for LazyEnv.yaml_path attached by the loader walker (#220).
 
 The loader walks the parsed YAML tree and stamps every ``LazyEnv``
 placeholder with the dotted-indexed path where it was found. Resolution

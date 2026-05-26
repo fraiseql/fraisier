@@ -1,4 +1,4 @@
-"""Tests for the LazyEnv placeholder and to_str() helper (#220 Phase 2).
+"""Tests for the LazyEnv placeholder and to_str() helper (#220).
 
 LazyEnv defers `os.environ[NAME]` resolution from YAML load time to the
 boundary where a consumer (or validator) actually inspects the value.

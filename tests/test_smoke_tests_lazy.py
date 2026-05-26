@@ -1,15 +1,19 @@
-"""Phase 3 — smoke_tests tolerates LazyEnv (#220).
+"""smoke_tests tolerates LazyEnv (#220).
 
-Phase 5 Cycle 5.1 adds explicit header materialization at the
-materialize_test_headers boundary so the value type reaching httpx is
-a concrete ``str`` and never relies on httpx's implicit ``str()``.
+Validator tolerance: parsers / schema checks accept ``LazyEnv``
+placeholders for env-var-eligible fields and never call
+``isinstance(_, str)`` directly on them.
 
-Phase 5 Cycle 5.3 locks in the logging-safety invariant: even if a
-LazyEnv slipped past materialization, the smoke-test log line cannot
-leak the resolved secret. Two defenses combine: ``_redacted_headers``
-substitutes by key name BEFORE touching the value, and ``%s``-style
-dict logging routes through ``repr()`` on each value, hitting the
-non-resolving ``LazyEnv.__repr__``.
+Consumer-side materialization: ``materialize_test_headers`` is the
+boundary that resolves LazyEnv values so httpx receives a concrete
+``str`` — never relying on httpx's implicit ``str()``.
+
+Logging-safety invariant: even if a LazyEnv slipped past
+materialization, the smoke-test log line cannot leak the resolved
+secret. Two defenses combine: ``_redacted_headers`` substitutes by
+key name BEFORE touching the value, and ``%s``-style dict logging
+routes through ``repr()`` on each value, hitting the non-resolving
+``LazyEnv.__repr__``.
 """
 
 from __future__ import annotations
@@ -180,7 +184,8 @@ class TestMaterializeTestHeaders:
 
     def test_unset_lazy_header_raises_with_path(self, monkeypatch):
         # The error must surface from materialize_test_headers, not
-        # later from httpx — and must carry the YAML path (Phase 4).
+        # later from httpx — and must carry the YAML path stamped by
+        # the loader walker.
         monkeypatch.delenv("TOK", raising=False)
         t = _smoke_test_with_headers(
             {"Authorization": LazyEnv("TOK", "fraises.api.prod.smoke[0].headers.A")}
@@ -243,8 +248,8 @@ class TestLoggingSafetyForLazyHeaders:
          X-API-Key the value never gets converted to a string.
       2. The redacted dict is logged via ``%s`` formatting, which
          routes through ``repr()`` on each value. ``LazyEnv.__repr__``
-         does NOT resolve (Cycle 2.3), so non-redacted LazyEnvs render
-         as ``LazyEnv(name='X', yaml_path='Y')`` placeholders — never
+         does NOT resolve, so non-redacted LazyEnvs render as
+         ``LazyEnv(name='X', yaml_path='Y')`` placeholders — never
          the resolved secret.
     """
 

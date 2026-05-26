@@ -1,13 +1,13 @@
 """Centralised naming helpers for systemd unit names.
 
 Resolution of ``!envvar``-tagged ``systemd_service`` /
-``systemd_deploy_socket`` fields happens here, at the read boundary
-(Phase 5 Cycle 5.8). Downstream consumers (validation,
-remote_validator, setup, cli helpers, cli/db, cli/_diagnose) call
-:func:`resolve_systemd_service` and :func:`resolve_systemd_deploy_socket`
-to get a concrete ``str | None`` — never a ``LazyEnv`` — before
-shelling out to ``systemctl`` (which won't autocoerce) or computing
-string-method names like ``.removesuffix(".service")``.
+``systemd_deploy_socket`` fields happens here, at the read boundary.
+Downstream consumers (validation, remote_validator, setup, cli
+helpers, cli/db, cli/_diagnose) call :func:`resolve_systemd_service`
+and :func:`resolve_systemd_deploy_socket` to get a concrete
+``str | None`` — never a ``LazyEnv`` — before shelling out to
+``systemctl`` (which won't autocoerce) or computing string-method
+names like ``.removesuffix(".service")``.
 """
 
 from __future__ import annotations

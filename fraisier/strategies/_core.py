@@ -49,7 +49,7 @@ class MigrateStrategy(Strategy):
         hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         # Resolve LazyEnv at the strategy boundary so every downstream
-        # dbops call receives a concrete `str` (Phase 5 Cycle 5.5).
+        # dbops call receives a concrete `str`.
         db_url = resolve_db_url(database_url, role="database_url")
         preflight(
             confiture_config,
@@ -292,7 +292,7 @@ class RebuildStrategy(Strategy):
 
         # Resolve LazyEnv inputs at the strategy boundary so pydantic
         # validation of the confiture Environment and every downstream
-        # dbops call receives concrete `str` URLs (Phase 5 Cycle 5.5).
+        # dbops call receives concrete `str` URLs.
         db_url = resolve_db_url(database_url, role="database_url")
 
         # Load environment from config YAML.
