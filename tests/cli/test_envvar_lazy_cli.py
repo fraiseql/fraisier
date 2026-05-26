@@ -165,3 +165,38 @@ def test_version_with_unset_envvars_everywhere(tmp_path, _delenv_all):
         "fraisier --version must not require any !envvar; got "
         f"exit={result.exit_code}\nOutput:\n{result.output}"
     )
+
+
+# Cycle 6.2 — `fraisier ship patch --pr` is the issue's verbatim
+# reproduction. The flag set never enters the smoke-test consumer
+# path; it must not require SMOKE_CLIENT_SECRET. Uses --dry-run to
+# avoid the git push / GitHub PR side-effects.
+
+
+def test_ship_patch_pr_with_unset_smoke_vars(tmp_path, _delenv_all):
+    cfg = _write(tmp_path, _CONFIG_WITH_ENVVARS_EVERYWHERE)
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "demo"\nversion = "1.2.3"\n')
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "-c",
+            str(cfg),
+            "ship",
+            "patch",
+            "--pr",
+            "--pr-base",
+            "dev",
+            "--auto-merge",
+            "--dry-run",
+            "--pyproject",
+            str(pyproject),
+        ],
+    )
+
+    assert result.exit_code == 0, (
+        "ship patch --pr --dry-run must not require any !envvar; got "
+        f"exit={result.exit_code}\nOutput:\n{result.output}"
+    )
