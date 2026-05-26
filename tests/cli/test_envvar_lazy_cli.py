@@ -63,7 +63,7 @@ fraises:
             method: POST
             on_failure: rollback
             headers:
-              Authorization: !envvar SMOKE_TEST_JWT
+              X-Api-Key: !envvar SMOKE_TEST_JWT
             token_provider:
               type: oauth2_client_credentials
               token_url: https://idp.example.com/token
@@ -199,4 +199,34 @@ def test_ship_patch_pr_with_unset_smoke_vars(tmp_path, _delenv_all):
     assert result.exit_code == 0, (
         "ship patch --pr --dry-run must not require any !envvar; got "
         f"exit={result.exit_code}\nOutput:\n{result.output}"
+    )
+
+
+# Cycle 6.3 — when an actual smoke-test consumer runs with an unset
+# `!envvar`, the error must name the full YAML path. The smoke consumer
+# entry point is ``materialize_test_headers``: the deployer calls it
+# right before the HTTP probe, and Phase 5 made it the consumer-side
+# resolution boundary. Exercising it directly avoids spinning up the
+# deploy pipeline while still hitting the production code path.
+
+
+def test_deploy_smoke_envvar_unset_names_yaml_path(tmp_path, _delenv_all):
+    from fraisier.config import FraisierConfig
+    from fraisier.errors import ConfigurationError
+    from fraisier.smoke_tests import load_smoke_tests, materialize_test_headers
+
+    cfg = _write(tmp_path, _CONFIG_WITH_ENVVARS_EVERYWHERE)
+    config = FraisierConfig(cfg)
+    env = config.get_fraise_environment("api", "prod")
+    assert env is not None
+
+    tests = load_smoke_tests(env, base_url="https://api.example.com")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        materialize_test_headers(tests)
+
+    msg = str(exc_info.value)
+    assert "SMOKE_TEST_JWT" in msg, f"error should name the env var: {msg}"
+    assert "fraises.api.environments.prod.smoke_tests[0].headers.X-Api-Key" in msg, (
+        f"error should name the YAML path: {msg}"
     )
