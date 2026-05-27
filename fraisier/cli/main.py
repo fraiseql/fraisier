@@ -16,6 +16,8 @@ import click
 
 from fraisier.config import get_config
 
+from ._envmap_help import CommandWithEnvvarEpilog
+
 
 @click.group()
 @click.version_option(package_name="fraisier", prog_name="fraisier")
@@ -68,6 +70,11 @@ def main(ctx: click.Context, config: str | None, verbose: bool, no_color: bool) 
     except FileNotFoundError:
         ctx.obj["config"] = None
     ctx.obj["skip_health"] = False
+
+
+# Default every @main.command(...) to the envvar-epilog-aware Command
+# subclass. Per-command overrides (cls=...) still win.
+main.command_class = CommandWithEnvvarEpilog
 
 
 # Import submodules to register their commands with `main`.
