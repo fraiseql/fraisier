@@ -297,9 +297,24 @@ def trigger_deploy(
 
 @main.command()
 @click.argument("fraise")
-@click.option("--json", is_flag=True, help="Output in JSON format")
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Output format (default: text)",
+)
+@click.option(
+    "--json",
+    "legacy_json",
+    is_flag=True,
+    hidden=True,
+    help="Deprecated alias for --format json",
+)
 @click.pass_context
-def deployment_status(ctx: click.Context, fraise: str, json: bool) -> None:
+def deployment_status(
+    ctx: click.Context, fraise: str, fmt: str, legacy_json: bool
+) -> None:
     """Show the last deployment status for a fraise.
 
     Reads the deployment status from the socket-activated daemon's status file
@@ -308,9 +323,14 @@ def deployment_status(ctx: click.Context, fraise: str, json: bool) -> None:
     \b
     Examples:
         fraisier deployment-status my_api
-        fraisier deployment-status my_api --json
+        fraisier deployment-status my_api --format json
     """
     import json
+
+    from fraisier.cli._json import resolve_format
+
+    fmt = resolve_format(fmt, legacy_json, command_name="deployment-status")
+    json_output = fmt == "json"
 
     config = ctx.obj["config"]
 
@@ -342,7 +362,7 @@ def deployment_status(ctx: click.Context, fraise: str, json: bool) -> None:
             data = json.loads(status_path.read_text())
             status_found = True
 
-            if json:
+            if json_output:
                 # Output raw JSON
                 import sys
 

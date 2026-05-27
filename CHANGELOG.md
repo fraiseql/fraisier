@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.0] - 2026-05-27
+## [0.26.0] - 2026-05-27
+
+### Added
+
+- **`fraisier.introspection` — subcommand → config-section map + `!envvar` walker** ([#221](https://github.com/fraiseql/fraisier/issues/221), foundation for bundle B). Internal API that answers "if I ran `fraisier <subcommand>`, which YAML paths would it touch, and which `!envvar` refs would be reachable?" without running the subcommand. `ConfigPath` (dotted globbing), `EnvVarRef` (named tuple of name / yaml_path / is_set), `reachable_envvars(config, subcommand, *, fraise, environment)`. Walker never resolves `LazyEnv` — only inspects placeholders. A drift-guard test asserts every registered CLI command is either in `SUBCOMMAND_CONFIG_SECTIONS` or in `COMMANDS_WITHOUT_CONFIG_ACCESS`.
+- **"Reads envvars:" section in every subcommand `--help`** ([#221](https://github.com/fraiseql/fraisier/issues/221) item 2). Click `format_epilog` hook derives the listing from the introspection map and the loaded config. Marks unset variables with `[unset]`. Renders a graceful placeholder when no `fraises.yaml` is discoverable. Verified safe across both `fraisier <cmd> --help` and `fraisier --config X <cmd> --help` invocation orders via a Cycle-0 spike before designing.
+- **`fraisier env-check <subcommand>`** ([#221](https://github.com/fraiseql/fraisier/issues/221) item 3). Standalone preflight that prints which env vars a given subcommand would read and which are currently unset. Designed for CI gates: exit 0 if all set, 1 if any unset, 2 if subcommand invalid. `--format text` (rich.Table) or `--format json` for piping. `--required-only` filters to unset variables. `--fraise` / `--environment` narrow scope.
+- **`fraisier doctor`** ([#221](https://github.com/fraiseql/fraisier/issues/221) item 4). Host-wide self-diagnosis independent of any particular fraise; answers "is this install OK to use?" Pluggable check registry with seven shipped checks: `python_version`, `fraisier_version`, `confiture_version`, `fraises_yaml_loadable`, `fraises_yaml_resolves` (uses the introspection walker), `secrets_env_readable`, `helper_sudoers` (stat-only — never invokes `visudo`, never parses sudoers syntax; byte-diffs against the expected fragment via `fraisier.scaffold.sudoers_diff` when content is readable). Each check is side-effect-free and isolated — one failing check never aborts the rest. `--format text|json`, `--check NAME` (repeatable) for filtering, `--skip-network` for offline environments. Exit codes: 0 / 1 / 2 for pass / fail / warn-only. Documented in `docs/doctor.md`.
+- **`--format json` on `ship` (dry-run) and `deployment-status`** ([#221](https://github.com/fraiseql/fraisier/issues/221) item 6). New shared `--format text|json` option pattern via `fraisier/cli/_json.py`. `fraisier ship <bump> --dry-run --format json` emits a structured `{version: {old, new, bump_type}, dry_run, create_pr, pr_base, auto_merge, ...}` payload suitable for piping into `jq`. `fraisier deployment-status --json` is preserved as a hidden deprecated alias for `--format json`; the legacy flag emits a one-time per-process stderr warning. Other commands' existing `--json` flags are left untouched in this release — migration of the remaining ~10 sites will follow as a separate change.
+
+
 
 ### Added
 

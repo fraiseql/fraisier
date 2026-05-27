@@ -34,3 +34,65 @@ def dumps(obj: Any, *, indent: int | None = None) -> str:
     secret even when the env var is set.
     """
     return json.dumps(obj, indent=indent, default=_default)
+
+
+# ---------------------------------------------------------------------------
+# Shared --format option (#221 bundle B phase 05)
+# ---------------------------------------------------------------------------
+
+import click  # noqa: E402
+
+_DEPRECATION_WARNING_EMITTED: set[str] = set()
+
+
+def format_option(extra_choices: tuple[str, ...] = ()):
+    """Shared ``--format text|json`` decorator for commands that emit
+    structured output.
+
+    The decorator is composable with existing ``--json`` flags via
+    :func:`resolve_format` — pass both the new ``--format`` value and the
+    legacy ``--json`` boolean and ``resolve_format`` picks the right
+    one, emitting a one-time deprecation warning on stderr when
+    ``--json`` was used.
+
+    Args:
+        extra_choices: Additional format names beyond ``text`` and
+            ``json`` (e.g. ``"yaml"`` for commands that grow more
+            formats).
+    """
+    choices = ("text", "json", *extra_choices)
+
+    def decorator(fn):
+        return click.option(
+            "--format",
+            "fmt",
+            type=click.Choice(choices),
+            default="text",
+            help="Output format (default: text)",
+        )(fn)
+
+    return decorator
+
+
+def resolve_format(fmt: str, legacy_json: bool, *, command_name: str) -> str:
+    """Pick the effective format from the new --format and legacy --json.
+
+    When the legacy ``--json`` flag is set, returns ``"json"`` and emits
+    a one-time deprecation warning on stderr per command-name. When
+    both ``--format json`` and ``--json`` are set, the new flag wins
+    silently (consumers in transition).
+    """
+    if fmt == "json":
+        return "json"
+    if legacy_json:
+        from fraisier.cli._helpers import err_console
+
+        if command_name not in _DEPRECATION_WARNING_EMITTED:
+            _DEPRECATION_WARNING_EMITTED.add(command_name)
+            err_console.print(
+                "[yellow]warning:[/yellow] `--json` is deprecated; "
+                "use `--format json` instead. "
+                "(Will be removed in a future release.)"
+            )
+        return "json"
+    return fmt
