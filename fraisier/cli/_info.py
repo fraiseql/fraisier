@@ -66,7 +66,13 @@ def init(output: str, template: str, force: bool) -> None:
 @click.option("--flat", is_flag=True, help="Show flat list instead of grouped")
 @click.pass_context
 def list_(ctx: click.Context, flat: bool) -> None:
-    """List all registered fraises and their environments."""
+    """List all registered fraises and their environments.
+
+    \b
+    Examples:
+        fraisier list
+        fraisier list --flat
+    """
     config = ctx.obj["config"]
 
     if flat:

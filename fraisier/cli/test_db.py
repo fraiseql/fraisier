@@ -37,7 +37,13 @@ def test_db() -> None:
     help="PostgreSQL connection URL",
 )
 def test_db_status(env: str, project_dir: str, connection_url: str | None) -> None:
-    """Show template database status."""
+    """Show template database status.
+
+    \b
+    Examples:
+        fraisier test-db status
+        fraisier test-db status --env ci --connection-url $DATABASE_URL
+    """
     from fraisier.testing._manager import TemplateManager
 
     if not connection_url:
@@ -89,7 +95,13 @@ def test_db_status(env: str, project_dir: str, connection_url: str | None) -> No
     help="PostgreSQL connection URL",
 )
 def test_db_rebuild(env: str, project_dir: str, connection_url: str | None) -> None:
-    """Force rebuild the template database."""
+    """Force rebuild the template database.
+
+    \b
+    Examples:
+        fraisier test-db rebuild
+        fraisier test-db rebuild --env ci
+    """
     from fraisier.testing._manager import TemplateManager
 
     if not connection_url:
@@ -130,7 +142,13 @@ def test_db_rebuild(env: str, project_dir: str, connection_url: str | None) -> N
     help="PostgreSQL connection URL",
 )
 def test_db_clean(env: str, project_dir: str, connection_url: str | None) -> None:
-    """Drop test database templates."""
+    """Drop test database templates.
+
+    \b
+    Examples:
+        fraisier test-db clean
+        fraisier test-db clean --env ci
+    """
     from fraisier.testing._manager import TemplateManager
 
     if not connection_url:

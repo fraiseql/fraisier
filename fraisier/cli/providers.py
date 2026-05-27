@@ -14,7 +14,13 @@ from .main import main
 @main.command(name="providers")
 @click.pass_context
 def providers(_ctx: click.Context) -> None:
-    """List all available deployment providers."""
+    """List all available deployment providers.
+
+    \b
+    Examples:
+        fraisier providers
+        fraisier providers | grep docker
+    """
     from fraisier.providers import ProviderRegistry
     from fraisier.providers.bare_metal import BareMetalProvider
     from fraisier.providers.docker_compose import DockerComposeProvider
@@ -51,7 +57,13 @@ def providers(_ctx: click.Context) -> None:
 @click.argument("provider_type")
 @click.pass_context
 def provider_info(_ctx: click.Context, provider_type: str) -> None:
-    """Show detailed information about a provider type."""
+    """Show detailed information about a provider type.
+
+    \b
+    Examples:
+        fraisier provider-info bare_metal
+        fraisier provider-info docker_compose
+    """
     from fraisier.providers import ProviderRegistry
     from fraisier.providers.bare_metal import BareMetalProvider
     from fraisier.providers.docker_compose import DockerComposeProvider
@@ -129,7 +141,13 @@ def provider_info(_ctx: click.Context, provider_type: str) -> None:
 def provider_test(
     _ctx: click.Context, provider_type: str, config_file: str | None
 ) -> None:
-    """Run pre-flight checks for a provider."""
+    """Run pre-flight checks for a provider.
+
+    \b
+    Examples:
+        fraisier provider-test bare_metal
+        fraisier provider-test docker_compose --config-file provider.yaml
+    """
     import yaml
 
     from fraisier.providers import ProviderConfig, ProviderRegistry

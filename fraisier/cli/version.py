@@ -83,7 +83,13 @@ def version_group(ctx: click.Context, full: bool) -> None:
     help="Path to version.json",
 )
 def version_show(version_file: str) -> None:
-    """Show project version info from version.json."""
+    """Show project version info from version.json.
+
+    \b
+    Examples:
+        fraisier version show
+        fraisier version show --version-file dist/version.json
+    """
     from fraisier.versioning import read_version
 
     info = read_version(Path(version_file))
@@ -234,6 +240,24 @@ def ship(
         fraisier ship --no-bump
         fraisier ship minor --auto-merge
         fraisier ship patch --pr --auto-merge --merge-method rebase
+
+    \b
+    Flag interactions:
+        --pr               Create a PR after push. Requires --pr-base
+                           (or ship.pr_base in fraises.yaml).
+        --auto-merge       Enable GitHub auto-merge. Requires either
+                           --pr (to create the PR first) or an existing
+                           PR for HEAD.
+        --wait-deploy      Block until the deploy webhook reports
+                           success. Implies --auto-merge when paired
+                           with --pr — it won't return until the PR is
+                           merged AND the resulting deploy lands.
+        --no-deploy        Skip the deploy step entirely; useful for
+                           tag-only releases.
+        --no-bump          Re-ship the current version without bumping.
+                           Cannot combine with a bump-type argument.
+        --skip-checks      Bypass the ship.checks pipeline; bump +
+                           commit + push only.
     """
     if no_bump and bump_type is not None:
         console.print(

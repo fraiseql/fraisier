@@ -20,11 +20,6 @@ if TYPE_CHECKING:
 @click.option("--json", is_flag=True, help="Output diagnostic results in JSON format")
 @click.pass_context
 def diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> None:
-    """Diagnose deployment issues for a fraise environment."""
-    _diagnose(ctx, fraise, environment, json)
-
-
-def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> None:
     """Diagnose deployment issues for a fraise environment.
 
     Analyzes recent deployment logs, status files, and socket connectivity
@@ -35,6 +30,10 @@ def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> 
         fraisier diagnose my_api production
         fraisier diagnose my_api development --json
     """
+    _diagnose(ctx, fraise, environment, json)
+
+
+def _diagnose(ctx: click.Context, fraise: str, environment: str, json: bool) -> None:
     config = ctx.obj["config"]
 
     fraise_config = config.get_fraise_environment(fraise, environment)
