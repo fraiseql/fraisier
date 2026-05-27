@@ -4125,6 +4125,200 @@ fraises: {{}}
         assert "--dry-run" in result.output
         assert "--yes" in result.output
 
+    # --- #224: sudoers diff-and-warn before overwrite -----------------------
+
+    def _setup_sudoers_install(self, tmp_path, *, source_sudoers: str):
+        """Build a minimal install.sh + rendered sudoers for the #224 tests."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            f"""
+name: myproj
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises: {{}}
+"""
+        )
+        output_dir = tmp_path / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        install_script = output_dir / "install.sh"
+        install_script.write_text("#!/bin/sh\nexit 0\n")
+        install_script.chmod(0o755)
+        sudoers_src = output_dir / "sudoers"
+        sudoers_src.write_text(source_sudoers)
+        return cfg
+
+    def test_sudoers_diff_warns_on_removed_rules(self, tmp_path, monkeypatch):
+        """A rule on disk but not in the rendered fragment surfaces as 'removed' (#224)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        cfg = self._setup_sudoers_install(
+            tmp_path,
+            source_sudoers="user1 ALL=(root) NOPASSWD: /usr/bin/foo\n",
+        )
+
+        # Currently on disk: an extra rule that's about to disappear.
+        monkeypatch.setattr(
+            scaffold_mod,
+            "_read_current_sudoers",
+            lambda _name: (
+                "user1 ALL=(root) NOPASSWD: /usr/bin/foo\n"
+                "admin ALL=(root) NOPASSWD: /usr/bin/baz\n",
+                "ok",
+            ),
+        )
+        monkeypatch.setattr(scaffold_mod, "_run_script", lambda _cmd: 0)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install", "--yes"])
+        assert result.exit_code == 0
+        assert "would be removed" in result.output.lower()
+        assert "admin ALL=(root) NOPASSWD: /usr/bin/baz" in result.output
+
+    def test_sudoers_diff_silent_when_fresh_install(self, tmp_path, monkeypatch):
+        """No target file on disk → no diff section, no warning (#224)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        cfg = self._setup_sudoers_install(
+            tmp_path,
+            source_sudoers="user1 ALL=(root) NOPASSWD: /usr/bin/foo\n",
+        )
+        monkeypatch.setattr(
+            scaffold_mod,
+            "_read_current_sudoers",
+            lambda _name: (None, "missing"),
+        )
+        monkeypatch.setattr(scaffold_mod, "_run_script", lambda _cmd: 0)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install", "--yes"])
+        assert result.exit_code == 0
+        assert "would be removed" not in result.output.lower()
+
+    def test_sudoers_diff_silent_when_identical(self, tmp_path, monkeypatch):
+        """Identical current and new → no diff section (#224)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        rule = "user1 ALL=(root) NOPASSWD: /usr/bin/foo\n"
+        cfg = self._setup_sudoers_install(tmp_path, source_sudoers=rule)
+        monkeypatch.setattr(
+            scaffold_mod, "_read_current_sudoers", lambda _name: (rule, "ok")
+        )
+        monkeypatch.setattr(scaffold_mod, "_run_script", lambda _cmd: 0)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install", "--yes"])
+        assert result.exit_code == 0
+        assert "would be removed" not in result.output.lower()
+
+    def test_sudoers_diff_unreadable_non_strict_warns_and_proceeds(
+        self, tmp_path, monkeypatch
+    ):
+        """Unreadable sudoers + no --strict-sudoers → note + skip diff + proceed."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        cfg = self._setup_sudoers_install(
+            tmp_path,
+            source_sudoers="user1 ALL=(root) NOPASSWD: /usr/bin/foo\n",
+        )
+        monkeypatch.setattr(
+            scaffold_mod,
+            "_read_current_sudoers",
+            lambda _name: (None, "unreadable"),
+        )
+        monkeypatch.setattr(scaffold_mod, "_run_script", lambda _cmd: 0)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install", "--yes"])
+        assert result.exit_code == 0
+        assert "could not read" in result.output.lower()
+
+    def test_strict_sudoers_aborts_with_exit_code_3(self, tmp_path, monkeypatch):
+        """--strict-sudoers + diff → exit 3, do not run install (#224)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        cfg = self._setup_sudoers_install(
+            tmp_path,
+            source_sudoers="user1 ALL=(root) NOPASSWD: /usr/bin/foo\n",
+        )
+        monkeypatch.setattr(
+            scaffold_mod,
+            "_read_current_sudoers",
+            lambda _name: (
+                "user1 ALL=(root) NOPASSWD: /usr/bin/foo\n"
+                "admin ALL=(root) NOPASSWD: /usr/bin/baz\n",
+                "ok",
+            ),
+        )
+
+        ran: list[list[str]] = []
+
+        def fake_run(cmd):
+            ran.append(cmd)
+            return 0
+
+        monkeypatch.setattr(scaffold_mod, "_run_script", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-c", str(cfg), "scaffold-install", "--yes", "--strict-sudoers"],
+        )
+        assert result.exit_code == 3
+        assert "strict-sudoers" in result.output.lower()
+        assert ran == []  # install must not have been invoked
+
+    def test_strict_sudoers_aborts_on_unreadable_sudoers(self, tmp_path, monkeypatch):
+        """--strict-sudoers + unreadable target → exit 3 (couldn't verify, #224)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        cfg = self._setup_sudoers_install(
+            tmp_path,
+            source_sudoers="user1 ALL=(root) NOPASSWD: /usr/bin/foo\n",
+        )
+        monkeypatch.setattr(
+            scaffold_mod,
+            "_read_current_sudoers",
+            lambda _name: (None, "unreadable"),
+        )
+        monkeypatch.setattr(scaffold_mod, "_run_script", lambda _cmd: 0)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-c", str(cfg), "scaffold-install", "--yes", "--strict-sudoers"],
+        )
+        assert result.exit_code == 3
+        assert "could not read" in result.output.lower()
+
+    def test_scaffold_install_help_includes_strict_sudoers(self, tmp_path):
+        """scaffold-install --help lists the new --strict-sudoers flag (#224)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["scaffold-install", "--help"])
+        assert result.exit_code == 0
+        assert "--strict-sudoers" in result.output
+
 
 class TestDeploySocketServiceUnits:
     """Regression tests for issue #72 — socket/service unit correctness."""
