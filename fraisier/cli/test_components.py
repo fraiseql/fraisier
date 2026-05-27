@@ -69,6 +69,7 @@ def test_wrapper(
     \b
     Examples:
         fraisier test-wrapper api development systemctl restart api.service
+        fraisier test-wrapper api production systemctl status api.service
     """
     config = require_config(ctx)
     fraise_config = config.get_fraise_environment(fraise, environment)

@@ -790,6 +790,7 @@ def db_check(_ctx: click.Context) -> None:
     \b
     Examples:
         fraisier db-check
+        fraisier db-check 2>&1 | tee db-health.log
     """
     from fraisier.db.factory import get_database_adapter
 

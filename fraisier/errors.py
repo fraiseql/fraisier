@@ -16,6 +16,40 @@ if TYPE_CHECKING:
     from fraisier.migration_analyzer import ErrorClassification
 
 
+# Generic placeholder hint kept for backwards compatibility with
+# ``format_for_cli`` callers. ``str(err)`` suppresses it so the trailing
+# ``Recover with:`` line only appears for actionable, partial-state hints.
+_GENERIC_HINT = "Check the logs for more details."
+
+
+# Canonical recovery hints keyed by *scenario tag*, not class name. One
+# error class may map to multiple scenarios; one scenario may be raised
+# from multiple call sites. Keys must stay lowercase snake_case so they
+# remain decoupled from the type hierarchy.
+RECOVERY_HINTS: dict[str, str] = {
+    "migration_preflight": (
+        "rollback the restored snapshot, fix migrations, or run "
+        "`confiture migrate baseline` to re-baseline."
+    ),
+    "migrate_partial": (
+        "`fraisier rollback <fraise> <env>` to restore the previous SHA "
+        "and reverse the partial migration."
+    ),
+    "health_check_unhealthy": (
+        "`fraisier rollback <fraise> <env>` — the new revision is live "
+        "but failing its health check."
+    ),
+    "rollback_failed": (
+        "manual intervention required: check `journalctl -u <service>`, "
+        "inspect git HEAD, and verify database state before retrying."
+    ),
+    "deploy_timeout_unknown_phase": (
+        "`fraisier diagnose <fraise> <env>` to determine which phase "
+        "the deploy was in when the timeout fired."
+    ),
+}
+
+
 class FrameworkError(Exception):
     """Base exception for all framework errors.
 
@@ -28,7 +62,7 @@ class FrameworkError(Exception):
 
     code: str = "FRAISIER_ERROR"
     recoverable: bool = False
-    recovery_hint: str = "Check the logs for more details."
+    recovery_hint: str = _GENERIC_HINT
 
     def __init__(
         self,
@@ -37,6 +71,7 @@ class FrameworkError(Exception):
         context: dict[str, Any] | None = None,
         recoverable: bool | None = None,
         cause: Exception | None = None,
+        recovery_hint: str | None = None,
     ):
         """Initialize Fraisier error.
 
@@ -46,12 +81,18 @@ class FrameworkError(Exception):
             context: Additional context dict for debugging
             recoverable: Whether error can be automatically recovered from
             cause: Original exception that caused this error
+            recovery_hint: Per-instance recovery hint. When provided, overrides
+                the class-level default and is rendered into ``str(err)`` as a
+                trailing ``Recover with: <hint>`` line. Pass ``""`` (empty
+                string) to explicitly suppress the trailing line entirely.
         """
         self.message = message
         self.code = code or self.__class__.code
         self.context = context or {}
         if recoverable is not None:
             self.recoverable = recoverable
+        if recovery_hint is not None:
+            self.recovery_hint = recovery_hint
         self.cause = cause
 
         # Include cause in message if present
@@ -60,6 +101,13 @@ class FrameworkError(Exception):
             msg = f"{message} (caused by {type(cause).__name__}: {cause!s})"
 
         super().__init__(msg)
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        hint = self.recovery_hint
+        if hint and hint != _GENERIC_HINT:
+            return f"{base}\n\nRecover with: {hint}"
+        return base
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize error to dict for logging/API responses."""
@@ -223,6 +271,7 @@ class MigrationError(DatabaseError):
         context: dict[str, Any] | None = None,
         recoverable: bool | None = None,
         cause: Exception | None = None,
+        recovery_hint: str | None = None,
         migration_file: str | None = None,
         direction: str | None = None,
         step: int | None = None,
@@ -294,6 +343,7 @@ class MigrationError(DatabaseError):
             context=merged_context,
             recoverable=recoverable,
             cause=cause,
+            recovery_hint=recovery_hint,
         )
 
     @property
@@ -432,8 +482,9 @@ class MigrationPreflightError(DatabaseError):
         self,
         message: str,
         preflight_result: MigrationPreflightResult | None = None,
+        recovery_hint: str | None = None,
     ) -> None:
-        super().__init__(message=message)
+        super().__init__(message=message, recovery_hint=recovery_hint)
         self.preflight_result = preflight_result
 
 

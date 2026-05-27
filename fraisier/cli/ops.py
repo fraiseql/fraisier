@@ -83,7 +83,14 @@ def _build_remote_history_argv(
 def status_all(
     ctx: click.Context, environment: str | None, fraise_type: str | None
 ) -> None:
-    """Check status of all fraises."""
+    """Check status of all fraises.
+
+    \b
+    Examples:
+        fraisier status-all
+        fraisier status-all --environment production
+        fraisier status-all --type api
+    """
     from fraisier.database import get_db
 
     config = require_config(ctx)
@@ -235,7 +242,15 @@ def history(
     as_json: bool,
     since: str | None,
 ) -> None:
-    """Show deployment history."""
+    """Show deployment history.
+
+    \b
+    Examples:
+        fraisier history
+        fraisier history my_api production
+        fraisier history --since 7d --json
+        fraisier history --fraise my_api --limit 5
+    """
     from fraisier.cli._helpers import parse_since
     from fraisier.database import get_db
 
@@ -380,7 +395,14 @@ def stats(
     days: int,
     as_json: bool,
 ) -> None:
-    """Show deployment statistics."""
+    """Show deployment statistics.
+
+    \b
+    Examples:
+        fraisier stats
+        fraisier stats --fraise my_api --days 7
+        fraisier stats --env production --json
+    """
     # --- SSH dispatch ---
     if fraise and environment:
         config = require_config(ctx)
@@ -449,7 +471,13 @@ def stats(
 @main.command()
 @click.option("--limit", "-n", default=10, help="Number of events to show")
 def webhooks(limit: int) -> None:
-    """Show recent webhook events."""
+    """Show recent webhook events.
+
+    \b
+    Examples:
+        fraisier webhooks
+        fraisier webhooks --limit 25
+    """
     from fraisier.database import get_db
 
     console.print("[yellow]Note:[/yellow] Showing local webhook events only.")

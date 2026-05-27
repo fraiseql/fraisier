@@ -121,10 +121,13 @@ class RestoreMigrateStrategy(Strategy):
             failures = "\n".join(
                 f"  - {m.version} ({m.name}): {m.error}" for m in result.failures
             )
+            from fraisier.errors import RECOVERY_HINTS
+
             raise MigrationPreflightError(
                 f"Migration preflight failed ({result.failure_count} of "
                 f"{len(result.migrations)} migrations would fail):\n{failures}",
                 preflight_result=result,
+                recovery_hint=RECOVERY_HINTS["migration_preflight"],
             )
 
     def execute(
