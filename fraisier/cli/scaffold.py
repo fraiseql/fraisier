@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -236,15 +237,34 @@ def scaffold_install(
         )
         raise SystemExit(1)
 
-    if not install_script.is_file():
+    try:
+        is_file = install_script.is_file()
+    except OSError:
+        is_file = False
+
+    if not is_file:
         console.print(
-            f"[red]Error:[/red] {install_script} is not a regular file.",
+            f"[red]Error:[/red] {install_script} is not a regular file "
+            "or is not readable.",
             style="bold",
         )
         raise SystemExit(1)
 
-    # Make sure install.sh is executable
-    install_script.chmod(0o755)
+    # Make sure install.sh is executable. If we can't chmod (e.g. file owned
+    # by another user), only fail when the file isn't already executable —
+    # otherwise the chmod is a no-op anyway.
+    try:
+        install_script.chmod(0o755)
+    except OSError as exc:
+        if not os.access(install_script, os.X_OK):
+            console.print(
+                f"[red]Error:[/red] cannot make {install_script} executable: "
+                f"{exc.strerror or exc}.\n"
+                f"Fix permissions and retry, e.g.: "
+                f"sudo chmod +x {install_script}",
+                style="bold",
+            )
+            raise SystemExit(1) from exc
 
     # Build the command
     cmd: list[str] = ["sudo", str(install_script)]

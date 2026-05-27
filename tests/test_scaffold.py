@@ -3911,6 +3911,84 @@ fraises: {{}}
         assert "Traceback" not in result.output
         assert "not found" in result.output.lower()
 
+    def test_scaffold_install_command_is_file_permission_error(
+        self, tmp_path, monkeypatch
+    ):
+        """scaffold-install handles PermissionError from is_file() cleanly (#222)."""
+        from pathlib import Path
+
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises: {{}}
+"""
+        )
+        install_script = tmp_path / "output" / "install.sh"
+        install_script.parent.mkdir(parents=True)
+        install_script.write_text("#!/bin/sh\n")
+
+        real_is_file = Path.is_file
+
+        def fake_is_file(self, *args, **kwargs):
+            if self == install_script:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_is_file(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "is_file", fake_is_file)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install"])
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Traceback" not in result.output
+
+    def test_scaffold_install_command_chmod_permission_error(
+        self, tmp_path, monkeypatch
+    ):
+        """scaffold-install handles PermissionError from chmod() cleanly (#222)."""
+        from pathlib import Path
+
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises: {{}}
+"""
+        )
+        install_script = tmp_path / "output" / "install.sh"
+        install_script.parent.mkdir(parents=True)
+        install_script.write_text("#!/bin/sh\n")
+        install_script.chmod(0o644)  # not executable
+
+        real_chmod = Path.chmod
+
+        def fake_chmod(self, *args, **kwargs):
+            if self == install_script:
+                raise PermissionError(1, "Operation not permitted", str(self))
+            return real_chmod(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "chmod", fake_chmod)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install", "--yes"])
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Traceback" not in result.output
+        assert "executable" in result.output.lower()
+
     def test_scaffold_then_install_workflow(self, tmp_path):
         """Complete workflow: scaffold generates files, scaffold-install installs."""
         from click.testing import CliRunner
