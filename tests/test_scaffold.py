@@ -3989,6 +3989,85 @@ fraises: {{}}
         assert "Traceback" not in result.output
         assert "executable" in result.output.lower()
 
+    def test_scaffold_install_failure_message_includes_exit_code(
+        self, tmp_path, monkeypatch
+    ):
+        """scaffold-install --dry-run failure surfaces exit code + log hint (#225).
+
+        Regression for #225: when install.sh exits non-zero in dry-run/validate
+        mode, the wrapper's failure message must include the actual exit code
+        and a copy-pasteable command (with --verbose + tee) that produces a
+        persistent log. Replaces the previous "Review the output above" hint
+        that was useless when no output existed.
+        """
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises: {{}}
+"""
+        )
+        install_script = tmp_path / "output" / "install.sh"
+        install_script.parent.mkdir(parents=True)
+        install_script.write_text("#!/bin/sh\nexit 42\n")
+        install_script.chmod(0o755)
+
+        monkeypatch.setattr(scaffold_mod, "_run_script", lambda _cmd: 42)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["-c", str(cfg), "scaffold-install", "--dry-run", "--yes"]
+        )
+        assert result.exit_code == 42
+        assert "42" in result.output
+        assert "install.sh" in result.output
+        assert "tee" in result.output
+
+    def test_scaffold_install_install_failure_message_includes_exit_code(
+        self, tmp_path, monkeypatch
+    ):
+        """scaffold-install (non-preview) failure surfaces exit code + hint (#225).
+
+        Parallel regression to the dry-run path: when install.sh exits non-zero
+        outside of preview/validate, the message must include the exit code and
+        the verbose-log rerun hint.
+        """
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+        from fraisier.cli import scaffold as scaffold_mod
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises: {{}}
+"""
+        )
+        install_script = tmp_path / "output" / "install.sh"
+        install_script.parent.mkdir(parents=True)
+        install_script.write_text("#!/bin/sh\nexit 7\n")
+        install_script.chmod(0o755)
+
+        monkeypatch.setattr(scaffold_mod, "_run_script", lambda _cmd: 7)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install", "--yes"])
+        assert result.exit_code == 7
+        assert "7" in result.output
+        assert "install.sh" in result.output
+        assert "tee" in result.output
+        assert "Installation failed" in result.output
+
     def test_scaffold_then_install_workflow(self, tmp_path):
         """Complete workflow: scaffold generates files, scaffold-install installs."""
         from click.testing import CliRunner
