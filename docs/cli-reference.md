@@ -1081,6 +1081,7 @@ fraisier ship patch|minor|major [OPTIONS]
 | `--skip-checks` | Skip pre-ship checks (lint, tests) |
 | `--version-file PATH` | Path to a custom `version.json` |
 | `--pyproject PATH` | Path to a custom `pyproject.toml` |
+| `--format text\|json` | Output format. `json` is supported on `--dry-run` only; emits `{version: {old, new, bump_type}, dry_run: true, ...}`. |
 
 **Examples:**
 

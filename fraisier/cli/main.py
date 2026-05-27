@@ -16,6 +16,8 @@ import click
 
 from fraisier.config import get_config
 
+from ._envmap_help import CommandWithEnvvarEpilog
+
 
 @click.group()
 @click.version_option(package_name="fraisier", prog_name="fraisier")
@@ -70,6 +72,11 @@ def main(ctx: click.Context, config: str | None, verbose: bool, no_color: bool) 
     ctx.obj["skip_health"] = False
 
 
+# Default every @main.command(...) to the envvar-epilog-aware Command
+# subclass. Per-command overrides (cls=...) still win.
+main.command_class = CommandWithEnvvarEpilog
+
+
 # Import submodules to register their commands with `main`.
 # Each sibling does ``from .main import main`` and attaches its commands via
 # ``@main.command(...)``, so importing the module is enough to register them.
@@ -80,6 +87,8 @@ from . import _rollback as _rollback_mod  # noqa: E402, F401
 from . import _validate as _validate_mod  # noqa: E402, F401
 from . import bootstrap as _bootstrap_mod  # noqa: E402, F401
 from . import db as _db_mod  # noqa: E402, F401
+from . import doctor as _doctor_mod  # noqa: E402, F401
+from . import env_check as _env_check_mod  # noqa: E402, F401
 from . import health as _health_mod  # noqa: E402, F401
 from . import logs as _logs_mod  # noqa: E402, F401
 from . import ops as _ops_mod  # noqa: E402, F401

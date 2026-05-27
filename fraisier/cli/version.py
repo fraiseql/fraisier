@@ -212,6 +212,13 @@ def version_bump(
         "Falls back to ship.merge_method in fraises.yaml."
     ),
 )
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Output format (default: text). JSON currently supported on --dry-run only.",
+)
 @click.pass_context
 def ship(
     ctx: click.Context,
@@ -227,6 +234,7 @@ def ship(
     deploy_timeout: int,
     auto_merge: bool,
     merge_method: str | None,
+    fmt: str,
 ) -> None:
     """Bump version, commit, push, and deploy in one step.
 
@@ -321,6 +329,30 @@ def ship(
         return
 
     new = _calc_new_version(current_version, bump_type)
+
+    if dry_run and fmt == "json":
+        import json as _json
+
+        click.echo(
+            _json.dumps(
+                {
+                    "version": {
+                        "old": current_version,
+                        "new": new,
+                        "bump_type": bump_type,
+                    },
+                    "dry_run": True,
+                    "create_pr": create_pr,
+                    "pr_base": pr_base,
+                    "no_deploy": no_deploy,
+                    "auto_merge": resolved_auto_merge,
+                    "merge_method": resolved_merge_method,
+                    "has_pipeline": has_pipeline,
+                },
+                indent=2,
+            )
+        )
+        return
 
     if dry_run:
         _ship_dry_run(
