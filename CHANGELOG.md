@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.1] - 2026-05-27
+
+### Fixed
+
+- **`scaffold-install` no longer crashes with an unhandled `PermissionError` on `Path.exists()` / `is_file()` / `chmod()`** ([#222](https://github.com/fraiseql/fraisier/issues/222)). On hosts where a parent directory of the generated `install.sh` isn't traversable by the invoking user, `Path.exists()` propagates `EACCES` as `PermissionError` rather than returning `False`. `is_file()` has the same failure mode. The wrapper now treats any `OSError` from those probes as "can't see the file" and prints the friendly "not found or not readable" error instead of a traceback. `chmod(0o755)` is similarly hardened: when the file is owned by another user the chmod is allowed to fail silently as long as the file is already executable (the common case for a freshly-generated script).
+
+### Changed
+
+- **`scaffold-install` failure messages now include the install.sh exit code and a copy-pasteable rerun command** ([#225](https://github.com/fraiseql/fraisier/issues/225)). The previous "Review the output above for details" line was misleading when no output existed (the wrapper inherits stdio, so a quiet `install.sh` produces no preceding output). Failures now print the actual exit code (`Preview exited with code 42` / `Validation exited with code 42` / `Installation failed (exit code 42)`) and a verbose+tee command the operator can paste to reproduce with a persistent log: `sudo /opt/<project>/scripts/generated/install.sh <flags> --verbose 2>&1 | tee /tmp/install.log`. `--verbose` is added only when not already present in the original invocation. The success path is unchanged. No behavioral change to subprocess invocation — this is strictly an error-message UX fix.
+
 ## [0.23.0] - 2026-05-26
 
 ### Changed
