@@ -531,6 +531,118 @@ database name) — the SQL is the same.
 
 ---
 
+## Post-migration verification
+
+Fraisier ships two complementary hooks that run after `confiture migrate` and
+before the deployment is reported successful:
+
+| Hook | Runs | Reads | Failure policy |
+|---|---|---|---|
+| `database.post_migrate` | after migrate, before service restart | DB only (no app) | `on_error: halt | warn` |
+| `smoke_tests` | after service restart and `/health` passes | the live HTTP app | `on_failure: rollback | halt | warn` |
+
+The two solve different problems. `post_migrate` is for **schema-side**
+side effects that the migration tool itself doesn't cover (grant
+reconciliation, materialized view refreshes, vendor extension setup).
+`smoke_tests` is for **application-side** behavior that an
+unauthenticated `/health` probe can't reach (authenticated queries,
+permission boundaries, cross-service contracts).
+
+### `database.post_migrate`: SQL hooks after migrate
+
+A list of steps; each step runs exactly one of `sql_dir` (every `.sql`
+file in the directory, sorted) or `sql_file` (a single file) against the
+fraise's `database_url`. Both modes are designed to be idempotent so a
+re-deploy after a partial failure is safe.
+
+```yaml
+database:
+  database_url: !envvar DATABASE_URL
+  strategy: apply
+  post_migrate:
+    - sql_dir: db/7_grant/   # idempotent grant sweep — see below
+      on_error: halt          # default: abort before restart
+    - sql_file: db/post_migrate.sql
+      on_error: warn          # log and continue
+```
+
+**Failure policy**:
+
+- `halt` (default) — raises `DeploymentError` and aborts the deploy *before*
+  the service is restarted. The new code never serves traffic, so no
+  rollback is needed: the old service keeps running on the old commit.
+- `warn` — logs the failure and continues. Use sparingly; this is
+  appropriate for housekeeping (e.g. refresh a stale materialized view)
+  but never for grants the app is about to require.
+
+The canonical use case is **grant reconciliation**: when a confiture
+migration creates a new relation, the app role's grants aren't
+automatically extended. A small idempotent SQL file under `db/7_grant/`
+keeps the app role's privileges in sync with whatever the migration
+introduced.
+
+### `smoke_tests`: authenticated probes after restart
+
+A list of HTTP probes that run against the freshly-deployed service,
+authenticated either via a static `!envvar` header or via a
+`token_provider` block (see [Token providers for authenticated smoke
+tests](#token-providers-for-authenticated-smoke-tests) earlier in this
+guide for the provider catalog).
+
+**Failure policy** — `on_failure:` on each probe:
+
+- `rollback` (default) — invoke `ApiDeployer.rollback()`, which checks
+  out the previous SHA, reverses migrations if reversible, and restarts
+  the service. The deploy returns `status=rolled_back`.
+- `halt` — leave the broken-but-unhealthy revision live. The deploy
+  returns `status=failed`. Use when rollback would itself cause data
+  loss (e.g. an irreversible migration just ran) — the operator
+  investigates while the broken code keeps serving.
+- `warn` — log the failure and let the deploy succeed. Use only for
+  flaky probes whose failures are tolerable.
+
+A token-provider failure (script crash, IdP 401, network error) is
+distinct from a smoke-test failure: it raises `DeploymentError` and
+**halts without rolling back**, since a transient IdP hiccup is not a
+code regression.
+
+### Worked example: post-migrate grants + authenticated smoke
+
+The combined shape — verbatim from `fraises.example.yaml`:
+
+```yaml
+environments:
+  production:
+    database:
+      database_url: !envvar DATABASE_URL
+      strategy: apply
+      backup_before_deploy: true
+      post_migrate:
+        - sql_dir: db/7_grant/
+          on_error: halt
+    health_check:
+      url: https://api.myapp.io/health
+      timeout: 30
+    smoke_tests:
+      - name: authenticated_me
+        method: POST
+        url: /graphql
+        headers:
+          Authorization: !envvar SMOKE_TEST_JWT
+        body: '{"query":"{ me { id role } }"}'
+        on_failure: rollback
+        assert:
+          - { json_path: $.data.me.id, not_null: true }
+          - { json_path: $.data.me.role, equals: admin }
+          - { json_path: $.errors, null: true }
+```
+
+This wires the full chain: migrate → post_migrate grants → restart →
+`/health` poll → authenticated GraphQL probe. Any step's failure
+triggers its declared policy.
+
+---
+
 ## Multi-Environment Setup
 
 A typical setup has staging and production on separate servers. In `fraises.yaml`, assign
