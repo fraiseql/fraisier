@@ -5,11 +5,19 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 import click
 
+from fraisier.scaffold.sudoers_diff import SudoersDiff, diff_sudoers
+
 from ._helpers import console, require_config
 from .main import main
+
+# Distinct exit code for --strict-sudoers aborts (#224). 1 stays generic;
+# this lets CI/automation distinguish "sudoers would change" from any other
+# install failure without parsing the output.
+STRICT_SUDOERS_EXIT_CODE = 3
 
 
 @main.command(name="scaffold-diff")
@@ -211,6 +219,93 @@ def _print_install_failure(
     )
 
 
+def _read_current_sudoers(
+    project_name: str,
+) -> tuple[str | None, Literal["ok", "missing", "unreadable"]]:
+    """Read `/etc/sudoers.d/<project_name>` via sudo for the diff check (#224).
+
+    Returns:
+        ``(content, "ok")`` when the file was read successfully.
+        ``(None, "missing")`` when the file does not exist (fresh install).
+        ``(None, "unreadable")`` when sudo refused, the file was unreadable,
+        or any other I/O error occurred.
+
+    Uses plain ``sudo`` (not ``sudo -n``) so the read piggybacks on the
+    existing scaffold-install sudo timestamp: interactive runs warm it via
+    the preceding install.sh preview; ``--yes`` runs warm it via the
+    install itself. ``sudo test -f`` distinguishes "missing" from
+    "can't read" without paying a second password prompt.
+    """
+    target = f"/etc/sudoers.d/{project_name}"
+    try:
+        probe = subprocess.run(
+            ["sudo", "test", "-f", target],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None, "unreadable"
+    if probe.returncode == 1:
+        return None, "missing"
+    if probe.returncode != 0:
+        return None, "unreadable"
+    try:
+        result = subprocess.run(
+            ["sudo", "cat", target],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None, "unreadable"
+    if result.returncode != 0:
+        return None, "unreadable"
+    return result.stdout, "ok"
+
+
+def _print_sudoers_diff(
+    *,
+    sudoers_src: Path,
+    project_name: str,
+    strict: bool,
+) -> SudoersDiff | None:
+    """Print the sudoers-rule removal warning and return the diff (#224).
+
+    Returns ``None`` if the check was skipped (no source file, no target on
+    disk, or unreadable target in non-strict mode). Raises ``SystemExit(3)``
+    in strict mode when the current sudoers can't be read.
+    """
+    if not sudoers_src.exists():
+        return None
+    content, status = _read_current_sudoers(project_name)
+    if status == "missing":
+        return None
+    if status == "unreadable":
+        if strict:
+            console.print(
+                "\n[red]✗ --strict-sudoers: could not read "
+                f"/etc/sudoers.d/{project_name} to verify what would "
+                "change.[/red]"
+            )
+            raise SystemExit(STRICT_SUDOERS_EXIT_CODE)
+        console.print(
+            f"\n[yellow]Note: could not read /etc/sudoers.d/{project_name}; "
+            "skipping sudoers diff.[/yellow]"
+        )
+        return None
+    assert content is not None  # status == "ok" implies content is set
+    diff = diff_sudoers(content, sudoers_src.read_text())
+    if diff.removed:
+        console.print(
+            f"\n[yellow]⚠ {len(diff.removed)} sudoers rule(s) currently in "
+            f"/etc/sudoers.d/{project_name} are not in your fraises.yaml "
+            "and would be removed:[/yellow]"
+        )
+        for rule in diff.removed:
+            console.print(f"  - {rule}")
+    return diff
+
+
 @main.command(name="scaffold-install")
 @click.option("--dry-run", is_flag=True, help="Preview what would be installed")
 @click.option(
@@ -218,6 +313,14 @@ def _print_install_failure(
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option(
+    "--strict-sudoers",
+    is_flag=True,
+    help=(
+        "Abort (exit 3) if sudoers rules would be removed or current "
+        "/etc/sudoers.d/<project> can't be read. Intended for CI/automation."
+    ),
+)
 @click.pass_context
 def scaffold_install(
     ctx: click.Context,
@@ -225,6 +328,7 @@ def scaffold_install(
     validate_only: bool,
     yes: bool,
     verbose: bool,
+    strict_sudoers: bool,
 ) -> None:
     """Install generated scaffold files to system locations.
 
@@ -312,14 +416,45 @@ def scaffold_install(
     else:
         console.print("[cyan]Installation plan:[/cyan]\n")
 
+    sudoers_src = output_dir / "sudoers"
+
+    def _check_sudoers_diff() -> None:
+        """Print the sudoers diff and honor --strict-sudoers.
+
+        Closure over `config.project_name`, `sudoers_src`, and `strict_sudoers`
+        so the call sites below stay short. Raises SystemExit(3) when
+        --strict-sudoers detects a removal or an unreadable target.
+        """
+        diff = _print_sudoers_diff(
+            sudoers_src=sudoers_src,
+            project_name=config.project_name,
+            strict=strict_sudoers,
+        )
+        if strict_sudoers and diff is not None and diff.removed:
+            console.print(
+                "\n[red]✗ --strict-sudoers: aborting because sudoers rules "
+                "would be removed. Add them to sudoers_rules in fraises.yaml "
+                "or remove --strict-sudoers.[/red]"
+            )
+            raise SystemExit(STRICT_SUDOERS_EXIT_CODE)
+
     # If not --yes and not validating/dry-running, show preview first
     if not yes and not validate_only and not dry_run:
         preview_cmd = _build_preview_cmd(cmd)
         _run_script(preview_cmd)
         console.print()
+        # Single prompt covers BOTH the install plan AND the sudoers diff:
+        # chaining a second `click.confirm` here would train operators to mash
+        # `y` past safety questions.
+        _check_sudoers_diff()
         if not click.confirm("Proceed with installation?"):
             console.print("[yellow]Aborted.[/yellow]")
             return
+    else:
+        # --yes / --dry-run / --validate-only: still surface the diff (loudly
+        # in --yes, as part of the preview output otherwise). The operator
+        # opted out of the prompt, not out of seeing what would change.
+        _check_sudoers_diff()
 
     # Run the actual command
     returncode = _run_script(cmd)
