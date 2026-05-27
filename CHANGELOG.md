@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-05-27
+
+### Added
+
+- **`scaffold-install` now diffs the current `/etc/sudoers.d/<project>` against the rendered fragment and warns about rules that would be removed** ([#224](https://github.com/fraiseql/fraisier/issues/224)). Previously the install silently overwrote the target file, so any operator-added rule (workarounds, non-fraisier components' rules, leftover entries from prior fraisier versions) silently disappeared on next `scaffold-install`. The wrapper now reads the current sudoers file via `sudo cat` (piggybacking on the existing sudo timestamp — no extra password prompt in practice), diffs against the rendered fragment using a line-set comparison that ignores comments and normalizes whitespace, and prints a clearly-formatted list of rules that would be removed. In interactive mode the existing `Proceed with installation?` confirm covers both the install plan and the sudoers diff — there is deliberately no second prompt. In `--yes` / `--dry-run` / `--validate-only` modes the diff still prints (`--yes` opts out of the prompt, not out of visibility). The check is silently skipped when `/etc/sudoers.d/<project>` doesn't exist yet (fresh installs).
+- **`scaffold-install --strict-sudoers` flag** for CI/automation that should fail loud on any sudoers removal. Exits with code 3 (distinct from generic `1` and user-abort `2`) when rules would be removed OR when the current sudoers state can't be read — "couldn't verify" is treated as failure under strict, not silently as "no changes". Naming is deliberately per-resource: future nginx/systemd safety nets get sibling flags (`--strict-nginx`, ...) rather than a single coarse `--strict-overwrites`.
+- **New module `fraisier.scaffold.sudoers_diff`** — pure-function `diff_sudoers(current, new) -> SudoersDiff` with `added` / `removed` rule lists and a `has_changes` property. Stdlib-only, no I/O, fully unit-tested.
+
 ## [0.23.1] - 2026-05-27
 
 ### Fixed
