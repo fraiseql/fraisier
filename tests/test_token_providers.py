@@ -111,7 +111,7 @@ class TestParseDispatchesToTypedSubclass:
 
         provider = parse_token_provider({"type": "exec", "command": ["printf", "x"]})
         with pytest.raises(FrozenInstanceError):
-            provider.command = ("evil",)  # type: ignore[misc]
+            provider.command = ("evil",)  # type: ignore[misc]  # ty: ignore[invalid-assignment]
 
     def test_base_class_resolve_raises_not_implemented(self):
         # The base class is abstract-by-convention — instantiating it
@@ -306,7 +306,7 @@ class TestExecProviderParseSideEffects:
         provider = parse_token_provider({"type": "exec", "command": ["false"]})
         # Parse succeeded without running anything.
         assert called == []
-        assert provider.command == ("false",)
+        assert provider.command == ("false",)  # ty: ignore[unresolved-attribute]
 
     def test_validate_does_not_invoke_subprocess(self, monkeypatch):
         from fraisier.config._validation import _validate_smoke_tests

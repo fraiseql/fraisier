@@ -9,6 +9,7 @@ through ``_collect_all_validation_errors``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fraisier.config import FraisierConfig
@@ -24,7 +25,7 @@ def eager_load(path: str | PathLike[str]) -> FraisierConfig:
     ``ConfigurationError`` encountered, matching the eager-fail
     behaviour the loader had before the Stage 1/2 split.
     """
-    config = FraisierConfig(path)
+    config = FraisierConfig(Path(path) if not isinstance(path, str) else path)
     _ = config.notifications
     _ = config.hooks
     for name in config.list_fraises():

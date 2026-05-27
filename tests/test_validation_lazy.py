@@ -69,6 +69,7 @@ fraises:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(fraise["database"]["database_url"], LazyEnv)
 
     def test_envvar_set_to_non_pg_url_fails_at_resolved_scheme_check(
@@ -86,6 +87,7 @@ fraises:
         # Load + Stage-2 validation tolerates LazyEnv presence; the
         # scheme check must be runnable on the resolved value by callers.
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         resolved = str(fraise["database"]["database_url"])
         errors = validate_pg_url_string("my_api", "database_url", resolved)
         assert errors and "PostgreSQL URL" in errors[0]
@@ -118,6 +120,7 @@ class TestSystemdServiceAcceptsLazyEnv:
         config_file = _write_config(tmp_path, _SVC_TEMPLATE.format(expr="!envvar SVC"))
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(fraise["systemd_service"], LazyEnv)
 
     def test_str_invalid_still_fails(self, tmp_path):
@@ -146,6 +149,7 @@ class TestSystemdSocketAcceptsLazyEnv:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(fraise["systemd_deploy_socket"], LazyEnv)
 
 
@@ -169,6 +173,7 @@ class TestSshFieldsAcceptLazyEnv:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(fraise["ssh"]["host"], LazyEnv)
 
 
@@ -191,6 +196,7 @@ class TestCloneUrlAcceptsLazyEnv:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(fraise["clone_url"], LazyEnv)
 
     def test_str_bad_url_still_fails(self, tmp_path):
@@ -226,6 +232,7 @@ class TestZfsAcceptsLazyEnv:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(fraise["zfs"]["pool"], LazyEnv)
         assert isinstance(fraise["zfs"]["data_dataset"], LazyEnv)
 
@@ -255,6 +262,7 @@ class TestRestoreCompressionAcceptsLazyEnv:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(
             fraise["database"]["restore"]["preferred_compression"], LazyEnv
         )

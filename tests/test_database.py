@@ -96,7 +96,7 @@ class TestFraisierDB:
         # Re-init through fraisier; should ADD COLUMN, not DROP+CREATE.
         original = dbmod.get_db_path
         try:
-            dbmod.get_db_path = lambda: legacy_path
+            dbmod.get_db_path = lambda: legacy_path  # ty: ignore[invalid-assignment]
             dbmod.init_database()
             with dbmod.get_connection() as conn:
                 cols = {

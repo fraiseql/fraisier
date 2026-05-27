@@ -123,7 +123,7 @@ class DjangoMigrateStrategy(MigrationStrategy):
 
             if self.app_label:
                 app_config = apps.get_app_config(self.app_label)
-                migration_module = migrations.get_migration_module(app_config)
+                migration_module = migrations.get_migration_module(app_config)  # ty: ignore[unresolved-attribute]
                 # Get the latest migration name
                 migration_names = [
                     name for name in dir(migration_module) if not name.startswith("_")
@@ -135,7 +135,7 @@ class DjangoMigrateStrategy(MigrationStrategy):
                 latest_migration = None
                 for app_config in apps.get_app_configs():
                     try:
-                        migration_module = migrations.get_migration_module(app_config)
+                        migration_module = migrations.get_migration_module(app_config)  # ty: ignore[unresolved-attribute]
                         migration_names = [
                             name
                             for name in dir(migration_module)

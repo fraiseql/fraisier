@@ -65,7 +65,7 @@ class TestValidateFormatRejectsLazyEnv:
             ConfigurationError,
             match=r"format must be a literal string, not !envvar",
         ):
-            _validate_format(LazyEnv("FMT", "p"))
+            _validate_format(LazyEnv("FMT", "p"))  # ty: ignore[invalid-argument-type]
 
     def test_str_still_accepted(self):
         # Sanity: literal-string formats still parse fine.

@@ -11,7 +11,11 @@ from typing import Any
 
 # Try to import prometheus_client, fail gracefully if not available
 try:
-    from prometheus_client import Counter, Gauge, Histogram
+    from prometheus_client import (  # ty: ignore[unresolved-import]
+        Counter,
+        Gauge,
+        Histogram,
+    )
 
     PROMETHEUS_AVAILABLE = True
 except ImportError:

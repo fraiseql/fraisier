@@ -126,7 +126,7 @@ def _collect_install_helper_sockets(
     install-helper renderer (fraise_name, env_name, install_user, app_path,
     socket_path, env_var, socket_unit, service_unit).
     """
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for fraise in local_fraises:
         fraise_name = fraise["name"]
         fraise_install = fraise.get("install")
