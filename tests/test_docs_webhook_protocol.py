@@ -85,9 +85,7 @@ def test_each_documented_event_type_is_emitted(event_type):
     # Smoke: each event_type the doc lists must be constructible. Catches
     # the case where the doc lists an event_type that DeployEvent has no
     # path to produce.
-    event = DeployEvent(
-        fraise_name="api", environment="prod", event_type=event_type
-    )
+    event = DeployEvent(fraise_name="api", environment="prod", event_type=event_type)
     assert event.to_dict()["event_type"] == event_type
 
 

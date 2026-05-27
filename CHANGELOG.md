@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-05-27
+
+### Added
+
+- **Worked-example epilogs on every `--help` body, plus a `ship` flag-interaction matrix** ([#221](https://github.com/fraiseql/fraisier/issues/221) item 1). Every subcommand under `fraisier ...` now ends its `--help` with at least two `fraisier ...` example lines so an agent or operator can grok flag interactions without source-reading. `ship --help` additionally enumerates the `--pr` / `--auto-merge` / `--wait-deploy` / `--no-deploy` / `--no-bump` / `--skip-checks` relationships in a single block. A new `tests/test_help_epilogs.py` parametrizes over every leaf command in `fraisier.cli.main.main` and asserts the contract holds — drift catches a missing epilog at CI time.
+- **Per-instance `recovery_hint` on framework errors, surfaced into `str(err)`** ([#221](https://github.com/fraiseql/fraisier/issues/221) item 7). `FrameworkError.__init__` accepts a `recovery_hint` kwarg; when set, `str(err)` renders the hint as a trailing `Recover with: <hint>` line. A new `fraisier.errors.RECOVERY_HINTS` catalog supplies canonical strings keyed by scenario tag (`migration_preflight`, `migrate_partial`, `health_check_unhealthy`, `rollback_failed`, `deploy_timeout_unknown_phase`) so wording stays consistent across raise sites. The `MigrationPreflightError` raise site in `fraisier/strategies/_restore.py` is wired through to the canonical hint — the exact incident the issue references. CLI error rendering picks up the trailing line for free since handlers interpolate `str(exc)`. Empty-string explicitly suppresses the line.
+- **`docs/webhook-protocol.md`** ([#221](https://github.com/fraiseql/fraisier/issues/221) item 5). Public contract for the JSON payload fraisier POSTs to `type: webhook` notification destinations. Documents every `DeployEvent.to_dict()` field, all four `event_type` values, the operator-supplied header auth pattern (fraisier does not HMAC-sign outbound notifications — the inbound `_verify_signature` machinery is unrelated), stability guarantees, three worked examples covering `failure` / `rollback` / `success`, and idempotency semantics. A new `tests/test_docs_webhook_protocol.py` parses every fenced JSON block in the doc and asserts every documented field is emitted by `DeployEvent.to_dict()` (and vice-versa) so doc and code can't silently drift.
+
 ## [0.24.0] - 2026-05-27
 
 ### Added
