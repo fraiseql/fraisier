@@ -182,6 +182,35 @@ def _build_preview_cmd(cmd: list[str]) -> list[str]:
     return preview
 
 
+def _print_install_failure(
+    *,
+    install_script: Path,
+    returncode: int,
+    cmd: list[str],
+    phase: str | None,
+) -> None:
+    """Print the failure message for a non-zero install.sh exit.
+
+    ``phase`` is ``"Validation"`` or ``"Preview"`` for the dry-run / validate
+    paths, or ``None`` for a real install. The rerun hint adds ``--verbose``
+    if it wasn't already present so the operator's copy-paste produces a
+    diagnostic log even when the original invocation didn't.
+    """
+    rerun_flags = " ".join(cmd[2:])  # skip ["sudo", install_script]
+    if "--verbose" not in rerun_flags:
+        rerun_flags = f"{rerun_flags} --verbose".strip()
+    if phase is not None:
+        headline = f"[yellow]⚠ {phase} exited with code {returncode}.[/yellow]"
+    else:
+        headline = f"[red]✗ Installation failed (exit code {returncode}).[/red]"
+    console.print(
+        f"\n{headline}\n"
+        "To capture the full output for debugging:\n"
+        f"  sudo {install_script} {rerun_flags} 2>&1 | tee /tmp/install.log",
+        soft_wrap=True,
+    )
+
+
 @main.command(name="scaffold-install")
 @click.option("--dry-run", is_flag=True, help="Preview what would be installed")
 @click.option(
@@ -313,14 +342,16 @@ def scaffold_install(
                 "     fraisier trigger-deploy <fraise> <environment>"
             )
     else:
-        if validate_only or dry_run:
-            console.print(
-                "\n[yellow]⚠ Preview/validation encountered issues.[/yellow]\n"
-                "Review the output above for details."
-            )
+        if validate_only:
+            phase: str | None = "Validation"
+        elif dry_run:
+            phase = "Preview"
         else:
-            console.print(
-                "\n[red]✗ Installation failed[/red]\n"
-                "Review the output above for details."
-            )
+            phase = None
+        _print_install_failure(
+            install_script=install_script,
+            returncode=returncode,
+            cmd=cmd,
+            phase=phase,
+        )
         raise SystemExit(returncode)
