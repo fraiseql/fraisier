@@ -135,7 +135,7 @@ async def bootstrap_server(
             )
             if result.action != "accept":
                 return "Bootstrap aborted: sudo password was declined."
-            sudo_password = result.data.sudo_password
+            sudo_password = result.data.sudo_password  # ty: ignore[unresolved-attribute]
 
     server, runner = _resolve_runner(
         config,

@@ -206,8 +206,16 @@ def pg_container():
     except ImportError:
         pytest.skip("testcontainers not installed")  # ty: ignore[too-many-positional-arguments]
 
-    with PostgresContainer("postgres:16", driver=None) as pg:
-        yield pg
+    try:
+        container = PostgresContainer("postgres:16", driver=None)
+        container.start()
+    except Exception as exc:  # noqa: BLE001 — docker daemon may be missing / broken
+        pytest.skip(f"Docker unavailable: {exc.__class__.__name__}: {exc}")  # ty: ignore[too-many-positional-arguments]
+
+    try:
+        yield container
+    finally:
+        container.stop()
 
 
 @pytest.fixture(scope="session")

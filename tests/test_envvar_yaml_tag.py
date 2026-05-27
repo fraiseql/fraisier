@@ -45,6 +45,7 @@ class TestEnvvarYamlTag:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert fraise["secret"] == "eyJsuper-secret"
 
     def test_raises_when_env_var_missing(self, tmp_path, monkeypatch):
@@ -56,6 +57,7 @@ class TestEnvvarYamlTag:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         with pytest.raises(ConfigurationError, match=r"MISSING_VAR.*not set"):
             to_str(fraise["secret"])
 
@@ -69,6 +71,7 @@ class TestEnvvarYamlTag:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert isinstance(fraise["secret"], LazyEnv)
         assert fraise["secret"].name == "MISSING_VAR"
 
@@ -80,6 +83,7 @@ class TestEnvvarYamlTag:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert fraise["secret"] == ""
 
     def test_works_inside_nested_structures(self, tmp_path, monkeypatch):
@@ -100,4 +104,5 @@ fraises:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         assert fraise["secrets"] == ["abc", "literal_value"]

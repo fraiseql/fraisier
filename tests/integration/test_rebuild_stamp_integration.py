@@ -34,10 +34,8 @@ def _stamp_test_db(pg_superuser_url):
 
     db_url = replace_db_name(pg_superuser_url, db_name)
     with psycopg.connect(db_url, autocommit=True) as conn:
-        conn.execute("CREATE TABLE public.tb_version (app_version text)")  # ty: ignore[no-matching-overload]
-        conn.execute(  # ty: ignore[no-matching-overload]
-            "INSERT INTO public.tb_version (app_version) VALUES ('0.0.0')"
-        )
+        conn.execute("CREATE TABLE public.tb_version (app_version text)")
+        conn.execute("INSERT INTO public.tb_version (app_version) VALUES ('0.0.0')")
 
     yield db_url, db_name
 
@@ -60,7 +58,7 @@ def _empty_tb_version_db(pg_superuser_url):
 
     db_url = replace_db_name(pg_superuser_url, db_name)
     with psycopg.connect(db_url, autocommit=True) as conn:
-        conn.execute("CREATE TABLE public.tb_version (app_version text)")  # ty: ignore[no-matching-overload]
+        conn.execute("CREATE TABLE public.tb_version (app_version text)")
 
     yield db_url, db_name
 

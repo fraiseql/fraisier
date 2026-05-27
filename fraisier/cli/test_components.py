@@ -529,7 +529,7 @@ def test_database(ctx: click.Context, fraise: str, environment: str) -> None:
 
     start_time = time.time()
     try:
-        import psycopg2
+        import psycopg2  # ty: ignore[unresolved-import]
 
         # Attempt connection
         conn = psycopg2.connect(database_url)

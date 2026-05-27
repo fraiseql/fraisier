@@ -503,7 +503,7 @@ def metrics_endpoint(port: int, address: str) -> None:
         fraisier metrics --address 0.0.0.0  # Listen on all interfaces
     """
     try:
-        from prometheus_client import start_http_server
+        from prometheus_client import start_http_server  # ty: ignore[unresolved-import]
     except ImportError as e:
         console.print(
             "[red]Error:[/red] prometheus_client not installed\n"

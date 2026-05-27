@@ -330,7 +330,7 @@ class TestCompleteDbRecordSizeSampling:
     db_size_mb to complete_deployment (#201 follow-up)."""
 
     def _api_deployer(self, **db_overrides):
-        config = {
+        config: dict[str, object] = {
             "fraise_name": "my_api",
             "environment": "production",
             "app_path": "/var/www/api",

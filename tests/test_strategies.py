@@ -931,7 +931,7 @@ class TestGetStrategy:
 
     def test_rebuild_create_template_defaults_false(self):
         s = get_strategy("rebuild")
-        assert s._create_template is False
+        assert s._create_template is False  # ty: ignore[unresolved-attribute]
 
     def test_rebuild_with_create_template(self):
         s = get_strategy("rebuild", create_template=True)
@@ -952,12 +952,12 @@ class TestGetStrategy:
     def test_rebuild_app_version_default_is_none(self):
         """Without app_version kwarg, the strategy's _app_version is None."""
         s = get_strategy("rebuild")
-        assert s._app_version is None
+        assert s._app_version is None  # ty: ignore[unresolved-attribute]
 
     def test_rebuild_empty_app_version_is_ignored(self):
         """Empty-string app_version is dropped so auto-discovery runs."""
         s = get_strategy("rebuild", create_template=True, app_version="")
-        assert s._app_version is None
+        assert s._app_version is None  # ty: ignore[unresolved-attribute]
 
     def test_rebuild_invalid_app_version_raises(self):
         """Invalid app_version propagates ValueError (not swallowed by factory)."""

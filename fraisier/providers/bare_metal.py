@@ -119,7 +119,7 @@ class BareMetalProvider(DeploymentProvider):
             ConnectionError: If SSH connection fails
         """
         try:
-            import asyncssh
+            import asyncssh  # ty: ignore[unresolved-import]
 
             # Create SSH connection options
             options = asyncssh.SSHClientConnectionOptions()
@@ -208,7 +208,7 @@ class BareMetalProvider(DeploymentProvider):
             raise RuntimeError("Not connected to SSH server")
 
         try:  # pragma: no cover
-            import asyncssh
+            import asyncssh  # ty: ignore[unresolved-import]
 
             async with asyncssh.connect(
                 self.host,
@@ -237,7 +237,7 @@ class BareMetalProvider(DeploymentProvider):
             raise RuntimeError("Not connected to SSH server")
 
         try:  # pragma: no cover
-            import asyncssh
+            import asyncssh  # ty: ignore[unresolved-import]
 
             async with asyncssh.connect(
                 self.host,

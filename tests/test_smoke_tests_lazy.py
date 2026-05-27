@@ -90,6 +90,7 @@ fraises:
         # Stage-2 triggers smoke_tests validation, which now tolerates
         # LazyEnv in url:.
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         raw = fraise["smoke_tests"][0]["url"]
         assert isinstance(raw, LazyEnv)
         assert raw.name == "SMOKE_URL"
@@ -104,6 +105,7 @@ fraises:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         tests = load_smoke_tests(fraise, base_url="https://api.x")
         assert isinstance(tests[0].url, LazyEnv)
         assert tests[0].base_url == "https://api.x"
@@ -115,6 +117,7 @@ fraises:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         tests = load_smoke_tests(fraise, base_url="https://api.x")
         assert resolve_test_url(tests[0]) == "https://api.x/graphql"
 
@@ -125,6 +128,7 @@ fraises:
         )
         config = FraisierConfig(config_file)
         fraise = config.get_fraise_environment("my_api", "production")
+        assert fraise is not None
         tests = load_smoke_tests(fraise, base_url="https://api.x")
         with pytest.raises(ConfigurationError, match=r"SMOKE_URL.*not set"):
             resolve_test_url(tests[0])

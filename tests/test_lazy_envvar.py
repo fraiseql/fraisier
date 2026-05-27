@@ -118,15 +118,15 @@ class TestLazyEnvSafety:
 
     def test_ordering_is_typeerror(self):
         with pytest.raises(TypeError):
-            _ = LazyEnv("V", "p") < LazyEnv("W", "p")
+            _ = LazyEnv("V", "p") < LazyEnv("W", "p")  # ty: ignore[unsupported-operator]
 
     def test_containment_is_typeerror(self):
         with pytest.raises(TypeError):
-            _ = "a" in LazyEnv("V", "p")
+            _ = "a" in LazyEnv("V", "p")  # ty: ignore[unsupported-operator]
 
     def test_iter_is_typeerror(self):
         with pytest.raises(TypeError):
-            iter(LazyEnv("V", "p"))
+            iter(LazyEnv("V", "p"))  # ty: ignore[no-matching-overload]
 
 
 class TestToStr:
