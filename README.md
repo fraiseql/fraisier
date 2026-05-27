@@ -35,6 +35,8 @@ Most deployment tools get migrations wrong:
 
 **Atomic coordination**: Preflight checks → framework-specific migrations → service restart → health validation → automatic rollback on failure.
 
+**Post-migration verification**: idempotent SQL hooks (`database.post_migrate`) and authenticated `smoke_tests` probes wrap the migrate/restart with a verification layer. See [Post-migration verification](docs/deployment-guide.md#post-migration-verification) in the deployment guide.
+
 **Multi-framework support**: Works with Django, Alembic, Peewee, and Confiture.
 
 ### Who this is for
