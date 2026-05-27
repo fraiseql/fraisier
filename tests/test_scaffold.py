@@ -3868,6 +3868,49 @@ fraises: {{}}
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
+    def test_scaffold_install_command_unreadable_install_script(
+        self, tmp_path, monkeypatch
+    ):
+        """scaffold-install reports a friendly error when install.sh is unreadable.
+
+        Regression for #222: `Path.exists()` propagates `PermissionError` when a
+        parent directory of the install script is not traversable. The CLI must
+        treat that the same as "not found" and exit cleanly instead of crashing
+        with an unhandled traceback.
+        """
+        from pathlib import Path
+
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            f"""
+name: tp
+scaffold:
+  output_dir: {tmp_path / "output"}
+fraises: {{}}
+"""
+        )
+
+        real_exists = Path.exists
+        unreadable = tmp_path / "output" / "install.sh"
+
+        def fake_exists(self, *args, **kwargs):
+            if self == unreadable:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_exists(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "exists", fake_exists)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install"])
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Traceback" not in result.output
+        assert "not found" in result.output.lower()
+
     def test_scaffold_then_install_workflow(self, tmp_path):
         """Complete workflow: scaffold generates files, scaffold-install installs."""
         from click.testing import CliRunner

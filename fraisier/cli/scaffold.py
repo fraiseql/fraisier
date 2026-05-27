@@ -220,9 +220,17 @@ def scaffold_install(
     output_dir = Path(config.scaffold.output_dir)
     install_script = output_dir / "install.sh"
 
-    if not install_script.exists():
+    # Path.exists() only swallows ENOENT/ENOTDIR/ELOOP/EBADF; EACCES on a
+    # parent directory propagates as PermissionError. Treat any stat failure
+    # as "can't see the file" so the friendly message wins over a traceback.
+    try:
+        exists = install_script.exists()
+    except OSError:
+        exists = False
+
+    if not exists:
         console.print(
-            f"[red]Error:[/red] {install_script} not found.\n"
+            f"[red]Error:[/red] {install_script} not found or not readable.\n"
             "Run 'fraisier scaffold' first to generate it.",
             style="bold",
         )
