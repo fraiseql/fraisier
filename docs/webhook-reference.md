@@ -4,6 +4,11 @@
 
 Fraisier receives webhooks from Git providers (GitHub, GitLab, Gitea, Bitbucket) to trigger automated deployments when code is pushed.
 
+> **Outbound notifications.** This document is for *inbound* webhooks
+> (Git provider → fraisier). For the JSON contract of *outbound*
+> deploy-result notifications fraisier sends to `type: webhook`
+> destinations, see [webhook-protocol.md](webhook-protocol.md).
+
 ---
 
 ## Quick Start

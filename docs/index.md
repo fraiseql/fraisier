@@ -9,7 +9,8 @@
 
 - [CLI Reference](cli-reference.md) — all commands and options
 - [API Reference](api-reference.md) — webhook REST API
-- [Webhook Reference](webhook-reference.md) — webhook setup and security
+- [Webhook Reference](webhook-reference.md) — inbound webhook setup and security
+- [Webhook Protocol](webhook-protocol.md) — outbound notification payload contract
 
 ## Operations
 
