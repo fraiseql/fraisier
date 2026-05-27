@@ -131,6 +131,7 @@ SUBCOMMAND_CONFIG_SECTIONS: dict[str, frozenset[ConfigPath]] = {
     "db-check": _DB_SECTIONS,
     "deployment-status": frozenset(),  # reads state files, not config
     "env-check": frozenset(),  # introspection over caller-named subcommand
+    "doctor": frozenset(),  # host-wide; consults its own host state
     "diagnose": _DIAGNOSE_SECTIONS,
     "health": _HEALTH_SECTIONS,
     "history": frozenset(),  # reads deployment DB

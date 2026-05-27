@@ -15,6 +15,7 @@
 ## Operations
 
 - [Deployment Guide](deployment-guide.md) — production setup
+- [Doctor](doctor.md) — `fraisier doctor` host-wide health checks
 - [Testing](testing.md)
 
 ## Providers
