@@ -209,7 +209,7 @@ def pg_container():
     try:
         container = PostgresContainer("postgres:16", driver=None)
         container.start()
-    except Exception as exc:  # noqa: BLE001 — docker daemon may be missing / broken
+    except Exception as exc:
         pytest.skip(f"Docker unavailable: {exc.__class__.__name__}: {exc}")  # ty: ignore[too-many-positional-arguments]
 
     try:
