@@ -411,10 +411,18 @@ def _ship_commit_push_deploy(
     bump_kind: str | None,
 ) -> None:
     """Run the commit-push-PR-deploy sequence."""
+    # #232: race base is the PR target when --pr is set (origin/<pr_base> moves
+    # while we run CI), else the current branch (operator pushes the current
+    # branch and the webhook reads pyproject.toml from it).
+    resolved_pr_base = pr_base or (ship_config.pr_base if ship_config else None)
+    race_base = resolved_pr_base if create_pr else None
+
     if has_pipeline:
-        _ship_with_pipeline(version, ship_config, expected_base_version, bump_kind)
+        _ship_with_pipeline(
+            version, ship_config, expected_base_version, bump_kind, race_base
+        )
     else:
-        _ship_legacy(version, expected_base_version, bump_kind)
+        _ship_legacy(version, expected_base_version, bump_kind, race_base)
 
     if create_pr:
         pr_url = _ship_create_pr(version, pr_base, ship_config)
@@ -576,6 +584,7 @@ def _ship_with_pipeline(
     ship_config: ShipConfig | None,
     expected_base_version: str,
     bump_kind: str | None,
+    race_base: str | None,
 ) -> None:
     """Ship using the check pipeline (--no-verify commit)."""
     import subprocess
@@ -616,6 +625,7 @@ def _ship_with_pipeline(
         target_version=version,
         expected_base_version=expected_base_version,
         bump_kind=bump_kind,
+        pr_base=race_base,
     )
 
     # Commit with --no-verify (we already ran all checks)
@@ -630,6 +640,7 @@ def _ship_legacy(
     version: str,
     expected_base_version: str,
     bump_kind: str | None,
+    race_base: str | None,
 ) -> None:
     """Ship without pipeline (backward compat, uses pre-commit hooks)."""
     import subprocess
@@ -640,6 +651,7 @@ def _ship_legacy(
         target_version=version,
         expected_base_version=expected_base_version,
         bump_kind=bump_kind,
+        pr_base=race_base,
     )
 
     subprocess.run(["git", "add", "--update"], check=True)
@@ -672,6 +684,7 @@ def _assert_no_version_race(
     target_version: str,
     expected_base_version: str,
     bump_kind: str | None,
+    pr_base: str | None,
 ) -> None:
     """Fail loudly when origin's pyproject moved during local CI.
 
@@ -680,39 +693,84 @@ def _assert_no_version_race(
     auto-merge can't land. A short ``git fetch`` here closes the window:
     re-read origin's pyproject and compare against the version we observed
     at start. Mismatch ⇒ abort before commit so recovery is just a rebase.
+
+    *pr_base* is the branch we compare against — the PR target when ``--pr``
+    is set (the race is on ``origin/<pr_base>``, not the local feature
+    branch), else the current branch.
     """
     import subprocess
 
-    base_branch = _current_branch()
-    if base_branch is None:
+    current_branch = _current_branch()
+    if current_branch is None:
         # Detached HEAD or non-git tree — can't reason about origin/<branch>.
         return
+    race_branch = pr_base or current_branch
 
     fetch = subprocess.run(
-        ["git", "fetch", "--quiet", "origin", base_branch],
+        ["git", "fetch", "--quiet", "origin", race_branch],
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
     if fetch.returncode != 0:
-        # No remote, no upstream, network down, or branch missing on origin
-        # (first push): degrade silently — the operator isn't racing anyone.
+        stderr = (fetch.stderr or "").strip()
+        # "couldn't find remote ref" / "no such ref" → branch is missing on
+        # origin (first push), there's nothing to race against. Anything
+        # else (network, auth, …) is genuinely unknown — warn but proceed
+        # so a flaky network can't block ship.
+        if "couldn't find remote ref" in stderr or "no such ref" in stderr:
+            return
+        console.print(
+            f"[yellow]Warning:[/yellow] could not fetch origin/{race_branch} "
+            f"to verify version-race ({stderr or 'unknown'}); proceeding."
+        )
         return
 
-    origin_version = _read_pyproject_version_at_ref(f"origin/{base_branch}")
+    origin_version = _read_pyproject_version_at_ref(f"origin/{race_branch}")
     if origin_version is None or origin_version == expected_base_version:
         return
 
-    bump_arg = bump_kind or "--no-bump"
+    # Roll back the on-disk bump so the operator's working tree is clean
+    # and `git pull --ff-only` / `git rebase` will not error on local
+    # changes. Best-effort — if the restore fails we still abort.
+    restore = subprocess.run(
+        ["git", "checkout", "HEAD", "--", "pyproject.toml"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    restored_msg = (
+        f"  Your local pyproject.toml has been restored to v{expected_base_version}.\n"
+        if restore.returncode == 0
+        else "  [yellow]Could not auto-restore pyproject.toml; run "
+        "`git checkout HEAD -- pyproject.toml` manually.[/yellow]\n"
+    )
+
+    if bump_kind is None:
+        # --no-bump re-ship can't recover automatically: origin already has
+        # a newer version, so re-shipping at expected_base_version is also
+        # a regression. The operator has to decide on a new version.
+        next_action = (
+            "    # origin/" + race_branch + " already has a newer version than "
+            "your tree;\n"
+            "    # decide whether to abandon, or re-bump and re-ship.\n"
+            "    fraisier ship patch  # or minor/major\n"
+        )
+    else:
+        next_action = f"    fraisier ship {bump_kind}\n"
+
     console.print(
         f"\n[red]✗ Version race detected.[/red]\n"
         f"  Started at v{expected_base_version}; would push v{target_version}.\n"
-        f"  But origin/{base_branch} is now v{origin_version} — "
+        f"  But origin/{race_branch} is now v{origin_version} — "
         f"another ship landed during local CI.\n\n"
-        f"  Recover by rebasing onto fresh origin/{base_branch}:\n"
-        f"    git checkout {base_branch} && git pull --ff-only\n"
-        f"    git checkout - && git rebase {base_branch}\n"
-        f"    fraisier ship {bump_arg}\n"
+        f"{restored_msg}"
+        f"  Recover by rebasing onto fresh origin/{race_branch}:\n"
+        f"    git checkout {race_branch} && git pull --ff-only\n"
+        f"    git checkout {current_branch} && git rebase {race_branch}\n"
+        f"{next_action}"
     )
     raise SystemExit(1)
 
