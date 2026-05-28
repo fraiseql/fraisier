@@ -40,6 +40,11 @@ def _target_unchanged_since_base(merge_base: str, tgt: str, path: str) -> bool:
     When True, the target branch never touched this file — only the source did.
     It is safe to auto-resolve by taking the source version.
 
+    Reads from refs (``merge_base`` and ``origin/{tgt}``), not the index, so
+    the answer is meaningful mid-conflict — callers can ask "did target ever
+    touch this file?" without worrying about whatever transient stage-1/2/3
+    state ``git merge`` left behind.
+
     Any non-zero exit — including unexpected git errors — returns False, which
     causes the file to fall through to tier 5 (abort). This is intentional: we
     would rather fail loudly than silently claim a file is unmodified.
@@ -179,22 +184,34 @@ def _commit_merge_or_staged(message: str) -> None:
     Outside a merge (no ``MERGE_HEAD``), fall back to "commit only if
     something is staged" so we don't error on an empty index.
     """
-    if _merge_in_progress():
-        _run(["git", "commit", "--no-edit", "--no-verify", "-m", message])
-        return
-    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
-    if staged.returncode != 0:
-        _run(["git", "commit", "--no-edit", "--no-verify", "-m", message])
+    cmd = ["git", "commit", "--no-edit", "--no-verify", "-m", message]
+    in_merge = _merge_in_progress()
+    if not in_merge:
+        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
+        if staged.returncode == 0:
+            return
+    try:
+        _run(cmd)
+    except subprocess.CalledProcessError as exc:
+        phase = "merge finalization" if in_merge else "pre-merge commit"
+        err_console.print(
+            "[red]✗ Sync abort:[/red] "
+            f"`git commit` failed during {phase} (exit {exc.returncode}). "
+            "Inspect `git status` to see what went wrong; common causes are "
+            "a hostile pre-commit hook ignoring --no-verify or a corrupt index."
+        )
+        raise SystemExit(1) from exc
 
 
 def _assert_merge_finalized() -> None:
     """Fail loudly if a sync push would leave the PR in a CONFLICTING state.
 
     After all commit attempts and before pushing, HEAD must be a merge
-    commit (two parents) and MERGE_HEAD must be cleared. If either
-    invariant is broken, the push would silently drop the merge parent
-    and GitHub would mark the PR ``mergeable=CONFLICTING``. Surface that
-    locally so the operator doesn't walk away thinking it worked.
+    commit (at least two parents — octopus merges with ≥3 are valid too)
+    and MERGE_HEAD must be cleared. If either invariant is broken, the
+    push would silently drop the merge parent and GitHub would mark the
+    PR ``mergeable=CONFLICTING``. Surface that locally so the operator
+    doesn't walk away thinking it worked.
     """
     parents = subprocess.run(
         ["git", "log", "-1", "--pretty=%P", "HEAD"],
@@ -203,7 +220,7 @@ def _assert_merge_finalized() -> None:
         check=False,
     ).stdout.split()
     in_merge_still = _merge_in_progress()
-    if in_merge_still or len(parents) < 2:
+    if in_merge_still or not parents or len(parents) < 2:
         err_console.print(
             "[red]✗ Sync abort:[/red] auto-resolve completed but HEAD is not "
             "a merge commit "
@@ -227,6 +244,11 @@ def _propagate_source_deletions(merge_base: str, source: str, tgt: str) -> list[
     operator (or the conflict loop) decides, and the existing tier-1
     auto-resolver already handles the "source deleted, target modified"
     conflict case via ``cat-file -e``.
+
+    Only paths whose ``git rm`` actually succeeds are returned; this
+    matters when a deletion can't be applied (submodule, sparse-checkout
+    exclusion, …) — we don't lie to the operator log that resolution
+    succeeded when the index is unchanged.
     """
     deleted_on_source = subprocess.run(
         [
@@ -258,8 +280,20 @@ def _propagate_source_deletions(merge_base: str, source: str, tgt: str) -> list[
         if not in_index:
             continue
         if _target_unchanged_since_base(merge_base, tgt, path):
-            subprocess.run(["git", "rm", "--", path], capture_output=True, check=False)
-            propagated.append(path)
+            rm_result = subprocess.run(
+                ["git", "rm", "--", path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if rm_result.returncode == 0:
+                propagated.append(path)
+            else:
+                detail = rm_result.stderr.strip() or "git rm failed"
+                err_console.print(
+                    f"[yellow]Warning:[/yellow] could not propagate deletion "
+                    f"of [bold]{path}[/bold]: {detail}"
+                )
     return propagated
 
 
@@ -417,10 +451,11 @@ def sync_cmd(
             check=False,
         )
 
-        # Pre-pass: propagate source-side deletions before the conflict loop.
-        # `git merge` silently keeps target's copy when source deleted a file
-        # that target never touched — see #235. Running this first means any
-        # surviving conflicts go through the existing tier-1 path naturally.
+        # Runs unconditionally because source-side deletions don't show up
+        # as `UU` conflicts — `git merge` silently keeps target's copy
+        # whether the merge as a whole was clean or had unrelated conflicts.
+        # See #235. By running before the conflict loop, surviving
+        # source-deleted-target-modified files still flow through tier 1.
         for deleted in _propagate_source_deletions(merge_base, source, tgt):
             console.print(f"  Auto-resolved (source deletion): {deleted}")
 

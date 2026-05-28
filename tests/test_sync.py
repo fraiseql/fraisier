@@ -58,6 +58,97 @@ def _in_merge() -> MagicMock:
     return _mk(returncode=0)
 
 
+class MockGit:
+    """Argv-prefix-matching subprocess.run mock.
+
+    Replaces the legacy ``side_effect=[ordered, list, of, mocks]`` pattern
+    that all of the older tests in this file use. Tests declare responses
+    by command shape — ``("git", "rev-parse", "--verify", "--quiet",
+    "MERGE_HEAD")`` — so a future subprocess call inserted between two
+    existing ones doesn't break every test that touches the merge path.
+
+    Matching: **longest prefix wins**, responses consumed FIFO. Commands
+    that don't match anything return a successful empty ``_mk()`` — so
+    harmless probes (``git status``, ``git rev-parse HEAD``) don't need
+    explicit scripting.
+
+    Preferred pattern for new tests. Older tests are grandfathered on the
+    ordered-side_effect pattern.
+
+    Usage:
+
+        mg = (
+            MockGit()
+            .queue("git", "rev-parse", "--abbrev-ref", stdout="main\\n")
+            .queue("git", "merge", returncode=1)
+            .queue(
+                "git", "diff", "--name-only", "--diff-filter=D",
+                stdout="legacy.sql\\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")
+            .queue("git", "diff", "--quiet")  # _target_unchanged_since_base
+            .queue("git", "rm")
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            ...
+        assert mg.was_called(["git", "rm", "--", "legacy.sql"])
+    """
+
+    def __init__(self) -> None:
+        self._responses: dict[tuple[str, ...], list[MagicMock]] = {}
+        self.calls: list[list[str]] = []
+
+    def queue(
+        self,
+        *prefix: str,
+        returncode: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> MockGit:
+        """Append a response for `prefix`. Chainable."""
+        key = tuple(prefix)
+        self._responses.setdefault(key, []).append(
+            _mk(returncode=returncode, stdout=stdout, stderr=stderr)
+        )
+        return self
+
+    def __call__(self, cmd, *args, **kwargs):
+        # *args/**kwargs absorb subprocess.run's optional keyword forms
+        # (capture_output, text, check, …) — we ignore them, matching only
+        # on the command argv.
+        del args, kwargs
+        self.calls.append(list(cmd))
+        cmd_tuple = tuple(cmd)
+        best_key: tuple[str, ...] | None = None
+        for key in self._responses:
+            if (
+                len(cmd_tuple) >= len(key)
+                and cmd_tuple[: len(key)] == key
+                and self._responses[key]
+            ):
+                if best_key is None or len(key) > len(best_key):
+                    best_key = key
+        if best_key is None:
+            return _mk()
+        return self._responses[best_key].pop(0)
+
+    def was_called(self, expected: list[str]) -> bool:
+        """True if any recorded call argv exactly matched `expected`."""
+        return expected in self.calls
+
+    def calls_with_prefix(self, *prefix: str) -> list[list[str]]:
+        """Return all recorded calls whose argv starts with `prefix`."""
+        p = tuple(prefix)
+        return [c for c in self.calls if tuple(c[: len(p)]) == p]
+
+
 def _setup(tmp_path, pairs: list[dict]) -> str:
     cfg = tmp_path / "fraises.yaml"
     cfg.write_text(
@@ -1371,45 +1462,181 @@ class TestPropagateSourceDeletions:
 class TestSyncPropagatesSourceDeletions:
     """End-to-end regression for #235: source deletes a file, target unchanged,
     `git merge` succeeds clean. Pre-pass must `git rm` the file and the sync
-    PR must carry the deletion forward."""
+    PR must carry the deletion forward.
+
+    Uses the `MockGit` helper instead of the legacy ordered-side_effect
+    pattern, so this test is robust to non-relevant subprocess calls being
+    added or reordered elsewhere in `sync_cmd`.
+    """
 
     SHA = "deadbeef" * 5
     MERGE_BASE = "cafe1234" * 5
     PR_URL = "https://github.com/org/repo/pull/42"
 
+    def _scaffold_mockgit(self) -> MockGit:
+        """Common scaffolding: rev-parse, fetch, version reads, checkout, push,
+        gh PR ops. Tests layer on the merge + propagation calls they care about.
+        """
+        return (
+            MockGit()
+            .queue("git", "rev-parse", "--abbrev-ref", stdout="main\n")
+            .queue("git", "rev-parse", "origin/dev", stdout=self.SHA + "\n")
+            .queue("git", "merge-base", stdout=self.MERGE_BASE + "\n")
+            .queue(
+                "git",
+                "show",
+                "origin/dev:version.json",
+                stdout='{"version": "1.1.0"}',
+            )
+            .queue(
+                "git",
+                "show",
+                "origin/staging:version.json",
+                stdout='{"version": "1.0.0"}',
+            )
+            .queue("gh", "pr", "view", returncode=1)
+            .queue("gh", "pr", "create", stdout=self.PR_URL + "\n")
+        )
+
     def test_clean_merge_with_source_deletion_propagates(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="main\n"),
-                _mk(),
-                _mk(stdout=self.SHA + "\n"),
-                _mk(stdout=self.MERGE_BASE + "\n"),
-                _mk(returncode=0, stdout='{"version": "1.1.0"}'),
-                _mk(returncode=0, stdout='{"version": "1.0.0"}'),
-                _mk(),  # git checkout -b
-                _mk(),  # git merge (clean — source-deleted file silently kept)
-                # _propagate_source_deletions pre-pass:
-                _mk(stdout="db/legacy.sql\n"),  # diff --filter=D
-                _mk(returncode=0),  # ls-files --error-unmatch (in index)
-                _mk(returncode=0),  # target unchanged since merge-base
-                _mk(),  # git rm db/legacy.sql
-                _in_merge(),  # MERGE_HEAD set
-                _mk(),  # git commit
-                *_merge_finalize_tail(),
-                _mk(),  # git push
-                _mk(returncode=1),  # gh pr view
-                _mk(stdout=self.PR_URL + "\n"),  # gh pr create
-                _mk(),  # gh pr merge
-                _mk(),  # git checkout main
-            ]
+        mg = (
+            self._scaffold_mockgit()
+            # Clean merge — source-deleted file silently kept by `git merge`.
+            .queue("git", "merge")
+            # Pre-pass sees the deletion and propagates it:
+            .queue(
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=D",
+                stdout="db/legacy.sql\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")  # in index
+            .queue("git", "diff", "--quiet")  # target unchanged since merge-base
+            .queue("git", "rm")  # propagation
+            # Merge finalize: MERGE_HEAD set → commit; assert sees 2 parents
+            # and MERGE_HEAD cleared.
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
             result = CliRunner().invoke(
                 main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
             )
         assert result.exit_code == 0, result.output
         assert "Auto-resolved (source deletion): db/legacy.sql" in result.output
-        commands = [c[0][0] for c in m.call_args_list]
-        assert ["git", "rm", "--", "db/legacy.sql"] in commands
+        assert mg.was_called(["git", "rm", "--", "db/legacy.sql"])
+
+    def test_rename_on_source_propagates_old_path_deletion(self, tmp_path):
+        """Headline use-case from #235: source renames a file (`git mv old new`).
+        Under git's default rename detection threshold, the merge-base→source
+        diff shows `D old` + `A new`. Target hasn't touched `old`, so the
+        pre-pass `git rm`s it; `new` arrives naturally via `git merge`.
+        Net result on the sync branch: only `new` survives.
+        """
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            self._scaffold_mockgit()
+            .queue("git", "merge")
+            # Source renamed db/old.sql → db/new.sql; diff --filter=D reports
+            # the old-path deletion (the addition arrives via the merge).
+            .queue(
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=D",
+                stdout="db/old.sql\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")
+            .queue("git", "diff", "--quiet")  # target unchanged
+            .queue("git", "rm")
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "Auto-resolved (source deletion): db/old.sql" in result.output
+        assert mg.was_called(["git", "rm", "--", "db/old.sql"])
+
+    def test_failed_git_rm_does_not_appear_in_propagated_log(self, tmp_path):
+        """If `git rm` fails (submodule, sparse-checkout exclusion), the
+        operator must NOT see 'Auto-resolved (source deletion): …' — that
+        line is a promise, not a wish. Stderr from git is surfaced as a
+        warning instead.
+        """
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            self._scaffold_mockgit()
+            .queue("git", "merge")
+            .queue(
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=D",
+                stdout="submodules/legacy\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")
+            .queue("git", "diff", "--quiet")  # target unchanged
+            .queue(
+                "git",
+                "rm",
+                returncode=1,
+                stderr="fatal: pathspec is a submodule\n",
+            )
+            # No MERGE_HEAD → fall through to commit-if-staged.
+            # Clean merge here would have nothing staged (the only would-be
+            # change failed to apply), but `git merge --no-commit` still
+            # leaves MERGE_HEAD set, so the helper commits regardless.
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 0, result.output
+        assert (
+            "Auto-resolved (source deletion): submodules/legacy" not in result.output
+        ), (
+            "must not claim auto-resolved when `git rm` failed; that would "
+            "lie to the operator"
+        )
+        # A warning should appear telling the operator the propagation failed.
+        assert (
+            "could not propagate deletion" in result.output
+            or "submodules/legacy" in result.output
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1457,7 +1684,12 @@ class TestSyncAssertsMergeFinalized:
             _assert_merge_finalized()  # no raise
 
     def test_aborts_when_no_parents(self):
-        """Defensive: empty parent list (initial commit edge case) also fails."""
+        """Defensive isolation test: HEAD with zero parents would only happen
+        on the initial commit, which is unreachable in sync (we always
+        `git checkout -B sync/... origin/<source>` first). Still worth
+        asserting that the guard catches an empty parent list rather than
+        crashing on it, in case some future refactor changes how HEAD is
+        established before this assertion runs."""
         from fraisier.cli.sync import _assert_merge_finalized
 
         with patch(_PATCH) as m:
