@@ -149,16 +149,118 @@ def _find_existing_pr(sync_branch: str) -> dict | None:
     return json.loads(result.stdout)
 
 
-def _commit_if_staged(message: str) -> None:
-    """Commit the staged index with ``message`` only if there is something staged.
+def _merge_in_progress() -> bool:
+    """Return True when MERGE_HEAD exists (a merge is mid-flight).
 
-    Git refuses an empty commit, so callers that may have staged no net change
-    (clean merges with no diverging tracked content, or conflict resolutions
-    that resolve back to HEAD) need a guard before invoking ``git commit``.
+    Uses ``git rev-parse --verify`` so the check works under worktrees and
+    in any cwd inside the repo, without manual ``.git`` path manipulation.
     """
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def _commit_merge_or_staged(message: str) -> None:
+    """Commit a pending merge, or a non-merge staged index.
+
+    A merge in progress is signalled by ``MERGE_HEAD``. In that case we
+    always create the merge commit, even when the resolved tree matches
+    HEAD byte-for-byte — git happily produces a merge commit with no
+    tree diff, and that's exactly what records both parents and lets
+    GitHub see the branch as merged. ``git merge --no-commit`` always
+    leaves ``MERGE_HEAD`` set, so this fires for both clean merges and
+    resolved-conflict paths.
+
+    Outside a merge (no ``MERGE_HEAD``), fall back to "commit only if
+    something is staged" so we don't error on an empty index.
+    """
+    if _merge_in_progress():
+        _run(["git", "commit", "--no-edit", "--no-verify", "-m", message])
+        return
     staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
     if staged.returncode != 0:
         _run(["git", "commit", "--no-edit", "--no-verify", "-m", message])
+
+
+def _assert_merge_finalized() -> None:
+    """Fail loudly if a sync push would leave the PR in a CONFLICTING state.
+
+    After all commit attempts and before pushing, HEAD must be a merge
+    commit (two parents) and MERGE_HEAD must be cleared. If either
+    invariant is broken, the push would silently drop the merge parent
+    and GitHub would mark the PR ``mergeable=CONFLICTING``. Surface that
+    locally so the operator doesn't walk away thinking it worked.
+    """
+    parents = subprocess.run(
+        ["git", "log", "-1", "--pretty=%P", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
+    in_merge_still = _merge_in_progress()
+    if in_merge_still or len(parents) < 2:
+        err_console.print(
+            "[red]✗ Sync abort:[/red] auto-resolve completed but HEAD is not "
+            "a merge commit "
+            f"(parents: {parents or '?'}, merge in progress: {in_merge_still}).\n"
+            "  Pushing now would leave a CONFLICTING PR on GitHub. "
+            "This is a fraisier bug; please file an issue with the output above."
+        )
+        raise SystemExit(1)
+
+
+def _propagate_source_deletions(merge_base: str, source: str, tgt: str) -> list[str]:
+    """Propagate source-side deletions that target didn't touch since merge-base.
+
+    ``git merge`` doesn't surface "source deleted X, target unchanged" as
+    a UU-style conflict — it silently keeps target's copy. This pre-pass
+    walks files deleted on source since merge-base; for each one still
+    in the index where target hasn't modified it, run ``git rm`` to
+    mirror the source-side deletion.
+
+    Files that target *did* modify since merge-base are left alone — the
+    operator (or the conflict loop) decides, and the existing tier-1
+    auto-resolver already handles the "source deleted, target modified"
+    conflict case via ``cat-file -e``.
+    """
+    deleted_on_source = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=D",
+            merge_base,
+            f"origin/{source}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.splitlines()
+
+    propagated: list[str] = []
+    for raw in deleted_on_source:
+        path = raw.strip()
+        if not path:
+            continue
+        in_index = (
+            subprocess.run(
+                ["git", "ls-files", "--error-unmatch", "--", path],
+                capture_output=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+        if not in_index:
+            continue
+        if _target_unchanged_since_base(merge_base, tgt, path):
+            subprocess.run(["git", "rm", "--", path], capture_output=True, check=False)
+            propagated.append(path)
+    return propagated
 
 
 def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
@@ -174,13 +276,19 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print(f"    git checkout -B {sync_branch} origin/{source}")
     console.print(f"    git merge origin/{tgt} --no-edit --no-commit")
     console.print(
-        f"    # conflicts in [{auto_owned}] auto-resolved from {source};"
+        f"    # files deleted on {source} with {tgt} unchanged since merge-base"
+        f" are 'git rm'-ed to propagate the deletion;"
+        f" conflicts in [{auto_owned}] auto-resolved from {source};"
         f" files unchanged in {tgt} since merge-base also auto-resolved from {source};"
         " others cause a hard failure unless --prefer-source is used"
     )
     console.print(
         f'    git commit --no-edit --no-verify -m "Pre-merge {tgt} into sync branch'
         ' (auto-resolved fraisier files)"'
+    )
+    console.print(
+        "    # pre-push guard: HEAD must be a merge commit (two parents) and"
+        " MERGE_HEAD must be cleared, else abort"
     )
     console.print(f"    git push origin {sync_branch}")
     console.print(
@@ -309,6 +417,13 @@ def sync_cmd(
             check=False,
         )
 
+        # Pre-pass: propagate source-side deletions before the conflict loop.
+        # `git merge` silently keeps target's copy when source deleted a file
+        # that target never touched — see #235. Running this first means any
+        # surviving conflicts go through the existing tier-1 path naturally.
+        for deleted in _propagate_source_deletions(merge_base, source, tgt):
+            console.print(f"  Auto-resolved (source deletion): {deleted}")
+
         if merge_result.returncode != 0:
             conflicted = _capture(
                 ["git", "diff", "--name-only", "--diff-filter=U"]
@@ -373,11 +488,13 @@ def sync_cmd(
                 )
                 raise SystemExit(1)
 
-            _commit_if_staged(
+            _commit_merge_or_staged(
                 f"Pre-merge {tgt} into sync branch (auto-resolved fraisier files)"
             )
         else:
-            _commit_if_staged(f"Pre-merge {tgt} into sync branch")
+            _commit_merge_or_staged(f"Pre-merge {tgt} into sync branch")
+
+        _assert_merge_finalized()
 
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
         _run(["git", "push", "origin", sync_branch])
