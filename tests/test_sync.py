@@ -27,6 +27,128 @@ def _mk(returncode: int = 0, stdout: str = "", stderr: str = "") -> MagicMock:
     return m
 
 
+# Sentinel SHAs used in mocked `git log -1 --pretty=%P HEAD` output to satisfy
+# the pre-push merge-commit invariant (#233 Layer 2): HEAD must have 2 parents.
+_MERGE_PARENTS = "abcdef0123456789 fedcba9876543210\n"
+
+
+def _no_source_deletions() -> MagicMock:
+    """Mock the post-merge `git diff --filter=D` pre-pass returning nothing.
+
+    Inserted after every `git merge` mock to satisfy `_propagate_source_deletions`,
+    which fires once per sync run regardless of whether the merge had conflicts.
+    """
+    return _mk(stdout="")
+
+
+def _merge_finalize_tail() -> list[MagicMock]:
+    """Mock the post-commit pre-push invariant check (#233 Layer 2).
+
+    Sequence:
+      1. `git log -1 --pretty=%P HEAD` returns two parent SHAs (merge commit).
+      2. `git rev-parse --verify --quiet MERGE_HEAD` exits 1 (merge cleared).
+    """
+    return [_mk(stdout=_MERGE_PARENTS), _mk(returncode=1)]
+
+
+def _in_merge() -> MagicMock:
+    """Mock the `git rev-parse --verify --quiet MERGE_HEAD` probe used by
+    `_commit_merge_or_staged`: returncode 0 means a merge is in progress, so
+    the helper proceeds straight to `git commit` (no diff --cached check)."""
+    return _mk(returncode=0)
+
+
+class MockGit:
+    """Argv-prefix-matching subprocess.run mock.
+
+    Replaces the legacy ``side_effect=[ordered, list, of, mocks]`` pattern
+    that all of the older tests in this file use. Tests declare responses
+    by command shape — ``("git", "rev-parse", "--verify", "--quiet",
+    "MERGE_HEAD")`` — so a future subprocess call inserted between two
+    existing ones doesn't break every test that touches the merge path.
+
+    Matching: **longest prefix wins**, responses consumed FIFO. Commands
+    that don't match anything return a successful empty ``_mk()`` — so
+    harmless probes (``git status``, ``git rev-parse HEAD``) don't need
+    explicit scripting.
+
+    Preferred pattern for new tests. Older tests are grandfathered on the
+    ordered-side_effect pattern.
+
+    Usage:
+
+        mg = (
+            MockGit()
+            .queue("git", "rev-parse", "--abbrev-ref", stdout="main\\n")
+            .queue("git", "merge", returncode=1)
+            .queue(
+                "git", "diff", "--name-only", "--diff-filter=D",
+                stdout="legacy.sql\\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")
+            .queue("git", "diff", "--quiet")  # _target_unchanged_since_base
+            .queue("git", "rm")
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            ...
+        assert mg.was_called(["git", "rm", "--", "legacy.sql"])
+    """
+
+    def __init__(self) -> None:
+        self._responses: dict[tuple[str, ...], list[MagicMock]] = {}
+        self.calls: list[list[str]] = []
+
+    def queue(
+        self,
+        *prefix: str,
+        returncode: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> MockGit:
+        """Append a response for `prefix`. Chainable."""
+        key = tuple(prefix)
+        self._responses.setdefault(key, []).append(
+            _mk(returncode=returncode, stdout=stdout, stderr=stderr)
+        )
+        return self
+
+    def __call__(self, cmd, *args, **kwargs):
+        # *args/**kwargs absorb subprocess.run's optional keyword forms
+        # (capture_output, text, check, …) — we ignore them, matching only
+        # on the command argv.
+        del args, kwargs
+        self.calls.append(list(cmd))
+        cmd_tuple = tuple(cmd)
+        best_key: tuple[str, ...] | None = None
+        for key in self._responses:
+            if (
+                len(cmd_tuple) >= len(key)
+                and cmd_tuple[: len(key)] == key
+                and self._responses[key]
+            ):
+                if best_key is None or len(key) > len(best_key):
+                    best_key = key
+        if best_key is None:
+            return _mk()
+        return self._responses[best_key].pop(0)
+
+    def was_called(self, expected: list[str]) -> bool:
+        """True if any recorded call argv exactly matched `expected`."""
+        return expected in self.calls
+
+    def calls_with_prefix(self, *prefix: str) -> list[list[str]]:
+        """Return all recorded calls whose argv starts with `prefix`."""
+        p = tuple(prefix)
+        return [c for c in self.calls if tuple(c[: len(p)]) == p]
+
+
 def _setup(tmp_path, pairs: list[dict]) -> str:
     cfg = tmp_path / "fraises.yaml"
     cfg.write_text(
@@ -375,8 +497,10 @@ class TestSyncHappyPath:
             _mk(returncode=0, stdout='{"version": "1.0.0"}'),  # version staging
             _mk(),  # git checkout -b
             _mk(),  # git merge (clean)
-            _mk(returncode=1),  # git diff --cached (staged)
+            _no_source_deletions(),  # diff --filter=D pre-pass
+            _in_merge(),  # rev-parse MERGE_HEAD (in merge)
             _mk(),  # git commit pre-merge
+            *_merge_finalize_tail(),  # pre-push merge-commit invariant check
             _mk(),  # git push
             _mk(returncode=1),  # gh pr view (no existing PR)
             _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -416,8 +540,13 @@ class TestSyncHappyPath:
         commands = [c[0][0] for c in m.call_args_list]
         assert ["gh", "pr", "merge", "--auto", "--squash", self.PR_URL] in commands
 
-    def test_no_commit_when_nothing_staged_after_clean_merge(self, tmp_path):
-        """When merge is clean and nothing is staged, no commit is made."""
+    def test_merge_commit_created_even_when_no_tree_diff(self, tmp_path):
+        """Regression for #233: `git merge --no-commit` leaves MERGE_HEAD set
+        even on clean merges with no tree diff. The pre-merge commit MUST
+        still fire so the push records both parents and GitHub sees the
+        branch as merged. Previously `_commit_if_staged` skipped the commit
+        when `git diff --cached --quiet` returned 0, leaving the merge
+        orphaned and producing a CONFLICTING PR after push."""
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
@@ -429,18 +558,24 @@ class TestSyncHappyPath:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(),  # git merge (clean)
-                _mk(returncode=0),  # git diff --cached --quiet (nothing staged)
-                _mk(),  # git push (no commit)
+                _no_source_deletions(),  # diff --filter=D pre-pass
+                _in_merge(),  # MERGE_HEAD set → commit unconditionally
+                _mk(),  # git commit
+                *_merge_finalize_tail(),
+                _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),
                 _mk(),
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         commands = [c[0][0] for c in m.call_args_list]
         commit_calls = [c for c in commands if "commit" in c]
-        assert commit_calls == []
+        assert commit_calls, (
+            "expected a merge commit even when resolution yielded no diff; "
+            f"commands: {commands}"
+        )
 
     def test_pre_merge_commit_uses_no_verify_clean_merge(self, tmp_path):
         """Pre-merge commit on clean merge path must include --no-verify."""
@@ -475,6 +610,7 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="version.json\npyproject.toml\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:version.json (exists)
                 _mk(),  # checkout origin/dev -- version.json
@@ -483,7 +619,9 @@ class TestSyncConflicts:
                 _mk(),  # checkout origin/dev -- pyproject.toml
                 _mk(),  # git add pyproject.toml
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -491,7 +629,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
 
     def test_pre_merge_commit_uses_no_verify_conflict_path(self, tmp_path):
@@ -507,13 +645,15 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="version.json\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:version.json (exists)
                 _mk(),  # checkout origin/dev -- version.json
                 _mk(),  # git add version.json
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
-                _mk(returncode=1),  # git diff --cached --quiet → something staged
+                _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -525,14 +665,19 @@ class TestSyncConflicts:
         assert commit_calls, "expected at least one commit call"
         assert all("--no-verify" in call for call in commit_calls)
 
-    def test_pre_merge_skips_commit_when_resolution_yields_no_diff(self, tmp_path):
-        """Conflict-resolution path skips pre-merge commit when nothing is staged.
+    def test_pre_merge_commits_when_resolution_yields_no_tree_diff(self, tmp_path):
+        """Regression for #233 (supersedes the #164 reading of `_commit_if_staged`).
 
-        Regression test for #164. When every conflicted file auto-resolves
-        back to source HEAD (the sync branch's tip), the index after
-        `git add` is byte-identical to HEAD. Git refused the empty commit
-        and sync aborted. The fix mirrors the clean-merge path's existing
-        `git diff --cached --quiet` guard.
+        When every conflicted file auto-resolves back to source HEAD (the sync
+        branch's tip), the index after `git add` is byte-identical to HEAD,
+        but MERGE_HEAD is still set. `git commit` is happy to create a merge
+        commit with no tree diff in that case — and we MUST create it, because
+        pushing without the merge commit drops the second parent and leaves
+        the PR in a CONFLICTING state on GitHub.
+
+        The original #164 fix swallowed the commit via `git diff --cached
+        --quiet`, which is exactly the #233 bug. `_commit_merge_or_staged`
+        now detects MERGE_HEAD and commits unconditionally during a merge.
         """
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
@@ -545,12 +690,15 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="pyproject.toml\n"),  # diff --filter=U
                 _mk(returncode=0),  # cat-file origin/dev:pyproject.toml (exists)
                 _mk(),  # checkout origin/dev -- pyproject.toml
                 _mk(),  # git add pyproject.toml
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
-                _mk(returncode=0),  # git diff --cached --quiet → nothing staged
+                _in_merge(),  # MERGE_HEAD set → commit unconditionally
+                _mk(),  # git commit (merge commit, even with no tree diff)
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -562,14 +710,18 @@ class TestSyncConflicts:
         assert result.exit_code == 0, result.output
         commands = [c[0][0] for c in m.call_args_list]
         commit_calls = [c for c in commands if "commit" in c]
-        assert commit_calls == [], (
-            "no commit should be issued when conflict resolution staged no diff"
+        assert commit_calls, (
+            "a merge commit MUST be created when MERGE_HEAD is set, even "
+            "when the resolution yields no tree diff vs HEAD"
         )
-        staged_checks = [
-            c for c in commands if c == ["git", "diff", "--cached", "--quiet"]
+        merge_head_probes = [
+            c
+            for c in commands
+            if c[:4] == ["git", "rev-parse", "--verify", "--quiet"]
+            and "MERGE_HEAD" in c
         ]
-        assert len(staged_checks) == 1, (
-            "conflict-resolution path must guard the pre-merge commit"
+        assert merge_head_probes, (
+            "expected `_merge_in_progress` probe before the pre-merge commit"
         )
 
     def test_source_deletion_auto_resolved(self, tmp_path):
@@ -584,13 +736,16 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="old_script.py\n"),  # diff --filter=U (first)
                 _mk(
                     returncode=1
                 ),  # cat-file origin/dev:old_script.py (not in source → deleted)
                 _mk(),  # git rm old_script.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -598,7 +753,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert "Auto-resolved source deletion: old_script.py" in result.output
 
     def test_non_owned_conflicts_exit_1(self, tmp_path):
@@ -613,6 +768,7 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(
                     returncode=0
@@ -641,6 +797,7 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),
                 _mk(returncode=1),
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="src/routes.py\n"),
                 _mk(
                     returncode=0
@@ -670,6 +827,7 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 _mk(
@@ -678,7 +836,9 @@ class TestSyncConflicts:
                 _mk(),  # checkout origin/dev -- src/routes.py
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -686,7 +846,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
         assert (
             "Auto-resolved (staging unchanged since merge-base): src/routes.py"
@@ -705,6 +865,7 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 _mk(
@@ -713,7 +874,9 @@ class TestSyncConflicts:
                 _mk(),  # checkout origin/dev -- src/routes.py (prefer-source)
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -723,7 +886,7 @@ class TestSyncConflicts:
             result = CliRunner().invoke(
                 main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
             )
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
         assert "Auto-resolved (prefer-source): src/routes.py" in result.output
 
@@ -741,6 +904,7 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 _mk(
@@ -749,7 +913,9 @@ class TestSyncConflicts:
                 _mk(),  # checkout origin/dev -- src/routes.py (prefer-source from config)
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -757,7 +923,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
         assert "Auto-resolved (prefer-source): src/routes.py" in result.output
 
@@ -775,6 +941,7 @@ class TestSyncConflicts:
                 _mk(returncode=0, stdout='{"version": "1.0.0"}'),
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
+                _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 _mk(
@@ -783,7 +950,9 @@ class TestSyncConflicts:
                 _mk(),  # checkout origin/dev -- src/routes.py (flag overrides config)
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
+                _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -793,7 +962,7 @@ class TestSyncConflicts:
             result = CliRunner().invoke(
                 main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
             )
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
         assert "Auto-resolved (prefer-source): src/routes.py" in result.output
 
@@ -835,8 +1004,10 @@ class TestSyncConfirmation:
                 *self._pre_confirm_effects(),
                 _mk(),  # git checkout -b
                 _mk(),  # git merge (clean)
-                _mk(returncode=1),  # git diff --cached (staged)
+                _no_source_deletions(),  # diff --filter=D pre-pass
+                _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
+                *_merge_finalize_tail(),
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=pr_url + "\n"),  # gh pr create
@@ -844,7 +1015,7 @@ class TestSyncConfirmation:
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert "Proceed" not in result.output
 
 
@@ -984,8 +1155,10 @@ class TestSyncBranchForceCreate:
             _mk(returncode=0, stdout='{"version": "1.0.0"}'),  # version staging
             _mk(),  # git checkout -B
             _mk(),  # git merge (clean)
-            _mk(returncode=1),  # git diff --cached (staged)
+            _no_source_deletions(),  # diff --filter=D pre-pass
+            _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
+            *_merge_finalize_tail(),
             _mk(),  # git push
             _mk(returncode=1),  # gh pr view (no existing PR)
             _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -1056,8 +1229,10 @@ class TestSyncExistingPR:
             _mk(returncode=0, stdout='{"version": "1.0.0"}'),  # version staging
             _mk(),  # git checkout -B
             _mk(),  # git merge (clean)
-            _mk(returncode=1),  # git diff --cached (staged)
+            _no_source_deletions(),  # diff --filter=D pre-pass
+            _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
+            *_merge_finalize_tail(),
             _mk(),  # git push
         ]
 
@@ -1192,3 +1367,389 @@ class TestSyncExistingPR:
             "expected the existing PR URL on the final `==> Done.` line; "
             f"output:\n{result.output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Unit: _propagate_source_deletions (#235)
+# ---------------------------------------------------------------------------
+
+
+class TestPropagateSourceDeletions:
+    """`git merge` silently keeps target's copy when source deleted a file
+    target never touched. The pre-pass detects that case via the merge-base→
+    source `--diff-filter=D` list and runs `git rm` to mirror the deletion."""
+
+    def test_propagates_deletion_when_target_unchanged(self):
+        from fraisier.cli.sync import _propagate_source_deletions
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                # diff --filter=D base origin/dev: source deleted legacy.sql
+                _mk(stdout="db/legacy.sql\n"),
+                # ls-files --error-unmatch: still in index
+                _mk(returncode=0),
+                # _target_unchanged_since_base: target unchanged
+                _mk(returncode=0),
+                # git rm
+                _mk(),
+            ]
+            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
+        assert propagated == ["db/legacy.sql"]
+        commands = [c[0][0] for c in m.call_args_list]
+        assert ["git", "rm", "--", "db/legacy.sql"] in commands
+
+    def test_does_not_propagate_when_target_modified(self):
+        from fraisier.cli.sync import _propagate_source_deletions
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="db/legacy.sql\n"),  # source deleted
+                _mk(returncode=0),  # still in index
+                _mk(returncode=1),  # target MODIFIED since merge-base
+            ]
+            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
+        assert propagated == []
+        commands = [c[0][0] for c in m.call_args_list]
+        assert not any(cmd[:2] == ["git", "rm"] for cmd in commands), (
+            "must not propagate a deletion when target modified the file — "
+            "that's a real conflict for the operator to resolve"
+        )
+
+    def test_skips_when_file_no_longer_in_index(self):
+        """If the merge already resolved a deletion (e.g. via tier 1 in a
+        prior pass), `ls-files --error-unmatch` exits non-zero and we
+        skip — no double-rm."""
+        from fraisier.cli.sync import _propagate_source_deletions
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="db/legacy.sql\n"),
+                _mk(returncode=1),  # not in index
+            ]
+            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
+        assert propagated == []
+
+    def test_empty_when_no_deletions(self):
+        from fraisier.cli.sync import _propagate_source_deletions
+
+        with patch(_PATCH) as m:
+            m.side_effect = [_mk(stdout="")]
+            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
+        assert propagated == []
+
+    def test_handles_multiple_deletions(self):
+        from fraisier.cli.sync import _propagate_source_deletions
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="a.sql\nb.sql\nc.sql\n"),
+                _mk(returncode=0),  # a in index
+                _mk(returncode=0),  # a target unchanged
+                _mk(),  # rm a
+                _mk(returncode=0),  # b in index
+                _mk(returncode=1),  # b target MODIFIED
+                _mk(returncode=1),  # c NOT in index (already resolved)
+            ]
+            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
+        assert propagated == ["a.sql"]
+
+
+# ---------------------------------------------------------------------------
+# CLI: source-deletion propagation end-to-end (#235)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncPropagatesSourceDeletions:
+    """End-to-end regression for #235: source deletes a file, target unchanged,
+    `git merge` succeeds clean. Pre-pass must `git rm` the file and the sync
+    PR must carry the deletion forward.
+
+    Uses the `MockGit` helper instead of the legacy ordered-side_effect
+    pattern, so this test is robust to non-relevant subprocess calls being
+    added or reordered elsewhere in `sync_cmd`.
+    """
+
+    SHA = "deadbeef" * 5
+    MERGE_BASE = "cafe1234" * 5
+    PR_URL = "https://github.com/org/repo/pull/42"
+
+    def _scaffold_mockgit(self) -> MockGit:
+        """Common scaffolding: rev-parse, fetch, version reads, checkout, push,
+        gh PR ops. Tests layer on the merge + propagation calls they care about.
+        """
+        return (
+            MockGit()
+            .queue("git", "rev-parse", "--abbrev-ref", stdout="main\n")
+            .queue("git", "rev-parse", "origin/dev", stdout=self.SHA + "\n")
+            .queue("git", "merge-base", stdout=self.MERGE_BASE + "\n")
+            .queue(
+                "git",
+                "show",
+                "origin/dev:version.json",
+                stdout='{"version": "1.1.0"}',
+            )
+            .queue(
+                "git",
+                "show",
+                "origin/staging:version.json",
+                stdout='{"version": "1.0.0"}',
+            )
+            .queue("gh", "pr", "view", returncode=1)
+            .queue("gh", "pr", "create", stdout=self.PR_URL + "\n")
+        )
+
+    def test_clean_merge_with_source_deletion_propagates(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            self._scaffold_mockgit()
+            # Clean merge — source-deleted file silently kept by `git merge`.
+            .queue("git", "merge")
+            # Pre-pass sees the deletion and propagates it:
+            .queue(
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=D",
+                stdout="db/legacy.sql\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")  # in index
+            .queue("git", "diff", "--quiet")  # target unchanged since merge-base
+            .queue("git", "rm")  # propagation
+            # Merge finalize: MERGE_HEAD set → commit; assert sees 2 parents
+            # and MERGE_HEAD cleared.
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "Auto-resolved (source deletion): db/legacy.sql" in result.output
+        assert mg.was_called(["git", "rm", "--", "db/legacy.sql"])
+
+    def test_rename_on_source_propagates_old_path_deletion(self, tmp_path):
+        """Headline use-case from #235: source renames a file (`git mv old new`).
+        Under git's default rename detection threshold, the merge-base→source
+        diff shows `D old` + `A new`. Target hasn't touched `old`, so the
+        pre-pass `git rm`s it; `new` arrives naturally via `git merge`.
+        Net result on the sync branch: only `new` survives.
+        """
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            self._scaffold_mockgit()
+            .queue("git", "merge")
+            # Source renamed db/old.sql → db/new.sql; diff --filter=D reports
+            # the old-path deletion (the addition arrives via the merge).
+            .queue(
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=D",
+                stdout="db/old.sql\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")
+            .queue("git", "diff", "--quiet")  # target unchanged
+            .queue("git", "rm")
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "Auto-resolved (source deletion): db/old.sql" in result.output
+        assert mg.was_called(["git", "rm", "--", "db/old.sql"])
+
+    def test_failed_git_rm_does_not_appear_in_propagated_log(self, tmp_path):
+        """If `git rm` fails (submodule, sparse-checkout exclusion), the
+        operator must NOT see 'Auto-resolved (source deletion): …' — that
+        line is a promise, not a wish. Stderr from git is surfaced as a
+        warning instead.
+        """
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            self._scaffold_mockgit()
+            .queue("git", "merge")
+            .queue(
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=D",
+                stdout="submodules/legacy\n",
+            )
+            .queue("git", "ls-files", "--error-unmatch")
+            .queue("git", "diff", "--quiet")  # target unchanged
+            .queue(
+                "git",
+                "rm",
+                returncode=1,
+                stderr="fatal: pathspec is a submodule\n",
+            )
+            # No MERGE_HEAD → fall through to commit-if-staged.
+            # Clean merge here would have nothing staged (the only would-be
+            # change failed to apply), but `git merge --no-commit` still
+            # leaves MERGE_HEAD set, so the helper commits regardless.
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 0, result.output
+        assert (
+            "Auto-resolved (source deletion): submodules/legacy" not in result.output
+        ), (
+            "must not claim auto-resolved when `git rm` failed; that would "
+            "lie to the operator"
+        )
+        # A warning should appear telling the operator the propagation failed.
+        assert (
+            "could not propagate deletion" in result.output
+            or "submodules/legacy" in result.output
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pre-push merge-commit invariant (#233 Layer 2)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncAssertsMergeFinalized:
+    """Defence-in-depth: if any code path manages to skip the merge commit,
+    push must abort with a clear error rather than push a non-merge ref
+    and produce a CONFLICTING PR on GitHub."""
+
+    def test_aborts_when_head_has_one_parent(self):
+        from fraisier.cli.sync import _assert_merge_finalized
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="single-parent-sha\n"),  # log -1 %P → 1 parent
+                _mk(returncode=1),  # MERGE_HEAD cleared
+            ]
+            with pytest.raises(SystemExit) as exc:
+                _assert_merge_finalized()
+        assert exc.value.code == 1
+
+    def test_aborts_when_merge_head_still_set(self):
+        from fraisier.cli.sync import _assert_merge_finalized
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="parent-a parent-b\n"),  # 2 parents
+                _mk(returncode=0),  # but MERGE_HEAD still set — corruption!
+            ]
+            with pytest.raises(SystemExit) as exc:
+                _assert_merge_finalized()
+        assert exc.value.code == 1
+
+    def test_passes_when_two_parents_and_merge_cleared(self):
+        from fraisier.cli.sync import _assert_merge_finalized
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="parent-a parent-b\n"),  # 2 parents (merge commit)
+                _mk(returncode=1),  # MERGE_HEAD cleared
+            ]
+            _assert_merge_finalized()  # no raise
+
+    def test_aborts_when_no_parents(self):
+        """Defensive isolation test: HEAD with zero parents would only happen
+        on the initial commit, which is unreachable in sync (we always
+        `git checkout -B sync/... origin/<source>` first). Still worth
+        asserting that the guard catches an empty parent list rather than
+        crashing on it, in case some future refactor changes how HEAD is
+        established before this assertion runs."""
+        from fraisier.cli.sync import _assert_merge_finalized
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="\n"),  # no parents
+                _mk(returncode=1),
+            ]
+            with pytest.raises(SystemExit) as exc:
+                _assert_merge_finalized()
+        assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# Unit: _commit_merge_or_staged (#233 Layer 1)
+# ---------------------------------------------------------------------------
+
+
+class TestCommitMergeOrStaged:
+    """When MERGE_HEAD is set the helper commits unconditionally — even
+    when the resolved tree matches HEAD byte-for-byte. Without a merge
+    in progress, it falls back to commit-if-staged."""
+
+    def test_commits_unconditionally_during_merge(self):
+        from fraisier.cli.sync import _commit_merge_or_staged
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(returncode=0),  # MERGE_HEAD exists
+                _mk(),  # git commit
+            ]
+            _commit_merge_or_staged("msg")
+        commands = [c[0][0] for c in m.call_args_list]
+        commits = [c for c in commands if "commit" in c]
+        assert commits, "commit must fire when MERGE_HEAD is set"
+        assert all("--no-verify" in c for c in commits)
+        # Crucially: no `git diff --cached --quiet` probe in the merge path —
+        # that probe was the #233 bug source.
+        assert not any(c == ["git", "diff", "--cached", "--quiet"] for c in commands)
+
+    def test_skips_commit_outside_merge_with_clean_index(self):
+        from fraisier.cli.sync import _commit_merge_or_staged
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(returncode=1),  # no MERGE_HEAD
+                _mk(returncode=0),  # diff --cached --quiet → nothing staged
+            ]
+            _commit_merge_or_staged("msg")
+        commands = [c[0][0] for c in m.call_args_list]
+        assert not any("commit" in c for c in commands)
+
+    def test_commits_outside_merge_with_staged_changes(self):
+        from fraisier.cli.sync import _commit_merge_or_staged
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(returncode=1),  # no MERGE_HEAD
+                _mk(returncode=1),  # diff --cached --quiet → something staged
+                _mk(),  # git commit
+            ]
+            _commit_merge_or_staged("msg")
+        commands = [c[0][0] for c in m.call_args_list]
+        assert any("commit" in c for c in commands)
