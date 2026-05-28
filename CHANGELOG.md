@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.1] - 2026-05-29
+
+### Added
+
+- **Documented "bring-your-own batched releases" workflow** ([#234](https://github.com/fraiseql/fraisier/issues/234)). New [`docs/release-strategies.md`](docs/release-strategies.md) explains how to pair fraisier with [release-please](https://github.com/googleapis/release-please) (or any equivalent batcher) so feature PRs land code only via `fraisier ship --no-bump`, and a single release PR accumulates the version bump and CHANGELOG. Includes a working release-please GitHub Actions example, a trade-off table against the default per-PR workflow, and notes on how `--wait-deploy` and `fraisier sync` behave in each. No `release_strategy` yaml field is added; the design memo for that proposal (#234) is summarised in the doc page itself — the existing `--no-bump` flag plus a release-please workflow file is sufficient, and committing the schema surface is premature without adoption data.
+- **`fraisier ship --no-bump --wait-deploy` now prints an explanatory note** before the health poll: `--no-bump: no version change — polling vX.Y.Z to confirm the current redeploy stays healthy. A later release-PR merge (if any) produces a separate deploy.` Operators running a bring-your-own release-please workflow could otherwise mistake the immediate health-poll success for the release-PR-triggered deploy they were expecting; the note makes the semantics explicit. `_trigger_deploy_for_current_branch` gained a keyword-only `no_bump` parameter; default `False` preserves the per-PR path's output verbatim.
+
 ## [0.27.0] - 2026-05-28
 
 ### Added
