@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-05-28
+
+### Added
+
+- **`fraisier ship` detects version-bump races against origin at push time** ([#232](https://github.com/fraiseql/fraisier/issues/232)). Two concurrent `fraisier ship` invocations starting from the same base both computed the same next version locally; the second to finish pushed a duplicate-version branch whose PR was `mergeable=CONFLICTING`, auto-merge never fired, and nothing paged anyone. After `run_verify_phase` succeeds and immediately before `git commit`, ship now runs `git fetch --quiet origin <race-branch>` (30 s timeout) and re-reads the `version` field from `pyproject.toml` at `origin/<race-branch>`. The race branch is the PR target when `--pr` is set (falls back to `ship.pr_base` in `fraises.yaml`) — the race is on the destination, not the working feature branch — else the current branch. When origin no longer matches the version observed at start, ship rolls back the on-disk pyproject bump (`git checkout HEAD -- pyproject.toml`) and exits 1 with `✗ Version race detected.` naming both versions and a copy-pasteable rebase recipe (`git pull --ff-only` on the base, `git rebase` on the working branch, re-run `fraisier ship <bump-kind>`). For `--no-bump` re-ships the recovery message tells the operator to decide whether to abandon or pick a new version, since re-shipping at the stale version is regressive. The check runs in both the pipeline and legacy ship paths; `--dry-run` skips it (no real push); `--no-deploy` does not skip it (still pushes, race still matters). Cost: one `git fetch` (~1 s) on a ~10-minute ship. "Branch missing on origin" (first push) degrades silently. Other fetch failures (network blip, auth, timeout) print a yellow `Warning:` and proceed — a flaky network shouldn't block ship.
+
 ## [0.26.1] - 2026-05-28
 
 ### Fixed

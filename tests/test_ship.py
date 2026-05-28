@@ -1325,3 +1325,446 @@ class TestShipAutoMergeConfig:
         )
         assert result.exit_code == 0, result.output
         mock_enable.assert_not_called()
+
+
+class TestShipVersionRace:
+    """Test #232: ship detects version-bump races against origin at push time."""
+
+    @patch("subprocess.run")
+    def test_ship_aborts_when_origin_advanced_during_ci(self, mock_run, tmp_path):
+        """#232: simulate operator A landing v1.0.1 while we ran CI on v1.0.0.
+
+        The pipeline path runs a fetch + ``git show origin/<branch>:pyproject.toml``
+        between ``run_verify_phase`` and ``git commit``. When origin's pyproject
+        no longer matches the version we observed at start, ship must exit 1
+        before committing.
+        """
+        cfg = _setup_project_with_pipeline(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if cmd[:2] == ["git", "show"] and "pyproject.toml" in cmd[-1]:
+                return MagicMock(
+                    returncode=0,
+                    stdout='[project]\nname = "myapp"\nversion = "1.0.1"\n',
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        from fraisier.ship.checks import CheckResult
+
+        with patch("fraisier.ship.pipeline.run_check") as mock_check:
+            mock_check.return_value = CheckResult(
+                name="ok", success=True, output="", duration_seconds=0.1
+            )
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    cfg,
+                    "ship",
+                    "patch",
+                    "--no-deploy",
+                    "--pyproject",
+                    str(tmp_path / "pyproject.toml"),
+                ],
+            )
+
+        assert result.exit_code == 1, result.output
+        assert "Version race detected" in result.output
+        assert "1.0.1" in result.output
+
+        # No commit should have been issued
+        calls = mock_run.call_args_list
+        commit_calls = [c for c in calls if c[0] and "commit" in str(c[0][0])]
+        assert not commit_calls, (
+            f"ship should abort before committing on race; got: {commit_calls}"
+        )
+
+    @patch("subprocess.run")
+    def test_ship_proceeds_when_origin_unchanged(self, mock_run, tmp_path):
+        """Race check passes when origin's pyproject still matches starting version."""
+        cfg = _setup_project_with_pipeline(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if cmd[:2] == ["git", "show"] and "pyproject.toml" in cmd[-1]:
+                return MagicMock(
+                    returncode=0,
+                    stdout='[project]\nname = "myapp"\nversion = "1.0.0"\n',
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        from fraisier.ship.checks import CheckResult
+
+        with patch("fraisier.ship.pipeline.run_check") as mock_check:
+            mock_check.return_value = CheckResult(
+                name="ok", success=True, output="", duration_seconds=0.1
+            )
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    cfg,
+                    "ship",
+                    "patch",
+                    "--no-deploy",
+                    "--pyproject",
+                    str(tmp_path / "pyproject.toml"),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Version race detected" not in result.output
+
+    @patch("subprocess.run")
+    def test_ship_legacy_path_also_detects_race(self, mock_run, tmp_path):
+        """The non-pipeline (legacy) ship path runs the same check."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if cmd[:2] == ["git", "show"] and "pyproject.toml" in cmd[-1]:
+                return MagicMock(
+                    returncode=0,
+                    stdout='[project]\nname = "myapp"\nversion = "1.0.2"\n',
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 1, result.output
+        assert "Version race detected" in result.output
+        assert "1.0.2" in result.output
+
+    @patch("subprocess.run")
+    def test_ship_dry_run_skips_race_check(self, mock_run, tmp_path):
+        """--dry-run never fetches or aborts on race (no real push)."""
+        mock_run.return_value = MagicMock(returncode=0)
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--dry-run",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0
+        fetch_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c[0] and isinstance(c[0][0], list) and c[0][0][:2] == ["git", "fetch"]
+        ]
+        assert not fetch_calls
+
+    @patch("subprocess.run")
+    def test_ship_fetch_runs_against_current_branch_by_default(
+        self, mock_run, tmp_path
+    ):
+        """Without --pr, fetch targets origin/<current-branch>."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="feature-x\n", stderr="")
+            if cmd[:2] == ["git", "show"] and "pyproject.toml" in cmd[-1]:
+                return MagicMock(
+                    returncode=0,
+                    stdout='[project]\nname = "myapp"\nversion = "1.0.0"\n',
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        fetch_calls = [
+            c[0][0]
+            for c in mock_run.call_args_list
+            if c[0] and isinstance(c[0][0], list) and c[0][0][:2] == ["git", "fetch"]
+        ]
+        assert any(
+            cmd[:5] == ["git", "fetch", "--quiet", "origin", "feature-x"]
+            for cmd in fetch_calls
+        ), f"expected fetch against origin/feature-x; got {fetch_calls}"
+
+    @patch("fraisier.cli.version._ship_create_pr")
+    @patch("subprocess.run")
+    def test_ship_pr_flow_races_against_pr_base(
+        self, mock_run, mock_create_pr, tmp_path
+    ):
+        """With --pr --pr-base dev, race check targets origin/dev (not the feature branch)."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+        mock_create_pr.return_value = "https://github.com/u/r/pull/1"
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="feature-x\n", stderr="")
+            # origin/dev advanced to 1.0.1 during local CI
+            if cmd[:2] == ["git", "show"] and cmd[-1] == "origin/dev:pyproject.toml":
+                return MagicMock(
+                    returncode=0,
+                    stdout='[project]\nname = "myapp"\nversion = "1.0.1"\n',
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pr",
+                "--pr-base",
+                "dev",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 1, result.output
+        assert "Version race detected" in result.output
+        assert "origin/dev" in result.output
+
+        fetch_calls = [
+            c[0][0]
+            for c in mock_run.call_args_list
+            if c[0] and isinstance(c[0][0], list) and c[0][0][:2] == ["git", "fetch"]
+        ]
+        assert any(
+            cmd[:5] == ["git", "fetch", "--quiet", "origin", "dev"]
+            for cmd in fetch_calls
+        ), f"expected fetch against origin/dev; got {fetch_calls}"
+
+    @patch("subprocess.run")
+    def test_ship_aborts_restores_pyproject(self, mock_run, tmp_path):
+        """On race abort, pyproject.toml is restored via `git checkout HEAD --`."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if cmd[:2] == ["git", "show"] and "pyproject.toml" in cmd[-1]:
+                return MagicMock(
+                    returncode=0,
+                    stdout='[project]\nname = "myapp"\nversion = "1.0.1"\n',
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 1
+        restore_calls = [
+            c[0][0]
+            for c in mock_run.call_args_list
+            if c[0]
+            and isinstance(c[0][0], list)
+            and c[0][0][:4] == ["git", "checkout", "HEAD", "--"]
+        ]
+        assert restore_calls, "expected pyproject.toml to be restored on race abort"
+        assert any("pyproject.toml" in cmd for cmd in restore_calls)
+        assert "restored to v1.0.0" in result.output
+
+    @patch("subprocess.run")
+    def test_ship_no_bump_race_recovery_message_differs(self, mock_run, tmp_path):
+        """--no-bump race recovery says 'decide whether to abandon or re-bump'."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if cmd[:2] == ["git", "show"] and "pyproject.toml" in cmd[-1]:
+                return MagicMock(
+                    returncode=0,
+                    stdout='[project]\nname = "myapp"\nversion = "1.0.1"\n',
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "--no-bump",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 1
+        assert "decide whether to abandon" in result.output
+
+    @patch("subprocess.run")
+    def test_ship_detached_head_skips_race_check(self, mock_run, tmp_path):
+        """Detached HEAD reports as 'HEAD' — race check returns without fetching."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="HEAD\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        fetch_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c[0] and isinstance(c[0][0], list) and c[0][0][:2] == ["git", "fetch"]
+        ]
+        assert not fetch_calls
+
+    @patch("subprocess.run")
+    def test_ship_fetch_failure_warns_and_proceeds(self, mock_run, tmp_path):
+        """A network failure on fetch prints a warning but does not abort ship."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if cmd[:2] == ["git", "fetch"]:
+                return MagicMock(
+                    returncode=128,
+                    stdout="",
+                    stderr="fatal: unable to access 'https://...': network unreachable",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Warning" in result.output
+        assert "could not fetch" in result.output
+
+    @patch("subprocess.run")
+    def test_ship_fetch_branch_missing_silent(self, mock_run, tmp_path):
+        """`couldn't find remote ref` means first push — no warning, just proceed."""
+        cfg = _setup_project(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return MagicMock(returncode=0, stdout="brand-new-branch\n", stderr="")
+            if cmd[:2] == ["git", "fetch"]:
+                return MagicMock(
+                    returncode=128,
+                    stdout="",
+                    stderr="fatal: couldn't find remote ref brand-new-branch",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Warning" not in result.output
+        assert "could not fetch" not in result.output
