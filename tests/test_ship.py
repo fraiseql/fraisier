@@ -978,6 +978,73 @@ class TestShipDeploy:
         # Should show health verification
         assert "Verifying deployment" in result.output
 
+    @patch(
+        "fraisier.locking.deployment_lock",
+        return_value=contextlib.nullcontext(),
+    )
+    @patch("fraisier.ship.health_poll.poll_health_for_version")
+    @patch("fraisier.cli._helpers._get_deployer")
+    @patch("subprocess.run")
+    def test_ship_no_bump_wait_deploy_prints_unchanged_version_note(
+        self, mock_run, mock_get_deployer, mock_poll, _mock_lock, tmp_path
+    ):
+        """ship --no-bump --wait-deploy clarifies that polling is for the
+        re-deployed (unchanged) version, not a future release-PR deploy.
+
+        Without the note, an operator using a bring-your-own release-please
+        workflow could mistake the immediate health-poll success for the
+        release-PR deploy they were expecting. See #234 design memo (§5).
+        """
+        mock_run.return_value = MagicMock(returncode=0, stdout="main")
+        cfg = _setup_project(tmp_path, "1.0.0")
+
+        # Wire health_check + branch mapping so the deploy path runs.
+        fraises_file = tmp_path / "fraises.yaml"
+        config_data = yaml.safe_load(fraises_file.read_text())
+        config_data["fraises"]["my_api"]["environments"]["production"][
+            "health_check"
+        ] = {"url": "http://example.com/health"}
+        config_data["branch_mapping"] = {
+            "main": {"fraise": "my_api", "environment": "production"}
+        }
+        fraises_file.write_text(yaml.dump(config_data))
+
+        # Deployer returns equal old/new — that's the --no-bump invariant.
+        mock_deployer = MagicMock()
+        mock_deployer.execute.return_value = MagicMock(
+            success=True, old_version="1.0.0", new_version="1.0.0"
+        )
+        mock_get_deployer.return_value = mock_deployer
+
+        mock_poll.return_value = MagicMock(
+            success=True, final_version="1.0.0", elapsed_seconds=0.1
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "--no-bump",
+                "--wait-deploy",
+                "--pyproject",
+                str(tmp_path / "pyproject.toml"),
+            ],
+        )
+
+        assert result.exit_code == 0
+        # The honesty note: must mention no-bump context AND that this is
+        # the current redeploy, not a future release-PR deploy.
+        assert "no version change" in result.output.lower()
+        assert "release" in result.output.lower()
+        # And it must precede the standard "Verifying deployment" line so
+        # the operator reads the explanation first.
+        assert result.output.lower().index("no version change") < result.output.index(
+            "Verifying deployment"
+        )
+
     @patch("subprocess.run")
     def test_ship_skips_deploy_when_bare_repo_missing(self, mock_run, tmp_path):
         """ship skips local deploy gracefully when bare repo does not exist."""

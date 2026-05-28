@@ -15,6 +15,7 @@
 ## Operations
 
 - [Deployment Guide](deployment-guide.md) — production setup
+- [Release Strategies](release-strategies.md) — per-PR (default) vs bring-your-own batched (release-please)
 - [Doctor](doctor.md) — `fraisier doctor` host-wide health checks
 - [Testing](testing.md)
 

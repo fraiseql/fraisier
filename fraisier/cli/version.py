@@ -434,7 +434,9 @@ def _ship_commit_push_deploy(
     console.print(f"[green]Shipped {label}[/green]")
 
     if not no_deploy:
-        _trigger_deploy_for_current_branch(wait_deploy, deploy_timeout)
+        _trigger_deploy_for_current_branch(
+            wait_deploy, deploy_timeout, no_bump=bump_kind is None
+        )
 
 
 def _read_current_version(pyproject_path: Path) -> str:
@@ -853,7 +855,10 @@ def _resolve_bare_repo_skip() -> Path | None:
 
 
 def _trigger_deploy_for_current_branch(
-    wait_deploy: bool = False, deploy_timeout: int = 300
+    wait_deploy: bool = False,
+    deploy_timeout: int = 300,
+    *,
+    no_bump: bool = False,
 ) -> None:
     """Deploy all fraises mapped to the current git branch."""
     import subprocess as sp
@@ -935,6 +940,17 @@ def _trigger_deploy_for_current_branch(
             health_config = fraise_config.get("health_check")
             if health_config and "url" in health_config:
                 health_url = health_config["url"]
+                if no_bump:
+                    # Operators running a bring-your-own release-please workflow
+                    # can mistake the immediate-success health poll for the
+                    # release-PR-triggered deploy they were expecting. Be
+                    # explicit: this wait is for the current redeploy only.
+                    console.print(
+                        f"[cyan]--no-bump: no version change — polling "
+                        f"v{result.new_version} to confirm the current "
+                        f"redeploy stays healthy. A later release-PR merge "
+                        f"(if any) produces a separate deploy.[/cyan]"
+                    )
                 console.print(f"[cyan]Verifying deployment at {health_url}...[/cyan]")
 
                 from fraisier.ship.health_poll import poll_health_for_version
