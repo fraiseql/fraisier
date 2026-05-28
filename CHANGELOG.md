@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-05-28
+
+### Added
+
+- **`fraisier ship` detects version-bump races against origin at push time** ([#232](https://github.com/fraiseql/fraisier/issues/232)). Two concurrent `fraisier ship` invocations starting from the same `origin/<branch>` head both computed the same next version locally; the second to finish pushed a duplicate-version branch whose PR was `mergeable=CONFLICTING`, auto-merge never fired, and nothing paged anyone. After `run_verify_phase` succeeds and immediately before `git commit`, ship now runs `git fetch --quiet origin <current-branch>` and re-reads the `version` field from `pyproject.toml` at `origin/<branch>`. When it no longer matches the version observed at start, ship exits 1 with `✗ Version race detected.` naming both versions and a copy-pasteable rebase recipe (`git pull --ff-only` on the base, `git rebase` on the working branch, re-run `fraisier ship <bump-kind>`). The check runs in both the pipeline and legacy ship paths; `--dry-run` skips it (no real push); `--no-deploy` does not skip it (still pushes, race still matters). Cost: one `git fetch` (~1 s) on a ~10-minute ship. Fetch failures (no upstream, network down, first push of the branch) degrade silently — the operator isn't racing anyone.
+
 ## [0.26.1] - 2026-05-28
 
 ### Fixed

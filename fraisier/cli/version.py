@@ -325,6 +325,8 @@ def ship(
             auto_merge=resolved_auto_merge,
             merge_method=resolved_merge_method,
             label=f"v{current_version} (no bump)",
+            expected_base_version=current_version,
+            bump_kind=None,
         )
         return
 
@@ -387,6 +389,8 @@ def ship(
         auto_merge=resolved_auto_merge,
         merge_method=resolved_merge_method,
         label=f"v{info.version}",
+        expected_base_version=current_version,
+        bump_kind=bump_type,
     )
 
 
@@ -403,12 +407,14 @@ def _ship_commit_push_deploy(
     auto_merge: bool = False,
     merge_method: str = "squash",
     label: str,
+    expected_base_version: str,
+    bump_kind: str | None,
 ) -> None:
     """Run the commit-push-PR-deploy sequence."""
     if has_pipeline:
-        _ship_with_pipeline(version, ship_config)
+        _ship_with_pipeline(version, ship_config, expected_base_version, bump_kind)
     else:
-        _ship_legacy(version)
+        _ship_legacy(version, expected_base_version, bump_kind)
 
     if create_pr:
         pr_url = _ship_create_pr(version, pr_base, ship_config)
@@ -568,6 +574,8 @@ def _git_push() -> None:
 def _ship_with_pipeline(
     version: str,
     ship_config: ShipConfig | None,
+    expected_base_version: str,
+    bump_kind: str | None,
 ) -> None:
     """Ship using the check pipeline (--no-verify commit)."""
     import subprocess
@@ -602,6 +610,14 @@ def _ship_with_pipeline(
         console.print("[red]Validation/test checks failed, aborting ship.[/red]")
         raise SystemExit(1)
 
+    # #232: refuse to commit if origin advanced during local CI — the bump
+    # we computed before CI would now produce a duplicate-version PR.
+    _assert_no_version_race(
+        target_version=version,
+        expected_base_version=expected_base_version,
+        bump_kind=bump_kind,
+    )
+
     # Commit with --no-verify (we already ran all checks)
     subprocess.run(
         ["git", "commit", "--no-verify", "-m", f"release: v{version}"],
@@ -610,9 +626,21 @@ def _ship_with_pipeline(
     _git_push()
 
 
-def _ship_legacy(version: str) -> None:
+def _ship_legacy(
+    version: str,
+    expected_base_version: str,
+    bump_kind: str | None,
+) -> None:
     """Ship without pipeline (backward compat, uses pre-commit hooks)."""
     import subprocess
+
+    # #232: short window vs. the pipeline path (no long CI), but the race
+    # still exists if two operators run `ship` concurrently.
+    _assert_no_version_race(
+        target_version=version,
+        expected_base_version=expected_base_version,
+        bump_kind=bump_kind,
+    )
 
     subprocess.run(["git", "add", "--update"], check=True)
     try:
@@ -637,6 +665,94 @@ def _ship_legacy(version: str) -> None:
             check=True,
         )
     _git_push()
+
+
+def _assert_no_version_race(
+    *,
+    target_version: str,
+    expected_base_version: str,
+    bump_kind: str | None,
+) -> None:
+    """Fail loudly when origin's pyproject moved during local CI.
+
+    Two concurrent ``fraisier ship`` invocations can both compute the same
+    next version. The second to push produces a duplicate-version PR that
+    auto-merge can't land. A short ``git fetch`` here closes the window:
+    re-read origin's pyproject and compare against the version we observed
+    at start. Mismatch ⇒ abort before commit so recovery is just a rebase.
+    """
+    import subprocess
+
+    base_branch = _current_branch()
+    if base_branch is None:
+        # Detached HEAD or non-git tree — can't reason about origin/<branch>.
+        return
+
+    fetch = subprocess.run(
+        ["git", "fetch", "--quiet", "origin", base_branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if fetch.returncode != 0:
+        # No remote, no upstream, network down, or branch missing on origin
+        # (first push): degrade silently — the operator isn't racing anyone.
+        return
+
+    origin_version = _read_pyproject_version_at_ref(f"origin/{base_branch}")
+    if origin_version is None or origin_version == expected_base_version:
+        return
+
+    bump_arg = bump_kind or "--no-bump"
+    console.print(
+        f"\n[red]✗ Version race detected.[/red]\n"
+        f"  Started at v{expected_base_version}; would push v{target_version}.\n"
+        f"  But origin/{base_branch} is now v{origin_version} — "
+        f"another ship landed during local CI.\n\n"
+        f"  Recover by rebasing onto fresh origin/{base_branch}:\n"
+        f"    git checkout {base_branch} && git pull --ff-only\n"
+        f"    git checkout - && git rebase {base_branch}\n"
+        f"    fraisier ship {bump_arg}\n"
+    )
+    raise SystemExit(1)
+
+
+def _current_branch() -> str | None:
+    """Return the current branch name, or None on detached HEAD / no repo."""
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    branch = result.stdout.strip()
+    if not branch or branch == "HEAD":
+        return None
+    return branch
+
+
+def _read_pyproject_version_at_ref(ref: str) -> str | None:
+    """Read the ``version`` field from pyproject.toml at *ref*, or None."""
+    import re
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "show", f"{ref}:pyproject.toml"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        m = re.match(r'^version\s*=\s*"([^"]+)"', line)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _resolve_bare_repo_skip() -> Path | None:
