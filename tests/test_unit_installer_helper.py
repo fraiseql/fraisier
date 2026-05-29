@@ -435,18 +435,34 @@ def test_execute_refuses_dest_parent_inode_swap(tmp_path: Path) -> None:
     """If the dest_prefix path still exists but its inode changed (someone
     unlinked the directory and re-created it), the dev/inode check catches it.
 
-    A clean rmdir + mkdir at the same path is enough to change the inode —
-    the new directory's inode number differs from the snapshot.
+    Uses ``os.rename`` to swap in a directory built elsewhere — guarantees a
+    different inode regardless of filesystem-specific inode-reuse policy.
+    (Plain ``rmdir`` + ``mkdir`` at the same path is filesystem-dependent:
+    on ext4 the freed inode is often immediately recycled for the new mkdir,
+    so the rmdir+mkdir attack vector wouldn't trigger the dev/inode check
+    AND wouldn't constitute a real attack either — the resulting directory
+    is functionally equivalent. The realistic attack is rename-swap, which
+    this test exercises.)
     """
     src_dir, dest_dir = _seed_layout(tmp_path)
     source = src_dir / "foo.timer"
     source.write_text("[Unit]\n")
     allowlist = _allowlist_for(src_dir, dest_dir)
     resolved = _resolve_allowlist(allowlist)  # snapshot has the original inode
+    original_inode = dest_dir.stat().st_ino
 
-    # Adversarial action: unlink + recreate at the same path.
+    # Adversarial action: build a new directory elsewhere, swap it into the
+    # dest_prefix's path via rename. Both inodes exist simultaneously at one
+    # point so the new inode is guaranteed distinct from the original.
+    replacement = tmp_path / "_replacement_dir"
+    replacement.mkdir()
+    replacement_inode = replacement.stat().st_ino
+    assert replacement_inode != original_inode
+
     dest_dir.rmdir()
-    dest_dir.mkdir()
+    replacement.rename(dest_dir)
+    assert dest_dir.stat().st_ino == replacement_inode  # confirmed swap
+    assert dest_dir.stat().st_ino != original_inode  # different from snapshot
 
     op = InstallFileOp(
         source_path=str(source),
@@ -455,7 +471,7 @@ def test_execute_refuses_dest_parent_inode_swap(tmp_path: Path) -> None:
     )
     with pytest.raises(ManifestRejected, match="dev/inode"):
         _execute_install_file_op(op, resolved=resolved)
-    # No file landed in the fresh directory either.
+    # No file landed in the swapped-in directory either.
     assert not (dest_dir / "foo.timer").exists()
 
 
