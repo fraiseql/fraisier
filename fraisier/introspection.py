@@ -144,6 +144,7 @@ SUBCOMMAND_CONFIG_SECTIONS: dict[str, frozenset[ConfigPath]] = {
     "scaffold": frozenset({_FULL_CONFIG}),
     "scaffold-diff": frozenset({_FULL_CONFIG}),
     "scaffold-install": frozenset(),  # writes a new config; doesn't read existing
+    "scheduled-install": frozenset({_ENV_FULL}),  # reads env.app_path + env.jobs.*
     "setup": frozenset({_ENV_FULL}),
     "ship": frozenset({_SHIP, _GIT}),
     "stats": frozenset(),  # reads deployment DB
