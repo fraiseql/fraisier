@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING
 import pytest
 
 from fraisier.unit_installer_helper import (
+    _execute_install_file_op,
     _handle_manifest,
     _parse_allowlist,
+    _resolve_allowlist,
     _serve_connection,
 )
 from fraisier.unit_installer_protocol import (
@@ -25,6 +27,7 @@ from fraisier.unit_installer_protocol import (
     DaemonReloadAction,
     InstallFileOp,
     Manifest,
+    ManifestRejected,
     serialize_manifest,
 )
 
@@ -78,7 +81,10 @@ def test_handle_manifest_writes_install_file_op_and_replies_ok(
     server, client = _socket_pair()
     client.sendall(serialize_manifest(manifest))
     client.shutdown(socket.SHUT_WR)
-    _handle_manifest(server, allowlist=_allowlist_for(src_dir, dest_dir))
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
     response = _recv_json(client)
 
     assert response["status"] == "ok"
@@ -158,3 +164,72 @@ def test_parse_allowlist_extracts_repeated_allow_pairs(tmp_path: Path) -> None:
 @pytest.fixture
 def _silence_logger():
     yield
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4.4 — unauthorized manifest → {"status": "rejected"}, no writes
+# ---------------------------------------------------------------------------
+
+
+def test_handle_manifest_rejects_unauthorized_source_and_does_not_write(
+    tmp_path: Path,
+) -> None:
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    bad_src = elsewhere / "foo.timer"
+    bad_src.write_text("x")
+    op = InstallFileOp(
+        source_path=str(bad_src),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+
+    server, client = _socket_pair()
+    client.sendall(serialize_manifest(manifest))
+    client.shutdown(socket.SHUT_WR)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    response = _recv_json(client)
+
+    assert response["status"] == "rejected"
+    assert "source" in response["reason"].lower()
+    # The would-be-dest file must not exist (no partial write).
+    assert not (dest_dir / "foo.timer").exists()
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4.5 — TOCTOU: dest-parent symlink flipped between snapshot and execute
+# ---------------------------------------------------------------------------
+
+
+def test_execute_install_file_op_aborts_on_dest_parent_symlink_flip(
+    tmp_path: Path,
+) -> None:
+    """If the dest_prefix is replaced by a symlink to outside the snapshot,
+    the executor aborts before writing — even though Path.resolve() would
+    naively follow the symlink to the new target."""
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    resolved = _resolve_allowlist(allowlist)  # snapshot BEFORE the flip
+
+    # Adversarial action: replace dest_dir with a symlink to an unauthorised dir.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    dest_dir.rmdir()
+    dest_dir.symlink_to(outside)
+
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    with pytest.raises(ManifestRejected, match="TOCTOU"):
+        _execute_install_file_op(op, resolved=resolved)
+    # Critically: no file landed at the adversary's target.
+    assert not (outside / "foo.timer").exists()

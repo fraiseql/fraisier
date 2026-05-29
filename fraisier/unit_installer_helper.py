@@ -19,6 +19,7 @@ import logging
 import shutil
 import socket
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
@@ -40,6 +41,34 @@ logger = logging.getLogger(__name__)
 _MAX_READ_BYTES = 1024 * 1024 + 1
 _INSTALL_FILE_MODE = 0o644
 _MARKER_FILE_MODE = 0o600
+
+
+@dataclass(frozen=True)
+class ResolvedAllowlist:
+    """Frozen snapshot of allowlist prefixes resolved at helper startup.
+
+    The execute layer compares ``Path.resolve()`` results against this
+    snapshot — not against the protocol-level ``Allowlist.entries[i].
+    dest_prefix.resolve()``. If an attacker flips a dest-prefix directory
+    into a symlink between validate and execute, the live ``resolve``
+    would follow it; the snapshot remembers where the prefix pointed at
+    startup and refuses to write elsewhere (cycle 4.5).
+    """
+
+    dest_prefixes: tuple[Path, ...]
+    source_prefixes: tuple[Path, ...]
+
+
+def _resolve_allowlist(allowlist: Allowlist) -> ResolvedAllowlist:
+    """Resolve every prefix once; snapshot defends against TOCTOU flips."""
+    return ResolvedAllowlist(
+        dest_prefixes=tuple(
+            e.dest_prefix.resolve(strict=True) for e in allowlist.entries
+        ),
+        source_prefixes=tuple(
+            e.source_prefix.resolve(strict=True) for e in allowlist.entries
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +93,7 @@ def _handle_manifest(
     conn: socket.socket,
     *,
     allowlist: Allowlist,
+    resolved: ResolvedAllowlist,
 ) -> None:
     """Read one manifest, validate, execute, write structured response."""
     raw = _read_manifest_bytes(conn)
@@ -77,7 +107,14 @@ def _handle_manifest(
     except ManifestRejected as exc:
         conn.sendall(render_response("rejected", reason=str(exc)))
         return
-    response = _execute_manifest(manifest)
+    try:
+        response = _execute_manifest(manifest, resolved=resolved)
+    except ManifestRejected as exc:
+        # Mid-flight TOCTOU rejection (cycle 4.5). Any already-written ops
+        # in this manifest do NOT roll back — consistent with error-loud
+        # semantics shared with apply_unit_diffs.
+        conn.sendall(render_response("rejected", reason=str(exc)))
+        return
     conn.sendall(response)
 
 
@@ -86,23 +123,34 @@ def _handle_manifest(
 # ---------------------------------------------------------------------------
 
 
-def _execute_manifest(manifest: Manifest) -> bytes:
+def _execute_manifest(manifest: Manifest, *, resolved: ResolvedAllowlist) -> bytes:
     """Apply each op in order. Returns a structured response."""
     written: list[str] = []
     for op in manifest.operations:
-        _execute_install_file_op(op)
+        _execute_install_file_op(op, resolved=resolved)
         written.append(Path(op.dest_path).name)
     return render_response("ok", installed=written)
 
 
-def _execute_install_file_op(op: InstallFileOp) -> None:
+def _execute_install_file_op(
+    op: InstallFileOp,
+    *,
+    resolved: ResolvedAllowlist,
+) -> None:
     """Copy source bytes to dest, chmod 0644, write marker if present.
 
-    Per cycle 4.5, the dest_path is re-resolved via realpath immediately
-    before open() to defeat TOCTOU symlink races on the parent.
+    Cycle 4.5 TOCTOU defense: re-resolve dest parent and compare against
+    the snapshot taken at helper startup. If an attacker has flipped the
+    parent into a symlink to outside the snapshot, abort before write.
     """
     dest = Path(op.dest_path)
     parent_realpath = dest.parent.resolve(strict=True)
+    if parent_realpath not in resolved.dest_prefixes:
+        msg = (
+            f"TOCTOU detected: dest parent {parent_realpath} no longer "
+            "matches a snapshot dest_prefix (parent symlink flipped?)"
+        )
+        raise ManifestRejected(msg)
     final_dest = parent_realpath / dest.name
     shutil.copy2(op.source_path, final_dest)
     final_dest.chmod(_INSTALL_FILE_MODE)
@@ -134,14 +182,23 @@ def _serve_connection(
     *,
     expected_uid: int | None,
     allowlist: Allowlist,
+    resolved: ResolvedAllowlist | None = None,
 ) -> None:
-    """SO_PEERCRED check then ``_handle_manifest``."""
+    """SO_PEERCRED check then ``_handle_manifest``.
+
+    Callers normally pass ``resolved`` so the snapshot is reused across many
+    connections (``main`` resolves once at startup). Tests can omit it and a
+    fresh snapshot is taken — they assert TOCTOU by snapshotting BEFORE the
+    filesystem manipulation themselves.
+    """
+    if resolved is None:
+        resolved = _resolve_allowlist(allowlist)
     if expected_uid is None:
         logger.warning(
             "SO_PEERCRED check disabled: --deploy-uid not provided. "
             "Re-render this helper's unit with v0.29 scaffold-install."
         )
-        _handle_manifest(conn, allowlist=allowlist)
+        _handle_manifest(conn, allowlist=allowlist, resolved=resolved)
         return
     try:
         check_peer_creds(conn, expected_uid=expected_uid)
@@ -151,7 +208,7 @@ def _serve_connection(
             render_response("rejected", reason=f"peer credentials rejected: {exc}")
         )
         return
-    _handle_manifest(conn, allowlist=allowlist)
+    _handle_manifest(conn, allowlist=allowlist, resolved=resolved)
 
 
 def main() -> None:  # pragma: no cover — exercised end-to-end in Phase 8 smoke
@@ -169,6 +226,7 @@ def main() -> None:  # pragma: no cover — exercised end-to-end in Phase 8 smok
     )
     deploy_uid, remaining = extract_deploy_uid(sys.argv[1:])
     allowlist = _parse_allowlist(remaining)
+    resolved = _resolve_allowlist(allowlist)
     server_sock = _build_server_socket()
     try:
         while True:
@@ -180,7 +238,10 @@ def main() -> None:  # pragma: no cover — exercised end-to-end in Phase 8 smok
             with conn:
                 try:
                     _serve_connection(
-                        conn, expected_uid=deploy_uid, allowlist=allowlist
+                        conn,
+                        expected_uid=deploy_uid,
+                        allowlist=allowlist,
+                        resolved=resolved,
                     )
                 except Exception as exc:
                     logger.exception("Unhandled error in manifest handler: %s", exc)
