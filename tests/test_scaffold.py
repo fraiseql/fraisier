@@ -2449,6 +2449,123 @@ fraises:
         assert "myproj-long-lock-alerter.service" in wrapper_content
         assert "myproj-long-lock-alerter.timer" in wrapper_content
 
+    def test_systemctl_helper_execstart_carries_deploy_user_flag(self, tmp_path):
+        """02 Phase 3 cycle 3.3 — helper unit's ExecStart carries --deploy-user.
+
+        The helper resolves the username to UID at startup via pwd.getpwnam,
+        deferring the lookup to the target host where the user is guaranteed
+        to exist.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (
+            tmp_path / "output" / "systemd" / "fraisier-myproj-systemctl-helper.service"
+        ).read_text()
+        # The flag appears on the ExecStart line, before any positional args.
+        execstart = next(
+            line for line in content.splitlines() if line.startswith("ExecStart=")
+        )
+        assert "--deploy-user deployer" in execstart
+
+    def test_scaffold_install_helper_execstart_carries_deploy_user_flag(self, tmp_path):
+        """02 Phase 3 cycle 3.3 — scaffold-install-helper carries --deploy-user."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (
+            tmp_path
+            / "output"
+            / "systemd"
+            / "fraisier-myproj-scaffold-install-helper.service"
+        ).read_text()
+        execstart = next(
+            line for line in content.splitlines() if line.startswith("ExecStart=")
+        )
+        assert "--deploy-user deployer" in execstart
+
+    def test_install_helper_execstart_carries_deploy_user_flag(self, tmp_path):
+        """02 Phase 3 cycle 3.3 — per-(fraise,env) install-helper carries --deploy-user.
+
+        Even though the install-helper runs as install_user (not deploy_user),
+        the SocketUser is deploy_user — that's the UID we check connections
+        against.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+        install:
+          user: install_bot
+          command: ["uv", "sync", "--frozen"]
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        rendered = list((tmp_path / "output" / "systemd").iterdir())
+        candidates = [
+            p
+            for p in rendered
+            if p.name.endswith("-install-helper.service")
+            and "scaffold-install-helper" not in p.name
+        ]
+        assert candidates, f"no install-helper.service rendered (have {rendered})"
+        execstart = next(
+            line
+            for line in candidates[0].read_text().splitlines()
+            if line.startswith("ExecStart=")
+        )
+        assert "--deploy-user deployer" in execstart
+
     def test_collect_allowed_services_skips_jobs_on_non_scheduled_types(self):
         """Only type:scheduled fraises contribute jobs.* unit names to the
         allowlist. type:backup fraises (which also use jobs.*) must NOT —

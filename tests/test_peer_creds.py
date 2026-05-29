@@ -76,3 +76,32 @@ def test_extract_deploy_uid_returns_none_when_trailing_flag() -> None:
     uid, remaining = extract_deploy_uid(["foo", "--deploy-uid"])
     assert uid is None
     assert remaining == ["foo", "--deploy-uid"]
+
+
+def test_extract_deploy_uid_resolves_deploy_user_via_pwd() -> None:
+    """``--deploy-user <name>`` looks up via pwd.getpwnam at extraction time."""
+    import pwd
+
+    current = pwd.getpwuid(os.getuid())
+    uid, remaining = extract_deploy_uid(
+        ["--deploy-user", current.pw_name, "foo", "bar"]
+    )
+    assert uid == current.pw_uid
+    assert remaining == ["foo", "bar"]
+
+
+def test_extract_deploy_uid_returns_none_for_unknown_deploy_user() -> None:
+    """Unknown user → transitional fallback (None), preserving argv."""
+    argv = ["--deploy-user", "definitely-not-a-real-user-xyz-12345", "foo"]
+    uid, remaining = extract_deploy_uid(argv)
+    assert uid is None
+    assert remaining == argv
+
+
+def test_extract_deploy_uid_prefers_explicit_uid_over_user() -> None:
+    """Numeric ``--deploy-uid`` wins when both forms are present."""
+    uid, remaining = extract_deploy_uid(
+        ["--deploy-uid", "1234", "--deploy-user", "root", "rest"]
+    )
+    assert uid == 1234
+    assert remaining == ["--deploy-user", "root", "rest"]

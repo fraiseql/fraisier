@@ -8,7 +8,7 @@ Type=simple
 # No User= directive — runs as root so install.sh can write to /etc/.
 # ExecStart references the deploy user's venv — same pattern as systemctl-helper.
 # Root can execute binaries in any user's home; no privilege issue.
-ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-scaffold-install-helper {{ scaffold_install_script }}
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-scaffold-install-helper --deploy-user {{ scaffold.deploy_user }} {{ scaffold_install_script }}
 
 # Prevent Python from creating root-owned __pycache__ dirs in the deploy user's
 # tool installation when the helper runs as root.

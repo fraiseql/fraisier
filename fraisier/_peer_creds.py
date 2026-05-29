@@ -38,25 +38,54 @@ class PeerCreds:
 
 
 def extract_deploy_uid(argv: list[str]) -> tuple[int | None, list[str]]:
-    """Pull ``--deploy-uid <N>`` out of ``argv``; return ``(uid, remaining_argv)``.
+    """Pull the deploy-uid out of ``argv``; return ``(uid, remaining_argv)``.
 
-    No ``--deploy-uid`` → ``(None, argv_unchanged)`` — the caller logs a
-    transitional warning and runs without ``SO_PEERCRED`` enforcement. This
-    shim is only for the v0.29 transition window; v0.30 will make the flag
-    mandatory (units without it will be re-rendered before then).
+    Accepts either:
 
-    Malformed argument (non-integer, missing value, trailing flag) is treated
-    as missing — same fallback path.
+    - ``--deploy-uid <N>`` (numeric override; useful for tests + already-known
+      UID); or
+    - ``--deploy-user <name>`` (preferred — resolved at helper startup via
+      ``pwd.getpwnam``). Deferring resolution to the target host avoids
+      requiring the user to exist on whichever machine ran ``fraisier
+      scaffold``. The renderer emits this form.
+
+    No flag, malformed flag, missing user, non-integer UID → ``(None, argv)``.
+    The caller logs a transitional warning and runs without ``SO_PEERCRED``
+    enforcement (v0.30 will make the flag mandatory).
     """
+    remaining = list(argv)
+    uid = _pop_uid_flag(remaining)
+    if uid is not None:
+        return uid
+    return _pop_user_flag(remaining)
+
+
+def _pop_uid_flag(argv: list[str]) -> tuple[int, list[str]] | None:
     if "--deploy-uid" not in argv:
-        return None, list(argv)
+        return None
     i = argv.index("--deploy-uid")
     if i + 1 >= len(argv):
-        return None, list(argv)
+        return None
     try:
         uid = int(argv[i + 1])
     except ValueError:
-        return None, list(argv)
+        return None
+    return uid, argv[:i] + argv[i + 2 :]
+
+
+def _pop_user_flag(argv: list[str]) -> tuple[int | None, list[str]]:
+    if "--deploy-user" not in argv:
+        return None, argv
+    i = argv.index("--deploy-user")
+    if i + 1 >= len(argv):
+        return None, argv
+    name = argv[i + 1]
+    try:
+        import pwd
+
+        uid = pwd.getpwnam(name).pw_uid
+    except KeyError:
+        return None, argv
     return uid, argv[:i] + argv[i + 2 :]
 
 
