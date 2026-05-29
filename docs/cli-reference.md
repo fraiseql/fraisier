@@ -670,6 +670,22 @@ sudo fraisier scheduled-install --env <env>
 
 Skipping steps 1–2 leaves the on-disk `fraisier-<project>-systemctl-helper.service` carrying the *old* allowlist (rendered before the new job was declared). Webhook-driven redeploys of the new timer will then be rejected by the helper socket until those steps run. The change to `_collect_allowed_services` in v0.28.0 updates the *generator*; the rendered helper unit on each host is a separate artefact that only refreshes when `scaffold-install` runs.
 
+#### `--via-socket` (v0.29+)
+
+By default `fraisier scheduled-install` writes directly into `/etc/systemd/system/` and runs `systemctl` itself — both of which require root, so the operator must invoke the whole command under `sudo`.
+
+The `--via-socket` flag routes the apply through the new `fraisier-unit-installer` socket helper (also rendered by `scaffold` in v0.29). The helper runs as root under systemd; the CLI itself can run as the deploy user. Drops the `sudo` requirement and gains real SO_PEERCRED enforcement, a render-time allowlist, and TOCTOU realpath checks on the dest parent.
+
+```bash
+fraisier scheduled-install --env production --via-socket --yes
+```
+
+By default the CLI uses `/run/fraisier/<env>/unit-installer-<project>.sock`. Override with `--socket-path` if you've rendered the helper to a different path.
+
+The helper must be on the host first: run `fraisier scaffold && fraisier scaffold-install --yes` once on each host after upgrading to v0.29. If the socket isn't present, `--via-socket` fails with an actionable error pointing at `scaffold-install`.
+
+`--via-socket` will become the default in a future release; the legacy direct-write path will stay available behind an opt-out flag for at least one release after that.
+
 ---
 
 ### fraisier validate-deployment

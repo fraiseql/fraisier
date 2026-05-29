@@ -403,3 +403,97 @@ def test_help_renders(tmp_path):
     assert "--env" in result.output
     assert "--force" in result.output
     assert "Exit codes" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — --via-socket routes through apply_unit_diffs_via_helper
+# ---------------------------------------------------------------------------
+
+
+def test_via_socket_routes_to_helper_client(
+    tmp_path, fake_local_runner, patched_systemd_dest_dir, monkeypatch
+):
+    """02 Phase 7 cycle 7.1 — --via-socket calls apply_unit_diffs_via_helper.
+
+    The CLI should NOT touch /etc/systemd/system/ directly when --via-socket
+    is set; the helper-client path takes over.
+    """
+    from fraisier.scheduled_install import ApplyReport
+
+    cfg = _write_scheduled_yaml(tmp_path)
+    # Pretend the socket exists. patched_systemd_dest_dir gives us a path
+    # we can use; create a real Unix socket fixture there.
+    import socket as _socket
+
+    sock_path = tmp_path / "fake-unit-installer.sock"
+    server = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    server.bind(str(sock_path))
+    try:
+        captured = {}
+
+        def fake_apply_via_helper(diffs, *, socket_path, **kwargs):
+            captured["socket_path"] = socket_path
+            captured["force"] = kwargs.get("force")
+            captured["write_markers"] = kwargs.get("write_markers")
+            captured["config_path"] = kwargs.get("config_path")
+            return ApplyReport(
+                written=tuple(d.install for d in diffs),
+                skipped_identical=(),
+                enabled_timers=tuple(d.install for d in diffs if d.install.is_timer),
+                reloaded=True,
+            )
+
+        monkeypatch.setattr(
+            "fraisier.cli.scheduled_install.apply_unit_diffs_via_helper",
+            fake_apply_via_helper,
+        )
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "-c",
+                str(cfg),
+                "scheduled-install",
+                "--env",
+                "production",
+                "--via-socket",
+                "--socket-path",
+                str(sock_path),
+                "--yes",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert captured["socket_path"] == sock_path
+        assert captured["force"] is False
+        assert captured["write_markers"] is True
+        # config_path resolves to a real absolute path.
+        assert captured["config_path"] is not None
+    finally:
+        server.close()
+        sock_path.unlink(missing_ok=True)
+
+
+def test_via_socket_actionable_error_when_socket_absent(
+    tmp_path, fake_local_runner, patched_systemd_dest_dir
+):
+    """02 Phase 7 cycle 7.2 — pre-v0.29 host (no socket) → error names scaffold-install."""
+    cfg = _write_scheduled_yaml(tmp_path)
+    sock_path = tmp_path / "does-not-exist.sock"  # never created
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "-c",
+            str(cfg),
+            "scheduled-install",
+            "--env",
+            "production",
+            "--via-socket",
+            "--socket-path",
+            str(sock_path),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "unit-installer socket not found" in result.output
+    assert "scaffold-install" in result.output

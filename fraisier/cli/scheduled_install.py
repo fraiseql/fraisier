@@ -12,6 +12,7 @@ on re-run.
 from __future__ import annotations
 
 import difflib
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
@@ -22,6 +23,7 @@ from fraisier.scheduled_install import (
     UnitDiff,
     UnitState,
     apply_unit_diffs,
+    apply_unit_diffs_via_helper,
     classify_unit,
     enumerate_scheduled_units,
 )
@@ -167,6 +169,25 @@ def _print_verbose_diff(diff: UnitDiff) -> None:
     default=None,
     help="Narrow to a single fraise name (otherwise: all type:scheduled fraises).",
 )
+@click.option(
+    "--via-socket",
+    "via_socket",
+    is_flag=True,
+    help=(
+        "Route the apply through the unit-installer socket helper instead of "
+        "writing /etc/systemd/system/ directly. Drops the sudo requirement. "
+        "Helper must be on the host (requires `fraisier scaffold-install`)."
+    ),
+)
+@click.option(
+    "--socket-path",
+    "socket_path_override",
+    default=None,
+    help=(
+        "Override the helper socket path. Defaults to "
+        "/run/fraisier/<env>/unit-installer-<project>.sock."
+    ),
+)
 @click.pass_context
 def scheduled_install_cmd(
     ctx: click.Context,
@@ -177,6 +198,8 @@ def scheduled_install_cmd(
     yes: bool,
     verbose: bool,
     fraise: str | None,
+    via_socket: bool,
+    socket_path_override: str | None,
 ) -> None:
     """Install per-job systemd unit files declared by type:scheduled fraises.
 
@@ -252,7 +275,18 @@ def scheduled_install_cmd(
         ctx.exit(EXIT_OK)
 
     # Real apply path.
-    _run_apply(diffs, ctx, force=force, yes=yes, verbose=verbose)
+    _run_apply(
+        diffs,
+        ctx,
+        force=force,
+        yes=yes,
+        verbose=verbose,
+        via_socket=via_socket,
+        socket_path=_resolve_socket_path(config, env, override=socket_path_override)
+        if via_socket
+        else None,
+        config_path=Path(config.config_path) if via_socket else None,
+    )
 
 
 def _run_validate_only(
@@ -295,6 +329,9 @@ def _run_apply(
     force: bool,
     yes: bool,
     verbose: bool,
+    via_socket: bool = False,
+    socket_path: Path | None = None,
+    config_path: Path | None = None,
 ) -> None:
     """Real apply path. Prompts unless ``yes``."""
     if verbose:
@@ -322,6 +359,38 @@ def _run_apply(
             console.print("Aborted by operator.")
             ctx.exit(EXIT_OK)
 
+    if via_socket:
+        if socket_path is None or not socket_path.is_socket():
+            err_console.print(
+                "[red]Error:[/red] unit-installer socket not found at "
+                f"[bold]{socket_path}[/bold]. "
+                "This host has not been bootstrapped with the v0.29 helper. "
+                "Run [bold]fraisier scaffold-install --yes[/bold] first."
+            )
+            ctx.exit(EXIT_OPERATOR_ERROR)
+        try:
+            report = apply_unit_diffs_via_helper(
+                diffs,
+                socket_path=socket_path,
+                force=force,
+                write_markers=config_path is not None,
+                config_path=config_path,
+            )
+        except ScheduledInstallError as exc:
+            err_console.print(f"[red]Error:[/red] {exc}")
+            ctx.exit(EXIT_OPERATOR_ERROR)
+        if report.rejected_reason is not None:
+            err_console.print(
+                f"[red]Helper rejected manifest:[/red] {report.rejected_reason}"
+            )
+            ctx.exit(EXIT_POLICY_VIOLATION)
+        console.print(
+            f"Installed {len(report.written)} unit(s) via helper; "
+            f"enabled {len(report.enabled_timers)} timer(s); "
+            f"skipped {len(report.skipped_identical)} identical."
+        )
+        ctx.exit(EXIT_OK)
+
     try:
         report = apply_unit_diffs(diffs, runner=LocalRunner(), force=force)
     except ScheduledInstallError as exc:
@@ -337,3 +406,11 @@ def _run_apply(
         f"skipped {len(report.skipped_identical)} identical."
     )
     ctx.exit(EXIT_OK)
+
+
+def _resolve_socket_path(
+    config: FraisierConfig, env: str, *, override: str | None
+) -> Path:
+    if override:
+        return Path(override)
+    return Path(f"/run/fraisier/{env}/unit-installer-{config.project_name}.sock")
