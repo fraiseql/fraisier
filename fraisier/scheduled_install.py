@@ -24,11 +24,12 @@ from typing import TYPE_CHECKING
 from fraisier.dbops._validation import validate_service_name
 
 if TYPE_CHECKING:
-    from typing import Any
-
     from fraisier.config import FraisierConfig
     from fraisier.runners import CommandRunner
     from fraisier.unit_installer_protocol import Manifest, MarkerMeta
+
+# Any is referenced in runtime signatures (parse_auto_install_policy).
+from typing import Any
 
 SYSTEMD_DEST_DIR = Path("/etc/systemd/system")
 APP_PATH_UNITS_SUBDIR = Path("scripts/systemd")
@@ -37,6 +38,64 @@ APP_PATH_UNITS_SUBDIR = Path("scripts/systemd")
 # managed systemd unit. Advisory, not authenticated — see the MarkerMeta
 # docstring in fraisier.unit_installer_protocol for the threat model.
 MARKER_SUFFIX = ".fraisier-managed"
+
+_VALID_ON_MISSING = frozenset({"install", "skip"})
+_VALID_ON_DRIFT = frozenset({"fail", "overwrite", "skip"})
+
+
+@dataclass(frozen=True)
+class AutoInstallPolicy:
+    """#240 follow-up 01 Phase 1 — webhook-driven install drift policy.
+
+    Lives under ``fraises.yaml`` →
+    ``fraises.<name>.environments.<env>.scheduled.auto_install``.
+    Drives the per-deploy decision made by ``ScheduledDeployer`` (Phase 2)
+    when reconciling source vs dest unit content.
+
+    Defaults (locked Phase 0):
+    - ``on_missing="install"``: webhook copies new units from the deploy
+      worktree into /etc/systemd/system/. The whole point of bundle A.
+    - ``on_drift="fail"``: webhook aborts on drift between source and dest.
+      Operators opt into overwrite/skip per-fraise. Silent overwrite is
+      rejected as a default because /etc/systemd/system/ is operator-
+      editable (debugging, vendor packages) — unlike app_path content.
+    """
+
+    on_missing: str = "install"
+    on_drift: str = "fail"
+
+
+def parse_auto_install_policy(env_config: dict[str, Any]) -> AutoInstallPolicy:
+    """Extract the auto_install policy block, applying locked defaults.
+
+    Accepts the env config dict; returns the resolved policy. Unknown values
+    on either field raise ``ScheduledInstallError`` with a clear message
+    pointing at the offending field.
+    """
+    scheduled = env_config.get("scheduled") or {}
+    raw_auto = scheduled.get("auto_install") if isinstance(scheduled, dict) else None
+    if raw_auto is not None and not isinstance(raw_auto, dict):
+        msg = f"scheduled.auto_install must be a mapping, got {type(raw_auto).__name__}"
+        raise ScheduledInstallError(msg)
+    auto = raw_auto or {}
+
+    on_missing = auto.get("on_missing", "install")
+    on_drift = auto.get("on_drift", "fail")
+
+    if on_missing not in _VALID_ON_MISSING:
+        msg = (
+            f"scheduled.auto_install.on_missing must be one of "
+            f"{sorted(_VALID_ON_MISSING)}, got {on_missing!r}"
+        )
+        raise ScheduledInstallError(msg)
+    if on_drift not in _VALID_ON_DRIFT:
+        msg = (
+            f"scheduled.auto_install.on_drift must be one of "
+            f"{sorted(_VALID_ON_DRIFT)}, got {on_drift!r}"
+        )
+        raise ScheduledInstallError(msg)
+
+    return AutoInstallPolicy(on_missing=on_missing, on_drift=on_drift)
 
 
 class ScheduledInstallError(Exception):
