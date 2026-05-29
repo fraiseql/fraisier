@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -74,6 +75,12 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
 
                 self._install_dependencies()
 
+            # #240 follow-up 01 Phase 2 — auto-install scheduled unit files
+            # via the unit-installer helper before daemon-reload. Skipped if
+            # the host is pre-v0.29 (no socket) UNLESS the operator explicitly
+            # opted out via FRAISIER_DISABLE_WEBHOOK_AUTO_INSTALL=1.
+            self._auto_install_scheduled_units_if_applicable()
+
             if self.systemd_timer:
                 logger.info(f"Enabling timer: {self.systemd_timer}")
                 self.runner.run(
@@ -90,6 +97,102 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             return old_version, new_version
 
         return self._execute_with_lifecycle(_steps)
+
+    def _auto_install_scheduled_units_if_applicable(self) -> None:
+        """Run the webhook auto-install hook when wiring is available.
+
+        Quiet no-op when:
+        - The deployer wasn't given a ``config_object`` (FraisierConfig).
+        - The host has no unit-installer socket (pre-v0.29; deploy_event
+          records the situation but doesn't fail the deploy).
+        - The env name is "unknown" (the base deployer's fallback when
+          the test harness doesn't pass environment).
+
+        Otherwise runs ``auto_install_scheduled_units`` and surfaces drift /
+        pre-v0.29 errors as deploy failures so the operator sees them in
+        the deploy log.
+        """
+        if self.config_object is None:
+            return
+        if self.environment == "unknown":
+            return
+        try:
+            from fraisier.scheduled_install import (
+                auto_install_scheduled_units,
+                parse_auto_install_policy,
+            )
+        except ImportError:  # pragma: no cover
+            return
+
+        try:
+            project_name = self.config_object.project_name
+        except AttributeError:  # pragma: no cover
+            return
+        fraise_config = (
+            self.config_object.fraises.get(self.fraise_name)
+            if hasattr(self.config_object, "fraises")
+            else None
+        )
+        if not fraise_config or fraise_config.get("type") != "scheduled":
+            return
+        env_config = (fraise_config.get("environments") or {}).get(
+            self.environment
+        ) or {}
+        try:
+            policy = parse_auto_install_policy(env_config)
+        except Exception as exc:
+            logger.warning(
+                "auto_install policy parse failed for %s/%s: %s — skipping",
+                self.fraise_name,
+                self.environment,
+                exc,
+            )
+            return
+
+        socket_path = Path(
+            f"/run/fraisier/{self.environment}/unit-installer-{project_name}.sock"
+        )
+        is_socket_present = socket_path.is_socket()
+        if not is_socket_present:
+            logger.warning(
+                "unit-installer socket not present at %s — "
+                "skipping webhook auto-install. Run scaffold-install on the "
+                "host to bootstrap.",
+                socket_path,
+            )
+            return
+
+        report = auto_install_scheduled_units(
+            self.config_object,
+            self.environment,
+            fraise_name=self.fraise_name,
+            policy=policy,
+            socket_path=socket_path,
+            is_socket_present=is_socket_present,
+        )
+        if report.installed:
+            logger.info(
+                "auto-installed %d unit(s) via helper: %s",
+                len(report.installed),
+                ", ".join(report.installed),
+            )
+        if report.drift_overwrites:
+            logger.warning(
+                "overwrote %d drifted unit(s) per on_drift=overwrite: %s",
+                len(report.drift_overwrites),
+                ", ".join(report.drift_overwrites),
+            )
+        if report.skipped_drift_units:
+            logger.warning(
+                "skipped %d drifted unit(s) per on_drift=skip: %s",
+                len(report.skipped_drift_units),
+                ", ".join(report.skipped_drift_units),
+            )
+        if report.retried_busy:
+            logger.info(
+                "deploy retried %d time(s) on helper-busy before succeeding",
+                report.retried_busy,
+            )
 
     def _get_timer_state(self) -> str | None:
         """Get timer active state as version proxy."""
