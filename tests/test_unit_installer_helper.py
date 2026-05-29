@@ -394,6 +394,128 @@ def test_handle_manifest_rejects_oversize_wire_payload(tmp_path: Path) -> None:
     assert "too large" in response["reason"].lower()
 
 
+# ---------------------------------------------------------------------------
+# Post-Phase-7 TOCTOU hardening — dir_fd + O_NOFOLLOW
+# ---------------------------------------------------------------------------
+
+
+def test_execute_refuses_symlink_at_dest_basename(tmp_path: Path) -> None:
+    """If basename inside dest_prefix is a symlink to /etc/passwd (or any victim),
+    the executor refuses to follow it instead of clobbering the victim.
+
+    Pre-hardening: shutil.copy2 would have followed the symlink and written
+    source bytes through it, overwriting whatever the symlink pointed at.
+    Post-hardening: ``os.open(O_NOFOLLOW)`` fails with ELOOP and we abort.
+    """
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+
+    # Pre-plant a symlink at the dest basename pointing at a victim file
+    # outside the allowlist. Simulates an attacker with prior write access.
+    victim = tmp_path / "victim.conf"
+    victim.write_text("DO NOT OVERWRITE\n")
+    (dest_dir / "foo.timer").symlink_to(victim)
+
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    resolved = _resolve_allowlist(allowlist)
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    with pytest.raises(ManifestRejected, match="symlink"):
+        _execute_install_file_op(op, resolved=resolved)
+    # Victim is unchanged; the symlink wasn't followed.
+    assert victim.read_text() == "DO NOT OVERWRITE\n"
+
+
+def test_execute_refuses_dest_parent_inode_swap(tmp_path: Path) -> None:
+    """If the dest_prefix path still exists but its inode changed (someone
+    unlinked the directory and re-created it), the dev/inode check catches it.
+
+    A clean rmdir + mkdir at the same path is enough to change the inode —
+    the new directory's inode number differs from the snapshot.
+    """
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    resolved = _resolve_allowlist(allowlist)  # snapshot has the original inode
+
+    # Adversarial action: unlink + recreate at the same path.
+    dest_dir.rmdir()
+    dest_dir.mkdir()
+
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    with pytest.raises(ManifestRejected, match="dev/inode"):
+        _execute_install_file_op(op, resolved=resolved)
+    # No file landed in the fresh directory either.
+    assert not (dest_dir / "foo.timer").exists()
+
+
+def test_execute_refuses_source_swapped_to_symlink_outside_snapshot(
+    tmp_path: Path,
+) -> None:
+    """If source.resolve() at execute time lands outside the snapshot's
+    source_prefixes (deploy_user swapped a symlink between validate and
+    execute), the executor aborts before opening the malicious target."""
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    resolved = _resolve_allowlist(allowlist)
+
+    # Source path is a symlink to a file outside the allowlist.
+    outside = tmp_path / "outside_target"
+    outside.write_text("[Service]\nExecStart=/bin/evil\n")
+    sneaky_source = src_dir / "foo.timer"
+    sneaky_source.symlink_to(outside)
+
+    op = InstallFileOp(
+        source_path=str(sneaky_source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    with pytest.raises(ManifestRejected, match="source"):
+        _execute_install_file_op(op, resolved=resolved)
+    assert not (dest_dir / "foo.timer").exists()
+
+
+def test_execute_refuses_marker_path_symlink(tmp_path: Path) -> None:
+    """A pre-planted symlink at <unit>.fraisier-managed is rejected, not followed."""
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+    victim = tmp_path / "marker_victim.conf"
+    victim.write_text("MARKER VICTIM\n")
+    (dest_dir / "foo.timer.fraisier-managed").symlink_to(victim)
+
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    resolved = _resolve_allowlist(allowlist)
+    marker = MarkerMeta(
+        fraises_yaml_path="/opt/myproj/fraises.yaml",
+        fraise_name="alerter",
+        environment="production",
+        job_name="poll",
+    )
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+        marker=marker,
+    )
+    with pytest.raises(ManifestRejected, match="symlink"):
+        _execute_install_file_op(op, resolved=resolved)
+    # Victim is unchanged.
+    assert victim.read_text() == "MARKER VICTIM\n"
+    # The unit file IS still written successfully before the marker step
+    # fails — error-loud semantics (consistent with the rest of the helper).
+    # That's documented behaviour; callers run scheduled-install to converge.
+
+
 def test_install_file_op_with_marker_writes_sidecar_mode_0600(
     tmp_path: Path,
 ) -> None:

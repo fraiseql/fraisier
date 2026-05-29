@@ -15,11 +15,11 @@ renderer (``fraisier-<project>-<env>-unit-installer.{socket,service}``).
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import json
 import logging
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -89,21 +89,36 @@ class ResolvedAllowlist:
     into a symlink between validate and execute, the live ``resolve``
     would follow it; the snapshot remembers where the prefix pointed at
     startup and refuses to write elsewhere (cycle 4.5).
+
+    ``dest_prefix_ids`` carries the ``(st_dev, st_ino)`` of each
+    ``dest_prefix`` at snapshot time. The execute layer ``fstat``s the
+    directory it actually opens and rejects mismatches — closing the
+    last residual TOCTOU window (someone unlinks the dest_prefix and
+    re-creates a fresh directory at the same path between resolve and
+    open). Paired with ``openat`` + ``O_NOFOLLOW`` on every file open,
+    the helper writes nothing without proof that the on-disk object is
+    the same inode it validated.
     """
 
     dest_prefixes: tuple[Path, ...]
     source_prefixes: tuple[Path, ...]
+    dest_prefix_ids: tuple[tuple[int, int], ...]
+    source_prefix_ids: tuple[tuple[int, int], ...]
 
 
 def _resolve_allowlist(allowlist: Allowlist) -> ResolvedAllowlist:
     """Resolve every prefix once; snapshot defends against TOCTOU flips."""
+    dest_paths = tuple(e.dest_prefix.resolve(strict=True) for e in allowlist.entries)
+    source_paths = tuple(
+        e.source_prefix.resolve(strict=True) for e in allowlist.entries
+    )
+    dest_ids = tuple((p.stat().st_dev, p.stat().st_ino) for p in dest_paths)
+    source_ids = tuple((p.stat().st_dev, p.stat().st_ino) for p in source_paths)
     return ResolvedAllowlist(
-        dest_prefixes=tuple(
-            e.dest_prefix.resolve(strict=True) for e in allowlist.entries
-        ),
-        source_prefixes=tuple(
-            e.source_prefix.resolve(strict=True) for e in allowlist.entries
-        ),
+        dest_prefixes=dest_paths,
+        source_prefixes=source_paths,
+        dest_prefix_ids=dest_ids,
+        source_prefix_ids=source_ids,
     )
 
 
@@ -270,28 +285,137 @@ def _execute_install_file_op(
 ) -> None:
     """Copy source bytes to dest, chmod 0644, write marker if present.
 
-    Cycle 4.5 TOCTOU defense: re-resolve dest parent and compare against
-    the snapshot taken at helper startup. If an attacker has flipped the
-    parent into a symlink to outside the snapshot, abort before write.
+    TOCTOU defense (cycle 4.5 + post-Phase-7 hardening):
+
+    1. Re-resolve dest parent; reject if it no longer matches the snapshot
+       path. This catches a symlink-flipped *parent path*.
+    2. ``os.open(parent_realpath, O_RDONLY | O_DIRECTORY)`` then ``fstat``
+       and compare ``(st_dev, st_ino)`` against the snapshot. This catches
+       a same-path *different directory* swap (someone unlinked the dest
+       prefix and re-created it with a different inode).
+    3. ``os.open(basename, O_CREAT | O_TRUNC | O_NOFOLLOW, dir_fd=parent_fd)``
+       writes via the directory fd we just verified. ``O_NOFOLLOW`` means
+       if an attacker has pre-planted a symlink at ``<dest_prefix>/<basename>``
+       — e.g., pointing at ``/etc/passwd`` — the open fails with ELOOP and
+       we abort rather than overwrite their target.
+    4. Re-validate source against the snapshot's source_prefixes; open with
+       ``O_NOFOLLOW`` so a swap from regular-file-to-symlink between
+       resolve and read is caught.
+    5. ``os.fchmod`` on the open fd (not the path) so the chmod can't race
+       with a swap.
+
+    Marker (when present) is written via the same parent_fd with the same
+    ``O_NOFOLLOW`` discipline.
     """
     dest = Path(op.dest_path)
     parent_realpath = dest.parent.resolve(strict=True)
-    if parent_realpath not in resolved.dest_prefixes:
+    parent_fd = _open_and_verify_dest_parent(parent_realpath, resolved)
+    try:
+        basename = dest.name
+        _copy_source_into_dir_fd(parent_fd, basename, op.source_path, resolved)
+        if op.marker is not None:
+            _write_marker_into_dir_fd(parent_fd, basename, op.marker)
+    finally:
+        os.close(parent_fd)
+
+
+def _open_and_verify_dest_parent(
+    parent_realpath: Path, resolved: ResolvedAllowlist
+) -> int:
+    """Open ``parent_realpath`` as a dir-fd and verify dev/inode vs snapshot."""
+    matching_idx: int | None = None
+    for i, p in enumerate(resolved.dest_prefixes):
+        if p == parent_realpath:
+            matching_idx = i
+            break
+    if matching_idx is None:
         msg = (
             f"TOCTOU detected: dest parent {parent_realpath} no longer "
             "matches a snapshot dest_prefix (parent symlink flipped?)"
         )
         raise ManifestRejected(msg)
-    final_dest = parent_realpath / dest.name
-    shutil.copy2(op.source_path, final_dest)
-    final_dest.chmod(_INSTALL_FILE_MODE)
-    if op.marker is not None:
-        _write_marker(final_dest, op.marker)
+    parent_fd = os.open(parent_realpath, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        st = os.fstat(parent_fd)
+    except OSError:
+        os.close(parent_fd)
+        raise
+    expected = resolved.dest_prefix_ids[matching_idx]
+    if (st.st_dev, st.st_ino) != expected:
+        os.close(parent_fd)
+        msg = (
+            f"TOCTOU detected: dest parent {parent_realpath} dev/inode "
+            f"{(st.st_dev, st.st_ino)} differs from snapshot {expected} "
+            "— directory was replaced between snapshot and execute"
+        )
+        raise ManifestRejected(msg)
+    return parent_fd
 
 
-def _write_marker(unit_dest: Path, marker: MarkerMeta) -> None:
-    """Write the sidecar marker JSON next to ``unit_dest`` (mode 0600)."""
-    marker_path = unit_dest.with_name(unit_dest.name + ".fraisier-managed")
+def _copy_source_into_dir_fd(
+    parent_fd: int,
+    basename: str,
+    source_path: str,
+    resolved: ResolvedAllowlist,
+) -> None:
+    """Read source bytes (O_NOFOLLOW) and write to ``parent_fd/basename``.
+
+    Source path is re-validated against the snapshot's source_prefixes at
+    execute time — defends against deploy_user swapping a source file
+    between validate and execute. Both source and dest opens use
+    O_NOFOLLOW so a symlink inserted anywhere after the resolve is caught.
+    """
+    source_realpath = Path(source_path).resolve(strict=True)
+    if not any(source_realpath.is_relative_to(p) for p in resolved.source_prefixes):
+        msg = (
+            f"TOCTOU detected: source {source_realpath} is no longer "
+            "under any snapshot source_prefix"
+        )
+        raise ManifestRejected(msg)
+
+    try:
+        src_fd = os.open(source_realpath, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            msg = (
+                f"source {source_realpath} became a symlink after resolve "
+                "— refusing to follow"
+            )
+            raise ManifestRejected(msg) from exc
+        raise
+
+    try:
+        dst_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        try:
+            dst_fd = os.open(
+                basename, dst_flags, mode=_INSTALL_FILE_MODE, dir_fd=parent_fd
+            )
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                msg = (
+                    f"dest basename {basename!r} is a symlink — refusing "
+                    "to follow (O_NOFOLLOW)"
+                )
+                raise ManifestRejected(msg) from exc
+            raise
+        try:
+            while True:
+                chunk = os.read(src_fd, 65536)
+                if not chunk:
+                    break
+                _write_all(dst_fd, chunk)
+            os.fchmod(dst_fd, _INSTALL_FILE_MODE)
+        finally:
+            os.close(dst_fd)
+    finally:
+        os.close(src_fd)
+
+
+def _write_marker_into_dir_fd(
+    parent_fd: int, unit_basename: str, marker: MarkerMeta
+) -> None:
+    """Write the .fraisier-managed sidecar via ``parent_fd`` + O_NOFOLLOW."""
+    marker_name = unit_basename + ".fraisier-managed"
     payload = {
         "version": 1,
         "fraises_yaml_path": marker.fraises_yaml_path,
@@ -299,8 +423,29 @@ def _write_marker(unit_dest: Path, marker: MarkerMeta) -> None:
         "environment": marker.environment,
         "job_name": marker.job_name,
     }
-    marker_path.write_text(json.dumps(payload) + "\n")
-    marker_path.chmod(_MARKER_FILE_MODE)
+    data = (json.dumps(payload) + "\n").encode()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    try:
+        fd = os.open(marker_name, flags, mode=_MARKER_FILE_MODE, dir_fd=parent_fd)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            msg = (
+                f"marker {marker_name!r} is a symlink — refusing to follow (O_NOFOLLOW)"
+            )
+            raise ManifestRejected(msg) from exc
+        raise
+    try:
+        _write_all(fd, data)
+        os.fchmod(fd, _MARKER_FILE_MODE)
+    finally:
+        os.close(fd)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """``os.write`` until every byte is written (writes can be short on EINTR)."""
+    written = 0
+    while written < len(data):
+        written += os.write(fd, data[written:])
 
 
 # ---------------------------------------------------------------------------
