@@ -686,6 +686,31 @@ The helper must be on the host first: run `fraisier scaffold && fraisier scaffol
 
 `--via-socket` will become the default in a future release; the legacy direct-write path will stay available behind an opt-out flag for at least one release after that.
 
+#### `--prune` (v0.29+)
+
+Removes orphan units — those still on disk under their `.fraisier-managed` marker but no longer declared in `fraises.yaml`. Operator-driven cleanup for fraises (or job entries within them) that have been removed from config.
+
+```bash
+# List what would be pruned for this env. No writes.
+sudo fraisier scheduled-install --env production --prune --dry-run
+
+# Actually disable + remove the orphans.
+sudo fraisier scheduled-install --env production --prune --yes
+```
+
+`--prune` walks `/etc/systemd/system/` for `*.fraisier-managed` markers whose `environment` field matches `--env` and whose `fraises_yaml_path` resolves to the same file as the current config (per-yaml + per-env scoping — running `--prune --env staging` from one project won't sweep another project's production units that happen to share a host). For each match:
+
+1. If the unit is `.timer`, `systemctl disable --now` it first (so it can't fire mid-prune).
+2. Else (the `.service` half), `systemctl stop` it.
+3. Remove the unit file and its `.fraisier-managed` sidecar.
+4. After all removes, `systemctl daemon-reload` once.
+
+Markers without a paired unit on disk (operator manually `rm`'d the `.timer` but left the sidecar) or with corrupt JSON are classified as `stale_marker` — the marker is cleaned up, no `systemctl` invocations.
+
+**Markers are advisory, not authenticated.** They live in `/etc/systemd/system/`, which is root-only-write — an unprivileged adversary on the host cannot plant fake markers to bait `--prune` into removing a victim unit. A root-side adversary can do anything anyway; the marker convention is a cross-project / cross-env safety net for honest operator mistakes, not a defense against root.
+
+v0.29 only supports `--prune` under operator-typed `sudo` (the CLI walks the filesystem and invokes `systemctl` directly). `--prune --via-socket` will land in v0.30 with `RemoveFileOp` + ordered pre-actions in the helper protocol.
+
 ---
 
 ### fraisier validate-deployment
