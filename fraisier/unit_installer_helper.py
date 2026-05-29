@@ -232,7 +232,7 @@ def _execute_manifest(manifest: Manifest, *, resolved: ResolvedAllowlist) -> byt
     post_action_results: list[dict] = []
     for action_index, action in enumerate(manifest.post_actions):
         _check_manifest_deadline(start, stage="post_action", op_index=action_index)
-        post_action_results.append(_execute_post_action(action))
+        post_action_results.append(_execute_post_action(action, resolved=resolved))
     return render_response(
         "ok",
         installed=written,
@@ -250,13 +250,35 @@ def _check_manifest_deadline(start: float, *, stage: str, op_index: int) -> None
         raise _ManifestTimedOut(msg)
 
 
-def _execute_post_action(action: PostAction) -> dict:
+_MARKER_SUFFIX = ".fraisier-managed"
+
+
+def _execute_post_action(action: PostAction, *, resolved: ResolvedAllowlist) -> dict:
     """Run a systemctl-based post-action; return a structured per-op result.
 
     The helper does NOT raise on systemctl non-zero — that's a deployment
     issue surfaced in the response, not a manifest-validation issue. The
     caller (Phase 6 client) decides whether to retry or surface.
+
+    Security gate: ``disable_now`` and ``stop`` are only allowed against units
+    that have a fraisier-managed marker present in one of the snapshotted
+    dest_prefixes. Without this check a deploy_user could craft a manifest
+    with ``disable_now sshd.service`` and have the root-running helper take
+    down the host. The marker-presence check ties the action's scope to
+    units fraisier itself installed.
     """
+    if isinstance(action, (DisableNowAction, StopAction)) and not _marker_present(
+        action.unit, resolved
+    ):
+        return {
+            "kind": "disable" if isinstance(action, DisableNowAction) else "stop",
+            "unit": action.unit,
+            "ok": False,
+            "rejected": (
+                "no fraisier marker for this unit — refusing to disable/stop "
+                "a unit fraisier did not install"
+            ),
+        }
     cmd, timeout = _post_action_cmd(action)
     try:
         result = subprocess.run(
@@ -274,6 +296,21 @@ def _execute_post_action(action: PostAction) -> dict:
         "returncode": result.returncode,
         "stderr": result.stderr,
     }
+
+
+def _marker_present(unit_name: str, resolved: ResolvedAllowlist) -> bool:
+    """Check if ``<unit_name>.fraisier-managed`` exists in any snapshot dest_prefix.
+
+    Path-existence check is intentionally not TOCTOU-hardened (no dir_fd).
+    The window between this check and the subsequent systemctl call is
+    benign: at worst we proceed to stop a unit that lost its marker
+    microseconds ago, which is the operator-requested behaviour anyway.
+    """
+    for dest_prefix in resolved.dest_prefixes:
+        marker = dest_prefix / (unit_name + _MARKER_SUFFIX)
+        if marker.exists():
+            return True
+    return False
 
 
 def _post_action_cmd(action: PostAction) -> tuple[list[str], int]:

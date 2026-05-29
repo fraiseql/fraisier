@@ -522,6 +522,93 @@ def test_execute_refuses_marker_path_symlink(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Phase 4 security gate — disable_now/stop require a marker
+# ---------------------------------------------------------------------------
+
+
+def test_disable_now_rejected_when_no_marker_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defends against a deploy_user crafting `disable_now sshd.service`."""
+    import subprocess
+
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    # NO marker on disk for sshd.service.
+    manifest = Manifest(
+        version=1,
+        deploy_id="t",
+        post_actions=(
+            _disable_now := __import__(
+                "fraisier.unit_installer_protocol", fromlist=["DisableNowAction"]
+            ).DisableNowAction(unit="sshd.service"),
+        ),
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("fraisier.unit_installer_helper.subprocess.run", fake_run)
+
+    server, client = _socket_pair()
+    client.sendall(serialize_manifest(manifest))
+    client.shutdown(socket.SHUT_WR)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    response = _recv_json(client)
+    del _disable_now
+
+    assert response["status"] == "ok"
+    pa = response["post_actions"][0]
+    assert pa["ok"] is False
+    assert "no fraisier marker" in pa["rejected"]
+    # Critically: systemctl was NEVER invoked.
+    assert calls == []
+
+
+def test_stop_action_allowed_when_marker_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the fraisier marker is on disk, stop is permitted."""
+    import subprocess
+
+    from fraisier.unit_installer_protocol import StopAction
+
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    # Marker present on disk for foo.service (i.e., fraisier installed it).
+    (dest_dir / "foo.service.fraisier-managed").write_text("{}")
+    manifest = Manifest(
+        version=1,
+        deploy_id="t",
+        post_actions=(StopAction(unit="foo.service"),),
+    )
+
+    monkeypatch.setattr(
+        "fraisier.unit_installer_helper.subprocess.run",
+        lambda cmd, **_k: subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="", stderr=""
+        ),
+    )
+
+    server, client = _socket_pair()
+    client.sendall(serialize_manifest(manifest))
+    client.shutdown(socket.SHUT_WR)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    response = _recv_json(client)
+
+    assert response["status"] == "ok"
+    pa = response["post_actions"][0]
+    assert pa["ok"] is True  # systemctl ran (and was mocked to succeed)
+
+
 def test_write_marker_op_writes_sidecar_without_touching_unit_file(
     tmp_path: Path,
 ) -> None:
