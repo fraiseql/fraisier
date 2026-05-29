@@ -116,6 +116,72 @@ def test_build_manifest_skips_identical_diffs(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# #240 follow-up 04 Phase 2 — auto-backfill markers on IDENTICAL diffs
+# ---------------------------------------------------------------------------
+
+
+def test_build_manifest_emits_write_marker_for_identical_with_missing_marker(
+    tmp_path: Path,
+) -> None:
+    """v0.28.0-installed unit (no marker on disk) → auto-backfill via write_marker."""
+    from fraisier.unit_installer_protocol import InstallFileOp, WriteMarkerOp
+
+    src_dir, dest_dir = _seed(tmp_path)
+    src_dir.joinpath("alerter-poll.timer").write_text("[Unit]\n")
+    install = _install(src_dir=src_dir)
+    # Pre-existing unit on disk, no marker (the v0.28.0 install scenario).
+    dest_dir.joinpath("alerter-poll.timer").write_text("[Unit]\n")
+    diff = UnitDiff(install=install, state=UnitState.IDENTICAL, diff_summary=None)
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text("# real")
+
+    manifest = _build_helper_manifest(
+        [diff], force=False, resolved_config_path=cfg.resolve(strict=True)
+    )
+    assert len(manifest.operations) == 1
+    op = manifest.operations[0]
+    assert isinstance(op, WriteMarkerOp)
+    assert not isinstance(op, InstallFileOp)
+    assert op.dest_path == str(install.dest_path)
+    # No daemon_reload or enable_now — unit already active.
+    assert manifest.post_actions == ()
+
+
+def test_build_manifest_omits_write_marker_when_marker_present(
+    tmp_path: Path,
+) -> None:
+    """Idempotent on re-run: a marker present on disk means no op for that diff."""
+    src_dir, dest_dir = _seed(tmp_path)
+    src_dir.joinpath("alerter-poll.timer").write_text("[Unit]\n")
+    install = _install(src_dir=src_dir)
+    dest_dir.joinpath("alerter-poll.timer").write_text("[Unit]\n")
+    # Pre-existing marker.
+    dest_dir.joinpath("alerter-poll.timer.fraisier-managed").write_text("{}")
+    diff = UnitDiff(install=install, state=UnitState.IDENTICAL, diff_summary=None)
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text("# real")
+
+    manifest = _build_helper_manifest(
+        [diff], force=False, resolved_config_path=cfg.resolve(strict=True)
+    )
+    assert manifest.operations == ()
+
+
+def test_build_manifest_omits_write_marker_without_resolved_config_path(
+    tmp_path: Path,
+) -> None:
+    """resolved_config_path=None means no marker writes regardless of disk state."""
+    src_dir, dest_dir = _seed(tmp_path)
+    src_dir.joinpath("alerter-poll.timer").write_text("[Unit]\n")
+    install = _install(src_dir=src_dir)
+    dest_dir.joinpath("alerter-poll.timer").write_text("[Unit]\n")
+    diff = UnitDiff(install=install, state=UnitState.IDENTICAL, diff_summary=None)
+
+    manifest = _build_helper_manifest([diff], force=False, resolved_config_path=None)
+    assert manifest.operations == ()
+
+
+# ---------------------------------------------------------------------------
 # Cycle 6.2 — response → ApplyReport
 # ---------------------------------------------------------------------------
 

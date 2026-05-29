@@ -73,6 +73,25 @@ class InstallFileOp:
     marker: MarkerMeta | None = None
 
 
+@dataclass(frozen=True)
+class WriteMarkerOp:
+    """Sidecar-only op (#240 follow-up 04): write the marker, don't touch the unit.
+
+    Used by ``apply_unit_diffs_via_helper`` to backfill markers on v0.28.0
+    hosts: on an ``IDENTICAL`` diff whose ``.fraisier-managed`` sidecar is
+    missing, the client emits this op instead of ``InstallFileOp``. Avoids
+    re-reading the existing unit file just to confirm-by-rewrite.
+
+    ``dest_path`` is the full path to the *unit* (e.g.,
+    ``/etc/systemd/system/foo.timer``); the helper writes the marker at
+    ``<dest_path>.fraisier-managed``. Same allowlist + O_NOFOLLOW discipline
+    applies as ``InstallFileOp``.
+    """
+
+    dest_path: str
+    marker: MarkerMeta
+
+
 # ---------------------------------------------------------------------------
 # Post-actions (systemctl invocations sequenced after ops)
 # ---------------------------------------------------------------------------
@@ -120,13 +139,16 @@ PostAction = DaemonReloadAction | EnableNowAction | DisableNowAction | StopActio
 # ---------------------------------------------------------------------------
 
 
+Operation = InstallFileOp | WriteMarkerOp
+
+
 @dataclass(frozen=True)
 class Manifest:
     """One end-to-end install request."""
 
     version: int
     deploy_id: str
-    operations: tuple[InstallFileOp, ...] = ()
+    operations: tuple[Operation, ...] = ()
     post_actions: tuple[PostAction, ...] = ()
 
 
@@ -270,11 +292,30 @@ def validate_manifest(manifest: Manifest, allowlist: Allowlist) -> None:
 
     installed_basenames: set[str] = set()
     for index, op in enumerate(manifest.operations):
-        _validate_install_file_op(op, allowlist, op_index=index)
-        installed_basenames.add(Path(op.dest_path).name)
+        match op:
+            case InstallFileOp():
+                _validate_install_file_op(op, allowlist, op_index=index)
+                installed_basenames.add(Path(op.dest_path).name)
+            case WriteMarkerOp():
+                _validate_write_marker_op(op, allowlist, op_index=index)
+                # Marker-only ops do NOT contribute to installed_basenames —
+                # they don't install a unit; an enable_now in the same
+                # manifest can't legitimately target them.
 
     for index, action in enumerate(manifest.post_actions):
         _validate_post_action(action, installed_basenames, action_index=index)
+
+
+def _validate_write_marker_op(
+    op: WriteMarkerOp,
+    allowlist: Allowlist,
+    *,
+    op_index: int,
+) -> None:
+    basename = Path(op.dest_path).name
+    _check_unit_basename(basename, op_index=op_index)
+    _check_dest_parent(op.dest_path, allowlist, op_index=op_index)
+    _check_marker(op.marker, op_index=op_index)
 
 
 def _validate_install_file_op(
@@ -374,25 +415,45 @@ def _validate_post_action(
 # ---------------------------------------------------------------------------
 
 
-def _op_to_json(op: InstallFileOp) -> dict[str, Any]:
-    return {
-        "kind": "install_file",
-        "source_path": op.source_path,
-        "dest_path": op.dest_path,
-        "mode": op.mode,
-        "force": op.force,
-        "marker": _marker_to_json(op.marker),
-    }
+def _op_to_json(op: Operation) -> dict[str, Any]:
+    match op:
+        case InstallFileOp():
+            return {
+                "kind": "install_file",
+                "source_path": op.source_path,
+                "dest_path": op.dest_path,
+                "mode": op.mode,
+                "force": op.force,
+                "marker": _marker_to_json(op.marker),
+            }
+        case WriteMarkerOp():
+            return {
+                "kind": "write_marker",
+                "dest_path": op.dest_path,
+                "marker": _marker_to_json(op.marker),
+            }
+    msg = f"unsupported op: {op!r}"
+    raise TypeError(msg)
 
 
-def _op_from_json(data: dict[str, Any]) -> InstallFileOp:
-    return InstallFileOp(
-        source_path=data["source_path"],
-        dest_path=data["dest_path"],
-        mode=data["mode"],
-        force=data.get("force", False),
-        marker=_marker_from_json(data.get("marker")),
-    )
+def _op_from_json(data: dict[str, Any]) -> Operation:
+    kind = data.get("kind", "install_file")
+    if kind == "install_file":
+        return InstallFileOp(
+            source_path=data["source_path"],
+            dest_path=data["dest_path"],
+            mode=data["mode"],
+            force=data.get("force", False),
+            marker=_marker_from_json(data.get("marker")),
+        )
+    if kind == "write_marker":
+        marker = _marker_from_json(data.get("marker"))
+        if marker is None:
+            msg = "write_marker op requires a marker payload"
+            raise ManifestRejected(msg)
+        return WriteMarkerOp(dest_path=data["dest_path"], marker=marker)
+    msg = f"unknown op kind: {kind!r}"
+    raise ManifestRejected(msg)
 
 
 def _marker_to_json(marker: MarkerMeta | None) -> dict[str, Any] | None:

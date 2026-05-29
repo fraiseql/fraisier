@@ -44,6 +44,7 @@ from fraisier.unit_installer_protocol import (
     MarkerMeta,
     PostAction,
     StopAction,
+    WriteMarkerOp,
     parse_manifest,
     render_response,
     validate_manifest,
@@ -218,15 +219,26 @@ def _execute_manifest(manifest: Manifest, *, resolved: ResolvedAllowlist) -> byt
     """
     start = time.monotonic()
     written: list[str] = []
+    markers_written: list[str] = []
     for op_index, op in enumerate(manifest.operations):
-        _check_manifest_deadline(start, stage="install_file", op_index=op_index)
-        _execute_install_file_op(op, resolved=resolved)
-        written.append(Path(op.dest_path).name)
+        _check_manifest_deadline(start, stage="op", op_index=op_index)
+        match op:
+            case InstallFileOp():
+                _execute_install_file_op(op, resolved=resolved)
+                written.append(Path(op.dest_path).name)
+            case WriteMarkerOp():
+                _execute_write_marker_op(op, resolved=resolved)
+                markers_written.append(Path(op.dest_path).name)
     post_action_results: list[dict] = []
     for action_index, action in enumerate(manifest.post_actions):
         _check_manifest_deadline(start, stage="post_action", op_index=action_index)
         post_action_results.append(_execute_post_action(action))
-    return render_response("ok", installed=written, post_actions=post_action_results)
+    return render_response(
+        "ok",
+        installed=written,
+        markers_written=markers_written,
+        post_actions=post_action_results,
+    )
 
 
 def _check_manifest_deadline(start: float, *, stage: str, op_index: int) -> None:
@@ -315,6 +327,21 @@ def _execute_install_file_op(
         _copy_source_into_dir_fd(parent_fd, basename, op.source_path, resolved)
         if op.marker is not None:
             _write_marker_into_dir_fd(parent_fd, basename, op.marker)
+    finally:
+        os.close(parent_fd)
+
+
+def _execute_write_marker_op(op: WriteMarkerOp, *, resolved: ResolvedAllowlist) -> None:
+    """Write only the sidecar — used by 04's auto-backfill migration path.
+
+    Same parent_fd + O_NOFOLLOW discipline as ``_execute_install_file_op``;
+    no source bytes touched, no unit file written.
+    """
+    dest = Path(op.dest_path)
+    parent_realpath = dest.parent.resolve(strict=True)
+    parent_fd = _open_and_verify_dest_parent(parent_realpath, resolved)
+    try:
+        _write_marker_into_dir_fd(parent_fd, dest.name, op.marker)
     finally:
         os.close(parent_fd)
 

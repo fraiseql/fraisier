@@ -30,6 +30,7 @@ from fraisier.unit_installer_protocol import (
     Manifest,
     ManifestRejected,
     MarkerMeta,
+    WriteMarkerOp,
     serialize_manifest,
 )
 
@@ -514,6 +515,52 @@ def test_execute_refuses_marker_path_symlink(tmp_path: Path) -> None:
     # The unit file IS still written successfully before the marker step
     # fails — error-loud semantics (consistent with the rest of the helper).
     # That's documented behaviour; callers run scheduled-install to converge.
+
+
+# ---------------------------------------------------------------------------
+# #240 follow-up 04 Phase 2 — write_marker op (auto-backfill)
+# ---------------------------------------------------------------------------
+
+
+def test_write_marker_op_writes_sidecar_without_touching_unit_file(
+    tmp_path: Path,
+) -> None:
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    # Pre-existing unit file (IDENTICAL scenario — installed under v0.28.0).
+    pre_existing_unit = dest_dir / "foo.timer"
+    pre_existing_unit.write_text("[Unit]\nDescription=pre-existing\n")
+    op = WriteMarkerOp(
+        dest_path=str(pre_existing_unit),
+        marker=MarkerMeta(
+            fraises_yaml_path="/opt/myproj/fraises.yaml",
+            fraise_name="alerter",
+            environment="production",
+            job_name="poll",
+        ),
+    )
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+
+    server, client = _socket_pair()
+    client.sendall(serialize_manifest(manifest))
+    client.shutdown(socket.SHUT_WR)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    response = _recv_json(client)
+
+    assert response["status"] == "ok"
+    assert response["installed"] == []
+    assert response["markers_written"] == ["foo.timer"]
+    # Unit content unchanged.
+    assert pre_existing_unit.read_text() == "[Unit]\nDescription=pre-existing\n"
+    # Marker exists with correct content + mode.
+    sidecar = dest_dir / "foo.timer.fraisier-managed"
+    assert sidecar.exists()
+    assert (sidecar.stat().st_mode & 0o777) == 0o600
+    payload = json.loads(sidecar.read_text())
+    assert payload["fraise_name"] == "alerter"
+    assert payload["job_name"] == "poll"
 
 
 def test_install_file_op_with_marker_writes_sidecar_mode_0600(

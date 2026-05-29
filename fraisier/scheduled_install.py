@@ -410,10 +410,19 @@ def _build_helper_manifest(
 ) -> Manifest:
     """Construct a manifest from a list of ``UnitDiff``s.
 
-    ABSENT + (DRIFTED and force) become ``install_file`` ops. IDENTICAL are
-    skipped — they don't need a round-trip. Each rendered op carries a
-    ``daemon_reload`` post-action exactly once (deduplicated) and one
-    ``enable_now`` per ``.timer`` op (matches ``apply_unit_diffs`` semantics).
+    Three op kinds emitted:
+
+    - ``ABSENT`` + (``DRIFTED`` with ``force``) → ``InstallFileOp``.
+    - ``IDENTICAL`` with marker missing on disk → ``WriteMarkerOp``
+      (auto-backfill migration for v0.28.0-installed units; Phase 0
+      decision #2 of #240 follow-up 04). Idempotent on re-run: once the
+      marker exists no op is emitted for that diff.
+    - All other ``IDENTICAL`` → skipped, no round-trip.
+
+    Each install_file (not write_marker) emits a ``daemon_reload``
+    post-action exactly once (deduplicated) and an ``enable_now`` per
+    ``.timer`` op — write_marker only writes the sidecar; the unit is
+    already installed and active.
     """
     from datetime import datetime
 
@@ -423,17 +432,18 @@ def _build_helper_manifest(
         InstallFileOp,
         Manifest,
         MarkerMeta,
+        WriteMarkerOp,
     )
 
-    operations: list[InstallFileOp] = []
+    operations: list = []
     enable_actions: list[EnableNowAction] = []
+    install_file_count = 0
     for diff in diffs:
-        if diff.state is UnitState.IDENTICAL:
-            continue
-        if diff.state is UnitState.DRIFTED and not force:
-            continue  # already raised above; defence-in-depth
         if diff.state is UnitState.MISSING_SOURCE:
             continue  # already raised
+        if diff.state is UnitState.DRIFTED and not force:
+            continue  # already raised above; defence-in-depth
+
         marker: MarkerMeta | None = None
         if resolved_config_path is not None:
             marker = MarkerMeta(
@@ -442,6 +452,18 @@ def _build_helper_manifest(
                 environment=diff.install.environment,
                 job_name=diff.install.job_name,
             )
+
+        if diff.state is UnitState.IDENTICAL:
+            if (
+                marker is not None
+                and not marker_path_for(diff.install.dest_path).exists()
+            ):
+                operations.append(
+                    WriteMarkerOp(dest_path=str(diff.install.dest_path), marker=marker)
+                )
+            continue
+
+        # ABSENT or DRIFTED+force → install_file
         operations.append(
             InstallFileOp(
                 source_path=str(diff.install.source_path),
@@ -451,11 +473,12 @@ def _build_helper_manifest(
                 marker=marker,
             )
         )
+        install_file_count += 1
         if diff.install.is_timer:
             enable_actions.append(EnableNowAction(unit=diff.install.unit_name))
 
     post_actions: list = []
-    if operations:
+    if install_file_count > 0:
         post_actions.append(DaemonReloadAction())
     post_actions.extend(enable_actions)
 

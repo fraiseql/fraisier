@@ -23,6 +23,7 @@ from fraisier.unit_installer_protocol import (
     ManifestRejected,
     MarkerMeta,
     StopAction,
+    WriteMarkerOp,
     parse_manifest,
     render_response,
     serialize_manifest,
@@ -393,6 +394,82 @@ def test_validate_accepts_full_manifest_with_all_post_action_kinds(
         ),
     )
     validate_manifest(manifest, _allowlist(src_dir, dest_dir))
+
+
+# ---------------------------------------------------------------------------
+# #240 follow-up 04 Phase 2 — write_marker op kind
+# ---------------------------------------------------------------------------
+
+
+def test_write_marker_op_round_trips_through_wire_format() -> None:
+    op = WriteMarkerOp(
+        dest_path="/etc/systemd/system/foo.timer",
+        marker=_absolute_marker(),
+    )
+    original = Manifest(version=1, deploy_id="t", operations=(op,))
+    decoded = parse_manifest(serialize_manifest(original))
+    assert decoded == original
+    assert isinstance(decoded.operations[0], WriteMarkerOp)
+
+
+def test_validate_accepts_write_marker_op_with_allowlisted_dest(
+    tmp_path: Path,
+) -> None:
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    op = WriteMarkerOp(
+        dest_path=str(dest_dir / "foo.timer"),
+        marker=_absolute_marker(),
+    )
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+    validate_manifest(manifest, _allowlist(src_dir, dest_dir))
+
+
+def test_validate_rejects_write_marker_dest_outside_allowlist(
+    tmp_path: Path,
+) -> None:
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    op = WriteMarkerOp(
+        dest_path=str(elsewhere / "foo.timer"),
+        marker=_absolute_marker(),
+    )
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+    with pytest.raises(ManifestRejected, match="dest"):
+        validate_manifest(manifest, _allowlist(src_dir, dest_dir))
+
+
+def test_validate_rejects_write_marker_relative_marker_yaml_path(
+    tmp_path: Path,
+) -> None:
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    bad_marker = MarkerMeta(
+        fraises_yaml_path="relative/fraises.yaml",
+        fraise_name="alerter",
+        environment="production",
+        job_name="poll",
+    )
+    op = WriteMarkerOp(dest_path=str(dest_dir / "foo.timer"), marker=bad_marker)
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+    with pytest.raises(ManifestRejected, match="marker"):
+        validate_manifest(manifest, _allowlist(src_dir, dest_dir))
+
+
+def test_write_marker_does_not_contribute_to_enable_now_basenames(
+    tmp_path: Path,
+) -> None:
+    """A write_marker op for foo.timer does NOT authorise an
+    enable_now foo.timer in the same manifest. The unit isn't being
+    installed here; if the caller wants to enable, they should send an
+    install_file op."""
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    wm = WriteMarkerOp(dest_path=str(dest_dir / "foo.timer"), marker=_absolute_marker())
+    enable = EnableNowAction(unit="foo.timer")
+    manifest = Manifest(
+        version=1, deploy_id="t", operations=(wm,), post_actions=(enable,)
+    )
+    with pytest.raises(ManifestRejected, match="enable_now"):
+        validate_manifest(manifest, _allowlist(src_dir, dest_dir))
 
 
 def test_full_manifest_round_trips_through_wire_format(tmp_path: Path) -> None:
