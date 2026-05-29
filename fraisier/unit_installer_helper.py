@@ -14,14 +14,22 @@ renderer (``fraisier-<project>-<env>-unit-installer.{socket,service}``).
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
+import os
 import shutil
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
 from fraisier.unit_installer_protocol import (
@@ -46,6 +54,22 @@ _DAEMON_RELOAD_TIMEOUT = 30
 _ENABLE_NOW_TIMEOUT = 60
 _DISABLE_NOW_TIMEOUT = 60
 _STOP_TIMEOUT = 60
+
+# Wall-clock cap on overall manifest execution (cycle 4.9). Checked between
+# ops + post-actions. Per-op subprocess timeouts (above) bound each individual
+# call; this cap defends against many-small-ops manifests running away.
+_MANIFEST_TIMEOUT = 300
+
+_DEFAULT_LOCK_DIR = Path("/var/lib/fraisier/locks")
+
+
+class _ManifestTimedOut(Exception):
+    """Raised when wall-clock execution exceeds ``_MANIFEST_TIMEOUT``."""
+
+
+class _LockBusy(Exception):
+    """Raised when the per-helper flock is held by another manifest."""
+
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +130,13 @@ def _handle_manifest(
     *,
     allowlist: Allowlist,
     resolved: ResolvedAllowlist,
+    lock_path: Path | None = None,
 ) -> None:
-    """Read one manifest, validate, execute, write structured response."""
+    """Read one manifest, validate, execute, write structured response.
+
+    The whole execution runs under a non-blocking flock at ``lock_path``;
+    if another manifest is in flight the response is ``{"status": "busy"}``.
+    """
     raw = _read_manifest_bytes(conn)
     try:
         manifest = parse_manifest(raw)
@@ -120,14 +149,44 @@ def _handle_manifest(
         conn.sendall(render_response("rejected", reason=str(exc)))
         return
     try:
-        response = _execute_manifest(manifest, resolved=resolved)
-    except ManifestRejected as exc:
-        # Mid-flight TOCTOU rejection (cycle 4.5). Any already-written ops
-        # in this manifest do NOT roll back — consistent with error-loud
-        # semantics shared with apply_unit_diffs.
-        conn.sendall(render_response("rejected", reason=str(exc)))
+        with _flock_or_busy(lock_path):
+            try:
+                response = _execute_manifest(manifest, resolved=resolved)
+            except ManifestRejected as exc:
+                # Mid-flight TOCTOU rejection (cycle 4.5). Any already-written
+                # ops in this manifest do NOT roll back — consistent with
+                # error-loud semantics shared with apply_unit_diffs.
+                conn.sendall(render_response("rejected", reason=str(exc)))
+                return
+            except _ManifestTimedOut as exc:
+                conn.sendall(render_response("timeout", reason=str(exc)))
+                return
+    except _LockBusy:
+        conn.sendall(render_response("busy", reason="concurrent manifest in flight"))
         return
     conn.sendall(response)
+
+
+@contextlib.contextmanager
+def _flock_or_busy(lock_path: Path | None) -> Iterator[None]:
+    """Acquire a non-blocking flock at ``lock_path``.
+
+    ``lock_path=None`` skips locking entirely — used by tests that don't
+    exercise the concurrency boundary. Production always passes a real path.
+    """
+    if lock_path is None:
+        yield
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise _LockBusy from exc
+        yield
+    finally:
+        os.close(fd)  # closing the fd releases the flock
 
 
 # ---------------------------------------------------------------------------
@@ -136,15 +195,32 @@ def _handle_manifest(
 
 
 def _execute_manifest(manifest: Manifest, *, resolved: ResolvedAllowlist) -> bytes:
-    """Apply each op then each post-action in order. Returns a structured response."""
+    """Apply each op then each post-action in order. Returns a structured response.
+
+    Wall-clock checked between each op + post-action. Exceeding
+    ``_MANIFEST_TIMEOUT`` raises ``_ManifestTimedOut``; the caller (handler)
+    converts it to a ``{"status": "timeout"}`` response.
+    """
+    start = time.monotonic()
     written: list[str] = []
-    for op in manifest.operations:
+    for op_index, op in enumerate(manifest.operations):
+        _check_manifest_deadline(start, stage="install_file", op_index=op_index)
         _execute_install_file_op(op, resolved=resolved)
         written.append(Path(op.dest_path).name)
-    post_action_results: list[dict] = [
-        _execute_post_action(action) for action in manifest.post_actions
-    ]
+    post_action_results: list[dict] = []
+    for action_index, action in enumerate(manifest.post_actions):
+        _check_manifest_deadline(start, stage="post_action", op_index=action_index)
+        post_action_results.append(_execute_post_action(action))
     return render_response("ok", installed=written, post_actions=post_action_results)
+
+
+def _check_manifest_deadline(start: float, *, stage: str, op_index: int) -> None:
+    if time.monotonic() - start > _MANIFEST_TIMEOUT:
+        msg = (
+            f"manifest exceeded {_MANIFEST_TIMEOUT}s cap at stage={stage} "
+            f"op_index={op_index}"
+        )
+        raise _ManifestTimedOut(msg)
 
 
 def _execute_post_action(action: PostAction) -> dict:
@@ -238,6 +314,7 @@ def _serve_connection(
     expected_uid: int | None,
     allowlist: Allowlist,
     resolved: ResolvedAllowlist | None = None,
+    lock_path: Path | None = None,
 ) -> None:
     """SO_PEERCRED check then ``_handle_manifest``.
 
@@ -253,7 +330,9 @@ def _serve_connection(
             "SO_PEERCRED check disabled: --deploy-uid not provided. "
             "Re-render this helper's unit with v0.29 scaffold-install."
         )
-        _handle_manifest(conn, allowlist=allowlist, resolved=resolved)
+        _handle_manifest(
+            conn, allowlist=allowlist, resolved=resolved, lock_path=lock_path
+        )
         return
     try:
         check_peer_creds(conn, expected_uid=expected_uid)
@@ -263,7 +342,7 @@ def _serve_connection(
             render_response("rejected", reason=f"peer credentials rejected: {exc}")
         )
         return
-    _handle_manifest(conn, allowlist=allowlist, resolved=resolved)
+    _handle_manifest(conn, allowlist=allowlist, resolved=resolved, lock_path=lock_path)
 
 
 def main() -> None:  # pragma: no cover — exercised end-to-end in Phase 8 smoke
@@ -280,8 +359,10 @@ def main() -> None:  # pragma: no cover — exercised end-to-end in Phase 8 smok
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
     deploy_uid, remaining = extract_deploy_uid(sys.argv[1:])
+    project, env, remaining = _pop_project_env(remaining)
     allowlist = _parse_allowlist(remaining)
     resolved = _resolve_allowlist(allowlist)
+    lock_path = _DEFAULT_LOCK_DIR / f"unit-installer-{project}-{env}.lock"
     server_sock = _build_server_socket()
     try:
         while True:
@@ -297,11 +378,31 @@ def main() -> None:  # pragma: no cover — exercised end-to-end in Phase 8 smok
                         expected_uid=deploy_uid,
                         allowlist=allowlist,
                         resolved=resolved,
+                        lock_path=lock_path,
                     )
                 except Exception as exc:
                     logger.exception("Unhandled error in manifest handler: %s", exc)
     finally:
         server_sock.close()
+
+
+def _pop_project_env(argv: list[str]) -> tuple[str, str, list[str]]:
+    """Pull ``--project <name> --env <env>`` out of argv (renderer-injected)."""
+    remaining = list(argv)
+
+    def _pop(flag: str, default: str) -> str:
+        if flag not in remaining:
+            return default
+        i = remaining.index(flag)
+        if i + 1 >= len(remaining):
+            return default
+        value = remaining[i + 1]
+        del remaining[i : i + 2]
+        return value
+
+    project = _pop("--project", "unknown")
+    env = _pop("--env", "unknown")
+    return project, env, remaining
 
 
 def _parse_allowlist(argv: list[str]) -> Allowlist:

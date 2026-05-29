@@ -295,6 +295,105 @@ def test_handle_manifest_runs_daemon_reload_and_enable_now(
 # ---------------------------------------------------------------------------
 
 
+def test_handle_manifest_busy_when_lock_held(tmp_path: Path) -> None:
+    """Cycle 4.8 — concurrent manifest in flight ⇒ {"status": "busy"}."""
+    import fcntl
+
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    lock_path = lock_dir / "test.lock"
+
+    # Hold the flock externally (simulates another helper invocation in flight).
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        server, client = _socket_pair()
+        client.sendall(serialize_manifest(manifest))
+        client.shutdown(socket.SHUT_WR)
+        allowlist = _allowlist_for(src_dir, dest_dir)
+        _handle_manifest(
+            server,
+            allowlist=allowlist,
+            resolved=_resolve_allowlist(allowlist),
+            lock_path=lock_path,
+        )
+        response = _recv_json(client)
+        assert response["status"] == "busy"
+        assert "concurrent" in response["reason"].lower()
+        # Critically: no write happened.
+        assert not (dest_dir / "foo.timer").exists()
+    finally:
+        os.close(fd)
+
+
+def test_handle_manifest_timeout_when_deadline_exceeded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cycle 4.9 — wall-clock cap triggers ``{"status": "timeout"}``."""
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+
+    # Force the deadline check to fire immediately.
+    monkeypatch.setattr("fraisier.unit_installer_helper._MANIFEST_TIMEOUT", -1)
+
+    server, client = _socket_pair()
+    client.sendall(serialize_manifest(manifest))
+    client.shutdown(socket.SHUT_WR)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    response = _recv_json(client)
+    assert response["status"] == "timeout"
+    assert "cap" in response["reason"].lower()
+
+
+def test_handle_manifest_rejects_oversize_wire_payload(tmp_path: Path) -> None:
+    """Cycle 4.10 — >1 MiB payload rejected before parse.
+
+    The payload exceeds socketpair buffer space, so ``sendall`` would block
+    until the server reads. Run the write in a thread so the server can
+    drain it.
+    """
+    import threading
+
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    server, client = _socket_pair()
+    payload = b"x" * (1024 * 1024 + 10)  # no newline
+
+    def _push() -> None:
+        client.sendall(payload)
+        client.shutdown(socket.SHUT_WR)
+
+    writer = threading.Thread(target=_push, daemon=True)
+    writer.start()
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    writer.join(timeout=5)
+    response = _recv_json(client)
+    assert response["status"] == "rejected"
+    assert "too large" in response["reason"].lower()
+
+
 def test_install_file_op_with_marker_writes_sidecar_mode_0600(
     tmp_path: Path,
 ) -> None:
