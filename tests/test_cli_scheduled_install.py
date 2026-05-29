@@ -497,3 +497,192 @@ def test_via_socket_actionable_error_when_socket_absent(
     assert result.exit_code == 1
     assert "unit-installer socket not found" in result.output
     assert "scaffold-install" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — --prune flag (legacy sudo path; helper-routed prune is v0.30)
+# ---------------------------------------------------------------------------
+
+
+def _write_marker(
+    dest_dir,
+    *,
+    unit_name,
+    fraises_yaml_path,
+    fraise_name="alerter",
+    environment="production",
+    job_name="poll",
+):
+    import json as _json
+
+    marker_path = dest_dir / f"{unit_name}.fraisier-managed"
+    marker_path.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "fraises_yaml_path": fraises_yaml_path,
+                "fraise_name": fraise_name,
+                "environment": environment,
+                "job_name": job_name,
+            }
+        )
+        + "\n"
+    )
+    return marker_path
+
+
+def test_prune_dry_run_lists_orphans_without_writing(
+    tmp_path, fake_local_runner, patched_systemd_dest_dir
+):
+    """Phase 4 cycle 4.1 — --prune --dry-run lists, no writes."""
+    cfg = _write_scheduled_yaml(tmp_path)
+    # Orphan unit + marker on disk; not in fraises.yaml's declared set.
+    orphan = patched_systemd_dest_dir / "ghost.timer"
+    orphan.write_text("[Timer]\n")
+    marker = _write_marker(
+        patched_systemd_dest_dir,
+        unit_name="ghost.timer",
+        fraises_yaml_path=str(cfg.resolve()),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "-c",
+            str(cfg),
+            "scheduled-install",
+            "--env",
+            "production",
+            "--prune",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "ghost.timer" in result.output
+    assert "Would prune" in result.output
+    # Files unchanged.
+    assert orphan.exists()
+    assert marker.exists()
+    # No systemctl calls.
+    assert fake_local_runner == []
+
+
+def test_prune_yes_disables_and_removes_orphan(
+    tmp_path, fake_local_runner, patched_systemd_dest_dir
+):
+    """Phase 4 cycle 4.2 — --prune --yes disables timer, removes unit + marker."""
+    cfg = _write_scheduled_yaml(tmp_path)
+    orphan = patched_systemd_dest_dir / "ghost.timer"
+    orphan.write_text("[Timer]\n")
+    marker = _write_marker(
+        patched_systemd_dest_dir,
+        unit_name="ghost.timer",
+        fraises_yaml_path=str(cfg.resolve()),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "-c",
+            str(cfg),
+            "scheduled-install",
+            "--env",
+            "production",
+            "--prune",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # systemctl was called: disable+now for the timer, then daemon-reload.
+    assert ["systemctl", "disable", "--now", "ghost.timer"] in fake_local_runner
+    assert ["systemctl", "daemon-reload"] in fake_local_runner
+    # Files removed.
+    assert not orphan.exists()
+    assert not marker.exists()
+
+
+def test_prune_with_no_orphans_is_no_op(
+    tmp_path, fake_local_runner, patched_systemd_dest_dir
+):
+    """Phase 4 cycle 4.3 — --prune --yes without orphans → exit 0, no calls."""
+    cfg = _write_scheduled_yaml(tmp_path)
+    # The declared alerter.timer is also present + marker, so not an orphan.
+    (patched_systemd_dest_dir / "alerter.timer").write_text("[Timer]\n")
+    _write_marker(
+        patched_systemd_dest_dir,
+        unit_name="alerter.timer",
+        fraises_yaml_path=str(cfg.resolve()),
+        job_name="poll",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "-c",
+            str(cfg),
+            "scheduled-install",
+            "--env",
+            "production",
+            "--prune",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Already converged" in result.output or "No orphan" in result.output
+    assert fake_local_runner == []
+
+
+def test_prune_stale_marker_only_no_systemctl_calls(
+    tmp_path, fake_local_runner, patched_systemd_dest_dir
+):
+    """Phase 4 cycle 4.4 — stale-marker-only run: file removes, no disable/stop."""
+    cfg = _write_scheduled_yaml(tmp_path)
+    # Marker without a paired unit file.
+    _write_marker(
+        patched_systemd_dest_dir,
+        unit_name="orphan.timer",
+        fraises_yaml_path=str(cfg.resolve()),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "-c",
+            str(cfg),
+            "scheduled-install",
+            "--env",
+            "production",
+            "--prune",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # daemon-reload runs once.
+    assert ["systemctl", "daemon-reload"] in fake_local_runner
+    # disable / stop do NOT — no unit to act on.
+    assert ["systemctl", "disable", "--now", "orphan.timer"] not in fake_local_runner
+    assert ["systemctl", "stop", "orphan.timer"] not in fake_local_runner
+
+
+def test_prune_via_socket_rejected_as_v030_followup(tmp_path, fake_local_runner):
+    """v0.29 doesn't ship --prune --via-socket; surface a clear error."""
+    cfg = _write_scheduled_yaml(tmp_path)
+    result = CliRunner().invoke(
+        main,
+        [
+            "-c",
+            str(cfg),
+            "scheduled-install",
+            "--env",
+            "production",
+            "--prune",
+            "--via-socket",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "v0.30" in result.output or "not supported" in result.output

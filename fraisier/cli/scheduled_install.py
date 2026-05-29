@@ -19,6 +19,7 @@ import click
 
 from fraisier.runners import LocalRunner
 from fraisier.scheduled_install import (
+    PrunePlan,
     ScheduledInstallError,
     UnitDiff,
     UnitState,
@@ -26,6 +27,7 @@ from fraisier.scheduled_install import (
     apply_unit_diffs_via_helper,
     classify_unit,
     enumerate_scheduled_units,
+    prune_orphans,
 )
 
 from ._helpers import console, err_console, require_config
@@ -188,6 +190,16 @@ def _print_verbose_diff(diff: UnitDiff) -> None:
         "/run/fraisier/<env>/unit-installer-<project>.sock."
     ),
 )
+@click.option(
+    "--prune",
+    "prune",
+    is_flag=True,
+    help=(
+        "Disable + remove orphan units (those still on disk under their "
+        "fraisier-managed marker but no longer declared in fraises.yaml). "
+        "Per-env scoped. Requires --yes (or an interactive TTY) to confirm."
+    ),
+)
 @click.pass_context
 def scheduled_install_cmd(
     ctx: click.Context,
@@ -200,6 +212,7 @@ def scheduled_install_cmd(
     fraise: str | None,
     via_socket: bool,
     socket_path_override: str | None,
+    prune: bool,
 ) -> None:
     """Install per-job systemd unit files declared by type:scheduled fraises.
 
@@ -241,6 +254,17 @@ def scheduled_install_cmd(
         )
         err_console.print(_format_env_list(available))
         ctx.exit(EXIT_POLICY_VIOLATION)
+
+    if prune:
+        if via_socket:
+            err_console.print(
+                "[red]Error:[/red] --prune + --via-socket isn't supported in "
+                "v0.29; run with operator-typed sudo for now. Planned for v0.30."
+            )
+            ctx.exit(EXIT_POLICY_VIOLATION)
+        plans = prune_orphans(config, env)
+        _run_prune(plans, ctx, yes=yes, dry_run=dry_run)
+        return
 
     units = enumerate_scheduled_units(config, env)
     if fraise is not None:
@@ -287,6 +311,90 @@ def scheduled_install_cmd(
         else None,
         config_path=Path(config.config_path) if via_socket else None,
     )
+
+
+def _run_prune(
+    plans: list[PrunePlan],
+    ctx: click.Context,
+    *,
+    yes: bool,
+    dry_run: bool,
+) -> None:
+    """--prune flow. v0.29 uses the operator-sudo path (direct fs + systemctl)."""
+    orphan_count = sum(1 for p in plans if p.kind == "orphan")
+    stale_count = sum(1 for p in plans if p.kind == "stale_marker")
+
+    if not plans:
+        console.print("No orphan units to prune. Already converged.")
+        ctx.exit(EXIT_OK)
+
+    console.print(
+        f"fraisier scheduled-install --prune ({'dry-run' if dry_run else 'apply'})"
+    )
+    for plan in plans:
+        if plan.kind == "orphan":
+            console.print(
+                f"  [orphan] {plan.unit_name}  (disable+stop, remove unit + marker)"
+            )
+        else:
+            console.print(f"  [stale_marker] {plan.marker_path.name}  ({plan.reason})")
+
+    if dry_run:
+        console.print(
+            f"Would prune {orphan_count} orphan unit(s) "
+            f"and {stale_count} stale marker(s)."
+        )
+        ctx.exit(EXIT_OK)
+
+    if not yes:
+        if not click.confirm(
+            f"About to disable + remove {orphan_count} unit(s) and "
+            f"{stale_count} stale marker(s). Proceed?",
+            default=False,
+        ):
+            console.print("Aborted by operator.")
+            ctx.exit(EXIT_OK)
+
+    # Execute. Direct fs + systemctl invocations under operator-typed sudo.
+    runner = LocalRunner()
+    failures: list[str] = []
+    for plan in plans:
+        if plan.kind == "orphan" and plan.unit_name:
+            if plan.is_timer:
+                try:
+                    runner.run(["systemctl", "disable", "--now", plan.unit_name])
+                except OSError as exc:
+                    failures.append(f"disable {plan.unit_name}: {exc}")
+            else:
+                try:
+                    runner.run(["systemctl", "stop", plan.unit_name])
+                except OSError as exc:
+                    failures.append(f"stop {plan.unit_name}: {exc}")
+
+        if plan.unit_path is not None:
+            try:
+                plan.unit_path.unlink(missing_ok=True)
+            except OSError as exc:
+                failures.append(f"unlink {plan.unit_path}: {exc}")
+        try:
+            plan.marker_path.unlink(missing_ok=True)
+        except OSError as exc:
+            failures.append(f"unlink {plan.marker_path}: {exc}")
+
+    # Single daemon-reload after all removes.
+    try:
+        runner.run(["systemctl", "daemon-reload"])
+    except OSError as exc:
+        failures.append(f"daemon-reload: {exc}")
+
+    if failures:
+        for f in failures:
+            err_console.print(f"[red]Error:[/red] {f}")
+        ctx.exit(EXIT_OPERATOR_ERROR)
+    console.print(
+        f"Pruned {orphan_count} orphan unit(s) and {stale_count} stale marker(s)."
+    )
+    ctx.exit(EXIT_OK)
 
 
 def _run_validate_only(
