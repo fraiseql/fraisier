@@ -650,6 +650,26 @@ fraisier scaffold-install --yes
 systemctl status <service-name>
 ```
 
+**Adding a `type: scheduled` job:**
+
+When declaring a *new* `type: scheduled` job (with `systemd_service` and `systemd_timer` under `jobs.*`) in `fraises.yaml`, the host must be reconciled in this order:
+
+```bash
+# 1. Re-render scaffold output with the updated systemctl-helper allowlist.
+fraisier scaffold
+
+# 2. Install the regenerated helper unit — this is what actually updates
+#    the on-disk allowlist so the webhook-driven deployer can manage the
+#    new timer/service via the helper socket.
+fraisier scaffold-install --yes
+
+# 3. Lay down the job's unit files into /etc/systemd/system/ and enable
+#    the timer. Reads from <app_path>/scripts/systemd/<unit>.
+sudo fraisier scheduled-install --env <env>
+```
+
+Skipping steps 1–2 leaves the on-disk `fraisier-<project>-systemctl-helper.service` carrying the *old* allowlist (rendered before the new job was declared). Webhook-driven redeploys of the new timer will then be rejected by the helper socket until those steps run. The change to `_collect_allowed_services` in v0.28.0 updates the *generator*; the rendered helper unit on each host is a separate artefact that only refreshes when `scaffold-install` runs.
+
 ---
 
 ### fraisier validate-deployment

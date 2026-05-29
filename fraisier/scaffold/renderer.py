@@ -21,6 +21,7 @@ from fraisier.config import (
     ServiceConfig,
     ValidationError,
 )
+from fraisier.dbops._validation import validate_service_name
 from fraisier.manifest import build_manifest
 from fraisier.naming import app_service_name, deploy_socket_name
 
@@ -188,17 +189,33 @@ def _collect_allowed_services(
     Returns fully-qualified service names (e.g., 'project_fraise_env.service').
     The webhook's own service unit is included so the #162 self-upgrade path
     can restart the webhook via the systemctl-helper socket.
+
+    For ``type: scheduled`` fraises, also walks ``jobs.*`` and includes each
+    job's ``systemd_service`` and ``systemd_timer`` so the webhook-driven
+    ``ScheduledDeployer`` can enable/restart these units via the helper
+    socket on each deploy (#239). This is symmetric in shape to the webhook
+    fix in v0.22.2 but covers a separately-discovered gap.
     """
     services = [f"fraisier-{project_name}-webhook.service"]
     for fraise in fraises_list:
         fraise_name = fraise.get("name", "")
         if not fraise_name:
             continue
-        for env_name, env_config in fraise.get("environments", {}).items():
+        fraise_type = fraise.get("type")
+        for env_name, raw_env_config in fraise.get("environments", {}).items():
+            env_config = raw_env_config or {}
             base = _resolve_service_base(
-                project_name, fraise_name, env_name, env_config or {}
+                project_name, fraise_name, env_name, env_config
             )
             services.append(f"{base}.service")
+            if fraise_type == "scheduled":
+                for job in (env_config.get("jobs") or {}).values():
+                    for field in ("systemd_service", "systemd_timer"):
+                        unit = job.get(field)
+                        if not unit:
+                            continue
+                        validate_service_name(unit)
+                        services.append(unit)
     return services
 
 
