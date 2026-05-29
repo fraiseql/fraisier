@@ -9,8 +9,47 @@ import pytest
 from fraisier.config import FraisierConfig
 from fraisier.scheduled_install import (
     ScheduledUnitInstall,
+    UnitDiff,
+    UnitState,
+    classify_unit,
     enumerate_scheduled_units,
 )
+
+
+def _make_install(
+    tmp_path: Path,
+    *,
+    unit_name: str = "foo.timer",
+    is_timer: bool = True,
+    source_content: str | None = None,
+    dest_content: str | None = None,
+) -> ScheduledUnitInstall:
+    """Build a ScheduledUnitInstall pointing at sandboxed source/dest paths.
+
+    Pass ``source_content=None`` to leave the source path missing;
+    likewise for ``dest_content``.
+    """
+    src_dir = tmp_path / "app/scripts/systemd"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src = src_dir / unit_name
+    if source_content is not None:
+        src.write_text(source_content)
+
+    dst_dir = tmp_path / "etc-systemd-system"
+    dst_dir.mkdir(exist_ok=True)
+    dst = dst_dir / unit_name
+    if dest_content is not None:
+        dst.write_text(dest_content)
+
+    return ScheduledUnitInstall(
+        fraise_name="x",
+        environment="prod",
+        job_name="p",
+        unit_name=unit_name,
+        is_timer=is_timer,
+        source_path=src,
+        dest_path=dst,
+    )
 
 
 def _write_scheduled_yaml(tmp_path: Path) -> Path:
@@ -187,3 +226,96 @@ fraises:
 
     with pytest.raises(ValueError, match="Invalid service name"):
         enumerate_scheduled_units(config, environment="production")
+
+
+# -- Phase 2: classification -------------------------------------------------
+
+
+def test_classify_unit_absent(tmp_path):
+    """Source present, dest missing → ABSENT, no diff summary."""
+    install = _make_install(tmp_path, source_content="[Timer]\n")
+
+    result = classify_unit(install)
+
+    assert result.state is UnitState.ABSENT
+    assert result.diff_summary is None
+    assert result.install is install
+
+
+def test_classify_unit_identical(tmp_path):
+    """Source and dest byte-equal → IDENTICAL, no diff summary."""
+    body = "[Timer]\nOnUnitActiveSec=1h\n"
+    install = _make_install(tmp_path, source_content=body, dest_content=body)
+
+    result = classify_unit(install)
+
+    assert result.state is UnitState.IDENTICAL
+    assert result.diff_summary is None
+
+
+def test_classify_unit_drifted(tmp_path):
+    """Source and dest differ → DRIFTED with a one-line summary."""
+    install = _make_install(
+        tmp_path,
+        source_content="[Timer]\nOnUnitActiveSec=1h\nPersistent=true\n",
+        dest_content="[Timer]\nOnUnitActiveSec=30m\n",
+    )
+
+    result = classify_unit(install)
+
+    assert result.state is UnitState.DRIFTED
+    assert result.diff_summary is not None
+    assert "unit body differs" in result.diff_summary
+
+
+def test_classify_unit_drifted_summary_counts_lines(tmp_path):
+    """The summary line counts added/removed accurately for a known fixture.
+
+    Source has one extra line and one changed line vs dest, so unified_diff
+    sees: 2 lines added (the new line + the new value of the changed line),
+    1 line removed (the old value of the changed line).
+    """
+    install = _make_install(
+        tmp_path,
+        source_content="[Timer]\nOnUnitActiveSec=1h\nPersistent=true\n",
+        dest_content="[Timer]\nOnUnitActiveSec=30m\n",
+    )
+
+    result = classify_unit(install)
+
+    assert result.diff_summary == "unit body differs (2 lines added, 1 removed)"
+
+
+def test_classify_unit_missing_source(tmp_path):
+    """Source path missing → MISSING_SOURCE (operator error: deploy didn't land?)."""
+    install = _make_install(tmp_path, source_content=None, dest_content="[Timer]\n")
+
+    result = classify_unit(install)
+
+    assert result.state is UnitState.MISSING_SOURCE
+    assert result.diff_summary is None
+
+
+def test_classify_unit_is_pure_does_not_mutate_filesystem(tmp_path):
+    """classify_unit reads but never writes."""
+    install = _make_install(tmp_path, source_content="src", dest_content="dst")
+    snapshot = {p: p.read_text() for p in [install.source_path, install.dest_path]}
+
+    classify_unit(install)
+
+    assert install.source_path.read_text() == snapshot[install.source_path]
+    assert install.dest_path.read_text() == snapshot[install.dest_path]
+    assert list((tmp_path / "etc-systemd-system").iterdir()) == [install.dest_path]
+    assert list((tmp_path / "app/scripts/systemd").iterdir()) == [install.source_path]
+
+
+def test_unit_diff_is_a_dataclass(tmp_path):
+    """Quick contract check on the UnitDiff shape — frozen, has the right fields."""
+    install = _make_install(tmp_path, source_content="x")
+    diff = classify_unit(install)
+
+    assert isinstance(diff, UnitDiff)
+    assert diff.install is install
+    assert diff.state in UnitState
+    with pytest.raises((AttributeError, TypeError)):
+        diff.state = UnitState.ABSENT  # type: ignore[misc]
