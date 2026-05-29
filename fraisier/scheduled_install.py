@@ -16,6 +16,7 @@ from __future__ import annotations
 import difflib
 import shutil
 from dataclasses import dataclass
+from datetime import UTC
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,8 +24,11 @@ from typing import TYPE_CHECKING
 from fraisier.dbops._validation import validate_service_name
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from fraisier.config import FraisierConfig
     from fraisier.runners import CommandRunner
+    from fraisier.unit_installer_protocol import Manifest
 
 SYSTEMD_DEST_DIR = Path("/etc/systemd/system")
 APP_PATH_UNITS_SUBDIR = Path("scripts/systemd")
@@ -144,12 +148,20 @@ def _short_diff_summary(src: bytes, dst: bytes) -> str:
 
 @dataclass(frozen=True)
 class ApplyReport:
-    """Summary of what ``apply_unit_diffs`` actually did during one call."""
+    """Summary of what ``apply_unit_diffs`` actually did during one call.
+
+    ``rejected_reason``, ``busy``, ``timed_out`` are populated by
+    ``apply_unit_diffs_via_helper`` (#240 Phase 6); the direct apply path
+    leaves them at their defaults.
+    """
 
     written: tuple[ScheduledUnitInstall, ...]  # ABSENT + (DRIFTED with force)
     skipped_identical: tuple[ScheduledUnitInstall, ...]
     enabled_timers: tuple[ScheduledUnitInstall, ...]
     reloaded: bool
+    rejected_reason: str | None = None
+    busy: bool = False
+    timed_out: bool = False
 
 
 def _validate_unit_path_safety(
@@ -275,3 +287,250 @@ def apply_unit_diffs(
         enabled_timers=tuple(enabled),
         reloaded=reloaded,
     )
+
+
+# ---------------------------------------------------------------------------
+# #240 Phase 6 — apply_unit_diffs_via_helper (client for unit-installer socket)
+# ---------------------------------------------------------------------------
+
+
+def apply_unit_diffs_via_helper(
+    diffs: list[UnitDiff],
+    *,
+    socket_path: Path,
+    force: bool = False,
+    write_markers: bool = False,
+    config_path: Path | None = None,
+) -> ApplyReport:
+    """Apply ``diffs`` by sending a manifest to the unit-installer helper.
+
+    Parallel to :func:`apply_unit_diffs` but goes through #240's socket
+    helper instead of writing to disk directly. The helper enforces
+    SO_PEERCRED, an allowlist (baked at scaffold-render time), and
+    TOCTOU realpath checks; this client does client-side fast-fail
+    validation (same path-safety checks) before the round-trip.
+
+    Args:
+        diffs: Unit diffs to converge.
+        socket_path: Path of the helper's listening socket.
+        force: Overwrite DRIFTED units (mirrors apply_unit_diffs's ``force``).
+        write_markers: If True, include a marker payload on each install_file
+            op so the helper writes a .fraisier-managed sidecar (consumed by
+            #240's prune planner).
+        config_path: ``fraises.yaml`` path; required when ``write_markers`` is
+            True. The client resolves it via ``Path.resolve(strict=True)``
+            before sending so the marker's ``fraises_yaml_path`` is absolute.
+
+    Returns:
+        ``ApplyReport`` populated from the helper's structured response.
+        On ``rejected`` / ``busy`` / ``timeout`` responses the corresponding
+        field is set and ``written`` is an empty tuple.
+
+    Raises:
+        ScheduledInstallError: If client-side path-safety validation fails
+            (same conditions as apply_unit_diffs's _validate_unit_path_safety).
+    """
+    import socket as _socket
+
+    # Same client-side fast-fail as the direct apply path.
+    for diff in diffs:
+        _validate_unit_path_safety(diff.install, systemd_dest_dir=SYSTEMD_DEST_DIR)
+
+    missing = [d for d in diffs if d.state is UnitState.MISSING_SOURCE]
+    if missing:
+        names = ", ".join(d.install.unit_name for d in missing)
+        msg = f"source not found for: {names}"
+        raise ScheduledInstallError(msg)
+
+    if not force:
+        drifted = [d for d in diffs if d.state is UnitState.DRIFTED]
+        if drifted:
+            names = ", ".join(d.install.unit_name for d in drifted)
+            msg = (
+                f"drifted units (pass force=True to overwrite): {names}. "
+                "Helper would have rejected the manifest at validate."
+            )
+            raise ScheduledInstallError(msg)
+
+    resolved_config_path: Path | None = None
+    if write_markers:
+        if config_path is None:
+            msg = "write_markers=True requires config_path"
+            raise ScheduledInstallError(msg)
+        resolved_config_path = config_path.resolve(strict=True)
+
+    manifest = _build_helper_manifest(
+        diffs,
+        force=force,
+        resolved_config_path=resolved_config_path,
+    )
+
+    if not manifest.operations:
+        # Nothing to do — no need to even open the socket.
+        return ApplyReport(
+            written=(),
+            skipped_identical=tuple(
+                d.install for d in diffs if d.state is UnitState.IDENTICAL
+            ),
+            enabled_timers=(),
+            reloaded=False,
+        )
+
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.connect(str(socket_path))
+    try:
+        return _apply_via_open_socket(sock, manifest, diffs)
+    finally:
+        sock.close()
+
+
+def _apply_via_open_socket(
+    sock: Any, manifest: Manifest, diffs: list[UnitDiff]
+) -> ApplyReport:
+    """Send ``manifest`` on an already-connected ``sock`` and parse the report.
+
+    Factored from ``apply_unit_diffs_via_helper`` so tests can drive the
+    socket layer with a ``socket.socketpair`` (bypassing the connect step,
+    which AF_UNIX socketpair sockets reject as "already connected").
+    """
+    response = _exchange_manifest(sock, manifest)
+    return _build_apply_report(response, diffs)
+
+
+def _build_helper_manifest(
+    diffs: list[UnitDiff],
+    *,
+    force: bool,
+    resolved_config_path: Path | None,
+) -> Manifest:
+    """Construct a manifest from a list of ``UnitDiff``s.
+
+    ABSENT + (DRIFTED and force) become ``install_file`` ops. IDENTICAL are
+    skipped — they don't need a round-trip. Each rendered op carries a
+    ``daemon_reload`` post-action exactly once (deduplicated) and one
+    ``enable_now`` per ``.timer`` op (matches ``apply_unit_diffs`` semantics).
+    """
+    from datetime import datetime
+
+    from fraisier.unit_installer_protocol import (
+        DaemonReloadAction,
+        EnableNowAction,
+        InstallFileOp,
+        Manifest,
+        MarkerMeta,
+    )
+
+    operations: list[InstallFileOp] = []
+    enable_actions: list[EnableNowAction] = []
+    for diff in diffs:
+        if diff.state is UnitState.IDENTICAL:
+            continue
+        if diff.state is UnitState.DRIFTED and not force:
+            continue  # already raised above; defence-in-depth
+        if diff.state is UnitState.MISSING_SOURCE:
+            continue  # already raised
+        marker: MarkerMeta | None = None
+        if resolved_config_path is not None:
+            marker = MarkerMeta(
+                fraises_yaml_path=str(resolved_config_path),
+                fraise_name=diff.install.fraise_name,
+                environment=diff.install.environment,
+                job_name=diff.install.job_name,
+            )
+        operations.append(
+            InstallFileOp(
+                source_path=str(diff.install.source_path),
+                dest_path=str(diff.install.dest_path),
+                mode="0644",
+                force=force,
+                marker=marker,
+            )
+        )
+        if diff.install.is_timer:
+            enable_actions.append(EnableNowAction(unit=diff.install.unit_name))
+
+    post_actions: list = []
+    if operations:
+        post_actions.append(DaemonReloadAction())
+    post_actions.extend(enable_actions)
+
+    deploy_id = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ") + "-via-helper"
+    return Manifest(
+        version=1,
+        deploy_id=deploy_id,
+        operations=tuple(operations),
+        post_actions=tuple(post_actions),
+    )
+
+
+def _exchange_manifest(sock: Any, manifest: Manifest) -> dict:
+    """Send ``manifest`` over ``sock`` and return the parsed JSON response."""
+    import contextlib
+    import json as _json
+
+    from fraisier.unit_installer_protocol import serialize_manifest
+
+    sock.sendall(serialize_manifest(manifest))
+    with contextlib.suppress(OSError):
+        sock.shutdown(1)  # SHUT_WR — signal we're done sending
+
+    raw = bytearray()
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        raw.extend(chunk)
+        if b"\n" in raw:
+            break
+    return _json.loads(bytes(raw))
+
+
+def _build_apply_report(response: dict, diffs: list[UnitDiff]) -> ApplyReport:
+    """Translate a helper response dict into an ``ApplyReport``."""
+    status = response.get("status")
+    skipped_identical = tuple(
+        d.install for d in diffs if d.state is UnitState.IDENTICAL
+    )
+    if status == "ok":
+        installed_basenames = set(response.get("installed", []))
+        written = tuple(
+            d.install for d in diffs if d.install.unit_name in installed_basenames
+        )
+        enabled = tuple(install for install in written if install.is_timer)
+        reloaded = any(
+            a.get("kind") == "daemon-reload" for a in response.get("post_actions", [])
+        )
+        return ApplyReport(
+            written=written,
+            skipped_identical=skipped_identical,
+            enabled_timers=enabled,
+            reloaded=reloaded,
+        )
+    if status == "rejected":
+        return ApplyReport(
+            written=(),
+            skipped_identical=skipped_identical,
+            enabled_timers=(),
+            reloaded=False,
+            rejected_reason=response.get("reason", "(no reason provided)"),
+        )
+    if status == "busy":
+        return ApplyReport(
+            written=(),
+            skipped_identical=skipped_identical,
+            enabled_timers=(),
+            reloaded=False,
+            busy=True,
+            rejected_reason=response.get("reason"),
+        )
+    if status == "timeout":
+        return ApplyReport(
+            written=(),
+            skipped_identical=skipped_identical,
+            enabled_timers=(),
+            reloaded=False,
+            timed_out=True,
+            rejected_reason=response.get("reason"),
+        )
+    msg = f"helper returned unknown status: {status!r}"
+    raise ScheduledInstallError(msg)
