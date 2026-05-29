@@ -711,6 +711,38 @@ Markers without a paired unit on disk (operator manually `rm`'d the `.timer` but
 
 v0.29 only supports `--prune` under operator-typed `sudo` (the CLI walks the filesystem and invokes `systemctl` directly). `--prune --via-socket` will land in v0.30 with `RemoveFileOp` + ordered pre-actions in the helper protocol.
 
+#### Webhook-driven auto-install (v0.29+)
+
+After running `fraisier scaffold-install` once per host, webhook deploys of `type: scheduled` fraises **automatically** install new unit files into `/etc/systemd/system/` via the unit-installer socket helper. The manual `sudo fraisier scheduled-install` workflow becomes an override (rollback debugging, change-control), not a routine post-deploy step.
+
+The drift policy per env lives in fraises.yaml:
+
+```yaml
+fraises:
+  alerter:
+    type: scheduled
+    environments:
+      production:
+        scheduled:
+          auto_install:
+            on_missing: install       # default — copy new units from worktree
+            on_drift: fail             # default — refuse to overwrite hand-edits
+            # on_drift: overwrite      # opt-in: repo is source of truth
+            # on_drift: skip           # opt-in: leave hand-edits, log warning
+```
+
+`on_drift` choices:
+
+- **`fail`** (default): webhook deploy aborts before any write when source and dest differ. The operator sees the drifted unit names in the deploy error. Resolve by reverting the hand-edit, running `fraisier scheduled-install --env <env> --validate-only` to confirm convergence, or opting into `overwrite` / `skip` per-fraise.
+- **`overwrite`**: webhook silently replaces the drifted dest with source. A `WARNING` is logged listing each unit overwritten. The `deploy_event` carries `drift_overwrites: [...]` so external tooling can surface the change.
+- **`skip`**: webhook leaves drifted dest alone, logs a `WARNING`, and records the units in `deploy_event.skipped_drift_units`. ABSENT units (new declarations) still install.
+
+Hosts that haven't been bootstrapped with v0.29's helper (no `/run/fraisier/<env>/unit-installer-<project>.sock`) silently fall back to the legacy systemctl path with a `WARNING` log pointing at `scaffold-install`. Run `fraisier scaffold-install --yes` once per host to close the gap.
+
+Concurrent-deploy contention: if another deploy is in flight when the webhook tries to install, the helper returns `busy` and the deployer retries with 1s / 3s / 10s backoffs. Past the budget (3 attempts, ≤30s total wait), the deploy fails with `another deploy in flight` so the operator knows it's a contention issue, not a code bug.
+
+The webhook never runs `--prune`. Orphan removal stays an explicit operator opt-in.
+
 ---
 
 ### fraisier validate-deployment
