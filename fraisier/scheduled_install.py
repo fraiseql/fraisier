@@ -98,6 +98,181 @@ def parse_auto_install_policy(env_config: dict[str, Any]) -> AutoInstallPolicy:
     return AutoInstallPolicy(on_missing=on_missing, on_drift=on_drift)
 
 
+@dataclass(frozen=True)
+class WebhookInstallReport:
+    """Outcome of one ``auto_install_scheduled_units`` call.
+
+    Phase 2 of #240's follow-up 01 — consumed by ``ScheduledDeployer`` to
+    populate ``deploy_event`` fields:
+    - ``installed`` — units written this deploy
+    - ``drift_overwrites`` — units whose dest differed from source and were
+      replaced under ``on_drift="overwrite"``. Empty under ``on_drift="fail"``
+      (the call raises) and ``on_drift="skip"``.
+    - ``skipped_drift_units`` — units left alone under ``on_drift="skip"``.
+    - ``retried_busy`` — how many times the helper returned ``busy`` before
+      this call ultimately succeeded. 0 for normal deploys.
+    """
+
+    installed: tuple[str, ...]
+    drift_overwrites: tuple[str, ...]
+    skipped_drift_units: tuple[str, ...]
+    retried_busy: int
+
+
+# Retry budget for "busy" responses from the unit-installer helper.
+# Locked Phase 0: 3 retries with 1s/3s/10s backoff = total wait < 30s.
+_WEBHOOK_BUSY_RETRY_DELAYS = (1.0, 3.0, 10.0)
+
+
+def auto_install_scheduled_units(
+    config: FraisierConfig,
+    environment: str,
+    *,
+    fraise_name: str,
+    policy: AutoInstallPolicy,
+    socket_path: Path,
+    is_socket_present: bool,
+    sleep: Any = None,
+) -> WebhookInstallReport:
+    """Webhook hook: reconcile dest vs source for a single fraise's units.
+
+    Calls ``apply_unit_diffs_via_helper`` and translates the result into a
+    ``WebhookInstallReport`` for ``deploy_event`` population. Drift policy
+    enforced HERE (the helper itself doesn't know fraises.yaml semantics).
+
+    Pre-v0.29 host detection is a positive ``is_socket_present`` check
+    passed in by the caller (the deployer uses ``socket_path.is_socket()``).
+    On missing socket, raises ``ScheduledInstallError`` with an actionable
+    message pointing at ``scaffold-install``.
+
+    Busy retry: when the helper returns ``{"status": "busy"}`` the client
+    sleeps and retries up to the budget. Past budget → raises.
+
+    ``sleep`` is injected for tests; defaults to ``time.sleep``.
+    """
+    import time as _time
+
+    if not is_socket_present:
+        msg = (
+            "unit-installer helper not on host. "
+            f"Run 'fraisier scaffold-install --yes' to bootstrap. "
+            f"(host is pre-v0.29; expected socket at {socket_path})"
+        )
+        raise ScheduledInstallError(msg)
+
+    sleep = sleep or _time.sleep
+
+    units = [
+        u
+        for u in enumerate_scheduled_units(config, environment)
+        if u.fraise_name == fraise_name
+    ]
+    if not units:
+        return WebhookInstallReport(
+            installed=(), drift_overwrites=(), skipped_drift_units=(), retried_busy=0
+        )
+
+    diffs = [classify_unit(u) for u in units]
+    return _reconcile_with_policy(
+        diffs, policy=policy, config=config, socket_path=socket_path, sleep=sleep
+    )
+
+
+def _reconcile_with_policy(
+    diffs: list[UnitDiff],
+    *,
+    policy: AutoInstallPolicy,
+    config: FraisierConfig,
+    socket_path: Path,
+    sleep: Any,
+) -> WebhookInstallReport:
+    """Apply ``policy`` to ``diffs`` then send to helper. Pure-ish (only sleeps).
+
+    Drift policy is enforced client-side BEFORE sending the manifest:
+    - ``on_drift="fail"``: any DRIFTED diff → raise immediately. No round-trip.
+    - ``on_drift="overwrite"``: DRIFTED diffs get the ``force=True`` flag on
+      install_file ops. Report records each unit as drift_overwrites.
+    - ``on_drift="skip"``: DRIFTED diffs are filtered out of the manifest
+      entirely. Report records each unit as skipped_drift_units. ABSENT
+      diffs still install.
+    """
+    drifted_unit_names = tuple(
+        d.install.unit_name for d in diffs if d.state is UnitState.DRIFTED
+    )
+
+    if policy.on_drift == "fail" and drifted_unit_names:
+        names = ", ".join(drifted_unit_names)
+        msg = (
+            f"drifted units (on_drift=fail): {names}. "
+            f"Set scheduled.auto_install.on_drift to 'overwrite' or 'skip' "
+            "per-fraise in fraises.yaml to opt into a different policy."
+        )
+        raise ScheduledInstallError(msg)
+
+    diffs_for_apply = diffs
+    skipped_drift_units: tuple[str, ...] = ()
+    drift_overwrites: tuple[str, ...] = ()
+
+    if policy.on_drift == "skip":
+        diffs_for_apply = [d for d in diffs if d.state is not UnitState.DRIFTED]
+        skipped_drift_units = drifted_unit_names
+
+    elif policy.on_drift == "overwrite":
+        drift_overwrites = drifted_unit_names
+
+    force = policy.on_drift == "overwrite"
+    report, retried = _apply_with_busy_retry(
+        diffs_for_apply,
+        socket_path=socket_path,
+        force=force,
+        config_path=config.config_path,
+        sleep=sleep,
+    )
+    if report.rejected_reason is not None:
+        msg = f"helper rejected manifest: {report.rejected_reason}"
+        raise ScheduledInstallError(msg)
+    return WebhookInstallReport(
+        installed=tuple(install.unit_name for install in report.written),
+        drift_overwrites=drift_overwrites,
+        skipped_drift_units=skipped_drift_units,
+        retried_busy=retried,
+    )
+
+
+def _apply_with_busy_retry(
+    diffs: list[UnitDiff],
+    *,
+    socket_path: Path,
+    force: bool,
+    config_path: Path,
+    sleep: Any,
+) -> tuple[ApplyReport, int]:
+    """Call ``apply_unit_diffs_via_helper`` with the Phase 0 busy retry budget.
+
+    Returns ``(report, retried_count)``. Raises on exhausted retry budget.
+    """
+    delays = (*_WEBHOOK_BUSY_RETRY_DELAYS, None)  # final None = no more retries
+    for retried, delay in enumerate(delays):
+        report = apply_unit_diffs_via_helper(
+            diffs,
+            socket_path=socket_path,
+            force=force,
+            write_markers=True,
+            config_path=config_path,
+        )
+        if not report.busy:
+            return report, retried
+        if delay is None:
+            msg = (
+                f"helper returned busy after {retried + 1} attempts "
+                "(retry budget exhausted) — another deploy in flight"
+            )
+            raise ScheduledInstallError(msg)
+        sleep(delay)
+    msg = "unreachable: retry loop exited without returning"  # pragma: no cover
+    raise ScheduledInstallError(msg)  # pragma: no cover
+
+
 class ScheduledInstallError(Exception):
     """Raised when ``apply_unit_diffs`` refuses to converge.
 
