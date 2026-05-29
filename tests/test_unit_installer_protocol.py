@@ -16,11 +16,13 @@ from fraisier.unit_installer_protocol import (
     Allowlist,
     AllowlistEntry,
     DaemonReloadAction,
+    DisableNowAction,
     EnableNowAction,
     InstallFileOp,
     Manifest,
     ManifestRejected,
     MarkerMeta,
+    StopAction,
     parse_manifest,
     render_response,
     serialize_manifest,
@@ -355,3 +357,63 @@ def test_marker_round_trips_through_wire_format() -> None:
     decoded = parse_manifest(serialize_manifest(original))
     assert decoded == original
     assert decoded.operations[0].marker == _absolute_marker()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 cycle 1.5 — validator accepts a full well-formed manifest
+# ---------------------------------------------------------------------------
+
+
+def test_validate_accepts_full_manifest_with_all_post_action_kinds(
+    tmp_path: Path,
+) -> None:
+    """Install + marker + every post-action kind passes validation.
+
+    disable_now/stop intentionally skip the install_file basename constraint
+    (they're used by 04's prune path against units already on disk); helper
+    runtime layer (Phase 4) enforces marker-presence for those.
+    """
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    install = InstallFileOp(
+        source_path=str(src_dir / "foo.timer"),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+        marker=_absolute_marker(),
+    )
+    (src_dir / "foo.timer").write_text("[Unit]\n")
+    manifest = Manifest(
+        version=1,
+        deploy_id="full",
+        operations=(install,),
+        post_actions=(
+            DaemonReloadAction(),
+            EnableNowAction(unit="foo.timer"),
+            DisableNowAction(unit="orphan.timer"),
+            StopAction(unit="orphan.service"),
+        ),
+    )
+    validate_manifest(manifest, _allowlist(src_dir, dest_dir))
+
+
+def test_full_manifest_round_trips_through_wire_format(tmp_path: Path) -> None:
+    """All op kinds survive serialize → parse."""
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    install = InstallFileOp(
+        source_path=str(src_dir / "foo.timer"),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+        marker=_absolute_marker(),
+    )
+    original = Manifest(
+        version=1,
+        deploy_id="full",
+        operations=(install,),
+        post_actions=(
+            DaemonReloadAction(),
+            EnableNowAction(unit="foo.timer"),
+            DisableNowAction(unit="orphan.timer"),
+            StopAction(unit="orphan.service"),
+        ),
+    )
+    decoded = parse_manifest(serialize_manifest(original))
+    assert decoded == original

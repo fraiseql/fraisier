@@ -90,7 +90,29 @@ class EnableNowAction:
     unit: str
 
 
-PostAction = DaemonReloadAction | EnableNowAction
+@dataclass(frozen=True)
+class DisableNowAction:
+    """``systemctl disable --now <unit>`` post-action (prune path).
+
+    Validator does NOT constrain ``unit`` against the same manifest's
+    install_file basenames — the helper's runtime layer (Phase 4) checks
+    marker-presence on disk before executing.
+    """
+
+    unit: str
+
+
+@dataclass(frozen=True)
+class StopAction:
+    """``systemctl stop <unit>`` post-action (prune path).
+
+    Same runtime-only constraint as ``DisableNowAction``.
+    """
+
+    unit: str
+
+
+PostAction = DaemonReloadAction | EnableNowAction | DisableNowAction | StopAction
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +152,25 @@ class Allowlist:
     def match_source_prefix(self, resolved_source: Path) -> AllowlistEntry | None:
         """Return the entry whose ``source_prefix`` covers ``resolved_source``."""
         for entry in self.entries:
-            try:
-                src_root = entry.source_prefix.resolve(strict=True)
-            except FileNotFoundError:
-                continue
-            if resolved_source.is_relative_to(src_root):
+            src_root = _safe_resolve(entry.source_prefix)
+            if src_root is not None and resolved_source.is_relative_to(src_root):
                 return entry
+        return None
+
+    def match_dest_prefix(self, resolved_dest_parent: Path) -> AllowlistEntry | None:
+        """Return the entry whose ``dest_prefix`` equals ``resolved_dest_parent``."""
+        for entry in self.entries:
+            dest_root = _safe_resolve(entry.dest_prefix)
+            if dest_root is not None and resolved_dest_parent == dest_root:
+                return entry
+        return None
+
+
+def _safe_resolve(path: Path) -> Path | None:
+    """``Path.resolve(strict=True)`` returning ``None`` for missing entries."""
+    try:
+        return path.resolve(strict=True)
+    except FileNotFoundError:
         return None
 
 
@@ -308,18 +343,12 @@ def _check_dest_parent(dest_path: str, allowlist: Allowlist, *, op_index: int) -
     except FileNotFoundError as exc:
         msg = f"op {op_index}: dest parent does not exist: {Path(dest_path).parent}"
         raise ManifestRejected(msg) from exc
-    for entry in allowlist.entries:
-        try:
-            expected = entry.dest_prefix.resolve(strict=True)
-        except FileNotFoundError:
-            continue
-        if actual_parent == expected:
-            return
-    msg = (
-        f"op {op_index}: dest parent {actual_parent} is outside every "
-        "allowlisted dest_prefix"
-    )
-    raise ManifestRejected(msg)
+    if allowlist.match_dest_prefix(actual_parent) is None:
+        msg = (
+            f"op {op_index}: dest parent {actual_parent} is outside every "
+            "allowlisted dest_prefix"
+        )
+        raise ManifestRejected(msg)
 
 
 def _validate_post_action(
@@ -329,7 +358,7 @@ def _validate_post_action(
     action_index: int,
 ) -> None:
     match action:
-        case DaemonReloadAction():
+        case DaemonReloadAction() | DisableNowAction() | StopAction():
             return
         case EnableNowAction(unit=unit):
             if unit not in installed_basenames:
@@ -394,6 +423,10 @@ def _action_to_json(action: PostAction) -> dict[str, Any]:
             return {"kind": "daemon_reload"}
         case EnableNowAction(unit=unit):
             return {"kind": "enable_now", "unit": unit}
+        case DisableNowAction(unit=unit):
+            return {"kind": "disable_now", "unit": unit}
+        case StopAction(unit=unit):
+            return {"kind": "stop", "unit": unit}
     msg = f"unsupported post-action: {action!r}"
     raise TypeError(msg)
 
@@ -404,5 +437,9 @@ def _action_from_json(data: dict[str, Any]) -> PostAction:
         return DaemonReloadAction()
     if kind == "enable_now":
         return EnableNowAction(unit=data["unit"])
+    if kind == "disable_now":
+        return DisableNowAction(unit=data["unit"])
+    if kind == "stop":
+        return StopAction(unit=data["unit"])
     msg = f"unknown post-action kind: {kind!r}"
     raise ValueError(msg)
