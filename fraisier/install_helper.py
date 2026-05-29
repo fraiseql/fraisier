@@ -32,7 +32,11 @@ import socket
 import subprocess
 import sys
 
+from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
+
 logger = logging.getLogger(__name__)
+
+_peer_creds_skip_warned = False
 
 
 def _send_error(conn: socket.socket, message: str) -> None:
@@ -145,6 +149,38 @@ def _handle_connection(conn: socket.socket, allowed_command: list[str]) -> None:
         _send_response(conn, response)
 
 
+def _serve_connection(
+    conn: socket.socket,
+    *,
+    expected_uid: int | None,
+    allowed_command: list[str],
+) -> None:
+    """Enforce SO_PEERCRED then dispatch one request to ``_handle_connection``.
+
+    ``expected_uid=None`` is the v0.29 transitional fallback — log a one-time
+    warning and process the request anyway (becomes mandatory in v0.30).
+    """
+    global _peer_creds_skip_warned
+    if expected_uid is None:
+        if not _peer_creds_skip_warned:
+            logger.warning(
+                "SO_PEERCRED check disabled: --deploy-uid not provided. "
+                "Re-render this helper's unit with v0.29 scaffold-install "
+                "to close the trust gap (will become mandatory in v0.30)."
+            )
+            _peer_creds_skip_warned = True
+        _handle_connection(conn, allowed_command=allowed_command)
+        return
+    try:
+        check_peer_creds(conn, expected_uid=expected_uid)
+    except PermissionError as exc:
+        logger.warning("Rejecting connection: %s", exc)
+        with conn:
+            _send_error(conn, f"peer credentials rejected: {exc}")
+        return
+    _handle_connection(conn, allowed_command=allowed_command)
+
+
 def main() -> None:
     """Entry point for fraisier-install-helper.
 
@@ -156,7 +192,7 @@ def main() -> None:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    allowed_command = sys.argv[1:]
+    deploy_uid, allowed_command = extract_deploy_uid(sys.argv[1:])
     if not allowed_command:
         logger.error(
             "Usage: fraisier-install-helper <command> [args...]\n"
@@ -187,7 +223,11 @@ def main() -> None:
                 logger.error("accept() failed: %s", exc)
                 break
             try:
-                _handle_connection(conn, allowed_command=allowed_command)
+                _serve_connection(
+                    conn,
+                    expected_uid=deploy_uid,
+                    allowed_command=allowed_command,
+                )
             except Exception as exc:
                 # Bare-except is intentional here: any handler crash must
                 # not bring down the systemd-supervised socket server.

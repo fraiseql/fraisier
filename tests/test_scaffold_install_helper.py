@@ -13,6 +13,7 @@ from fraisier.scaffold_install_helper import (
     _handle_connection,
     _send_error,
     _send_response,
+    _serve_connection,
 )
 
 # ---------------------------------------------------------------------------
@@ -426,3 +427,29 @@ class TestInstallScaffoldSocketClient:
             pytest.raises(DeploymentError),
         ):
             deployer._install_scaffold(config_path=config_path)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 cycle 3.1 — SO_PEERCRED retrofit
+# ---------------------------------------------------------------------------
+
+
+class TestServeConnectionEnforcesPeerCreds:
+    """``_serve_connection`` runs ``check_peer_creds`` before dispatching."""
+
+    def test_rejects_non_matching_uid(self, tmp_path):
+        import os
+
+        script = tmp_path / "install.sh"
+        script.write_text("#!/bin/bash\necho hi\n")
+        server, client = _make_socket_pair()
+        wrong_uid = os.getuid() + 1
+        _serve_connection(
+            server,
+            expected_uid=wrong_uid,
+            allowed_script=str(script),
+        )
+        data = _recv_json(client)
+        client.close()
+        assert data["ok"] is False
+        assert "peer" in data["error"].lower()

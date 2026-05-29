@@ -29,10 +29,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
+
 logger = logging.getLogger(__name__)
 
 _ALLOWED_ACTIONS: frozenset[str] = frozenset({"install"})
 _BASH = "/usr/bin/bash"
+
+_peer_creds_skip_warned = False
 
 
 def _send_error(conn: socket.socket, message: str) -> None:
@@ -125,6 +129,38 @@ def _handle_connection(conn: socket.socket, allowed_script: str) -> None:
         _send_response(conn, response)
 
 
+def _serve_connection(
+    conn: socket.socket,
+    *,
+    expected_uid: int | None,
+    allowed_script: str,
+) -> None:
+    """Enforce SO_PEERCRED then dispatch one request to ``_handle_connection``.
+
+    ``expected_uid=None`` is the v0.29 transitional fallback — log a one-time
+    warning and process the request anyway (becomes mandatory in v0.30).
+    """
+    global _peer_creds_skip_warned
+    if expected_uid is None:
+        if not _peer_creds_skip_warned:
+            logger.warning(
+                "SO_PEERCRED check disabled: --deploy-uid not provided. "
+                "Re-render this helper's unit with v0.29 scaffold-install "
+                "to close the trust gap (will become mandatory in v0.30)."
+            )
+            _peer_creds_skip_warned = True
+        _handle_connection(conn, allowed_script=allowed_script)
+        return
+    try:
+        check_peer_creds(conn, expected_uid=expected_uid)
+    except PermissionError as exc:
+        logger.warning("Rejecting connection: %s", exc)
+        with conn:
+            _send_error(conn, f"peer credentials rejected: {exc}")
+        return
+    _handle_connection(conn, allowed_script=allowed_script)
+
+
 def _build_server_socket(allowed_script: str) -> socket.socket:
     """Acquire socket from systemd socket activation (LISTEN_FDS protocol).
 
@@ -173,11 +209,13 @@ def main() -> None:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    if len(sys.argv) < 2:
+    deploy_uid, remaining = extract_deploy_uid(sys.argv[1:])
+
+    if not remaining:
         logger.error("Usage: fraisier-scaffold-install-helper <path-to-install.sh>")
         sys.exit(1)
 
-    allowed_script = sys.argv[1]
+    allowed_script = remaining[0]
 
     if not Path(allowed_script).exists():
         logger.critical("install.sh not found at startup: %s", allowed_script)
@@ -193,7 +231,11 @@ def main() -> None:
                 logger.error("accept() failed: %s", exc)
                 break
             try:
-                _handle_connection(conn, allowed_script=allowed_script)
+                _serve_connection(
+                    conn,
+                    expected_uid=deploy_uid,
+                    allowed_script=allowed_script,
+                )
             except Exception as exc:
                 logger.exception("Unhandled error in connection handler: %s", exc)
     finally:

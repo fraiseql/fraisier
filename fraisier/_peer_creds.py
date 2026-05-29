@@ -37,6 +37,29 @@ class PeerCreds:
     gid: int
 
 
+def extract_deploy_uid(argv: list[str]) -> tuple[int | None, list[str]]:
+    """Pull ``--deploy-uid <N>`` out of ``argv``; return ``(uid, remaining_argv)``.
+
+    No ``--deploy-uid`` → ``(None, argv_unchanged)`` — the caller logs a
+    transitional warning and runs without ``SO_PEERCRED`` enforcement. This
+    shim is only for the v0.29 transition window; v0.30 will make the flag
+    mandatory (units without it will be re-rendered before then).
+
+    Malformed argument (non-integer, missing value, trailing flag) is treated
+    as missing — same fallback path.
+    """
+    if "--deploy-uid" not in argv:
+        return None, list(argv)
+    i = argv.index("--deploy-uid")
+    if i + 1 >= len(argv):
+        return None, list(argv)
+    try:
+        uid = int(argv[i + 1])
+    except ValueError:
+        return None, list(argv)
+    return uid, argv[:i] + argv[i + 2 :]
+
+
 def check_peer_creds(conn: socket.socket, *, expected_uid: int) -> PeerCreds:
     """Read ``SO_PEERCRED`` on ``conn`` and reject if peer UID differs.
 
