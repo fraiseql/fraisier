@@ -28,10 +28,15 @@ if TYPE_CHECKING:
 
     from fraisier.config import FraisierConfig
     from fraisier.runners import CommandRunner
-    from fraisier.unit_installer_protocol import Manifest
+    from fraisier.unit_installer_protocol import Manifest, MarkerMeta
 
 SYSTEMD_DEST_DIR = Path("/etc/systemd/system")
 APP_PATH_UNITS_SUBDIR = Path("scripts/systemd")
+
+# Marker convention (#240 follow-up 04). Sidecar file next to each fraisier-
+# managed systemd unit. Advisory, not authenticated — see the MarkerMeta
+# docstring in fraisier.unit_installer_protocol for the threat model.
+MARKER_SUFFIX = ".fraisier-managed"
 
 
 class ScheduledInstallError(Exception):
@@ -534,3 +539,113 @@ def _build_apply_report(response: dict, diffs: list[UnitDiff]) -> ApplyReport:
         )
     msg = f"helper returned unknown status: {status!r}"
     raise ScheduledInstallError(msg)
+
+
+# ---------------------------------------------------------------------------
+# #240 follow-up 04 Phase 1 — marker convention (read helpers)
+# ---------------------------------------------------------------------------
+
+
+class CorruptMarker(Exception):
+    """Raised by ``read_marker`` when a marker file can't be parsed.
+
+    The prune planner catches this and converts to a ``stale_marker`` plan
+    so the operator can clean up by-product without manual intervention.
+    """
+
+
+def marker_path_for(unit_dest: Path) -> Path:
+    """Return the sidecar path for ``unit_dest`` (``<unit>.fraisier-managed``)."""
+    return unit_dest.with_name(unit_dest.name + MARKER_SUFFIX)
+
+
+def build_marker(
+    install: ScheduledUnitInstall, *, resolved_config_path: Path
+) -> MarkerMeta:
+    """Build a ``MarkerMeta`` for ``install`` from a pre-resolved config path.
+
+    ``resolved_config_path`` MUST be absolute — the caller is responsible for
+    calling ``Path.resolve(strict=True)`` BEFORE invoking this. The marker's
+    ``fraises_yaml_path`` carries the absolute form so prune planners
+    launched from different working directories converge on the same
+    project identity (see ``MarkerMeta`` docstring).
+    """
+    from fraisier.unit_installer_protocol import MarkerMeta as _MarkerMeta
+
+    if not resolved_config_path.is_absolute():
+        msg = (
+            f"build_marker requires an absolute config path; got "
+            f"{resolved_config_path!r}"
+        )
+        raise ScheduledInstallError(msg)
+    return _MarkerMeta(
+        fraises_yaml_path=str(resolved_config_path),
+        fraise_name=install.fraise_name,
+        environment=install.environment,
+        job_name=install.job_name,
+    )
+
+
+def read_marker(marker_path: Path) -> MarkerMeta:
+    """Parse a marker file on disk into a ``MarkerMeta``.
+
+    Raises ``CorruptMarker`` on JSON decode failure, missing required fields,
+    or OSError reading the file. The prune planner catches this and tags
+    the marker as ``stale_marker`` so the operator can clean up.
+    """
+    import json as _json
+
+    from fraisier.unit_installer_protocol import MarkerMeta as _MarkerMeta
+
+    try:
+        raw = marker_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        msg = f"could not read marker {marker_path}: {exc}"
+        raise CorruptMarker(msg) from exc
+    try:
+        payload = _json.loads(raw)
+    except _json.JSONDecodeError as exc:
+        msg = f"marker {marker_path} is not valid JSON: {exc}"
+        raise CorruptMarker(msg) from exc
+    if not isinstance(payload, dict):
+        msg = f"marker {marker_path} is not a JSON object"
+        raise CorruptMarker(msg)
+    required = ("fraises_yaml_path", "fraise_name", "environment", "job_name")
+    missing = [k for k in required if k not in payload]
+    if missing:
+        msg = f"marker {marker_path} missing required fields: {missing}"
+        raise CorruptMarker(msg)
+    return _MarkerMeta(
+        fraises_yaml_path=payload["fraises_yaml_path"],
+        fraise_name=payload["fraise_name"],
+        environment=payload["environment"],
+        job_name=payload["job_name"],
+    )
+
+
+def find_markers(systemd_dest_dir: Path) -> list[Path]:
+    """Return every ``*.fraisier-managed`` path under ``systemd_dest_dir``.
+
+    Defence-in-depth: a marker whose paired unit name would fail
+    ``validate_service_name`` is silently skipped (the marker's existence is
+    advisory; if its name is malformed someone planted it manually). The
+    skip prevents future shell-injection vectors if the unit name flows into
+    a systemctl invocation downstream.
+    """
+    if not systemd_dest_dir.exists():
+        return []
+    markers: list[Path] = []
+    for entry in systemd_dest_dir.iterdir():
+        if not entry.name.endswith(MARKER_SUFFIX):
+            continue
+        unit_name = entry.name[: -len(MARKER_SUFFIX)]
+        try:
+            validate_service_name(unit_name)
+        except ValueError:
+            continue
+        # Reject .. and leading dot at the unit-name layer too (paired check
+        # with _validate_unit_path_safety).
+        if ".." in unit_name or unit_name.startswith("."):
+            continue
+        markers.append(entry)
+    return sorted(markers)
