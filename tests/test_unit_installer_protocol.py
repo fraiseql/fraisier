@@ -21,6 +21,7 @@ from fraisier.unit_installer_protocol import (
     Manifest,
     ManifestRejected,
     parse_manifest,
+    render_response,
     serialize_manifest,
     validate_manifest,
 )
@@ -263,3 +264,33 @@ def test_parse_rejects_missing_version_field() -> None:
     )
     with pytest.raises(ManifestRejected, match="version"):
         parse_manifest(raw)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 cycle 1.3 — structured rejection responses
+# ---------------------------------------------------------------------------
+
+
+def test_render_response_rejected_carries_reason_and_op_index() -> None:
+    """``render_response("rejected", ...)`` shapes the wire response strictly."""
+    wire = render_response("rejected", reason="bad mode", op_index=2)
+    assert wire.endswith(b"\n"), "responses must terminate with a newline"
+    decoded = json.loads(wire)
+    assert decoded == {"status": "rejected", "reason": "bad mode", "op_index": 2}
+
+
+def test_render_response_ok_drops_optional_fields() -> None:
+    """Optional kwargs are omitted when not provided (no ``op_index: null`` noise)."""
+    wire = render_response("ok")
+    decoded = json.loads(wire)
+    assert decoded == {"status": "ok"}
+
+
+def test_render_response_busy_with_reason() -> None:
+    """``busy`` carries the flock collision reason; no op_index."""
+    wire = render_response("busy", reason="concurrent manifest in flight")
+    decoded = json.loads(wire)
+    assert decoded == {
+        "status": "busy",
+        "reason": "concurrent manifest in flight",
+    }

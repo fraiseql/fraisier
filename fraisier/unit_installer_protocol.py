@@ -124,6 +124,33 @@ class Allowlist:
 
 
 # ---------------------------------------------------------------------------
+# Response wire format (helper → client)
+# ---------------------------------------------------------------------------
+
+
+def render_response(
+    status: str,
+    *,
+    reason: str | None = None,
+    op_index: int | None = None,
+    **extra: Any,
+) -> bytes:
+    """Encode a helper response as one JSON line terminated by ``\\n``.
+
+    ``status`` is one of ``"ok"``, ``"rejected"``, ``"busy"``, ``"timeout"``.
+    Optional kwargs are dropped when ``None`` (no ``op_index: null`` noise on
+    the wire). Callers pass any additional structured fields through ``extra``.
+    """
+    payload: dict[str, Any] = {"status": status}
+    if reason is not None:
+        payload["reason"] = reason
+    if op_index is not None:
+        payload["op_index"] = op_index
+    payload.update(extra)
+    return json.dumps(payload).encode() + b"\n"
+
+
+# ---------------------------------------------------------------------------
 # parse / serialize
 # ---------------------------------------------------------------------------
 
