@@ -2405,6 +2405,78 @@ fraises:
         wrapper_content = (tmp_path / "output" / "systemctl-wrapper.sh").read_text()
         assert "fraisier-myproj-webhook.service" in wrapper_content
 
+    def test_allowed_services_includes_scheduled_job_units(self, tmp_path):
+        """Helper allowlist must include systemd_service AND systemd_timer
+        declared on type:scheduled fraises' jobs.* — otherwise the webhook-driven
+        ScheduledDeployer cannot enable/restart these units via the helper socket
+        (#239). NOTE: this is NOT #218 (which was the webhook unit, fixed in
+        v0.22.2); this is a separate, previously-untested gap surfaced by #239.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  alerter:
+    type: scheduled
+    environments:
+      production:
+        app_path: /var/www/api
+        jobs:
+          poll:
+            name: myproj-long-lock-alerter
+            systemd_service: myproj-long-lock-alerter.service
+            systemd_timer: myproj-long-lock-alerter.timer
+            schedule: "*-*-* *:*:00"
+"""
+        )
+        config = FraisierConfig(p)
+        ScaffoldRenderer(config).render()
+
+        helper_content = (
+            tmp_path / "output" / "systemd" / "fraisier-myproj-systemctl-helper.service"
+        ).read_text()
+        assert "myproj-long-lock-alerter.service" in helper_content
+        assert "myproj-long-lock-alerter.timer" in helper_content
+
+        # Legacy wrapper carries them too — rollbacks must still work.
+        wrapper_content = (tmp_path / "output" / "systemctl-wrapper.sh").read_text()
+        assert "myproj-long-lock-alerter.service" in wrapper_content
+        assert "myproj-long-lock-alerter.timer" in wrapper_content
+
+    def test_collect_allowed_services_skips_jobs_on_non_scheduled_types(self):
+        """Only type:scheduled fraises contribute jobs.* unit names to the
+        allowlist. type:backup fraises (which also use jobs.*) must NOT —
+        their units are managed by a different path."""
+        from fraisier.scaffold.renderer import _collect_allowed_services
+
+        fraises = [
+            {
+                "name": "nightly_backup",
+                "type": "backup",
+                "environments": {
+                    "production": {
+                        "app_path": "/var/www/api",
+                        "jobs": {
+                            "dump": {
+                                "name": "myproj-nightly-backup",
+                                "systemd_service": "myproj-nightly-backup.service",
+                                "systemd_timer": "myproj-nightly-backup.timer",
+                            }
+                        },
+                    }
+                },
+            }
+        ]
+        services = _collect_allowed_services("myproj", fraises)
+        assert "myproj-nightly-backup.service" not in services
+        assert "myproj-nightly-backup.timer" not in services
+
     def test_sudoers_no_db_admin_for_migrate_strategy(self, tmp_path):
         """Sudoers omits DB admin commands for migrate/apply strategies (#41)."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
