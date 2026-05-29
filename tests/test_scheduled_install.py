@@ -8,12 +8,42 @@ import pytest
 
 from fraisier.config import FraisierConfig
 from fraisier.scheduled_install import (
+    ApplyReport,
+    ScheduledInstallError,
     ScheduledUnitInstall,
     UnitDiff,
     UnitState,
+    apply_unit_diffs,
     classify_unit,
     enumerate_scheduled_units,
 )
+
+
+class FakeRunner:
+    """Records every ``run`` call for assertion. Does NOT execute anything."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def run(self, cmd: list[str], **_kwargs: object) -> object:
+        self.calls.append(list(cmd))
+
+        class _Completed:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Completed()
+
+
+def _sandbox_dirs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Return (app_path, src_dir, dest_dir) under tmp_path with src_dir created."""
+    app_path = tmp_path / "app"
+    src_dir = app_path / "scripts/systemd"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    dest_dir = tmp_path / "etc-systemd-system"
+    dest_dir.mkdir(exist_ok=True)
+    return app_path, src_dir, dest_dir
 
 
 def _make_install(
@@ -29,15 +59,11 @@ def _make_install(
     Pass ``source_content=None`` to leave the source path missing;
     likewise for ``dest_content``.
     """
-    src_dir = tmp_path / "app/scripts/systemd"
-    src_dir.mkdir(parents=True, exist_ok=True)
+    app_path, src_dir, dest_dir = _sandbox_dirs(tmp_path)
     src = src_dir / unit_name
     if source_content is not None:
         src.write_text(source_content)
-
-    dst_dir = tmp_path / "etc-systemd-system"
-    dst_dir.mkdir(exist_ok=True)
-    dst = dst_dir / unit_name
+    dst = dest_dir / unit_name
     if dest_content is not None:
         dst.write_text(dest_content)
 
@@ -49,7 +75,13 @@ def _make_install(
         is_timer=is_timer,
         source_path=src,
         dest_path=dst,
+        app_path=app_path,
     )
+
+
+def _dest_dir(tmp_path: Path) -> Path:
+    """Convenience: same dest_dir _make_install uses, for apply_unit_diffs."""
+    return tmp_path / "etc-systemd-system"
 
 
 def _write_scheduled_yaml(tmp_path: Path) -> Path:
@@ -319,3 +351,261 @@ def test_unit_diff_is_a_dataclass(tmp_path):
     assert diff.state in UnitState
     with pytest.raises((AttributeError, TypeError)):
         diff.state = UnitState.ABSENT  # type: ignore[misc]
+
+
+# -- Phase 3: apply (the only write-the-filesystem path) ---------------------
+
+
+def test_apply_copies_absent_unit_and_enables_timer(tmp_path):
+    """ABSENT timer → copy, chmod 0644, daemon-reload, enable --now."""
+    install = _make_install(tmp_path, source_content="[Timer]\nOnUnitActiveSec=1h\n")
+    diff = classify_unit(install)
+    assert diff.state is UnitState.ABSENT
+    fake = FakeRunner()
+
+    report = apply_unit_diffs([diff], runner=fake, systemd_dest_dir=_dest_dir(tmp_path))
+
+    assert install.dest_path.read_text() == "[Timer]\nOnUnitActiveSec=1h\n"
+    assert install.dest_path.stat().st_mode & 0o777 == 0o644
+    assert fake.calls == [
+        ["systemctl", "daemon-reload"],
+        ["systemctl", "enable", "--now", "foo.timer"],
+    ]
+    assert report.reloaded is True
+    assert report.written == (install,)
+    assert report.enabled_timers == (install,)
+    assert report.skipped_identical == ()
+
+
+def test_apply_absent_service_does_not_enable(tmp_path):
+    """ABSENT service (is_timer=False) → copy + reload, but no enable --now.
+
+    Services are not enabled — only timers fire the enable --now step.
+    """
+    install = _make_install(
+        tmp_path,
+        unit_name="foo.service",
+        is_timer=False,
+        source_content="[Service]\nExecStart=/bin/true\n",
+    )
+    diff = classify_unit(install)
+    fake = FakeRunner()
+
+    report = apply_unit_diffs([diff], runner=fake, systemd_dest_dir=_dest_dir(tmp_path))
+
+    assert install.dest_path.exists()
+    assert fake.calls == [["systemctl", "daemon-reload"]]
+    assert report.enabled_timers == ()
+
+
+def test_apply_is_idempotent_on_identical(tmp_path):
+    """IDENTICAL → zero writes, zero daemon-reload, zero enable --now.
+
+    Core invariant: a re-run after convergence is a complete no-op at the
+    filesystem-and-systemctl level.
+    """
+    body = "[Timer]\nOnUnitActiveSec=1h\n"
+    install = _make_install(tmp_path, source_content=body, dest_content=body)
+    diff = classify_unit(install)
+    assert diff.state is UnitState.IDENTICAL
+    pre = install.dest_path.read_text()
+    fake = FakeRunner()
+
+    report = apply_unit_diffs([diff], runner=fake, systemd_dest_dir=_dest_dir(tmp_path))
+
+    assert install.dest_path.read_text() == pre
+    assert fake.calls == []
+    assert report.reloaded is False
+    assert report.written == ()
+    assert report.skipped_identical == (install,)
+    assert report.enabled_timers == ()
+
+
+def test_apply_two_consecutive_calls_are_idempotent(tmp_path):
+    """End-to-end: first call writes; second call is a complete no-op."""
+    install = _make_install(tmp_path, source_content="[Timer]\nOnUnitActiveSec=1h\n")
+    fake = FakeRunner()
+
+    apply_unit_diffs(
+        [classify_unit(install)], runner=fake, systemd_dest_dir=_dest_dir(tmp_path)
+    )
+    first_call_count = len(fake.calls)
+
+    # Second call: source-side unchanged, dest now equals source.
+    report2 = apply_unit_diffs(
+        [classify_unit(install)], runner=fake, systemd_dest_dir=_dest_dir(tmp_path)
+    )
+
+    assert len(fake.calls) == first_call_count  # no new calls
+    assert report2.written == ()
+    assert report2.reloaded is False
+
+
+def test_apply_drifted_without_force_raises(tmp_path):
+    """DRIFTED + no force → ScheduledInstallError, no writes, no systemctl calls."""
+    install = _make_install(
+        tmp_path,
+        source_content="new content\n",
+        dest_content="old content\n",
+    )
+    diff = classify_unit(install)
+    assert diff.state is UnitState.DRIFTED
+    pre_dest = install.dest_path.read_text()
+    fake = FakeRunner()
+
+    with pytest.raises(ScheduledInstallError, match="drifted"):
+        apply_unit_diffs([diff], runner=fake, systemd_dest_dir=_dest_dir(tmp_path))
+
+    assert install.dest_path.read_text() == pre_dest  # untouched
+    assert fake.calls == []
+
+
+def test_apply_drifted_with_force_overwrites_cleanly_no_backup(tmp_path):
+    """DRIFTED + force=True → overwrite, daemon-reload, enable --now, NO backup file."""
+    install = _make_install(
+        tmp_path,
+        source_content="new content\n",
+        dest_content="old content\n",
+    )
+    diff = classify_unit(install)
+    fake = FakeRunner()
+
+    report = apply_unit_diffs(
+        [diff],
+        runner=fake,
+        force=True,
+        systemd_dest_dir=_dest_dir(tmp_path),
+    )
+
+    assert install.dest_path.read_text() == "new content\n"
+    # No *.pre-fraisier-* or similar backup file left behind.
+    dest_dir_contents = sorted(p.name for p in _dest_dir(tmp_path).iterdir())
+    assert dest_dir_contents == ["foo.timer"]
+    assert report.reloaded is True
+    assert install in report.written
+
+
+def test_apply_missing_source_raises(tmp_path):
+    """MISSING_SOURCE → ScheduledInstallError before any writes."""
+    install = _make_install(tmp_path, source_content=None, dest_content="[Timer]\n")
+    diff = classify_unit(install)
+    assert diff.state is UnitState.MISSING_SOURCE
+    fake = FakeRunner()
+
+    with pytest.raises(ScheduledInstallError, match="source not found"):
+        apply_unit_diffs([diff], runner=fake, systemd_dest_dir=_dest_dir(tmp_path))
+
+    assert fake.calls == []
+
+
+def test_apply_rejects_slash_in_unit_name(tmp_path):
+    """unit_name containing '/' is rejected before any filesystem mutation."""
+    app_path, src_dir, dest_dir = _sandbox_dirs(tmp_path)
+    # Manually build install — _make_install would itself reject this name.
+    install = ScheduledUnitInstall(
+        fraise_name="x",
+        environment="prod",
+        job_name="p",
+        unit_name="bad/name.timer",
+        is_timer=True,
+        source_path=src_dir / "bad-name.timer",
+        dest_path=dest_dir / "bad-name.timer",
+        app_path=app_path,
+    )
+    diff = UnitDiff(install, UnitState.ABSENT, None)
+    fake = FakeRunner()
+
+    with pytest.raises(ScheduledInstallError, match="unsafe unit name"):
+        apply_unit_diffs([diff], runner=fake, systemd_dest_dir=dest_dir)
+
+    assert fake.calls == []
+
+
+def test_apply_rejects_double_dot_in_unit_name(tmp_path):
+    """unit_name containing '..' is rejected — validate_service_name lets this
+    through (its regex accepts dot-runs); apply_unit_diffs catches it."""
+    app_path, src_dir, dest_dir = _sandbox_dirs(tmp_path)
+    install = ScheduledUnitInstall(
+        fraise_name="x",
+        environment="prod",
+        job_name="p",
+        unit_name="..foo.timer",
+        is_timer=True,
+        source_path=src_dir / "..foo.timer",
+        dest_path=dest_dir / "..foo.timer",
+        app_path=app_path,
+    )
+    diff = UnitDiff(install, UnitState.ABSENT, None)
+    fake = FakeRunner()
+
+    with pytest.raises(ScheduledInstallError, match="unsafe unit name"):
+        apply_unit_diffs([diff], runner=fake, systemd_dest_dir=dest_dir)
+
+    assert fake.calls == []
+
+
+def test_apply_rejects_symlink_escape_in_source(tmp_path):
+    """A hostile worktree where scripts/systemd/foo.timer symlinks outside the
+    source root is rejected before copy."""
+    app_path, src_dir, dest_dir = _sandbox_dirs(tmp_path)
+    outside = tmp_path / "elsewhere" / "evil.timer"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("malicious")
+    sym = src_dir / "foo.timer"
+    sym.symlink_to(outside)
+
+    install = ScheduledUnitInstall(
+        fraise_name="x",
+        environment="prod",
+        job_name="p",
+        unit_name="foo.timer",
+        is_timer=True,
+        source_path=sym,
+        dest_path=dest_dir / "foo.timer",
+        app_path=app_path,
+    )
+    diff = UnitDiff(install, UnitState.ABSENT, None)
+    fake = FakeRunner()
+
+    with pytest.raises(ScheduledInstallError, match="escapes"):
+        apply_unit_diffs([diff], runner=fake, systemd_dest_dir=dest_dir)
+
+    assert fake.calls == []
+    assert not (dest_dir / "foo.timer").exists()
+
+
+def test_apply_daemon_reload_fires_once_for_multiple_writes(tmp_path):
+    """daemon-reload fires *exactly once* per call regardless of write count."""
+    install_a = _make_install(
+        tmp_path,
+        unit_name="a.timer",
+        source_content="a\n",
+    )
+    install_b = _make_install(
+        tmp_path,
+        unit_name="b.timer",
+        source_content="b\n",
+    )
+    diffs = [classify_unit(install_a), classify_unit(install_b)]
+    fake = FakeRunner()
+
+    apply_unit_diffs(diffs, runner=fake, systemd_dest_dir=_dest_dir(tmp_path))
+
+    reload_calls = [c for c in fake.calls if c == ["systemctl", "daemon-reload"]]
+    assert len(reload_calls) == 1
+    enable_calls = [c for c in fake.calls if c[:3] == ["systemctl", "enable", "--now"]]
+    assert {c[3] for c in enable_calls} == {"a.timer", "b.timer"}
+
+
+def test_apply_report_is_a_frozen_dataclass(tmp_path):
+    """ApplyReport contract check."""
+    install = _make_install(tmp_path, source_content="x")
+    fake = FakeRunner()
+
+    report = apply_unit_diffs(
+        [classify_unit(install)], runner=fake, systemd_dest_dir=_dest_dir(tmp_path)
+    )
+
+    assert isinstance(report, ApplyReport)
+    with pytest.raises((AttributeError, TypeError)):
+        report.reloaded = False  # type: ignore[misc]
