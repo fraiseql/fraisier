@@ -1,0 +1,11 @@
+[Unit]
+Description=Fraisier unit-installer socket for {{ project_name }} ({{ env_name }})
+
+[Socket]
+ListenStream=/run/fraisier/{{ env_name }}/unit-installer-{{ project_name }}.sock
+SocketUser=root
+SocketGroup={{ scaffold.deploy_user }}
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target

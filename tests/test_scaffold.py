@@ -2594,6 +2594,141 @@ fraises:
         assert "myproj-nightly-backup.service" not in services
         assert "myproj-nightly-backup.timer" not in services
 
+    def test_unit_installer_helper_units_rendered_when_scheduled_fraise_present(
+        self, tmp_path
+    ):
+        """02 Phase 5 cycle 5.1 — type:scheduled fraise → unit-installer helper rendered."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  alerter:
+    type: scheduled
+    environments:
+      production:
+        app_path: /var/www/api
+        jobs:
+          poll:
+            systemd_service: alerter-poll.service
+            systemd_timer: alerter-poll.timer
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        systemd_dir = tmp_path / "output" / "systemd"
+        socket_unit = systemd_dir / "fraisier-myproj-production-unit-installer.socket"
+        service_unit = systemd_dir / "fraisier-myproj-production-unit-installer.service"
+        assert socket_unit.exists()
+        assert service_unit.exists()
+
+    def test_unit_installer_helper_execstart_carries_deploy_user_and_allow(
+        self, tmp_path
+    ):
+        """02 Phase 5 cycle 5.2 — ExecStart has --deploy-user, --project, --env, --allow."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  alerter:
+    type: scheduled
+    environments:
+      production:
+        app_path: /var/www/api
+        jobs:
+          poll:
+            systemd_service: alerter-poll.service
+            systemd_timer: alerter-poll.timer
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        service_unit = (
+            tmp_path
+            / "output"
+            / "systemd"
+            / "fraisier-myproj-production-unit-installer.service"
+        )
+        content = service_unit.read_text()
+        execstart = next(
+            line for line in content.splitlines() if line.startswith("ExecStart=")
+        )
+        assert "--deploy-user deployer" in execstart
+        assert "--project myproj" in execstart
+        assert "--env production" in execstart
+        assert "--allow /var/www/api/scripts/systemd/:/etc/systemd/system/" in execstart
+
+    def test_unit_installer_helper_not_rendered_without_scheduled_fraise(
+        self, tmp_path
+    ):
+        """02 Phase 5 cycle 5.3 — no type:scheduled → no helper units (no dead units)."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+"""
+        )
+        config = FraisierConfig(p)
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        systemd_dir = tmp_path / "output" / "systemd"
+        assert not any(systemd_dir.glob("*unit-installer*"))
+
+    def test_collect_allowed_services_omits_synthesised_entry_for_scheduled(self):
+        """02 Phase 5 cycle 5.4 (folds 06) — no <project>_<scheduled>_<env>.service."""
+        from fraisier.scaffold.renderer import _collect_allowed_services
+
+        fraises = [
+            {
+                "name": "alerter",
+                "type": "scheduled",
+                "environments": {
+                    "production": {
+                        "app_path": "/var/www/api",
+                        "jobs": {
+                            "poll": {
+                                "systemd_service": "alerter-poll.service",
+                                "systemd_timer": "alerter-poll.timer",
+                            }
+                        },
+                    }
+                },
+            }
+        ]
+        services = _collect_allowed_services("myproj", fraises)
+        # Synthesised entry must NOT appear (#240 06).
+        assert "myproj_alerter_production.service" not in services
+        # The real per-job entries are still present.
+        assert "alerter-poll.service" in services
+        assert "alerter-poll.timer" in services
+
     def test_sudoers_no_db_admin_for_migrate_strategy(self, tmp_path):
         """Sudoers omits DB admin commands for migrate/apply strategies (#41)."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
