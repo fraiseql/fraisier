@@ -20,6 +20,7 @@ from fraisier.unit_installer_protocol import (
     InstallFileOp,
     Manifest,
     ManifestRejected,
+    MarkerMeta,
     parse_manifest,
     render_response,
     serialize_manifest,
@@ -294,3 +295,63 @@ def test_render_response_busy_with_reason() -> None:
         "status": "busy",
         "reason": "concurrent manifest in flight",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 cycle 1.4 — marker validation
+# ---------------------------------------------------------------------------
+
+
+def _absolute_marker() -> MarkerMeta:
+    return MarkerMeta(
+        fraises_yaml_path="/opt/myproj/fraises.yaml",
+        fraise_name="alerter",
+        environment="production",
+        job_name="poll",
+    )
+
+
+def test_validate_rejects_relative_marker_yaml_path(tmp_path: Path) -> None:
+    """Caller is responsible for resolving; validator enforces the invariant."""
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    base = _good_op(src_dir, dest_dir)
+    marker = MarkerMeta(
+        fraises_yaml_path="relative/fraises.yaml",
+        fraise_name="alerter",
+        environment="production",
+        job_name="poll",
+    )
+    op = InstallFileOp(
+        source_path=base.source_path,
+        dest_path=base.dest_path,
+        mode="0644",
+        marker=marker,
+    )
+    with pytest.raises(ManifestRejected, match="marker"):
+        validate_manifest(_manifest(op), _allowlist(src_dir, dest_dir))
+
+
+def test_validate_accepts_op_with_absolute_marker_yaml_path(tmp_path: Path) -> None:
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    base = _good_op(src_dir, dest_dir)
+    op = InstallFileOp(
+        source_path=base.source_path,
+        dest_path=base.dest_path,
+        mode="0644",
+        marker=_absolute_marker(),
+    )
+    validate_manifest(_manifest(op), _allowlist(src_dir, dest_dir))
+
+
+def test_marker_round_trips_through_wire_format() -> None:
+    """Marker survives serialize → parse on a canonical install_file op."""
+    op = InstallFileOp(
+        source_path="/var/www/api/scripts/systemd/foo.timer",
+        dest_path="/etc/systemd/system/foo.timer",
+        mode="0644",
+        marker=_absolute_marker(),
+    )
+    original = Manifest(version=1, deploy_id="t", operations=(op,))
+    decoded = parse_manifest(serialize_manifest(original))
+    assert decoded == original
+    assert decoded.operations[0].marker == _absolute_marker()

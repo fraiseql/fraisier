@@ -47,6 +47,22 @@ class ManifestRejected(Exception):
 
 
 @dataclass(frozen=True)
+class MarkerMeta:
+    """Sidecar marker payload — advisory, not authenticated.
+
+    Phase 04 of bundle A consumes these via ``prune_orphans`` to identify
+    fraisier-managed units. ``fraises_yaml_path`` MUST be absolute (typically
+    the caller's ``Path.resolve(strict=True)`` output) so prune planners
+    started from different working directories converge on the same identity.
+    """
+
+    fraises_yaml_path: str
+    fraise_name: str
+    environment: str
+    job_name: str
+
+
+@dataclass(frozen=True)
 class InstallFileOp:
     """File-install operation: copy source bytes to dest, chmod ``mode``."""
 
@@ -54,7 +70,7 @@ class InstallFileOp:
     dest_path: str
     mode: str
     force: bool = False
-    marker: None = None  # MarkerMeta lands in cycle 1.4
+    marker: MarkerMeta | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +260,19 @@ def _validate_install_file_op(
     _check_source(op.source_path, allowlist, op_index=op_index)
     _check_dest_parent(op.dest_path, allowlist, op_index=op_index)
 
+    if op.marker is not None:
+        _check_marker(op.marker, op_index=op_index)
+
+
+def _check_marker(marker: MarkerMeta, *, op_index: int) -> None:
+    if not Path(marker.fraises_yaml_path).is_absolute():
+        msg = (
+            f"op {op_index}: marker fraises_yaml_path "
+            f"{marker.fraises_yaml_path!r} is not absolute "
+            "(caller must Path.resolve() before sending)"
+        )
+        raise ManifestRejected(msg)
+
 
 def _check_unit_basename(basename: str, *, op_index: int) -> None:
     if ".." in basename:
@@ -323,7 +352,7 @@ def _op_to_json(op: InstallFileOp) -> dict[str, Any]:
         "dest_path": op.dest_path,
         "mode": op.mode,
         "force": op.force,
-        "marker": op.marker,
+        "marker": _marker_to_json(op.marker),
     }
 
 
@@ -333,7 +362,29 @@ def _op_from_json(data: dict[str, Any]) -> InstallFileOp:
         dest_path=data["dest_path"],
         mode=data["mode"],
         force=data.get("force", False),
-        marker=data.get("marker"),
+        marker=_marker_from_json(data.get("marker")),
+    )
+
+
+def _marker_to_json(marker: MarkerMeta | None) -> dict[str, Any] | None:
+    if marker is None:
+        return None
+    return {
+        "fraises_yaml_path": marker.fraises_yaml_path,
+        "fraise_name": marker.fraise_name,
+        "environment": marker.environment,
+        "job_name": marker.job_name,
+    }
+
+
+def _marker_from_json(data: dict[str, Any] | None) -> MarkerMeta | None:
+    if data is None:
+        return None
+    return MarkerMeta(
+        fraises_yaml_path=data["fraises_yaml_path"],
+        fraise_name=data["fraise_name"],
+        environment=data["environment"],
+        job_name=data["job_name"],
     )
 
 
