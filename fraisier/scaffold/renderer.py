@@ -169,6 +169,36 @@ def _collect_install_helper_sockets(
     return result
 
 
+def _collect_unit_installer_envs(
+    fraises_list: list[dict[str, Any]],
+) -> dict[str, list[str]]:
+    """Return ``{env_name: [allow_pair, ...]}`` covering every type:scheduled env.
+
+    Each allow_pair is ``"<src_prefix>:<dest_prefix>"`` baked at scaffold time
+    for the unit-installer helper's argv. Multiple fraises sharing one env get
+    merged: one helper per env (Phase 0 decision #2 of #240). The dest prefix
+    is always ``/etc/systemd/system/``.
+    """
+    envs: dict[str, list[str]] = {}
+    seen: dict[str, set[str]] = {}
+    for fraise in fraises_list:
+        if fraise.get("type") != "scheduled":
+            continue
+        for env_name, raw_env_config in fraise.get("environments", {}).items():
+            env_config = raw_env_config or {}
+            app_path = env_config.get("app_path")
+            if not app_path:
+                continue
+            src_prefix = f"{str(app_path).rstrip('/')}/scripts/systemd/"
+            pair = f"{src_prefix}:/etc/systemd/system/"
+            envs.setdefault(env_name, [])
+            seen.setdefault(env_name, set())
+            if pair not in seen[env_name]:
+                envs[env_name].append(pair)
+                seen[env_name].add(pair)
+    return envs
+
+
 def _resolve_service_base(
     project_name: str,
     fraise_name: str,
@@ -204,11 +234,10 @@ def _collect_allowed_services(
         fraise_type = fraise.get("type")
         for env_name, raw_env_config in fraise.get("environments", {}).items():
             env_config = raw_env_config or {}
-            base = _resolve_service_base(
-                project_name, fraise_name, env_name, env_config
-            )
-            services.append(f"{base}.service")
             if fraise_type == "scheduled":
+                # Folded 06 (#240): for type:scheduled fraises the synthesised
+                # `<project>_<fraise>_<env>.service` is a phantom — no such
+                # unit exists. Only emit the real per-job entries below.
                 for job in (env_config.get("jobs") or {}).values():
                     for field in ("systemd_service", "systemd_timer"):
                         unit = job.get(field)
@@ -216,6 +245,11 @@ def _collect_allowed_services(
                             continue
                         validate_service_name(unit)
                         services.append(unit)
+            else:
+                base = _resolve_service_base(
+                    project_name, fraise_name, env_name, env_config
+                )
+                services.append(f"{base}.service")
     return services
 
 
@@ -648,6 +682,10 @@ class ScaffoldRenderer:
         # Install helper units: socket+service per fraise+env with separate install user
         rendered_files.extend(self._render_install_helper_units(dry_run))
 
+        # Unit-installer helper (#240 Phase 5): per-env socket+service when at
+        # least one type:scheduled fraise is declared.
+        rendered_files.extend(self._render_unit_installer_helper_units(dry_run))
+
         # Webhook service(s) — rendered dynamically to include project name
         rendered_files.extend(self._render_webhook_services(dry_run))
 
@@ -769,6 +807,37 @@ class ScaffoldRenderer:
                     self._write_output(
                         service_rel, "# Placeholder: install-helper.service.j2\n"
                     )
+        return rendered
+
+    def _render_unit_installer_helper_units(self, dry_run: bool) -> list[str]:
+        """Render the unit-installer helper for each env with type:scheduled fraises.
+
+        Phase 0 decision #2 (#240): one helper per (project, env). Allowlist
+        baked at render time as ``--allow <src_prefix>:<dest_prefix>`` pairs in
+        ExecStart, with ``src_prefix = env.app_path / scripts/systemd/`` and
+        ``dest_prefix = /etc/systemd/system/``.
+        """
+        envs = _collect_unit_installer_envs(self.context["local_fraises"])
+        if not envs:
+            return []
+
+        rendered: list[str] = []
+        project = self.context["project_name"]
+        for env_name, allow_pairs in envs.items():
+            service_out = (
+                f"systemd/fraisier-{project}-{env_name}-unit-installer.service"
+            )
+            socket_out = f"systemd/fraisier-{project}-{env_name}-unit-installer.socket"
+            rendered.extend([service_out, socket_out])
+            if not dry_run:
+                self.context["env_name"] = env_name
+                self.context["unit_installer_allow_pairs"] = allow_pairs
+                try:
+                    self._render_template("core/unit-installer.service.j2", service_out)
+                    self._render_template("core/unit-installer.socket.j2", socket_out)
+                finally:
+                    del self.context["env_name"]
+                    del self.context["unit_installer_allow_pairs"]
         return rendered
 
     def _render_systemctl_helper(self, dry_run: bool) -> list[str]:

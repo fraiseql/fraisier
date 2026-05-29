@@ -1,0 +1,29 @@
+[Unit]
+Description=Fraisier unit-installer for {{ project_name }} ({{ env_name }})
+Requires=fraisier-{{ project_name }}-{{ env_name }}-unit-installer.socket
+After=fraisier-{{ project_name }}-{{ env_name }}-unit-installer.socket
+Documentation=https://fraisier.readthedocs.io/
+
+[Service]
+Type=simple
+# Runs as root: must write to /etc/systemd/system/ and invoke systemctl.
+# SO_PEERCRED restricts connections to the deploy user only.
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-unit-installer --deploy-user {{ scaffold.deploy_user }} --project {{ project_name }} --env {{ env_name }}{% for pair in unit_installer_allow_pairs %} --allow {{ pair }}{% endfor %}
+
+# Prevent Python from creating root-owned __pycache__ dirs in the deploy user's
+# tool installation when the helper runs as root.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Security hardening — runs as root but restricted.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+# Writes to systemd unit dir + per-env lock dir; reads everywhere else.
+ReadWritePaths=/etc/systemd/system /var/lib/fraisier /run/fraisier
+
+[Install]
+WantedBy=multi-user.target

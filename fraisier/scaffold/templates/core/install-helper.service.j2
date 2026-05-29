@@ -10,7 +10,7 @@ Group={{ install_user }}
 # Binary is installed as a uv tool under the deploy user's home directory.
 # ProtectHome is intentionally omitted: the binary lives in ~/.local which
 # ProtectHome (any value) would make inaccessible.
-ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-install-helper {{ install_command | join(' ') }}
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-install-helper --deploy-user {{ scaffold.deploy_user }} {{ install_command | join(' ') }}
 
 Environment=PYTHONDONTWRITEBYTECODE=1
 # Pin the uv cache to a known path so ReadWritePaths can cover it exactly.

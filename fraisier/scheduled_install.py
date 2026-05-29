@@ -16,6 +16,7 @@ from __future__ import annotations
 import difflib
 import shutil
 from dataclasses import dataclass
+from datetime import UTC
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,9 +26,251 @@ from fraisier.dbops._validation import validate_service_name
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
     from fraisier.runners import CommandRunner
+    from fraisier.unit_installer_protocol import Manifest, MarkerMeta
+
+# Any is referenced in runtime signatures (parse_auto_install_policy).
+from typing import Any
 
 SYSTEMD_DEST_DIR = Path("/etc/systemd/system")
 APP_PATH_UNITS_SUBDIR = Path("scripts/systemd")
+
+# Marker convention (#240 follow-up 04). Sidecar file next to each fraisier-
+# managed systemd unit. Advisory, not authenticated — see the MarkerMeta
+# docstring in fraisier.unit_installer_protocol for the threat model.
+MARKER_SUFFIX = ".fraisier-managed"
+
+_VALID_ON_MISSING = frozenset({"install", "skip"})
+_VALID_ON_DRIFT = frozenset({"fail", "overwrite", "skip"})
+
+
+@dataclass(frozen=True)
+class AutoInstallPolicy:
+    """#240 follow-up 01 Phase 1 — webhook-driven install drift policy.
+
+    Lives under ``fraises.yaml`` →
+    ``fraises.<name>.environments.<env>.scheduled.auto_install``.
+    Drives the per-deploy decision made by ``ScheduledDeployer`` (Phase 2)
+    when reconciling source vs dest unit content.
+
+    Defaults (locked Phase 0):
+    - ``on_missing="install"``: webhook copies new units from the deploy
+      worktree into /etc/systemd/system/. The whole point of bundle A.
+    - ``on_drift="fail"``: webhook aborts on drift between source and dest.
+      Operators opt into overwrite/skip per-fraise. Silent overwrite is
+      rejected as a default because /etc/systemd/system/ is operator-
+      editable (debugging, vendor packages) — unlike app_path content.
+    """
+
+    on_missing: str = "install"
+    on_drift: str = "fail"
+
+
+def parse_auto_install_policy(env_config: dict[str, Any]) -> AutoInstallPolicy:
+    """Extract the auto_install policy block, applying locked defaults.
+
+    Accepts the env config dict; returns the resolved policy. Unknown values
+    on either field raise ``ScheduledInstallError`` with a clear message
+    pointing at the offending field.
+    """
+    scheduled = env_config.get("scheduled") or {}
+    raw_auto = scheduled.get("auto_install") if isinstance(scheduled, dict) else None
+    if raw_auto is not None and not isinstance(raw_auto, dict):
+        msg = f"scheduled.auto_install must be a mapping, got {type(raw_auto).__name__}"
+        raise ScheduledInstallError(msg)
+    auto = raw_auto or {}
+
+    on_missing = auto.get("on_missing", "install")
+    on_drift = auto.get("on_drift", "fail")
+
+    if on_missing not in _VALID_ON_MISSING:
+        msg = (
+            f"scheduled.auto_install.on_missing must be one of "
+            f"{sorted(_VALID_ON_MISSING)}, got {on_missing!r}"
+        )
+        raise ScheduledInstallError(msg)
+    if on_drift not in _VALID_ON_DRIFT:
+        msg = (
+            f"scheduled.auto_install.on_drift must be one of "
+            f"{sorted(_VALID_ON_DRIFT)}, got {on_drift!r}"
+        )
+        raise ScheduledInstallError(msg)
+
+    return AutoInstallPolicy(on_missing=on_missing, on_drift=on_drift)
+
+
+@dataclass(frozen=True)
+class WebhookInstallReport:
+    """Outcome of one ``auto_install_scheduled_units`` call.
+
+    Phase 2 of #240's follow-up 01 — consumed by ``ScheduledDeployer`` to
+    populate ``deploy_event`` fields:
+    - ``installed`` — units written this deploy
+    - ``drift_overwrites`` — units whose dest differed from source and were
+      replaced under ``on_drift="overwrite"``. Empty under ``on_drift="fail"``
+      (the call raises) and ``on_drift="skip"``.
+    - ``skipped_drift_units`` — units left alone under ``on_drift="skip"``.
+    - ``retried_busy`` — how many times the helper returned ``busy`` before
+      this call ultimately succeeded. 0 for normal deploys.
+    """
+
+    installed: tuple[str, ...]
+    drift_overwrites: tuple[str, ...]
+    skipped_drift_units: tuple[str, ...]
+    retried_busy: int
+
+
+# Retry budget for "busy" responses from the unit-installer helper.
+# Locked Phase 0: 3 retries with 1s/3s/10s backoff = total wait < 30s.
+_WEBHOOK_BUSY_RETRY_DELAYS = (1.0, 3.0, 10.0)
+
+
+def auto_install_scheduled_units(
+    config: FraisierConfig,
+    environment: str,
+    *,
+    fraise_name: str,
+    policy: AutoInstallPolicy,
+    socket_path: Path,
+    is_socket_present: bool,
+    sleep: Any = None,
+) -> WebhookInstallReport:
+    """Webhook hook: reconcile dest vs source for a single fraise's units.
+
+    Calls ``apply_unit_diffs_via_helper`` and translates the result into a
+    ``WebhookInstallReport`` for ``deploy_event`` population. Drift policy
+    enforced HERE (the helper itself doesn't know fraises.yaml semantics).
+
+    Pre-v0.29 host detection is a positive ``is_socket_present`` check
+    passed in by the caller (the deployer uses ``socket_path.is_socket()``).
+    On missing socket, raises ``ScheduledInstallError`` with an actionable
+    message pointing at ``scaffold-install``.
+
+    Busy retry: when the helper returns ``{"status": "busy"}`` the client
+    sleeps and retries up to the budget. Past budget → raises.
+
+    ``sleep`` is injected for tests; defaults to ``time.sleep``.
+    """
+    import time as _time
+
+    if not is_socket_present:
+        msg = (
+            "unit-installer helper not on host. "
+            f"Run 'fraisier scaffold-install --yes' to bootstrap. "
+            f"(host is pre-v0.29; expected socket at {socket_path})"
+        )
+        raise ScheduledInstallError(msg)
+
+    sleep = sleep or _time.sleep
+
+    units = [
+        u
+        for u in enumerate_scheduled_units(config, environment)
+        if u.fraise_name == fraise_name
+    ]
+    if not units:
+        return WebhookInstallReport(
+            installed=(), drift_overwrites=(), skipped_drift_units=(), retried_busy=0
+        )
+
+    diffs = [classify_unit(u) for u in units]
+    return _reconcile_with_policy(
+        diffs, policy=policy, config=config, socket_path=socket_path, sleep=sleep
+    )
+
+
+def _reconcile_with_policy(
+    diffs: list[UnitDiff],
+    *,
+    policy: AutoInstallPolicy,
+    config: FraisierConfig,
+    socket_path: Path,
+    sleep: Any,
+) -> WebhookInstallReport:
+    """Apply ``policy`` to ``diffs`` then send to helper. Pure-ish (only sleeps).
+
+    Drift policy is enforced client-side BEFORE sending the manifest:
+    - ``on_drift="fail"``: any DRIFTED diff → raise immediately. No round-trip.
+    - ``on_drift="overwrite"``: DRIFTED diffs get the ``force=True`` flag on
+      install_file ops. Report records each unit as drift_overwrites.
+    - ``on_drift="skip"``: DRIFTED diffs are filtered out of the manifest
+      entirely. Report records each unit as skipped_drift_units. ABSENT
+      diffs still install.
+    """
+    drifted_unit_names = tuple(
+        d.install.unit_name for d in diffs if d.state is UnitState.DRIFTED
+    )
+
+    if policy.on_drift == "fail" and drifted_unit_names:
+        names = ", ".join(drifted_unit_names)
+        msg = (
+            f"drifted units (on_drift=fail): {names}. "
+            f"Set scheduled.auto_install.on_drift to 'overwrite' or 'skip' "
+            "per-fraise in fraises.yaml to opt into a different policy."
+        )
+        raise ScheduledInstallError(msg)
+
+    diffs_for_apply = diffs
+    skipped_drift_units: tuple[str, ...] = ()
+    drift_overwrites: tuple[str, ...] = ()
+
+    if policy.on_drift == "skip":
+        diffs_for_apply = [d for d in diffs if d.state is not UnitState.DRIFTED]
+        skipped_drift_units = drifted_unit_names
+
+    elif policy.on_drift == "overwrite":
+        drift_overwrites = drifted_unit_names
+
+    force = policy.on_drift == "overwrite"
+    report, retried = _apply_with_busy_retry(
+        diffs_for_apply,
+        socket_path=socket_path,
+        force=force,
+        config_path=config.config_path,
+        sleep=sleep,
+    )
+    if report.rejected_reason is not None:
+        msg = f"helper rejected manifest: {report.rejected_reason}"
+        raise ScheduledInstallError(msg)
+    return WebhookInstallReport(
+        installed=tuple(install.unit_name for install in report.written),
+        drift_overwrites=drift_overwrites,
+        skipped_drift_units=skipped_drift_units,
+        retried_busy=retried,
+    )
+
+
+def _apply_with_busy_retry(
+    diffs: list[UnitDiff],
+    *,
+    socket_path: Path,
+    force: bool,
+    config_path: Path,
+    sleep: Any,
+) -> tuple[ApplyReport, int]:
+    """Call ``apply_unit_diffs_via_helper`` with the Phase 0 busy retry budget.
+
+    Returns ``(report, retried_count)``. Raises on exhausted retry budget.
+    """
+    delays = (*_WEBHOOK_BUSY_RETRY_DELAYS, None)  # final None = no more retries
+    for retried, delay in enumerate(delays):
+        report = apply_unit_diffs_via_helper(
+            diffs,
+            socket_path=socket_path,
+            force=force,
+            write_markers=True,
+            config_path=config_path,
+        )
+        if not report.busy:
+            return report, retried
+        if delay is None:
+            msg = (
+                f"helper returned busy after {retried + 1} attempts "
+                "(retry budget exhausted) — another deploy in flight"
+            )
+            raise ScheduledInstallError(msg)
+        sleep(delay)
+    msg = "unreachable: retry loop exited without returning"  # pragma: no cover
+    raise ScheduledInstallError(msg)  # pragma: no cover
 
 
 class ScheduledInstallError(Exception):
@@ -144,12 +387,20 @@ def _short_diff_summary(src: bytes, dst: bytes) -> str:
 
 @dataclass(frozen=True)
 class ApplyReport:
-    """Summary of what ``apply_unit_diffs`` actually did during one call."""
+    """Summary of what ``apply_unit_diffs`` actually did during one call.
+
+    ``rejected_reason``, ``busy``, ``timed_out`` are populated by
+    ``apply_unit_diffs_via_helper`` (#240 Phase 6); the direct apply path
+    leaves them at their defaults.
+    """
 
     written: tuple[ScheduledUnitInstall, ...]  # ABSENT + (DRIFTED with force)
     skipped_identical: tuple[ScheduledUnitInstall, ...]
     enabled_timers: tuple[ScheduledUnitInstall, ...]
     reloaded: bool
+    rejected_reason: str | None = None
+    busy: bool = False
+    timed_out: bool = False
 
 
 def _validate_unit_path_safety(
@@ -275,3 +526,493 @@ def apply_unit_diffs(
         enabled_timers=tuple(enabled),
         reloaded=reloaded,
     )
+
+
+# ---------------------------------------------------------------------------
+# #240 Phase 6 — apply_unit_diffs_via_helper (client for unit-installer socket)
+# ---------------------------------------------------------------------------
+
+
+def apply_unit_diffs_via_helper(
+    diffs: list[UnitDiff],
+    *,
+    socket_path: Path,
+    force: bool = False,
+    write_markers: bool = False,
+    config_path: Path | None = None,
+) -> ApplyReport:
+    """Apply ``diffs`` by sending a manifest to the unit-installer helper.
+
+    Parallel to :func:`apply_unit_diffs` but goes through #240's socket
+    helper instead of writing to disk directly. The helper enforces
+    SO_PEERCRED, an allowlist (baked at scaffold-render time), and
+    TOCTOU realpath checks; this client does client-side fast-fail
+    validation (same path-safety checks) before the round-trip.
+
+    Args:
+        diffs: Unit diffs to converge.
+        socket_path: Path of the helper's listening socket.
+        force: Overwrite DRIFTED units (mirrors apply_unit_diffs's ``force``).
+        write_markers: If True, include a marker payload on each install_file
+            op so the helper writes a .fraisier-managed sidecar (consumed by
+            #240's prune planner).
+        config_path: ``fraises.yaml`` path; required when ``write_markers`` is
+            True. The client resolves it via ``Path.resolve(strict=True)``
+            before sending so the marker's ``fraises_yaml_path`` is absolute.
+
+    Returns:
+        ``ApplyReport`` populated from the helper's structured response.
+        On ``rejected`` / ``busy`` / ``timeout`` responses the corresponding
+        field is set and ``written`` is an empty tuple.
+
+    Raises:
+        ScheduledInstallError: If client-side path-safety validation fails
+            (same conditions as apply_unit_diffs's _validate_unit_path_safety).
+    """
+    import socket as _socket
+
+    # Same client-side fast-fail as the direct apply path.
+    for diff in diffs:
+        _validate_unit_path_safety(diff.install, systemd_dest_dir=SYSTEMD_DEST_DIR)
+
+    missing = [d for d in diffs if d.state is UnitState.MISSING_SOURCE]
+    if missing:
+        names = ", ".join(d.install.unit_name for d in missing)
+        msg = f"source not found for: {names}"
+        raise ScheduledInstallError(msg)
+
+    if not force:
+        drifted = [d for d in diffs if d.state is UnitState.DRIFTED]
+        if drifted:
+            names = ", ".join(d.install.unit_name for d in drifted)
+            msg = (
+                f"drifted units (pass force=True to overwrite): {names}. "
+                "Helper would have rejected the manifest at validate."
+            )
+            raise ScheduledInstallError(msg)
+
+    resolved_config_path: Path | None = None
+    if write_markers:
+        if config_path is None:
+            msg = "write_markers=True requires config_path"
+            raise ScheduledInstallError(msg)
+        resolved_config_path = config_path.resolve(strict=True)
+
+    manifest = _build_helper_manifest(
+        diffs,
+        force=force,
+        resolved_config_path=resolved_config_path,
+    )
+
+    if not manifest.operations:
+        # Nothing to do — no need to even open the socket.
+        return ApplyReport(
+            written=(),
+            skipped_identical=tuple(
+                d.install for d in diffs if d.state is UnitState.IDENTICAL
+            ),
+            enabled_timers=(),
+            reloaded=False,
+        )
+
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.connect(str(socket_path))
+    try:
+        return _apply_via_open_socket(sock, manifest, diffs)
+    finally:
+        sock.close()
+
+
+def _apply_via_open_socket(
+    sock: Any, manifest: Manifest, diffs: list[UnitDiff]
+) -> ApplyReport:
+    """Send ``manifest`` on an already-connected ``sock`` and parse the report.
+
+    Factored from ``apply_unit_diffs_via_helper`` so tests can drive the
+    socket layer with a ``socket.socketpair`` (bypassing the connect step,
+    which AF_UNIX socketpair sockets reject as "already connected").
+    """
+    response = _exchange_manifest(sock, manifest)
+    return _build_apply_report(response, diffs)
+
+
+def _build_helper_manifest(
+    diffs: list[UnitDiff],
+    *,
+    force: bool,
+    resolved_config_path: Path | None,
+) -> Manifest:
+    """Construct a manifest from a list of ``UnitDiff``s.
+
+    Three op kinds emitted:
+
+    - ``ABSENT`` + (``DRIFTED`` with ``force``) → ``InstallFileOp``.
+    - ``IDENTICAL`` with marker missing on disk → ``WriteMarkerOp``
+      (auto-backfill migration for v0.28.0-installed units; Phase 0
+      decision #2 of #240 follow-up 04). Idempotent on re-run: once the
+      marker exists no op is emitted for that diff.
+    - All other ``IDENTICAL`` → skipped, no round-trip.
+
+    Each install_file (not write_marker) emits a ``daemon_reload``
+    post-action exactly once (deduplicated) and an ``enable_now`` per
+    ``.timer`` op — write_marker only writes the sidecar; the unit is
+    already installed and active.
+    """
+    from datetime import datetime
+
+    from fraisier.unit_installer_protocol import (
+        DaemonReloadAction,
+        EnableNowAction,
+        InstallFileOp,
+        Manifest,
+        MarkerMeta,
+        WriteMarkerOp,
+    )
+
+    operations: list = []
+    enable_actions: list[EnableNowAction] = []
+    install_file_count = 0
+    for diff in diffs:
+        if diff.state is UnitState.MISSING_SOURCE:
+            continue  # already raised
+        if diff.state is UnitState.DRIFTED and not force:
+            continue  # already raised above; defence-in-depth
+
+        marker: MarkerMeta | None = None
+        if resolved_config_path is not None:
+            marker = MarkerMeta(
+                fraises_yaml_path=str(resolved_config_path),
+                fraise_name=diff.install.fraise_name,
+                environment=diff.install.environment,
+                job_name=diff.install.job_name,
+            )
+
+        if diff.state is UnitState.IDENTICAL:
+            if (
+                marker is not None
+                and not marker_path_for(diff.install.dest_path).exists()
+            ):
+                operations.append(
+                    WriteMarkerOp(dest_path=str(diff.install.dest_path), marker=marker)
+                )
+            continue
+
+        # ABSENT or DRIFTED+force → install_file
+        operations.append(
+            InstallFileOp(
+                source_path=str(diff.install.source_path),
+                dest_path=str(diff.install.dest_path),
+                mode="0644",
+                force=force,
+                marker=marker,
+            )
+        )
+        install_file_count += 1
+        if diff.install.is_timer:
+            enable_actions.append(EnableNowAction(unit=diff.install.unit_name))
+
+    post_actions: list = []
+    if install_file_count > 0:
+        post_actions.append(DaemonReloadAction())
+    post_actions.extend(enable_actions)
+
+    deploy_id = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ") + "-via-helper"
+    return Manifest(
+        version=1,
+        deploy_id=deploy_id,
+        operations=tuple(operations),
+        post_actions=tuple(post_actions),
+    )
+
+
+def _exchange_manifest(sock: Any, manifest: Manifest) -> dict:
+    """Send ``manifest`` over ``sock`` and return the parsed JSON response."""
+    import contextlib
+    import json as _json
+
+    from fraisier.unit_installer_protocol import serialize_manifest
+
+    sock.sendall(serialize_manifest(manifest))
+    with contextlib.suppress(OSError):
+        sock.shutdown(1)  # SHUT_WR — signal we're done sending
+
+    raw = bytearray()
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        raw.extend(chunk)
+        if b"\n" in raw:
+            break
+    return _json.loads(bytes(raw))
+
+
+def _build_apply_report(response: dict, diffs: list[UnitDiff]) -> ApplyReport:
+    """Translate a helper response dict into an ``ApplyReport``."""
+    status = response.get("status")
+    skipped_identical = tuple(
+        d.install for d in diffs if d.state is UnitState.IDENTICAL
+    )
+    if status == "ok":
+        installed_basenames = set(response.get("installed", []))
+        written = tuple(
+            d.install for d in diffs if d.install.unit_name in installed_basenames
+        )
+        enabled = tuple(install for install in written if install.is_timer)
+        reloaded = any(
+            a.get("kind") == "daemon-reload" for a in response.get("post_actions", [])
+        )
+        return ApplyReport(
+            written=written,
+            skipped_identical=skipped_identical,
+            enabled_timers=enabled,
+            reloaded=reloaded,
+        )
+    if status == "rejected":
+        return ApplyReport(
+            written=(),
+            skipped_identical=skipped_identical,
+            enabled_timers=(),
+            reloaded=False,
+            rejected_reason=response.get("reason", "(no reason provided)"),
+        )
+    if status == "busy":
+        return ApplyReport(
+            written=(),
+            skipped_identical=skipped_identical,
+            enabled_timers=(),
+            reloaded=False,
+            busy=True,
+            rejected_reason=response.get("reason"),
+        )
+    if status == "timeout":
+        return ApplyReport(
+            written=(),
+            skipped_identical=skipped_identical,
+            enabled_timers=(),
+            reloaded=False,
+            timed_out=True,
+            rejected_reason=response.get("reason"),
+        )
+    msg = f"helper returned unknown status: {status!r}"
+    raise ScheduledInstallError(msg)
+
+
+# ---------------------------------------------------------------------------
+# #240 follow-up 04 Phase 1 — marker convention (read helpers)
+# ---------------------------------------------------------------------------
+
+
+class CorruptMarker(Exception):
+    """Raised by ``read_marker`` when a marker file can't be parsed.
+
+    The prune planner catches this and converts to a ``stale_marker`` plan
+    so the operator can clean up by-product without manual intervention.
+    """
+
+
+def marker_path_for(unit_dest: Path) -> Path:
+    """Return the sidecar path for ``unit_dest`` (``<unit>.fraisier-managed``)."""
+    return unit_dest.with_name(unit_dest.name + MARKER_SUFFIX)
+
+
+def build_marker(
+    install: ScheduledUnitInstall, *, resolved_config_path: Path
+) -> MarkerMeta:
+    """Build a ``MarkerMeta`` for ``install`` from a pre-resolved config path.
+
+    ``resolved_config_path`` MUST be absolute — the caller is responsible for
+    calling ``Path.resolve(strict=True)`` BEFORE invoking this. The marker's
+    ``fraises_yaml_path`` carries the absolute form so prune planners
+    launched from different working directories converge on the same
+    project identity (see ``MarkerMeta`` docstring).
+    """
+    from fraisier.unit_installer_protocol import MarkerMeta as _MarkerMeta
+
+    if not resolved_config_path.is_absolute():
+        msg = (
+            f"build_marker requires an absolute config path; got "
+            f"{resolved_config_path!r}"
+        )
+        raise ScheduledInstallError(msg)
+    return _MarkerMeta(
+        fraises_yaml_path=str(resolved_config_path),
+        fraise_name=install.fraise_name,
+        environment=install.environment,
+        job_name=install.job_name,
+    )
+
+
+def read_marker(marker_path: Path) -> MarkerMeta:
+    """Parse a marker file on disk into a ``MarkerMeta``.
+
+    Raises ``CorruptMarker`` on JSON decode failure, missing required fields,
+    or OSError reading the file. The prune planner catches this and tags
+    the marker as ``stale_marker`` so the operator can clean up.
+    """
+    import json as _json
+
+    from fraisier.unit_installer_protocol import MarkerMeta as _MarkerMeta
+
+    try:
+        raw = marker_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        msg = f"could not read marker {marker_path}: {exc}"
+        raise CorruptMarker(msg) from exc
+    try:
+        payload = _json.loads(raw)
+    except _json.JSONDecodeError as exc:
+        msg = f"marker {marker_path} is not valid JSON: {exc}"
+        raise CorruptMarker(msg) from exc
+    if not isinstance(payload, dict):
+        msg = f"marker {marker_path} is not a JSON object"
+        raise CorruptMarker(msg)
+    required = ("fraises_yaml_path", "fraise_name", "environment", "job_name")
+    missing = [k for k in required if k not in payload]
+    if missing:
+        msg = f"marker {marker_path} missing required fields: {missing}"
+        raise CorruptMarker(msg)
+    return _MarkerMeta(
+        fraises_yaml_path=payload["fraises_yaml_path"],
+        fraise_name=payload["fraise_name"],
+        environment=payload["environment"],
+        job_name=payload["job_name"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# #240 follow-up 04 Phase 3 — prune_orphans planner (pure)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PrunePlan:
+    """One unit-or-marker that ``--prune`` would act on.
+
+    - ``kind="orphan"``: marker + unit both exist, but the unit isn't declared
+      in the current ``fraises.yaml``. Execution will disable+stop the unit
+      (timer first) and remove both the unit file and its marker.
+    - ``kind="stale_marker"``: marker exists without a paired unit (or the
+      marker is corrupt). Execution only deletes the marker; no systemctl call.
+    """
+
+    kind: str  # "orphan" | "stale_marker"
+    marker_path: Path
+    unit_name: str | None = None
+    unit_path: Path | None = None
+    is_timer: bool = False
+    reason: str | None = None
+
+
+def prune_orphans(
+    config: FraisierConfig,
+    environment: str,
+    *,
+    systemd_dest_dir: Path | None = None,
+) -> list[PrunePlan]:
+    """Plan orphan removals for ``environment`` against ``systemd_dest_dir``.
+
+    Both sides of the project-identity comparison are resolved to absolute
+    paths before compare:
+
+    - The marker's ``fraises_yaml_path`` is stored absolute (the helper
+      writes only what the caller-resolved client sent).
+    - ``config.config_path`` is resolved here.
+
+    So a prune launched from a different CWD than the install converges on
+    the same project. Per-env scoping (``marker.environment == environment``)
+    keeps a ``--env staging --prune`` run from sweeping production units that
+    happen to share a host.
+
+    Sort: orphan timers → orphan services → stale_markers. The CLI executes
+    in this order so a timer can't fire mid-prune.
+    """
+    dest_dir = systemd_dest_dir if systemd_dest_dir is not None else SYSTEMD_DEST_DIR
+    declared = {u.unit_name for u in enumerate_scheduled_units(config, environment)}
+    try:
+        resolved_config_path = config.config_path.resolve(strict=True)
+    except FileNotFoundError:
+        resolved_config_path = config.config_path.resolve()
+
+    plans: list[PrunePlan] = []
+    for marker in find_markers(dest_dir):
+        unit_name = marker.name[: -len(MARKER_SUFFIX)]
+        try:
+            meta = read_marker(marker)
+        except CorruptMarker as exc:
+            plans.append(
+                PrunePlan(
+                    kind="stale_marker",
+                    marker_path=marker,
+                    unit_name=unit_name,
+                    reason=f"corrupt marker: {exc}",
+                )
+            )
+            continue
+
+        marker_yaml_path = Path(meta.fraises_yaml_path).resolve()
+        if marker_yaml_path != resolved_config_path:
+            continue  # different project on the same host; not our business
+        if meta.environment != environment:
+            continue  # per-env scoping
+
+        unit_path = dest_dir / unit_name
+        if not unit_path.exists():
+            plans.append(
+                PrunePlan(
+                    kind="stale_marker",
+                    marker_path=marker,
+                    unit_name=unit_name,
+                    reason="unit file missing on disk",
+                )
+            )
+            continue
+        if unit_name in declared:
+            continue  # still declared; no action
+
+        plans.append(
+            PrunePlan(
+                kind="orphan",
+                marker_path=marker,
+                unit_name=unit_name,
+                unit_path=unit_path,
+                is_timer=unit_name.endswith(".timer"),
+            )
+        )
+
+    # Sort: orphan timers, orphan services, stale_markers last.
+    plans.sort(
+        key=lambda p: (
+            p.kind != "orphan",  # orphans first (False < True)
+            not p.is_timer,  # within orphans: timers first
+        )
+    )
+    return plans
+
+
+def find_markers(systemd_dest_dir: Path) -> list[Path]:
+    """Return every ``*.fraisier-managed`` path under ``systemd_dest_dir``.
+
+    Defence-in-depth: a marker whose paired unit name would fail
+    ``validate_service_name`` is silently skipped (the marker's existence is
+    advisory; if its name is malformed someone planted it manually). The
+    skip prevents future shell-injection vectors if the unit name flows into
+    a systemctl invocation downstream.
+    """
+    if not systemd_dest_dir.exists():
+        return []
+    markers: list[Path] = []
+    for entry in systemd_dest_dir.iterdir():
+        if not entry.name.endswith(MARKER_SUFFIX):
+            continue
+        unit_name = entry.name[: -len(MARKER_SUFFIX)]
+        try:
+            validate_service_name(unit_name)
+        except ValueError:
+            continue
+        # Reject .. and leading dot at the unit-name layer too (paired check
+        # with _validate_unit_path_safety).
+        if ".." in unit_name or unit_name.startswith("."):
+            continue
+        markers.append(entry)
+    return sorted(markers)

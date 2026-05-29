@@ -33,6 +33,8 @@ import socket
 import subprocess
 import sys
 
+from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
+
 logger = logging.getLogger(__name__)
 
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
@@ -40,6 +42,8 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
 )
 
 _SYSTEMCTL = "/usr/bin/systemctl"
+
+_peer_creds_skip_warned = False
 
 
 def _send_error(conn: socket.socket, message: str) -> None:
@@ -141,6 +145,39 @@ def _handle_connection(conn: socket.socket, allowed_services: frozenset[str]) ->
         _send_response(conn, response)
 
 
+def _serve_connection(
+    conn: socket.socket,
+    *,
+    expected_uid: int | None,
+    allowed_services: frozenset[str],
+) -> None:
+    """Enforce SO_PEERCRED then dispatch one request to ``_handle_connection``.
+
+    ``expected_uid=None`` is the v0.29 transitional fallback — log a one-time
+    warning (the unit hasn't been re-rendered with ``--deploy-uid`` yet) and
+    process the request anyway.
+    """
+    global _peer_creds_skip_warned
+    if expected_uid is None:
+        if not _peer_creds_skip_warned:
+            logger.warning(
+                "SO_PEERCRED check disabled: --deploy-uid not provided. "
+                "Re-render this helper's unit with v0.29 scaffold-install "
+                "to close the trust gap (will become mandatory in v0.30)."
+            )
+            _peer_creds_skip_warned = True
+        _handle_connection(conn, allowed_services)
+        return
+    try:
+        check_peer_creds(conn, expected_uid=expected_uid)
+    except PermissionError as exc:
+        logger.warning("Rejecting connection: %s", exc)
+        with conn:
+            _send_error(conn, f"peer credentials rejected: {exc}")
+        return
+    _handle_connection(conn, allowed_services)
+
+
 def _build_server_socket(allowed_services: frozenset[str]) -> socket.socket:
     """Acquire socket from systemd socket activation (LISTEN_FDS protocol).
 
@@ -188,7 +225,8 @@ def main() -> None:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    allowed_services: frozenset[str] = frozenset(sys.argv[1:])
+    deploy_uid, remaining = extract_deploy_uid(sys.argv[1:])
+    allowed_services: frozenset[str] = frozenset(remaining)
 
     if not allowed_services:
         logger.warning(
@@ -205,7 +243,11 @@ def main() -> None:
                 logger.error("accept() failed: %s", exc)
                 break
             try:
-                _handle_connection(conn, allowed_services)
+                _serve_connection(
+                    conn,
+                    expected_uid=deploy_uid,
+                    allowed_services=allowed_services,
+                )
             except Exception as exc:
                 # Bare-except is intentional here: any handler crash must
                 # not bring down the systemd-supervised socket server.

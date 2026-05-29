@@ -12,18 +12,22 @@ on re-run.
 from __future__ import annotations
 
 import difflib
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
 
 from fraisier.runners import LocalRunner
 from fraisier.scheduled_install import (
+    PrunePlan,
     ScheduledInstallError,
     UnitDiff,
     UnitState,
     apply_unit_diffs,
+    apply_unit_diffs_via_helper,
     classify_unit,
     enumerate_scheduled_units,
+    prune_orphans,
 )
 
 from ._helpers import console, err_console, require_config
@@ -167,6 +171,35 @@ def _print_verbose_diff(diff: UnitDiff) -> None:
     default=None,
     help="Narrow to a single fraise name (otherwise: all type:scheduled fraises).",
 )
+@click.option(
+    "--via-socket",
+    "via_socket",
+    is_flag=True,
+    help=(
+        "Route the apply through the unit-installer socket helper instead of "
+        "writing /etc/systemd/system/ directly. Drops the sudo requirement. "
+        "Helper must be on the host (requires `fraisier scaffold-install`)."
+    ),
+)
+@click.option(
+    "--socket-path",
+    "socket_path_override",
+    default=None,
+    help=(
+        "Override the helper socket path. Defaults to "
+        "/run/fraisier/<env>/unit-installer-<project>.sock."
+    ),
+)
+@click.option(
+    "--prune",
+    "prune",
+    is_flag=True,
+    help=(
+        "Disable + remove orphan units (those still on disk under their "
+        "fraisier-managed marker but no longer declared in fraises.yaml). "
+        "Per-env scoped. Requires --yes (or an interactive TTY) to confirm."
+    ),
+)
 @click.pass_context
 def scheduled_install_cmd(
     ctx: click.Context,
@@ -177,6 +210,9 @@ def scheduled_install_cmd(
     yes: bool,
     verbose: bool,
     fraise: str | None,
+    via_socket: bool,
+    socket_path_override: str | None,
+    prune: bool,
 ) -> None:
     """Install per-job systemd unit files declared by type:scheduled fraises.
 
@@ -219,6 +255,17 @@ def scheduled_install_cmd(
         err_console.print(_format_env_list(available))
         ctx.exit(EXIT_POLICY_VIOLATION)
 
+    if prune:
+        if via_socket:
+            err_console.print(
+                "[red]Error:[/red] --prune + --via-socket isn't supported in "
+                "v0.29; run with operator-typed sudo for now. Planned for v0.30."
+            )
+            ctx.exit(EXIT_POLICY_VIOLATION)
+        plans = prune_orphans(config, env)
+        _run_prune(plans, ctx, yes=yes, dry_run=dry_run)
+        return
+
     units = enumerate_scheduled_units(config, env)
     if fraise is not None:
         units = [u for u in units if u.fraise_name == fraise]
@@ -252,7 +299,102 @@ def scheduled_install_cmd(
         ctx.exit(EXIT_OK)
 
     # Real apply path.
-    _run_apply(diffs, ctx, force=force, yes=yes, verbose=verbose)
+    _run_apply(
+        diffs,
+        ctx,
+        force=force,
+        yes=yes,
+        verbose=verbose,
+        via_socket=via_socket,
+        socket_path=_resolve_socket_path(config, env, override=socket_path_override)
+        if via_socket
+        else None,
+        config_path=Path(config.config_path) if via_socket else None,
+    )
+
+
+def _run_prune(
+    plans: list[PrunePlan],
+    ctx: click.Context,
+    *,
+    yes: bool,
+    dry_run: bool,
+) -> None:
+    """--prune flow. v0.29 uses the operator-sudo path (direct fs + systemctl)."""
+    orphan_count = sum(1 for p in plans if p.kind == "orphan")
+    stale_count = sum(1 for p in plans if p.kind == "stale_marker")
+
+    if not plans:
+        console.print("No orphan units to prune. Already converged.")
+        ctx.exit(EXIT_OK)
+
+    console.print(
+        f"fraisier scheduled-install --prune ({'dry-run' if dry_run else 'apply'})"
+    )
+    for plan in plans:
+        if plan.kind == "orphan":
+            console.print(
+                f"  [orphan] {plan.unit_name}  (disable+stop, remove unit + marker)"
+            )
+        else:
+            console.print(f"  [stale_marker] {plan.marker_path.name}  ({plan.reason})")
+
+    if dry_run:
+        console.print(
+            f"Would prune {orphan_count} orphan unit(s) "
+            f"and {stale_count} stale marker(s)."
+        )
+        ctx.exit(EXIT_OK)
+
+    if not yes:
+        if not click.confirm(
+            f"About to disable + remove {orphan_count} unit(s) and "
+            f"{stale_count} stale marker(s). Proceed?",
+            default=False,
+        ):
+            console.print("Aborted by operator.")
+            ctx.exit(EXIT_OK)
+
+    # Execute. Direct fs + systemctl invocations under operator-typed sudo.
+    runner = LocalRunner()
+    failures: list[str] = []
+    for plan in plans:
+        if plan.kind == "orphan" and plan.unit_name:
+            if plan.is_timer:
+                try:
+                    runner.run(["systemctl", "disable", "--now", plan.unit_name])
+                except OSError as exc:
+                    failures.append(f"disable {plan.unit_name}: {exc}")
+            else:
+                try:
+                    runner.run(["systemctl", "stop", plan.unit_name])
+                except OSError as exc:
+                    failures.append(f"stop {plan.unit_name}: {exc}")
+
+        if plan.unit_path is not None:
+            try:
+                plan.unit_path.unlink(missing_ok=True)
+            except OSError as exc:
+                failures.append(f"unlink {plan.unit_path}: {exc}")
+        try:
+            plan.marker_path.unlink(missing_ok=True)
+        except OSError as exc:
+            failures.append(f"unlink {plan.marker_path}: {exc}")
+
+    # Single daemon-reload after all removes.
+    try:
+        runner.run(["systemctl", "daemon-reload"])
+    except OSError as exc:
+        failures.append(f"daemon-reload: {exc}")
+
+    if failures:
+        for f in failures:
+            err_console.print(f"[red]Error:[/red] {f}")
+        ctx.exit(EXIT_OPERATOR_ERROR)
+    console.print(
+        f"Pruned {orphan_count} orphan unit(s) and {stale_count} stale marker(s)."
+    )
+    ctx.exit(EXIT_OK)
 
 
 def _run_validate_only(
@@ -295,6 +437,9 @@ def _run_apply(
     force: bool,
     yes: bool,
     verbose: bool,
+    via_socket: bool = False,
+    socket_path: Path | None = None,
+    config_path: Path | None = None,
 ) -> None:
     """Real apply path. Prompts unless ``yes``."""
     if verbose:
@@ -322,6 +467,38 @@ def _run_apply(
             console.print("Aborted by operator.")
             ctx.exit(EXIT_OK)
 
+    if via_socket:
+        if socket_path is None or not socket_path.is_socket():
+            err_console.print(
+                "[red]Error:[/red] unit-installer socket not found at "
+                f"[bold]{socket_path}[/bold]. "
+                "This host has not been bootstrapped with the v0.29 helper. "
+                "Run [bold]fraisier scaffold-install --yes[/bold] first."
+            )
+            ctx.exit(EXIT_OPERATOR_ERROR)
+        try:
+            report = apply_unit_diffs_via_helper(
+                diffs,
+                socket_path=socket_path,
+                force=force,
+                write_markers=config_path is not None,
+                config_path=config_path,
+            )
+        except ScheduledInstallError as exc:
+            err_console.print(f"[red]Error:[/red] {exc}")
+            ctx.exit(EXIT_OPERATOR_ERROR)
+        if report.rejected_reason is not None:
+            err_console.print(
+                f"[red]Helper rejected manifest:[/red] {report.rejected_reason}"
+            )
+            ctx.exit(EXIT_POLICY_VIOLATION)
+        console.print(
+            f"Installed {len(report.written)} unit(s) via helper; "
+            f"enabled {len(report.enabled_timers)} timer(s); "
+            f"skipped {len(report.skipped_identical)} identical."
+        )
+        ctx.exit(EXIT_OK)
+
     try:
         report = apply_unit_diffs(diffs, runner=LocalRunner(), force=force)
     except ScheduledInstallError as exc:
@@ -337,3 +514,11 @@ def _run_apply(
         f"skipped {len(report.skipped_identical)} identical."
     )
     ctx.exit(EXIT_OK)
+
+
+def _resolve_socket_path(
+    config: FraisierConfig, env: str, *, override: str | None
+) -> Path:
+    if override:
+        return Path(override)
+    return Path(f"/run/fraisier/{env}/unit-installer-{config.project_name}.sock")

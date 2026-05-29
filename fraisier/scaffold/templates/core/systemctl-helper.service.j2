@@ -6,7 +6,7 @@ Documentation=https://fraisier.readthedocs.io/
 
 [Service]
 Type=simple
-ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-systemctl-helper{% for svc in allowed_services %} {{ svc }}{% endfor %}
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-systemctl-helper --deploy-user {{ scaffold.deploy_user }}{% for svc in allowed_services %} {{ svc }}{% endfor %}
 
 # Prevent Python from creating root-owned __pycache__ dirs in the deploy user's
 # tool installation when the helper runs as root.

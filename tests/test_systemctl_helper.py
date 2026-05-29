@@ -15,6 +15,7 @@ from fraisier.systemctl_helper import (
     _handle_connection,
     _send_error,
     _send_response,
+    _serve_connection,
 )
 
 # ---------------------------------------------------------------------------
@@ -465,3 +466,48 @@ class TestMainConnectionErrorLogging:
         assert boom in call_args.args, (
             f"Expected {boom!r} in logger.exception args, got {call_args.args!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 cycle 3.1 — SO_PEERCRED retrofit
+# ---------------------------------------------------------------------------
+
+
+class TestServeConnectionEnforcesPeerCreds:
+    """``_serve_connection`` runs ``check_peer_creds`` before dispatching."""
+
+    def test_rejects_non_matching_uid(self):
+        import os
+
+        server, client = _make_socket_pair()
+        wrong_uid = os.getuid() + 1
+        _serve_connection(
+            server,
+            expected_uid=wrong_uid,
+            allowed_services=frozenset({"foo.service"}),
+        )
+        data = _recv_json(client)
+        client.close()
+        assert data["ok"] is False
+        assert "peer" in data["error"].lower()
+
+    def test_none_expected_uid_skips_check(self):
+        """``expected_uid=None`` is the transitional fallback for old units."""
+        import os
+
+        server, client = _make_socket_pair()
+        # Send a daemon-reload request so _handle_connection has work.
+        client.sendall(b'{"action": "daemon-reload"}\n')
+        client.shutdown(_socket.SHUT_WR)
+        with patch("fraisier.systemctl_helper.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            _serve_connection(
+                server,
+                expected_uid=None,
+                allowed_services=frozenset(),
+            )
+        # The handler ran (dispatched daemon-reload); peer-creds was bypassed.
+        run.assert_called_once()
+        del os, client

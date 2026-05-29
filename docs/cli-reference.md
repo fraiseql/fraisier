@@ -670,6 +670,79 @@ sudo fraisier scheduled-install --env <env>
 
 Skipping steps 1–2 leaves the on-disk `fraisier-<project>-systemctl-helper.service` carrying the *old* allowlist (rendered before the new job was declared). Webhook-driven redeploys of the new timer will then be rejected by the helper socket until those steps run. The change to `_collect_allowed_services` in v0.28.0 updates the *generator*; the rendered helper unit on each host is a separate artefact that only refreshes when `scaffold-install` runs.
 
+#### `--via-socket` (v0.29+)
+
+By default `fraisier scheduled-install` writes directly into `/etc/systemd/system/` and runs `systemctl` itself — both of which require root, so the operator must invoke the whole command under `sudo`.
+
+The `--via-socket` flag routes the apply through the new `fraisier-unit-installer` socket helper (also rendered by `scaffold` in v0.29). The helper runs as root under systemd; the CLI itself can run as the deploy user. Drops the `sudo` requirement and gains real SO_PEERCRED enforcement, a render-time allowlist, and TOCTOU realpath checks on the dest parent.
+
+```bash
+fraisier scheduled-install --env production --via-socket --yes
+```
+
+By default the CLI uses `/run/fraisier/<env>/unit-installer-<project>.sock`. Override with `--socket-path` if you've rendered the helper to a different path.
+
+The helper must be on the host first: run `fraisier scaffold && fraisier scaffold-install --yes` once on each host after upgrading to v0.29. If the socket isn't present, `--via-socket` fails with an actionable error pointing at `scaffold-install`.
+
+`--via-socket` will become the default in a future release; the legacy direct-write path will stay available behind an opt-out flag for at least one release after that.
+
+#### `--prune` (v0.29+)
+
+Removes orphan units — those still on disk under their `.fraisier-managed` marker but no longer declared in `fraises.yaml`. Operator-driven cleanup for fraises (or job entries within them) that have been removed from config.
+
+```bash
+# List what would be pruned for this env. No writes.
+sudo fraisier scheduled-install --env production --prune --dry-run
+
+# Actually disable + remove the orphans.
+sudo fraisier scheduled-install --env production --prune --yes
+```
+
+`--prune` walks `/etc/systemd/system/` for `*.fraisier-managed` markers whose `environment` field matches `--env` and whose `fraises_yaml_path` resolves to the same file as the current config (per-yaml + per-env scoping — running `--prune --env staging` from one project won't sweep another project's production units that happen to share a host). For each match:
+
+1. If the unit is `.timer`, `systemctl disable --now` it first (so it can't fire mid-prune).
+2. Else (the `.service` half), `systemctl stop` it.
+3. Remove the unit file and its `.fraisier-managed` sidecar.
+4. After all removes, `systemctl daemon-reload` once.
+
+Markers without a paired unit on disk (operator manually `rm`'d the `.timer` but left the sidecar) or with corrupt JSON are classified as `stale_marker` — the marker is cleaned up, no `systemctl` invocations.
+
+**Markers are advisory, not authenticated.** They live in `/etc/systemd/system/`, which is root-only-write — an unprivileged adversary on the host cannot plant fake markers to bait `--prune` into removing a victim unit. A root-side adversary can do anything anyway; the marker convention is a cross-project / cross-env safety net for honest operator mistakes, not a defense against root.
+
+v0.29 only supports `--prune` under operator-typed `sudo` (the CLI walks the filesystem and invokes `systemctl` directly). `--prune --via-socket` will land in v0.30 with `RemoveFileOp` + ordered pre-actions in the helper protocol.
+
+#### Webhook-driven auto-install (v0.29+)
+
+After running `fraisier scaffold-install` once per host, webhook deploys of `type: scheduled` fraises **automatically** install new unit files into `/etc/systemd/system/` via the unit-installer socket helper. The manual `sudo fraisier scheduled-install` workflow becomes an override (rollback debugging, change-control), not a routine post-deploy step.
+
+The drift policy per env lives in fraises.yaml:
+
+```yaml
+fraises:
+  alerter:
+    type: scheduled
+    environments:
+      production:
+        scheduled:
+          auto_install:
+            on_missing: install       # default — copy new units from worktree
+            on_drift: fail             # default — refuse to overwrite hand-edits
+            # on_drift: overwrite      # opt-in: repo is source of truth
+            # on_drift: skip           # opt-in: leave hand-edits, log warning
+```
+
+`on_drift` choices:
+
+- **`fail`** (default): webhook deploy aborts before any write when source and dest differ. The operator sees the drifted unit names in the deploy error. Resolve by reverting the hand-edit, running `fraisier scheduled-install --env <env> --validate-only` to confirm convergence, or opting into `overwrite` / `skip` per-fraise.
+- **`overwrite`**: webhook silently replaces the drifted dest with source. A `WARNING` is logged listing each unit overwritten. The `deploy_event` carries `drift_overwrites: [...]` so external tooling can surface the change.
+- **`skip`**: webhook leaves drifted dest alone, logs a `WARNING`, and records the units in `deploy_event.skipped_drift_units`. ABSENT units (new declarations) still install.
+
+Hosts that haven't been bootstrapped with v0.29's helper (no `/run/fraisier/<env>/unit-installer-<project>.sock`) silently fall back to the legacy systemctl path with a `WARNING` log pointing at `scaffold-install`. Run `fraisier scaffold-install --yes` once per host to close the gap.
+
+Concurrent-deploy contention: if another deploy is in flight when the webhook tries to install, the helper returns `busy` and the deployer retries with 1s / 3s / 10s backoffs. Past the budget (3 attempts, ≤30s total wait), the deploy fails with `another deploy in flight` so the operator knows it's a contention issue, not a code bug.
+
+The webhook never runs `--prune`. Orphan removal stays an explicit operator opt-in.
+
 ---
 
 ### fraisier validate-deployment

@@ -13,6 +13,7 @@ from fraisier.install_helper import (
     _handle_connection,
     _send_error,
     _send_response,
+    _serve_connection,
 )
 
 _DEFAULT_ALLOWED = ["uv", "sync", "--frozen"]
@@ -297,3 +298,27 @@ class TestMainConnectionErrorLogging:
         assert boom in call_args.args, (
             f"Expected {boom!r} in logger.exception args, got {call_args.args!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 cycle 3.1 — SO_PEERCRED retrofit
+# ---------------------------------------------------------------------------
+
+
+class TestServeConnectionEnforcesPeerCreds:
+    """``_serve_connection`` runs ``check_peer_creds`` before dispatching."""
+
+    def test_rejects_non_matching_uid(self):
+        import os
+
+        server, client = _make_socket_pair()
+        wrong_uid = os.getuid() + 1
+        _serve_connection(
+            server,
+            expected_uid=wrong_uid,
+            allowed_command=["uv", "sync", "--frozen"],
+        )
+        data = _recv_json(client)
+        client.close()
+        assert data["ok"] is False
+        assert "peer" in data["error"].lower()
