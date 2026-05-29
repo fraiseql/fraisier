@@ -25,9 +25,11 @@ from fraisier.unit_installer_protocol import (
     Allowlist,
     AllowlistEntry,
     DaemonReloadAction,
+    EnableNowAction,
     InstallFileOp,
     Manifest,
     ManifestRejected,
+    MarkerMeta,
     serialize_manifest,
 )
 
@@ -233,3 +235,104 @@ def test_execute_install_file_op_aborts_on_dest_parent_symlink_flip(
         _execute_install_file_op(op, resolved=resolved)
     # Critically: no file landed at the adversary's target.
     assert not (outside / "foo.timer").exists()
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4.6 — daemon_reload + enable_now post-actions
+# ---------------------------------------------------------------------------
+
+
+def test_handle_manifest_runs_daemon_reload_and_enable_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Post-actions invoke systemctl with the expected argv; result is in response."""
+    import subprocess
+
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+    )
+    manifest = Manifest(
+        version=1,
+        deploy_id="t",
+        operations=(op,),
+        post_actions=(DaemonReloadAction(), EnableNowAction(unit="foo.timer")),
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("fraisier.unit_installer_helper.subprocess.run", fake_run)
+
+    server, client = _socket_pair()
+    client.sendall(serialize_manifest(manifest))
+    client.shutdown(socket.SHUT_WR)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    response = _recv_json(client)
+
+    assert response["status"] == "ok"
+    assert calls == [
+        ["/usr/bin/systemctl", "daemon-reload"],
+        ["/usr/bin/systemctl", "enable", "--now", "foo.timer"],
+    ]
+    kinds = [r["kind"] for r in response["post_actions"]]
+    assert kinds == ["daemon-reload", "enable"]
+    assert all(r["ok"] for r in response["post_actions"])
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4.7 — install_file op with marker → sidecar 0600 file
+# ---------------------------------------------------------------------------
+
+
+def test_install_file_op_with_marker_writes_sidecar_mode_0600(
+    tmp_path: Path,
+) -> None:
+    src_dir, dest_dir = _seed_layout(tmp_path)
+    source = src_dir / "foo.timer"
+    source.write_text("[Unit]\n")
+    marker = MarkerMeta(
+        fraises_yaml_path="/opt/myproj/fraises.yaml",
+        fraise_name="alerter",
+        environment="production",
+        job_name="poll",
+    )
+    op = InstallFileOp(
+        source_path=str(source),
+        dest_path=str(dest_dir / "foo.timer"),
+        mode="0644",
+        marker=marker,
+    )
+    manifest = Manifest(version=1, deploy_id="t", operations=(op,))
+
+    server, client = _socket_pair()
+    client.sendall(serialize_manifest(manifest))
+    client.shutdown(socket.SHUT_WR)
+    allowlist = _allowlist_for(src_dir, dest_dir)
+    _handle_manifest(
+        server, allowlist=allowlist, resolved=_resolve_allowlist(allowlist)
+    )
+    response = _recv_json(client)
+
+    assert response["status"] == "ok"
+    sidecar = dest_dir / "foo.timer.fraisier-managed"
+    assert sidecar.exists()
+    assert (sidecar.stat().st_mode & 0o777) == 0o600
+    payload = json.loads(sidecar.read_text())
+    assert payload == {
+        "version": 1,
+        "fraises_yaml_path": "/opt/myproj/fraises.yaml",
+        "fraise_name": "alerter",
+        "environment": "production",
+        "job_name": "poll",
+    }

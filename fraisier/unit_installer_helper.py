@@ -18,6 +18,7 @@ import json
 import logging
 import shutil
 import socket
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,14 +27,25 @@ from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
 from fraisier.unit_installer_protocol import (
     Allowlist,
     AllowlistEntry,
+    DaemonReloadAction,
+    DisableNowAction,
+    EnableNowAction,
     InstallFileOp,
     Manifest,
     ManifestRejected,
     MarkerMeta,
+    PostAction,
+    StopAction,
     parse_manifest,
     render_response,
     validate_manifest,
 )
+
+_SYSTEMCTL = "/usr/bin/systemctl"
+_DAEMON_RELOAD_TIMEOUT = 30
+_ENABLE_NOW_TIMEOUT = 60
+_DISABLE_NOW_TIMEOUT = 60
+_STOP_TIMEOUT = 60
 
 logger = logging.getLogger(__name__)
 
@@ -124,12 +136,55 @@ def _handle_manifest(
 
 
 def _execute_manifest(manifest: Manifest, *, resolved: ResolvedAllowlist) -> bytes:
-    """Apply each op in order. Returns a structured response."""
+    """Apply each op then each post-action in order. Returns a structured response."""
     written: list[str] = []
     for op in manifest.operations:
         _execute_install_file_op(op, resolved=resolved)
         written.append(Path(op.dest_path).name)
-    return render_response("ok", installed=written)
+    post_action_results: list[dict] = [
+        _execute_post_action(action) for action in manifest.post_actions
+    ]
+    return render_response("ok", installed=written, post_actions=post_action_results)
+
+
+def _execute_post_action(action: PostAction) -> dict:
+    """Run a systemctl-based post-action; return a structured per-op result.
+
+    The helper does NOT raise on systemctl non-zero — that's a deployment
+    issue surfaced in the response, not a manifest-validation issue. The
+    caller (Phase 6 client) decides whether to retry or surface.
+    """
+    cmd, timeout = _post_action_cmd(action)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "kind": cmd[1] if len(cmd) > 1 else "unknown",
+            "ok": False,
+            "timeout": True,
+        }
+    return {
+        "kind": cmd[1] if len(cmd) > 1 else "unknown",
+        "ok": result.returncode == 0,
+        "returncode": result.returncode,
+        "stderr": result.stderr,
+    }
+
+
+def _post_action_cmd(action: PostAction) -> tuple[list[str], int]:
+    match action:
+        case DaemonReloadAction():
+            return ([_SYSTEMCTL, "daemon-reload"], _DAEMON_RELOAD_TIMEOUT)
+        case EnableNowAction(unit=unit):
+            return ([_SYSTEMCTL, "enable", "--now", unit], _ENABLE_NOW_TIMEOUT)
+        case DisableNowAction(unit=unit):
+            return ([_SYSTEMCTL, "disable", "--now", unit], _DISABLE_NOW_TIMEOUT)
+        case StopAction(unit=unit):
+            return ([_SYSTEMCTL, "stop", unit], _STOP_TIMEOUT)
+    msg = f"unsupported post-action: {action!r}"
+    raise TypeError(msg)
 
 
 def _execute_install_file_op(
