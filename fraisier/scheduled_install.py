@@ -646,6 +646,116 @@ def read_marker(marker_path: Path) -> MarkerMeta:
     )
 
 
+# ---------------------------------------------------------------------------
+# #240 follow-up 04 Phase 3 — prune_orphans planner (pure)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PrunePlan:
+    """One unit-or-marker that ``--prune`` would act on.
+
+    - ``kind="orphan"``: marker + unit both exist, but the unit isn't declared
+      in the current ``fraises.yaml``. Execution will disable+stop the unit
+      (timer first) and remove both the unit file and its marker.
+    - ``kind="stale_marker"``: marker exists without a paired unit (or the
+      marker is corrupt). Execution only deletes the marker; no systemctl call.
+    """
+
+    kind: str  # "orphan" | "stale_marker"
+    marker_path: Path
+    unit_name: str | None = None
+    unit_path: Path | None = None
+    is_timer: bool = False
+    reason: str | None = None
+
+
+def prune_orphans(
+    config: FraisierConfig,
+    environment: str,
+    *,
+    systemd_dest_dir: Path | None = None,
+) -> list[PrunePlan]:
+    """Plan orphan removals for ``environment`` against ``systemd_dest_dir``.
+
+    Both sides of the project-identity comparison are resolved to absolute
+    paths before compare:
+
+    - The marker's ``fraises_yaml_path`` is stored absolute (the helper
+      writes only what the caller-resolved client sent).
+    - ``config.config_path`` is resolved here.
+
+    So a prune launched from a different CWD than the install converges on
+    the same project. Per-env scoping (``marker.environment == environment``)
+    keeps a ``--env staging --prune`` run from sweeping production units that
+    happen to share a host.
+
+    Sort: orphan timers → orphan services → stale_markers. The CLI executes
+    in this order so a timer can't fire mid-prune.
+    """
+    dest_dir = systemd_dest_dir if systemd_dest_dir is not None else SYSTEMD_DEST_DIR
+    declared = {u.unit_name for u in enumerate_scheduled_units(config, environment)}
+    try:
+        resolved_config_path = config.config_path.resolve(strict=True)
+    except FileNotFoundError:
+        resolved_config_path = config.config_path.resolve()
+
+    plans: list[PrunePlan] = []
+    for marker in find_markers(dest_dir):
+        unit_name = marker.name[: -len(MARKER_SUFFIX)]
+        try:
+            meta = read_marker(marker)
+        except CorruptMarker as exc:
+            plans.append(
+                PrunePlan(
+                    kind="stale_marker",
+                    marker_path=marker,
+                    unit_name=unit_name,
+                    reason=f"corrupt marker: {exc}",
+                )
+            )
+            continue
+
+        marker_yaml_path = Path(meta.fraises_yaml_path).resolve()
+        if marker_yaml_path != resolved_config_path:
+            continue  # different project on the same host; not our business
+        if meta.environment != environment:
+            continue  # per-env scoping
+
+        unit_path = dest_dir / unit_name
+        if not unit_path.exists():
+            plans.append(
+                PrunePlan(
+                    kind="stale_marker",
+                    marker_path=marker,
+                    unit_name=unit_name,
+                    reason="unit file missing on disk",
+                )
+            )
+            continue
+        if unit_name in declared:
+            continue  # still declared; no action
+
+        plans.append(
+            PrunePlan(
+                kind="orphan",
+                marker_path=marker,
+                unit_name=unit_name,
+                unit_path=unit_path,
+                is_timer=unit_name.endswith(".timer"),
+            )
+        )
+
+    # Sort: orphan timers, orphan services, stale_markers last.
+    plans.sort(
+        key=lambda p: (
+            p.kind != "orphan",  # orphans first (False < True)
+            not p.is_timer,  # within orphans: timers first
+        )
+    )
+    return plans
+
+
 def find_markers(systemd_dest_dir: Path) -> list[Path]:
     """Return every ``*.fraisier-managed`` path under ``systemd_dest_dir``.
 
