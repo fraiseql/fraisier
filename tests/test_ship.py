@@ -111,106 +111,6 @@ class TestShipCommand:
         commands = [c[0][0] for c in calls]
         assert any("git" in str(cmd) and "push" in str(cmd) for cmd in commands)
 
-    @patch("subprocess.run")
-    def test_ship_retries_commit_on_precommit_failure(self, mock_run, tmp_path):
-        """Test ship retries commit when pre-commit hooks modify files."""
-        cfg = _setup_project(tmp_path)
-
-        # First commit fails (pre-commit modified files), retry succeeds
-        def side_effect(cmd, **kwargs):
-            if cmd[:2] == ["git", "commit"] and not hasattr(side_effect, "retried"):
-                side_effect.retried = True  # ty: ignore[unresolved-attribute]
-                raise subprocess.CalledProcessError(1, cmd)
-            # git diff --quiet returns 1 = dirty (files were modified by hook)
-            if cmd == ["git", "diff", "--quiet"]:
-                return MagicMock(returncode=1)
-            return MagicMock(returncode=0)
-
-        mock_run.side_effect = side_effect
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "-c",
-                cfg,
-                "ship",
-                "patch",
-                "--no-deploy",
-                "--pyproject",
-                str(tmp_path / "pyproject.toml"),
-            ],
-        )
-        assert result.exit_code == 0
-        assert "Pre-commit hooks modified files" in result.output
-
-        # Should have called git add --update twice (initial + retry)
-        add_calls = [
-            c for c in mock_run.call_args_list if c[0][0] == ["git", "add", "--update"]
-        ]
-        assert len(add_calls) == 2
-
-    @patch("subprocess.run")
-    def test_ship_raises_if_commit_fails_without_dirty_files(self, mock_run, tmp_path):
-        """Test ship raises if commit fails and no files were modified by hooks."""
-        cfg = _setup_project(tmp_path)
-
-        def side_effect(cmd, **kwargs):
-            if cmd[:2] == ["git", "commit"]:
-                raise subprocess.CalledProcessError(1, cmd)
-            # git diff --quiet returns 0 = clean (no hook modifications)
-            if cmd == ["git", "diff", "--quiet"]:
-                return MagicMock(returncode=0)
-            return MagicMock(returncode=0)
-
-        mock_run.side_effect = side_effect
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "-c",
-                cfg,
-                "ship",
-                "patch",
-                "--no-deploy",
-                "--pyproject",
-                str(tmp_path / "pyproject.toml"),
-            ],
-        )
-        assert result.exit_code != 0
-        assert "Pre-commit hooks modified files" not in result.output
-
-    @patch("subprocess.run")
-    def test_ship_raises_if_retry_also_fails(self, mock_run, tmp_path):
-        """Test ship raises if commit fails even after retry."""
-        cfg = _setup_project(tmp_path)
-
-        def side_effect(cmd, **kwargs):
-            if cmd[:2] == ["git", "commit"]:
-                raise subprocess.CalledProcessError(1, cmd)
-            # git diff --quiet returns 1 = dirty (hooks did modify files)
-            if cmd == ["git", "diff", "--quiet"]:
-                return MagicMock(returncode=1)
-            return MagicMock(returncode=0)
-
-        mock_run.side_effect = side_effect
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "-c",
-                cfg,
-                "ship",
-                "patch",
-                "--no-deploy",
-                "--pyproject",
-                str(tmp_path / "pyproject.toml"),
-            ],
-        )
-        assert result.exit_code != 0
-
 
 def _setup_project_with_pipeline(tmp_path, version="1.0.0"):
     """Create project with ship pipeline config."""
@@ -286,8 +186,10 @@ class TestShipPipelineIntegration:
         assert any("--no-verify" in cmd for cmd in commit_calls)
 
     @patch("subprocess.run")
-    def test_ship_backward_compat_no_pipeline(self, mock_run, tmp_path):
-        """Without ship config, uses legacy path (no --no-verify)."""
+    @patch("fraisier.ship.pipeline.run_check")
+    def test_ship_no_pipeline_uses_no_verify(self, mock_check, mock_run, tmp_path):
+        """A project without ship: config still ships via the pipeline path
+        (empty pipeline, --no-verify commit)."""
         mock_run.return_value = MagicMock(returncode=0)
         cfg = _setup_project(tmp_path)
 
@@ -304,33 +206,10 @@ class TestShipPipelineIntegration:
                 str(tmp_path / "pyproject.toml"),
             ],
         )
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         calls = mock_run.call_args_list
         commit_calls = [c[0][0] for c in calls if "commit" in str(c[0][0])]
-        assert not any("--no-verify" in cmd for cmd in commit_calls)
-
-    @patch("subprocess.run")
-    @patch("fraisier.ship.pipeline.run_check")
-    def test_ship_skip_checks_bypasses_pipeline(self, mock_check, mock_run, tmp_path):
-        """--skip-checks skips pipeline even when configured."""
-        mock_run.return_value = MagicMock(returncode=0)
-        cfg = _setup_project_with_pipeline(tmp_path)
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "-c",
-                cfg,
-                "ship",
-                "patch",
-                "--no-deploy",
-                "--skip-checks",
-                "--pyproject",
-                str(tmp_path / "pyproject.toml"),
-            ],
-        )
-        assert result.exit_code == 0
+        assert any("--no-verify" in cmd for cmd in commit_calls)
         mock_check.assert_not_called()
 
     @patch("subprocess.run")
@@ -1835,3 +1714,133 @@ class TestShipVersionRace:
         assert result.exit_code == 0, result.output
         assert "Warning" not in result.output
         assert "could not fetch" not in result.output
+
+
+class TestShipCommitNonZeroExit:
+    """Regressions for #243: git commit may exit non-zero after the commit
+    actually landed (transient gpg-agent stderr). Ship must detect the
+    landed commit and proceed instead of aborting."""
+
+    @patch("subprocess.run")
+    def test_ship_pipeline_recovers_when_commit_lands_despite_nonzero_exit(
+        self, mock_run, tmp_path
+    ):
+        """Pipeline path: git commit exits 128 but HEAD advanced to the
+        release commit → ship proceeds to push."""
+        cfg = _setup_project_with_pipeline(tmp_path, version="1.0.0")
+
+        # Pre-commit `git rev-parse HEAD` returns baseline; post-commit
+        # returns a different hash (HEAD advanced). git log -1 confirms
+        # the subject is the release commit.
+        state = {"commit_attempted": False}
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                if not state["commit_attempted"]:
+                    return MagicMock(returncode=0, stdout="aaaaaaa\n", stderr="")
+                return MagicMock(returncode=0, stdout="bbbbbbb\n", stderr="")
+            if cmd[:2] == ["git", "commit"]:
+                state["commit_attempted"] = True
+                # Faithfully simulate real subprocess.run semantics: when
+                # called with check=True, a non-zero exit raises. The
+                # current (buggy) code uses check=True, so this is the
+                # symptom we need to surface. The fixed code switches to
+                # check=False and inspects returncode itself.
+                if kwargs.get("check"):
+                    raise subprocess.CalledProcessError(
+                        128,
+                        cmd,
+                        output="",
+                        stderr="gpg: signing failed: Inappropriate ioctl for device\n",
+                    )
+                return MagicMock(
+                    returncode=128,
+                    stdout="",
+                    stderr="gpg: signing failed: Inappropriate ioctl for device\n",
+                    args=cmd,
+                )
+            if cmd[:4] == ["git", "log", "-1", "--format=%s"]:
+                return MagicMock(returncode=0, stdout="release: v1.0.1\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        from fraisier.ship.checks import CheckResult
+
+        with patch("fraisier.ship.pipeline.run_check") as mock_check:
+            mock_check.return_value = CheckResult(
+                name="ok", success=True, output="", duration_seconds=0.1
+            )
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    cfg,
+                    "ship",
+                    "patch",
+                    "--no-deploy",
+                    "--pyproject",
+                    str(tmp_path / "pyproject.toml"),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        commands = [c[0][0] for c in mock_run.call_args_list]
+        push_calls = [cmd for cmd in commands if "push" in cmd]
+        assert push_calls, (
+            f"ship should have called git push after recovered commit; got: {commands}"
+        )
+
+    @patch("subprocess.run")
+    def test_ship_pipeline_raises_when_commit_truly_fails(self, mock_run, tmp_path):
+        """Pipeline path: git commit exits 128 AND HEAD did not advance →
+        ship raises, surfacing git's stderr to the operator."""
+        cfg = _setup_project_with_pipeline(tmp_path, version="1.0.0")
+
+        def side_effect(cmd, **kwargs):
+            # HEAD never advances — both pre- and post-commit return the
+            # same hash, and the subject doesn't match the release commit.
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                return MagicMock(returncode=0, stdout="aaaaaaa\n", stderr="")
+            if cmd[:2] == ["git", "commit"]:
+                return MagicMock(
+                    returncode=128,
+                    stdout="",
+                    stderr="error: pathspec did not match\n",
+                )
+            if cmd[:4] == ["git", "log", "-1", "--format=%s"]:
+                return MagicMock(
+                    returncode=0, stdout="chore: prior commit\n", stderr=""
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        from fraisier.ship.checks import CheckResult
+
+        with patch("fraisier.ship.pipeline.run_check") as mock_check:
+            mock_check.return_value = CheckResult(
+                name="ok", success=True, output="", duration_seconds=0.1
+            )
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-c",
+                    cfg,
+                    "ship",
+                    "patch",
+                    "--no-deploy",
+                    "--pyproject",
+                    str(tmp_path / "pyproject.toml"),
+                ],
+            )
+
+        assert result.exit_code != 0, result.output
+        # The captured stderr from git commit must be surfaced so the
+        # operator can diagnose. CliRunner's default mix_stderr=True folds
+        # err_console output into result.output.
+        assert "pathspec did not match" in result.output

@@ -132,6 +132,37 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _enable_auto_merge_or_merge_now(pr_url: str) -> None:
+    """Enable auto-merge, falling back to immediate merge for #244.
+
+    `gh pr merge --auto` fails on PRs in "clean" status (no required
+    checks on the target branch). When that happens, merge now — there's
+    nothing to auto-merge against anyway. Other gh failures propagate.
+    """
+    result = subprocess.run(
+        ["gh", "pr", "merge", "--auto", "--squash", pr_url],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+    stderr = result.stderr or ""
+    if "enablePullRequestAutoMerge" in stderr or "clean status" in stderr:
+        console.print(
+            "[yellow]Target has no required checks; merging now instead of "
+            "waiting on auto-merge.[/yellow]"
+        )
+        subprocess.run(["gh", "pr", "merge", "--squash", pr_url], check=True)
+        return
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        result.args,
+        output=result.stdout,
+        stderr=result.stderr,
+    )
+
+
 def _find_existing_pr(sync_branch: str) -> dict | None:
     """Return PR head-ref lookup result, or None if no PR exists for the branch.
 
@@ -538,7 +569,7 @@ def sync_cmd(
         if existing and existing["state"] == "OPEN":
             pr_url = existing["url"]
             console.print(f"  Existing open PR found, updating: [bold]{pr_url}[/bold]")
-            _run(["gh", "pr", "merge", "--auto", "--squash", pr_url])
+            _enable_auto_merge_or_merge_now(pr_url)
             subprocess.run(["git", "checkout", original_branch], check=False)
             console.print(
                 f"==> [green]Done.[/green] PR updated and auto-merge enabled: {pr_url}"
@@ -572,7 +603,7 @@ def sync_cmd(
         )
         pr_url = pr_result.stdout.strip()
 
-        _run(["gh", "pr", "merge", "--auto", "--squash", pr_url])
+        _enable_auto_merge_or_merge_now(pr_url)
 
         subprocess.run(["git", "checkout", original_branch], check=False)
         console.print(

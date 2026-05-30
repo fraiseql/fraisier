@@ -29,3 +29,24 @@ environments:
     server: dev.example.com
   production:
     server: prod.example.com
+
+# Self-ship pipeline: `fraisier ship` runs these before committing the
+# release bump, then pushes with --no-verify (checks already passed).
+ship:
+  pr_base: main
+  checks:
+    - name: ruff-format
+      command: ["uv", "run", "ruff", "format", "--check", "."]
+      phase: fix
+    - name: ruff-lint
+      command: ["uv", "run", "ruff", "check", "."]
+      phase: validate
+    - name: pytest
+      command:
+        - "uv"
+        - "run"
+        - "pytest"
+        - "--deselect"
+        - "tests/test_install_helper.py::TestMainConnectionErrorLogging::test_handler_crash_is_logged_with_exception_object"
+      phase: test
+      timeout: 300

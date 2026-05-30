@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -120,10 +121,11 @@ class MockGit:
         return self
 
     def __call__(self, cmd, *args, **kwargs):
-        # *args/**kwargs absorb subprocess.run's optional keyword forms
-        # (capture_output, text, check, …) — we ignore them, matching only
-        # on the command argv.
-        del args, kwargs
+        # Match only on the command argv, but honor `check=True` the way
+        # real subprocess.run does: raise CalledProcessError on non-zero
+        # exit. Without this, mocks pass `check=True` silently and tests
+        # can't tell the difference between success and failure.
+        del args
         self.calls.append(list(cmd))
         cmd_tuple = tuple(cmd)
         best_key: tuple[str, ...] | None = None
@@ -135,9 +137,15 @@ class MockGit:
             ):
                 if best_key is None or len(key) > len(best_key):
                     best_key = key
-        if best_key is None:
-            return _mk()
-        return self._responses[best_key].pop(0)
+        result = self._responses[best_key].pop(0) if best_key else _mk()
+        if kwargs.get("check") and result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                list(cmd),
+                output=result.stdout,
+                stderr=result.stderr,
+            )
+        return result
 
     def was_called(self, expected: list[str]) -> bool:
         """True if any recorded call argv exactly matched `expected`."""
@@ -586,6 +594,151 @@ class TestSyncHappyPath:
         commit_calls = [c[0][0] for c in m.call_args_list if "commit" in c[0][0]]
         assert commit_calls, "expected at least one commit call"
         assert all("--no-verify" in call for call in commit_calls)
+
+
+class TestSyncAutoMergeFallback:
+    """Regressions for #244: `gh pr merge --auto` fails on PRs in "clean"
+    status (target branch has no required checks). Sync must degrade
+    gracefully to immediate merge instead of aborting."""
+
+    SHA = "deadbeef" * 5
+    MERGE_BASE = "cafe1234" * 5
+    PR_URL = "https://github.com/org/repo/pull/77"
+
+    _CLEAN_STATUS_STDERR = (
+        "GraphQL: Pull request Pull request is in clean status "
+        "(enablePullRequestAutoMerge)\n"
+    )
+
+    def test_sync_falls_back_to_immediate_merge_when_pr_is_clean(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+
+        mg = (
+            MockGit()
+            .queue("git", "rev-parse", "HEAD", stdout="main\n")
+            .queue("git", "fetch")
+            .queue("git", "rev-parse", "origin/dev", stdout=self.SHA + "\n")
+            .queue("git", "merge-base", stdout=self.MERGE_BASE + "\n")
+            .queue(
+                "git",
+                "show",
+                "origin/dev:version.json",
+                returncode=0,
+                stdout='{"version": "1.1.0"}',
+            )
+            .queue(
+                "git",
+                "show",
+                "origin/staging:version.json",
+                returncode=0,
+                stdout='{"version": "1.0.0"}',
+            )
+            .queue("git", "checkout", "-b")
+            .queue("git", "merge")
+            .queue(
+                "git", "diff", "--name-only", "--diff-filter=D", stdout=""
+            )  # _no_source_deletions
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")  # _in_merge
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+            .queue("git", "push")
+            .queue("gh", "pr", "view", returncode=1)  # no existing PR
+            .queue("gh", "pr", "create", stdout=self.PR_URL + "\n")
+            # The auto-merge attempt fails with the clean-status stderr…
+            .queue(
+                "gh",
+                "pr",
+                "merge",
+                "--auto",
+                "--squash",
+                returncode=1,
+                stderr=self._CLEAN_STATUS_STDERR,
+            )
+            # …and the fallback (no --auto) succeeds.
+            .queue("gh", "pr", "merge", "--squash")
+            .queue("git", "checkout", "main")
+        )
+
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        assert mg.was_called(["gh", "pr", "merge", "--squash", self.PR_URL]), (
+            f"expected fallback merge; got calls: {mg.calls}"
+        )
+
+    def test_sync_propagates_unrelated_gh_failures(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+
+        mg = (
+            MockGit()
+            .queue("git", "rev-parse", "HEAD", stdout="main\n")
+            .queue("git", "fetch")
+            .queue("git", "rev-parse", "origin/dev", stdout=self.SHA + "\n")
+            .queue("git", "merge-base", stdout=self.MERGE_BASE + "\n")
+            .queue(
+                "git",
+                "show",
+                "origin/dev:version.json",
+                returncode=0,
+                stdout='{"version": "1.1.0"}',
+            )
+            .queue(
+                "git",
+                "show",
+                "origin/staging:version.json",
+                returncode=0,
+                stdout='{"version": "1.0.0"}',
+            )
+            .queue("git", "checkout", "-b")
+            .queue("git", "merge")
+            .queue("git", "diff", "--name-only", "--diff-filter=D", stdout="")
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "MERGE_HEAD",
+                returncode=1,
+            )
+            .queue("git", "push")
+            .queue("gh", "pr", "view", returncode=1)
+            .queue("gh", "pr", "create", stdout=self.PR_URL + "\n")
+            .queue(
+                "gh",
+                "pr",
+                "merge",
+                "--auto",
+                "--squash",
+                returncode=1,
+                stderr="HTTP 403: Forbidden\n",
+            )
+            .queue("git", "checkout", "main")
+            .queue("git", "branch", "-D")
+        )
+
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+
+        assert result.exit_code != 0
+        # The fallback (no --auto) must NOT have been invoked.
+        fallback_calls = [
+            c for c in mg.calls if c[:4] == ["gh", "pr", "merge", "--squash"]
+        ]
+        assert not fallback_calls, (
+            f"unrelated gh failure should not trigger fallback; got: {fallback_calls}"
+        )
 
 
 # ---------------------------------------------------------------------------
