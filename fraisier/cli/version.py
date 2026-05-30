@@ -175,9 +175,6 @@ def version_bump(
 @click.option("--pr", "create_pr", is_flag=True, help="Create a PR after push")
 @click.option("--pr-base", default=None, help="Base branch for the PR")
 @click.option(
-    "--skip-checks", is_flag=True, help="Skip pipeline checks, just bump+commit+push"
-)
-@click.option(
     "--pyproject",
     type=click.Path(),
     default="pyproject.toml",
@@ -228,7 +225,6 @@ def ship(
     no_deploy: bool,
     create_pr: bool,
     pr_base: str | None,
-    skip_checks: bool,
     pyproject: str,
     wait_deploy: bool,
     deploy_timeout: int,
@@ -244,7 +240,6 @@ def ship(
         fraisier ship minor --dry-run
         fraisier ship patch --no-deploy
         fraisier ship patch --pr --pr-base dev
-        fraisier ship major --skip-checks
         fraisier ship --no-bump
         fraisier ship minor --auto-merge
         fraisier ship patch --pr --auto-merge --merge-method rebase
@@ -264,8 +259,6 @@ def ship(
                            tag-only releases.
         --no-bump          Re-ship the current version without bumping.
                            Cannot combine with a bump-type argument.
-        --skip-checks      Bypass the ship.checks pipeline; bump +
-                           commit + push only.
     """
     if no_bump and bump_type is not None:
         console.print(
@@ -287,7 +280,6 @@ def ship(
     # Resolve ship config (may be None if no fraises.yaml)
     config = ctx.obj.get("config") if ctx.obj else None
     ship_config: ShipConfig | None = config.ship if config else None
-    has_pipeline = bool(ship_config and ship_config.checks and not skip_checks)
 
     # CLI flags take precedence; fall back to fraises.yaml ship: section defaults
     resolved_auto_merge = auto_merge or (
@@ -303,7 +295,6 @@ def ship(
                 current_version,
                 pyproject_path,
                 ship_config,
-                has_pipeline,
                 create_pr,
                 pr_base,
                 no_deploy,
@@ -316,7 +307,6 @@ def ship(
         _ship_commit_push_deploy(
             current_version,
             ship_config,
-            has_pipeline,
             create_pr,
             pr_base,
             no_deploy,
@@ -349,7 +339,6 @@ def ship(
                     "no_deploy": no_deploy,
                     "auto_merge": resolved_auto_merge,
                     "merge_method": resolved_merge_method,
-                    "has_pipeline": has_pipeline,
                 },
                 indent=2,
             )
@@ -363,7 +352,6 @@ def ship(
             bump_type,
             pyproject_path,
             ship_config,
-            has_pipeline,
             create_pr,
             pr_base,
             no_deploy,
@@ -380,7 +368,6 @@ def ship(
     _ship_commit_push_deploy(
         info.version,
         ship_config,
-        has_pipeline,
         create_pr,
         pr_base,
         no_deploy,
@@ -397,7 +384,6 @@ def ship(
 def _ship_commit_push_deploy(
     version: str,
     ship_config: ShipConfig | None,
-    has_pipeline: bool,
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
@@ -417,12 +403,9 @@ def _ship_commit_push_deploy(
     resolved_pr_base = pr_base or (ship_config.pr_base if ship_config else None)
     race_base = resolved_pr_base if create_pr else None
 
-    if has_pipeline:
-        _ship_with_pipeline(
-            version, ship_config, expected_base_version, bump_kind, race_base
-        )
-    else:
-        _ship_legacy(version, expected_base_version, bump_kind, race_base)
+    _ship_with_pipeline(
+        version, ship_config, expected_base_version, bump_kind, race_base
+    )
 
     if create_pr:
         pr_url = _ship_create_pr(version, pr_base, ship_config)
@@ -471,7 +454,6 @@ def _ship_dry_run(
     bump_type: str | None,
     pyproject_path: Path,
     ship_config: ShipConfig | None,
-    has_pipeline: bool,
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
@@ -483,8 +465,7 @@ def _ship_dry_run(
     console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{new}")
     console.print(f"  Bump: {current_version} -> {new} ({bump_type})")
     console.print(f"  File: {pyproject_path}")
-    if has_pipeline:
-        assert ship_config is not None
+    if ship_config and ship_config.checks:
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
             console.print(f"    [{c.phase}] {c.name}: {' '.join(c.command)}")
@@ -502,7 +483,6 @@ def _ship_dry_run_no_bump(
     current_version: str,
     pyproject_path: Path,
     ship_config: ShipConfig | None,
-    has_pipeline: bool,
     create_pr: bool,
     pr_base: str | None,
     no_deploy: bool,
@@ -514,8 +494,7 @@ def _ship_dry_run_no_bump(
     console.print(f"[cyan]DRY RUN:[/cyan] Would ship v{current_version} (no bump)")
     console.print(f"  Version: {current_version} (unchanged)")
     console.print(f"  File: {pyproject_path}")
-    if has_pipeline:
-        assert ship_config is not None
+    if ship_config and ship_config.checks:
         console.print("  Pipeline checks:")
         for c in ship_config.checks:
             console.print(f"    [{c.phase}] {c.name}: {' '.join(c.command)}")
@@ -563,6 +542,83 @@ def _ship_enable_auto_merge(merge_method: str, *, pr_url: str | None = None) -> 
     enable_auto_merge(merge_method, console, pr_url=pr_url)
 
 
+def _commit_release(version: str) -> None:
+    """Create the `release: v{version}` commit, surviving spurious non-zero exits.
+
+    git commit occasionally exits non-zero (e.g. transient gpg-agent
+    stderr) *after* writing a valid commit object. We capture HEAD
+    before the attempt; on non-zero exit, if HEAD now points at a fresh
+    commit whose subject is `release: v{version}`, the commit landed and
+    we proceed. Otherwise we surface git's stderr to err_console and
+    re-raise. See issue #243.
+    """
+    import subprocess
+
+    from ._helpers import err_console
+
+    expected_subject = f"release: v{version}"
+
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    head_before_hash = head_before.stdout.strip() if head_before.returncode == 0 else ""
+
+    result = subprocess.run(
+        ["git", "commit", "--no-verify", "-m", expected_subject],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    head_subject = subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    head_after_hash = head_after.stdout.strip() if head_after.returncode == 0 else ""
+    landed = (
+        head_after.returncode == 0
+        and head_subject.returncode == 0
+        and head_after_hash not in ("", head_before_hash)
+        and head_subject.stdout.strip() == expected_subject
+    )
+    if landed:
+        stderr_blurb = (result.stderr or "").strip()
+        console.print(
+            f"[yellow]git commit exited {result.returncode} but the release "
+            "commit is present on HEAD (hash advanced). Proceeding.[/yellow]"
+        )
+        if stderr_blurb:
+            console.print(f"[yellow]git stderr was:[/yellow]\n{stderr_blurb}")
+        return
+
+    stderr_blurb = (result.stderr or "").strip()
+    stdout_blurb = (result.stdout or "").strip()
+    err_console.print("[red]git commit failed and HEAD did not advance.[/red]")
+    if stderr_blurb:
+        err_console.print(f"[red]stderr:[/red]\n{stderr_blurb}")
+    if stdout_blurb:
+        err_console.print(f"[red]stdout:[/red]\n{stdout_blurb}")
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        result.args,
+        output=result.stdout,
+        stderr=result.stderr,
+    )
+
+
 def _git_push() -> None:
     """Push to remote, setting upstream if needed (#45)."""
     import subprocess
@@ -588,14 +644,21 @@ def _ship_with_pipeline(
     bump_kind: str | None,
     race_base: str | None,
 ) -> None:
-    """Ship using the check pipeline (--no-verify commit)."""
+    """Ship using the check pipeline (--no-verify commit).
+
+    A project without a `ship:` block in fraises.yaml (or no fraises.yaml
+    at all) gets a synthetic empty config — the pipeline's check phases
+    short-circuit when no checks are configured, but the
+    migration-untracked check and commit/push still run.
+    """
     import subprocess
 
+    from fraisier.config.schema import ShipConfig as _ShipConfig
     from fraisier.ship.pipeline import ShipPipeline
 
-    assert ship_config is not None  # only called when has_pipeline is True
+    config = ship_config or _ShipConfig()
     cwd = Path.cwd()
-    pipeline = ShipPipeline(ship_config, cwd, console)
+    pipeline = ShipPipeline(config, cwd, console)
 
     # Pre-flight: detect untracked migration files that git add --update
     # would silently leave behind (see issue #181)
@@ -631,53 +694,7 @@ def _ship_with_pipeline(
     )
 
     # Commit with --no-verify (we already ran all checks)
-    subprocess.run(
-        ["git", "commit", "--no-verify", "-m", f"release: v{version}"],
-        check=True,
-    )
-    _git_push()
-
-
-def _ship_legacy(
-    version: str,
-    expected_base_version: str,
-    bump_kind: str | None,
-    race_base: str | None,
-) -> None:
-    """Ship without pipeline (backward compat, uses pre-commit hooks)."""
-    import subprocess
-
-    # #232: short window vs. the pipeline path (no long CI), but the race
-    # still exists if two operators run `ship` concurrently.
-    _assert_no_version_race(
-        target_version=version,
-        expected_base_version=expected_base_version,
-        bump_kind=bump_kind,
-        pr_base=race_base,
-    )
-
-    subprocess.run(["git", "add", "--update"], check=True)
-    try:
-        subprocess.run(
-            ["git", "commit", "-m", f"release: v{version}"],
-            check=True,
-        )
-    except subprocess.CalledProcessError:
-        # Pre-commit hooks may have auto-fixed files (ruff, detect-secrets…)
-        # Only retry if the working tree is dirty — otherwise it's a real failure
-        diff = subprocess.run(
-            ["git", "diff", "--quiet"], capture_output=True, check=False
-        )
-        if diff.returncode == 0:
-            raise
-        console.print(
-            "[yellow]Pre-commit hooks modified files, staging and retrying...[/yellow]"
-        )
-        subprocess.run(["git", "add", "--update"], check=True)
-        subprocess.run(
-            ["git", "commit", "-m", f"release: v{version}"],
-            check=True,
-        )
+    _commit_release(version)
     _git_push()
 
 
