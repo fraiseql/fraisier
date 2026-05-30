@@ -456,7 +456,9 @@ def sync_cmd(
     ).stdout.strip()
 
     if merge_base == source_sha:
-        console.print("  [green]Already up to date — nothing to sync.[/green]")
+        from fraisier._output import success
+
+        success("Already up to date — nothing to sync.")
         return
 
     src_ver = _read_branch_version(source)
@@ -571,9 +573,9 @@ def sync_cmd(
             console.print(f"  Existing open PR found, updating: [bold]{pr_url}[/bold]")
             _enable_auto_merge_or_merge_now(pr_url)
             subprocess.run(["git", "checkout", original_branch], check=False)
-            console.print(
-                f"==> [green]Done.[/green] PR updated and auto-merge enabled: {pr_url}"
-            )
+            from fraisier._output import success
+
+            success(f"Done. PR updated and auto-merge enabled: {pr_url}")
             return
         if existing:
             console.print(
@@ -606,9 +608,9 @@ def sync_cmd(
         _enable_auto_merge_or_merge_now(pr_url)
 
         subprocess.run(["git", "checkout", original_branch], check=False)
-        console.print(
-            f"==> [green]Done.[/green] PR created and auto-merge enabled: {pr_url}"
-        )
+        from fraisier._output import success
+
+        success(f"Done. PR created and auto-merge enabled: {pr_url}")
 
     except SystemExit:
         subprocess.run(["git", "checkout", original_branch], check=False)

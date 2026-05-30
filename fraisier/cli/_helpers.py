@@ -15,12 +15,26 @@ if TYPE_CHECKING:
 
 
 class _LazyConsole:
-    """Lazy-initialized Rich Console.
+    """Lazy-initialized Rich Console with OutputMode dispatch.
 
     Delays Console construction until the first call so that a
     ``--no-color`` CLI flag (or the ``NO_COLOR`` environment variable)
     can be set *before* any output is produced.  All attribute and method
     accesses are transparently delegated to the underlying Console.
+
+    ``print`` is the hot path; it consults the active
+    :class:`fraisier._output.OutputContext`:
+
+    - **Compact** (default): plain string args are routed through
+      :func:`fraisier._output._strip_markup` and written to
+      stdout/stderr without Rich rendering. Rich objects (Panel, Table,
+      Syntax, …) fall through to the Rich console — Rich already
+      strips ANSI when not on a TTY, so the output is clean for LLM
+      and CI consumers.
+    - **Verbose** (``-v``): today's Rich-markup output verbatim.
+    - **JSON** (``--json``): suppressed entirely; structured events are
+      emitted via :func:`fraisier._output.success` /
+      :func:`fraisier._output.failure` + :func:`fraisier._output.emit_json`.
     """
 
     def __init__(self, *, stderr: bool = False) -> None:
@@ -38,8 +52,28 @@ class _LazyConsole:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._get(), name)
 
-    # Explicit delegation for the hot-path method so type checkers are happy.
     def print(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        # Local import: avoids circular dep with fraisier.cli.main during
+        # bootstrap (main.py imports from _helpers; _output imports click).
+        from fraisier._output import OutputMode, _strip_markup, get_context
+
+        ctx = get_context()
+        if ctx.mode is OutputMode.JSON:
+            return
+        if ctx.mode is OutputMode.VERBOSE:
+            self._get().print(*args, **kwargs)
+            return
+        # Compact mode: simple string args bypass Rich entirely; complex
+        # Rich objects fall through (Rich strips ANSI for non-tty). Honour
+        # ``markup=False`` (callers passing literal ``[...]`` content rely
+        # on it; see scheduled-install's ``[would copy]`` lines).
+        if len(args) == 1 and isinstance(args[0], str):
+            import sys
+
+            stream = sys.stderr if self._stderr else sys.stdout
+            text = args[0] if kwargs.get("markup") is False else _strip_markup(args[0])
+            stream.write(text + "\n")
+            return
         self._get().print(*args, **kwargs)
 
 

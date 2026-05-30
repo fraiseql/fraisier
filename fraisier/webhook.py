@@ -25,7 +25,12 @@ if TYPE_CHECKING:
 from .duration_estimate import build_estimate, to_dispatch_dict
 from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
-from .locking import deployment_lock, is_deployment_locked
+from .locking import (
+    clear_draining_flag,
+    deployment_lock,
+    is_deployment_locked,
+    is_draining,
+)
 from .status import read_status
 from .webhook_rate_limit import check_rate_limit
 from .webhook_self_upgrade import maybe_self_upgrade
@@ -48,10 +53,25 @@ def _validate_env_config(port: int, rate_limit: int) -> None:
         raise ValueError(msg)
 
 
+def _clear_stale_drain_flag() -> None:
+    """Best-effort cleanup of a ``.draining`` flag left by a crashed worker."""
+    try:
+        lock_dir = _get_lock_dir(get_config())
+    except FileNotFoundError:
+        return
+    if lock_dir is None:
+        return
+    try:
+        clear_draining_flag(lock_dir)
+    except OSError:
+        logger.debug("Could not clear stale draining flag", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage webhook server lifecycle."""
     logger.info("Fraisier webhook server starting")
+    _clear_stale_drain_flag()
     yield
     logger.info("Fraisier webhook server shutting down")
 
@@ -85,7 +105,30 @@ _RECOVERY_HINTS: dict[str, str] = {
     "authentication_error": "Check your webhook secret or deployment token.",
     "validation_error": "Check the request payload and provider configuration.",
     "not_found": "Verify the fraise name and that a status file exists.",
+    "service_unavailable": (
+        "Self-upgrade in progress. Retry after the indicated delay."
+    ),
 }
+
+
+_RETRY_AFTER_DEFAULT_S = 60
+
+
+def _retry_after_seconds() -> int:
+    """Single source of truth for the draining ``Retry-After`` value.
+
+    Returned by both the HTTP header and each per-fraise ``retry_after_s``
+    field so the two cannot drift. Reads ``webhook.self_upgrade_retry_after_s``
+    from config; falls back to the default on any read failure.
+    """
+    try:
+        return int(
+            get_config().webhook.get(
+                "self_upgrade_retry_after_s", _RETRY_AFTER_DEFAULT_S
+            )
+        )
+    except (FileNotFoundError, AttributeError, ValueError, TypeError):
+        return _RETRY_AFTER_DEFAULT_S
 
 
 def _structured_error(
@@ -101,6 +144,54 @@ def _structured_error(
             "message": message,
             "recovery_hint": _RECOVERY_HINTS.get(error_type, ""),
         },
+    )
+
+
+def _unavailable(
+    retry_after_s: int,
+    deployments: list[dict[str, Any]],
+    *,
+    branch: str | None = None,
+    provider: str | None = None,
+    webhook_id: int | None = None,
+) -> JSONResponse:
+    """Build a 503 JSONResponse with a ``Retry-After`` header.
+
+    Mirrors the ``_structured_error`` JSON shape and folds the dispatch
+    ``deployments`` list in so callers can correlate which fraises were
+    refused.
+    """
+    body: dict[str, Any] = {
+        "error_type": "service_unavailable",
+        "message": "Webhook is draining for self-upgrade.",
+        "recovery_hint": _RECOVERY_HINTS["service_unavailable"],
+        "deployments": deployments,
+    }
+    if branch is not None:
+        body["branch"] = branch
+    if provider is not None:
+        body["provider"] = provider
+    if webhook_id is not None:
+        body["webhook_id"] = webhook_id
+    return JSONResponse(
+        status_code=503,
+        content=body,
+        headers={"Retry-After": str(retry_after_s)},
+    )
+
+
+def _is_draining_response(payload: dict[str, Any]) -> bool:
+    """Return True iff ``payload`` was built by ``_draining_response``.
+
+    The single integration point where the plain-dict dispatch result is
+    elevated to HTTP 503. Any new caller of ``_dispatch_deployment`` that
+    bypasses ``generic_webhook`` must call this predicate too.
+    """
+    if payload.get("status") == "draining":
+        return True
+    return any(
+        isinstance(d, dict) and d.get("status") == "draining"
+        for d in payload.get("deployments", [])
     )
 
 
@@ -327,13 +418,59 @@ def _build_estimate(
     return to_dispatch_dict(result)
 
 
+def _draining_response(
+    event: WebhookEvent,
+    fraise_configs: list[dict[str, Any]],
+    webhook_id: int,
+) -> dict[str, Any]:
+    """Build the dispatch response when the host is draining for self-upgrade.
+
+    Callers downstream of ``_dispatch_deployment`` (currently only
+    ``generic_webhook`` via ``_is_draining_response``) elevate this to HTTP
+    503 + ``Retry-After``. The per-fraise ``retry_after_s`` and the HTTP
+    header both read from :func:`_retry_after_seconds`.
+    """
+    retry_after = _retry_after_seconds()
+    deployments = [
+        {
+            "status": "draining",
+            "reason": "self-upgrade in progress",
+            "fraise": fc["fraise_name"],
+            "environment": fc["environment"],
+            "retry_after_s": retry_after,
+        }
+        for fc in fraise_configs
+    ]
+    if len(deployments) == 1:
+        d = deployments[0]
+        return {
+            **d,
+            "branch": event.branch,
+            "provider": event.provider,
+            "webhook_id": webhook_id,
+        }
+    return {
+        "status": "deployments_triggered",
+        "deployments": deployments,
+        "branch": event.branch,
+        "provider": event.provider,
+        "webhook_id": webhook_id,
+    }
+
+
 def _dispatch_deployment(
     event: WebhookEvent,
     background_tasks: BackgroundTasks,
     webhook_id: int,
     config: "FraisierConfig",
 ) -> dict[str, Any]:
-    """Find matching fraises for a push event and trigger deployments."""
+    """Find matching fraises for a push event and trigger deployments.
+
+    Returns a plain dict. The endpoint (``generic_webhook``) inspects the
+    result via ``_is_draining_response`` and converts a draining shape to
+    HTTP 503 + ``Retry-After`` — bypassing ``generic_webhook`` would miss
+    that elevation, so any future caller must call the predicate too.
+    """
     assert event.branch is not None  # caller guards on event.branch before dispatch
     fraise_configs = config.get_fraises_for_branch(event.branch)
 
@@ -347,6 +484,13 @@ def _dispatch_deployment(
         }
 
     lock_dir = _get_lock_dir(config)
+    if lock_dir is not None and is_draining(lock_dir):
+        logger.warning(
+            "Self-upgrade in progress; refusing dispatch for branch %s",
+            event.branch,
+        )
+        return _draining_response(event, fraise_configs, webhook_id)
+
     deployments: list[dict[str, Any]] = []
 
     for fraise_config in fraise_configs:
@@ -566,14 +710,17 @@ async def _normalize_event(
     return event
 
 
-@app.post("/webhook")
+@app.post("/webhook", response_model=None)
 async def generic_webhook(
     request: Request, background_tasks: BackgroundTasks
-) -> dict[str, Any]:
+) -> dict[str, Any] | JSONResponse:
     """Receive webhook from any Git provider.
 
     The provider is auto-detected from headers, or can be specified
     via query parameter: /webhook?provider=gitlab
+
+    Returns ``JSONResponse(503)`` with a ``Retry-After`` header when the
+    webhook is draining for a self-upgrade (see ``_is_draining_response``).
     """
     from .database import get_db
 
@@ -609,7 +756,19 @@ async def generic_webhook(
         git_provider=event.provider,
     )
 
-    return process_webhook_event(event, background_tasks, webhook_id)
+    result = process_webhook_event(event, background_tasks, webhook_id)
+    if _is_draining_response(result):
+        deployments = result.get("deployments") or [
+            {k: v for k, v in result.items() if k != "webhook_id"}
+        ]
+        return _unavailable(
+            _retry_after_seconds(),
+            deployments,
+            branch=result.get("branch"),
+            provider=result.get("provider"),
+            webhook_id=result.get("webhook_id"),
+        )
+    return result
 
 
 def _get_webhook_secret() -> str:
@@ -698,10 +857,10 @@ async def get_deploy_details(fraise_name: str, request: Request) -> dict[str, An
 
 
 # Legacy endpoint for backward compatibility
-@app.post("/webhook/github")
+@app.post("/webhook/github", response_model=None)
 async def github_webhook(
     request: Request, background_tasks: BackgroundTasks
-) -> dict[str, Any]:
+) -> dict[str, Any] | JSONResponse:
     """GitHub-specific webhook endpoint (legacy, use /webhook instead)."""
     from starlette.datastructures import QueryParams
 

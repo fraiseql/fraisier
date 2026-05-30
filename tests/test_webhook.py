@@ -999,6 +999,262 @@ class TestMultiFraiseDispatch:
         assert len(result["deployments"]) == 2
 
 
+class TestDrainingFlagDispatch:
+    """Tests for self-upgrade drain coordination at dispatch time (#246)."""
+
+    def _push_event(self) -> WebhookEvent:
+        return WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="dev",
+            is_push=True,
+            is_ping=False,
+        )
+
+    def test_dispatch_returns_draining_when_flag_present(self, test_db, tmp_path):
+        """When ``.draining`` exists in lock_dir, every fraise is marked draining
+        and no background task is queued."""
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        (tmp_path / DRAINING_FLAG_NAME).touch()
+        configs = [
+            {"fraise_name": "api_a", "environment": "staging", "type": "api"},
+            {"fraise_name": "api_b", "environment": "staging", "type": "api"},
+        ]
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = configs
+            mock_config_obj.deployment.lock_dir = str(tmp_path)
+            mock_config_obj.webhook = {}
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            background_tasks = MagicMock(spec=BackgroundTasks)
+            result = process_webhook_event(
+                self._push_event(), background_tasks, webhook_id=1
+            )
+
+        assert background_tasks.add_task.call_count == 0
+        assert result["status"] == "deployments_triggered"
+        for dep in result["deployments"]:
+            assert dep["status"] == "draining"
+            assert dep["reason"] == "self-upgrade in progress"
+            assert dep["retry_after_s"] == 60
+
+    def test_dispatch_when_lock_dir_unresolvable_skips_drain_check(self, test_db):
+        """When lock_dir cannot be resolved, dispatch proceeds normally."""
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.get_fraises_for_branch.return_value = [
+                {"fraise_name": "my_api", "environment": "prod", "type": "api"},
+            ]
+            # _get_lock_dir catches AttributeError → returns None; the deployment
+            # property raising attribute access models the "config missing" path.
+            from unittest.mock import PropertyMock
+
+            type(mock_config_obj).deployment = PropertyMock(
+                side_effect=AttributeError("no deployment")
+            )
+            mock_config.return_value = mock_config_obj
+
+            from fastapi import BackgroundTasks
+
+            background_tasks = MagicMock(spec=BackgroundTasks)
+            result = process_webhook_event(
+                self._push_event(), background_tasks, webhook_id=1
+            )
+
+        assert result["status"] == "deployment_triggered"
+        assert background_tasks.add_task.call_count == 1
+
+    def test_lifespan_clears_stale_draining_flag(self, tmp_path):
+        """A flag left by a crashed worker is cleared on webhook startup."""
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        flag = tmp_path / DRAINING_FLAG_NAME
+        flag.touch()
+
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.deployment.lock_dir = str(tmp_path)
+            mock_config.return_value = mock_config_obj
+            from fraisier.webhook import app as webhook_app
+
+            with TestClient(webhook_app):
+                assert not flag.exists()
+
+
+class TestUnavailableHelper:
+    """``_unavailable`` builds a 503 JSONResponse with the right header."""
+
+    def test_unavailable_response_carries_retry_after_header(self):
+        from fraisier.webhook import _unavailable
+
+        resp = _unavailable(60, [{"fraise": "api", "status": "draining"}])
+        assert resp.status_code == 503
+        assert resp.headers["retry-after"] == "60"
+
+    def test_unavailable_response_body_has_recovery_hint(self):
+        import json
+
+        from fraisier.webhook import _unavailable
+
+        resp = _unavailable(60, [{"fraise": "api", "status": "draining"}])
+        body = json.loads(bytes(resp.body))
+        assert body["error_type"] == "service_unavailable"
+        assert "self-upgrade" in body["recovery_hint"].lower()
+        assert body["deployments"][0]["fraise"] == "api"
+
+
+class TestIsDrainingResponse:
+    """``_is_draining_response`` predicate."""
+
+    def test_flat_draining_response(self):
+        from fraisier.webhook import _is_draining_response
+
+        assert _is_draining_response({"status": "draining"}) is True
+
+    def test_multi_fraise_with_draining_member(self):
+        from fraisier.webhook import _is_draining_response
+
+        payload = {
+            "status": "deployments_triggered",
+            "deployments": [{"status": "draining"}],
+        }
+        assert _is_draining_response(payload) is True
+
+    def test_non_draining_response(self):
+        from fraisier.webhook import _is_draining_response
+
+        assert (
+            _is_draining_response(
+                {
+                    "status": "deployments_triggered",
+                    "deployments": [{"status": "deployment_triggered"}],
+                }
+            )
+            is False
+        )
+
+
+class TestEndpointDrainingTo503:
+    """End-to-end: a flagged ``lock_dir`` flips the endpoint response to 503."""
+
+    def _stub_provider(self, mock_get_provider):
+        provider = MagicMock()
+        provider.verify_webhook_signature.return_value = True
+        provider.parse_webhook_event.return_value = WebhookEvent(
+            provider="github",
+            event_type="push",
+            branch="main",
+            commit_sha="abc123",
+            sender="developer",
+            is_push=True,
+            is_ping=False,
+        )
+        mock_get_provider.return_value = provider
+        return provider
+
+    def _stub_config(self, mock_config, lock_dir, webhook_overrides=None):
+        cfg = MagicMock()
+        cfg.get_fraises_for_branch.return_value = [
+            {"fraise_name": "my_api", "environment": "staging", "type": "api"}
+        ]
+        cfg.deployment.lock_dir = str(lock_dir)
+        cfg.webhook = webhook_overrides or {}
+        cfg.get_git_provider_config.return_value = {"provider": "github"}
+        mock_config.return_value = cfg
+        return cfg
+
+    def test_webhook_returns_503_when_draining(self, webhook_client, test_db, tmp_path):
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        (tmp_path / DRAINING_FLAG_NAME).touch()
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            response = webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-draining-503-001",
+                },
+            )
+
+        assert response.status_code == 503
+        assert response.headers["retry-after"] == "60"
+        body = response.json()
+        assert body["error_type"] == "service_unavailable"
+        assert body["deployments"][0]["status"] == "draining"
+        assert body["deployments"][0]["retry_after_s"] == 60
+
+    def test_legacy_github_endpoint_returns_503_when_draining(
+        self, webhook_client, test_db, tmp_path
+    ):
+        """``/webhook/github`` delegates to ``generic_webhook`` — same 503 shape."""
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        (tmp_path / DRAINING_FLAG_NAME).touch()
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            response = webhook_client.post(
+                "/webhook/github",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-draining-legacy-503-001",
+                },
+            )
+
+        assert response.status_code == 503
+        assert response.headers["retry-after"] == "60"
+
+    def test_retry_after_reads_config_value(self, webhook_client, test_db, tmp_path):
+        """The header and body's retry_after_s come from the same config knob."""
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        (tmp_path / DRAINING_FLAG_NAME).touch()
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(
+                mock_config,
+                tmp_path,
+                webhook_overrides={"self_upgrade_retry_after_s": 30},
+            )
+
+            response = webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-retry-after-config-001",
+                },
+            )
+
+        assert response.status_code == 503
+        assert response.headers["retry-after"] == "30"
+        assert response.json()["deployments"][0]["retry_after_s"] == 30
+
+
 class TestWebhookRoutes:
     """Tests for FastAPI webhook routes."""
 
