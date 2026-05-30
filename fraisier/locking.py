@@ -3,6 +3,10 @@
 Two backends:
 - **file**: ``fcntl.flock`` — fast, single-machine only (default).
 - **database**: SQLite with WAL — works across machines on shared storage.
+
+This module also exposes ``count_held_deployment_locks`` and the
+``.draining`` flag helpers used to coordinate the webhook self-upgrade
+restart with in-flight deployments (issue #246, ``lock_backend=file``).
 """
 
 import fcntl
@@ -20,6 +24,11 @@ from fraisier.errors import DeploymentLockError
 logger = logging.getLogger(__name__)
 
 DEFAULT_LOCK_DIR = Path("/run/fraisier")
+
+# Hidden flag file the self-upgrade worker drops in ``lock_dir`` while it is
+# installing + draining. The leading dot keeps it out of the ``*.lock`` glob
+# used by ``count_held_deployment_locks``.
+DRAINING_FLAG_NAME = ".draining"
 
 
 @contextmanager
@@ -103,6 +112,56 @@ def is_deployment_locked(
     finally:
         if fd is not None:
             fd.close()
+
+
+def count_held_deployment_locks(lock_dir: Path) -> int:
+    """Count ``*.lock`` files in ``lock_dir`` currently held by another process.
+
+    Non-blocking probe via :func:`fcntl.flock` with ``LOCK_NB``. A successful
+    acquisition (the lock was free) is released immediately and does not
+    count; a ``BlockingIOError`` (the lock is held) increments the counter.
+
+    Files that disappear mid-scan are ignored: a deploy that has just
+    finished is by definition no longer in-flight.
+
+    Returns 0 when ``lock_dir`` does not exist (e.g. ``lock_backend=database``
+    hosts that never create per-fraise lock files).
+    """
+    if not lock_dir.exists():
+        return 0
+    held = 0
+    for path in lock_dir.glob("*.lock"):
+        try:
+            held += _probe_lock_held(path)
+        except FileNotFoundError:
+            continue
+    return held
+
+
+def _probe_lock_held(path: Path) -> int:
+    """Return 1 if ``path`` is flock'd by another process, else 0."""
+    with path.open("w") as fd:
+        try:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 1
+        fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+        return 0
+
+
+def is_draining(lock_dir: Path) -> bool:
+    """Return True iff the ``.draining`` flag exists under ``lock_dir``.
+
+    The flag is set by :mod:`fraisier.webhook_self_upgrade` while a worker
+    is installing + draining; the webhook consults it to refuse new deploys
+    with HTTP 503 + ``Retry-After`` (see :mod:`fraisier.webhook`).
+    """
+    return (lock_dir / DRAINING_FLAG_NAME).exists()
+
+
+def clear_draining_flag(lock_dir: Path) -> None:
+    """Remove the ``.draining`` flag if present. Tolerates a missing flag."""
+    (lock_dir / DRAINING_FLAG_NAME).unlink(missing_ok=True)
 
 
 @contextmanager

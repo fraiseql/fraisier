@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-05-30
+
+### Fixed
+
+- **Webhook self-upgrade no longer kills concurrent deploys** ([#246](https://github.com/fraiseql/fraisier/issues/246)). On multi-environment hosts (e.g. dev + staging served by one webhook), the canonical "merge fraisier bump → ship dev → ship staging" promotion previously hit a race: the second deploy arrived during the upgrade worker's restart window and was killed by systemd's `SIGTERM` mid-flight, with no retry. The upgrade worker now touches a `.draining` flag in `lock_dir` **before** running `uv tool install`, sleeps a short settle window so dispatch-accepted tasks reach their `with deployment_lock(...)` line, waits for any in-flight `*.lock` to be released (default 10-minute timeout), and only then issues the restart RPC. During that window the webhook returns `HTTP 503 Service Unavailable` with a `Retry-After: 60` header and a structured JSON body identifying the refused fraises, so upstream callers (GitHub Actions, curl, monitors) record a loud, retriable failure rather than the previous silent drop. Drain-timeout exits with rc `2` (distinct from install-failure / restart-RPC-failure rc `1`), logs the held lock basenames, and leaves the unit unrestarted for operator intervention. Four new defaulted `webhook.self_upgrade_*` config keys (`drain_timeout_s` = 600, `drain_poll_s` = 1.0, `drain_settle_s` = 2.0, `retry_after_s` = 60) tune the timing; no `fraises.yaml` change is required for existing hosts to pick up the fix. The coordination is correct for `lock_backend=file` (the default); `lock_backend=database` hosts get the dispatch refusal but the drain loop sees no `*.lock` files and proceeds to restart immediately — behaviour for those hosts is no worse than today and a SQL-backed drain helper is tracked as a follow-up. New operator doc at [`docs/operations/self-upgrade.md`](docs/operations/self-upgrade.md) covers the knobs, failure modes, an optional GH Actions retry snippet, and the explicit residual-race scope.
+
 ## [0.29.0] - 2026-05-29
 
 ### Added
