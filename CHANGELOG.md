@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-05-30
+
+### Fixed
+
+- **`fraisier sync` no longer aborts when a prior squash-merged PR left an orphan remote head branch behind** ([#248](https://github.com/fraiseql/fraisier/issues/248)). When a prior sync PR was squash-merged without `--delete-branch` (the GitHub Web UI default and the natural shape of `gh pr merge --auto --squash`), the remote head branch kept its pre-squash commits. The next sync run created a fresh local branch from `origin/<source>`, tried to push, and was rejected with `! [rejected] (fetch first)` — the whole sync aborted with `subprocess.CalledProcessError` and the operator had to `git push origin --delete <branch>` by hand and re-run. The push path now runs through a new `_push_sync_branch(...)` helper that pre-flights the orphan check (delete the remote branch when its most recent PR is MERGED or CLOSED, skip when OPEN) and retries once on the canonical non-fast-forward shape if the race window between pre-flight and push elected a PR merge in the gap. The retry uses plain push when the orphan can be reclaimed, and `--force-with-lease` only when a live OPEN PR is still using the branch — and only inside the new `fraisier/**` namespace. The push subprocess runs with `LC_ALL=C` so the English-only stderr sniffer (`"non-fast-forward"`, `"fetch first"`) is locale-stable regardless of operator environment. Reclaim deletes use `subprocess.run(..., check=False)` so a branch that vanishes between the exists-check and the `--delete` (concurrent fraisier run, manual cleanup) is treated as the desired end state rather than a fresh failure.
+
+### Changed
+
+- **BREAKING (operational, not API): sync branches moved into the `fraisier/**` namespace.** `fraisier sync` now creates `fraisier/sync/<target>-from-<source>` instead of `sync/<target>-from-<source>`. The new namespace is declared **fraisier-owned** in `README.md` — any branch under `fraisier/**` may be created, updated, deleted, or force-pushed by fraisier without warning. This contract is what makes the orphan-reclaim and the live-PR-race `--force-with-lease` retry above safe in principle, not just in practice. The previous flat `sync/*` namespace is no longer touched by 0.32; the rename has no fallback shim. **Upgrade note:** merge or close any in-flight pre-0.32 sync PRs **before** upgrading. After upgrade, a new sync run will not find the old PR via `_find_existing_pr` (it looks for the new branch name) and will open a fresh PR alongside the stale one — you will end up with two open PRs into the same target if the old one is still around. Old `sync/*` branches left in the remote are not auto-cleaned; delete them by hand (`git push origin --delete sync/<target>-from-<source>`) once their PRs are closed.
+
+### Added
+
+- **`fraisier/**` reserved as the tool-owned branch namespace.** Future fraisier commands will colocate their throwaway branches under this prefix (`fraisier/<command>/...`). Hand-authored work pushed under this prefix will be reclaimed on the next fraisier run — keep your branches outside it. See the new README "Branch namespace" section.
+
 ## [0.31.0] - 2026-05-30
 
 ### Fixed

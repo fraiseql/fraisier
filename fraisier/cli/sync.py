@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from typing import TYPE_CHECKING
@@ -161,6 +162,128 @@ def _enable_auto_merge_or_merge_now(pr_url: str) -> None:
         output=result.stdout,
         stderr=result.stderr,
     )
+
+
+# fraisier owns the `fraisier/**` branch namespace. Any branch under
+# this prefix may be created, updated, or deleted by fraisier without
+# warning — see README "Branch namespace". Code outside `fraisier/**`
+# is treated as user-owned and never touched here.
+FRAISIER_NS = "fraisier/"
+
+
+def _sync_branch_name(target: str, source: str) -> str:
+    return f"{FRAISIER_NS}sync/{target}-from-{source}"
+
+
+def _remote_branch_exists(branch: str) -> bool:
+    result = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _is_non_fast_forward_rejection(exc: subprocess.CalledProcessError) -> bool:
+    """True for git's 'fetch first' / non-fast-forward push rejection shape.
+
+    The push subprocess runs under ``LC_ALL=C`` so this English match is
+    reliable regardless of operator locale.
+    """
+    blob = (exc.stderr or "") + (exc.output or "")
+    return "non-fast-forward" in blob or "fetch first" in blob
+
+
+def _reclaim_orphan_branch_if_safe(branch: str) -> bool:
+    """Delete ``origin/<branch>`` if its most recent PR is merged/closed.
+
+    Returns True if the remote branch was deleted or never existed.
+    Returns False if a live OPEN PR is still using it — caller should
+    fall back to the "update existing PR" path.
+
+    Refuses to operate outside ``FRAISIER_NS``: the namespace contract
+    in the README is the only thing making unconditional deletion safe.
+    """
+    if not branch.startswith(FRAISIER_NS):
+        raise ValueError(f"refusing to reclaim non-fraisier branch: {branch}")
+
+    if not _remote_branch_exists(branch):
+        return True
+
+    existing = _find_existing_pr(branch)
+    if existing is not None and existing["state"] == "OPEN":
+        return False
+
+    if existing is not None:
+        console.print(
+            f"  Reclaiming orphan {branch} "
+            f"(prior PR {existing['state'].lower()}: {existing['url']})"
+        )
+
+    # check=False: the branch may have vanished between the exists-check
+    # above and this delete (concurrent fraisier run, manual cleanup).
+    # "Already gone" is the desired end state, not a failure.
+    result = subprocess.run(
+        ["git", "push", "origin", "--delete", branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 and "remote ref does not exist" not in (
+        result.stderr or ""
+    ):
+        console.print(
+            f"  [yellow]Warning: could not delete {branch}: "
+            f"{(result.stderr or '').strip()}[/yellow]"
+        )
+    return True
+
+
+def _push_sync_branch(sync_branch: str) -> None:
+    """Push ``sync_branch`` to origin, recovering from #248 orphan branches.
+
+    Flow:
+      1. Pre-flight: if origin holds an orphan ``sync_branch`` whose most
+         recent PR is MERGED/CLOSED, delete it first.
+      2. Push. ``LC_ALL=C`` so the non-FF sniffer matches English stderr
+         regardless of operator locale.
+      3. On non-FF rejection, retry once: reclaim again (a PR may have
+         merged in the gap), then either re-push or fall back to
+         ``--force-with-lease`` if a live OPEN PR is still using the
+         branch. Force-with-lease is safe here only because the branch
+         lives in ``FRAISIER_NS`` (declared tool-owned in README).
+      4. Any other failure (auth, network, etc.) propagates.
+    """
+    _reclaim_orphan_branch_if_safe(sync_branch)
+
+    push_argv = ["git", "push", "origin", sync_branch]
+    env = {**os.environ, "LC_ALL": "C"}
+    result = subprocess.run(
+        push_argv, capture_output=True, text=True, env=env, check=False
+    )
+    if result.returncode == 0:
+        return
+
+    exc = subprocess.CalledProcessError(
+        result.returncode, push_argv, output=result.stdout, stderr=result.stderr
+    )
+    if not _is_non_fast_forward_rejection(exc):
+        raise exc
+
+    # Race window between pre-flight and push, or live OPEN PR.
+    reclaimed = _reclaim_orphan_branch_if_safe(sync_branch)
+    retry_argv = (
+        push_argv
+        if reclaimed
+        else ["git", "push", "--force-with-lease", "origin", sync_branch]
+    )
+    retry = subprocess.run(
+        retry_argv, capture_output=True, text=True, env=env, check=False
+    )
+    if retry.returncode != 0:
+        raise subprocess.CalledProcessError(
+            retry.returncode, retry_argv, output=retry.stdout, stderr=retry.stderr
+        )
 
 
 def _find_existing_pr(sync_branch: str) -> dict | None:
@@ -425,7 +548,7 @@ def sync_cmd(
     pair = _resolve_pair(target, pairs)
     source = pair.source
     tgt = pair.target
-    sync_branch = f"sync/{tgt}-from-{source}"
+    sync_branch = _sync_branch_name(tgt, source)
 
     if dry_run:
         _print_dry_run_plan(source, tgt, sync_branch)
@@ -565,7 +688,7 @@ def sync_cmd(
         _assert_merge_finalized()
 
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
-        _run(["git", "push", "origin", sync_branch])
+        _push_sync_branch(sync_branch)
 
         existing = _find_existing_pr(sync_branch)
         if existing and existing["state"] == "OPEN":

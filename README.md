@@ -273,6 +273,20 @@ fraisier provider-test <type>                    Test provider connectivity
 
 ---
 
+## Branch namespace
+
+fraisier owns the `fraisier/**` git branch namespace. Branches under
+this prefix (currently `fraisier/sync/*`, more in future releases) may
+be created, updated, deleted, or force-pushed by fraisier without
+warning. **Do not push hand-authored work to `fraisier/**`** — it will
+be reclaimed on the next fraisier run.
+
+The flat `sync/*` namespace used by `fraisier sync` prior to 0.32 is no
+longer touched. Merge or close any in-flight pre-0.32 sync PRs before
+upgrading; the new sync run will not discover or update them.
+
+---
+
 ## Deployment targets
 
 Fraisier supports different deployment environments:
