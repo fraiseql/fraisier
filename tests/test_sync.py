@@ -509,6 +509,7 @@ class TestSyncHappyPath:
             _in_merge(),  # rev-parse MERGE_HEAD (in merge)
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),  # pre-push merge-commit invariant check
+            _mk(returncode=2),  # ls-remote: orphan branch absent
             _mk(),  # git push
             _mk(returncode=1),  # gh pr view (no existing PR)
             _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -570,6 +571,7 @@ class TestSyncHappyPath:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),
@@ -649,6 +651,7 @@ class TestSyncAutoMergeFallback:
                 "MERGE_HEAD",
                 returncode=1,
             )
+            .queue("git", "ls-remote", returncode=2)  # orphan absent
             .queue("git", "push")
             .queue("gh", "pr", "view", returncode=1)  # no existing PR
             .queue("gh", "pr", "create", stdout=self.PR_URL + "\n")
@@ -775,6 +778,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -807,6 +811,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -852,6 +857,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit (merge commit, even with no tree diff)
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -899,6 +905,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -966,7 +973,7 @@ class TestSyncConflicts:
         commands = [c[0][0] for c in m.call_args_list]
         deletes = [c for c in commands if "branch" in c and "-D" in c]
         assert len(deletes) == 1
-        assert "sync/staging-from-dev" in deletes[0]
+        assert "fraisier/sync/staging-from-dev" in deletes[0]
 
     def test_auto_resolves_target_behind_source(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -992,6 +999,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -1030,6 +1038,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -1069,6 +1078,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -1106,6 +1116,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -1161,6 +1172,7 @@ class TestSyncConfirmation:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
                 _mk(stdout=pr_url + "\n"),  # gh pr create
@@ -1241,7 +1253,9 @@ class TestSyncDryRun:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH):
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--dry-run"])
-        assert "git checkout -B sync/staging-from-dev origin/dev" in result.output
+        assert (
+            "git checkout -B fraisier/sync/staging-from-dev origin/dev" in result.output
+        )
 
     def test_dry_run_shows_merge(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -1253,7 +1267,7 @@ class TestSyncDryRun:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH):
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--dry-run"])
-        assert "git push origin sync/staging-from-dev" in result.output
+        assert "git push origin fraisier/sync/staging-from-dev" in result.output
 
     def test_dry_run_shows_pr_create(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -1261,7 +1275,7 @@ class TestSyncDryRun:
             result = CliRunner().invoke(main, ["-c", cfg, "sync", "--dry-run"])
         assert "gh pr create" in result.output
         assert "--base staging" in result.output
-        assert "--head sync/staging-from-dev" in result.output
+        assert "--head fraisier/sync/staging-from-dev" in result.output
 
     def test_dry_run_shows_pr_merge(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -1312,6 +1326,7 @@ class TestSyncBranchForceCreate:
             _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),
+            _mk(returncode=2),  # ls-remote: orphan branch absent
             _mk(),  # git push
             _mk(returncode=1),  # gh pr view (no existing PR)
             _mk(stdout=self.PR_URL + "\n"),  # gh pr create
@@ -1386,6 +1401,7 @@ class TestSyncExistingPR:
             _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),
+            _mk(returncode=2),  # ls-remote: orphan branch absent
             _mk(),  # git push
         ]
 
@@ -1681,6 +1697,7 @@ class TestSyncPropagatesSourceDeletions:
                 "MERGE_HEAD",
                 returncode=1,
             )
+            .queue("git", "ls-remote", returncode=2)  # orphan absent
         )
         with patch(_PATCH, side_effect=mg):
             result = CliRunner().invoke(
@@ -1724,6 +1741,7 @@ class TestSyncPropagatesSourceDeletions:
                 "MERGE_HEAD",
                 returncode=1,
             )
+            .queue("git", "ls-remote", returncode=2)  # orphan absent
         )
         with patch(_PATCH, side_effect=mg):
             result = CliRunner().invoke(
@@ -1773,6 +1791,7 @@ class TestSyncPropagatesSourceDeletions:
                 "MERGE_HEAD",
                 returncode=1,
             )
+            .queue("git", "ls-remote", returncode=2)  # orphan absent
         )
         with patch(_PATCH, side_effect=mg):
             result = CliRunner().invoke(
@@ -1906,3 +1925,261 @@ class TestCommitMergeOrStaged:
             _commit_merge_or_staged("msg")
         commands = [c[0][0] for c in m.call_args_list]
         assert any("commit" in c for c in commands)
+
+
+# ---------------------------------------------------------------------------
+# Issue #248: fraisier/* namespace + orphan-branch reclaim
+# ---------------------------------------------------------------------------
+
+
+class TestSyncBranchName:
+    def test_returns_branch_under_fraisier_namespace(self):
+        from fraisier.cli.sync import _sync_branch_name
+
+        assert _sync_branch_name("staging", "dev") == "fraisier/sync/staging-from-dev"
+
+
+class TestReclaimOrphanBranch:
+    def test_deletes_when_prior_pr_merged(self):
+        from fraisier.cli.sync import _reclaim_orphan_branch_if_safe
+
+        with (
+            patch("fraisier.cli.sync._remote_branch_exists", return_value=True),
+            patch(
+                "fraisier.cli.sync._find_existing_pr",
+                return_value={"state": "MERGED", "url": "https://x/pr/1"},
+            ),
+            patch(_PATCH) as run_mock,
+        ):
+            run_mock.return_value = _mk()
+            result = _reclaim_orphan_branch_if_safe("fraisier/sync/staging-from-dev")
+
+        assert result is True
+        delete_calls = [
+            c.args[0] for c in run_mock.call_args_list if "--delete" in c.args[0]
+        ]
+        assert delete_calls == [
+            [
+                "git",
+                "push",
+                "origin",
+                "--delete",
+                "fraisier/sync/staging-from-dev",
+            ]
+        ]
+
+    def test_skips_when_prior_pr_open(self):
+        from fraisier.cli.sync import _reclaim_orphan_branch_if_safe
+
+        with (
+            patch("fraisier.cli.sync._remote_branch_exists", return_value=True),
+            patch(
+                "fraisier.cli.sync._find_existing_pr",
+                return_value={"state": "OPEN", "url": "https://x/pr/2"},
+            ),
+            patch(_PATCH) as run_mock,
+        ):
+            result = _reclaim_orphan_branch_if_safe("fraisier/sync/staging-from-dev")
+
+        assert result is False
+        delete_calls = [c for c in run_mock.call_args_list if "--delete" in c.args[0]]
+        assert delete_calls == []
+
+    def test_noop_when_no_remote_branch(self):
+        from fraisier.cli.sync import _reclaim_orphan_branch_if_safe
+
+        with (
+            patch("fraisier.cli.sync._remote_branch_exists", return_value=False),
+            patch("fraisier.cli.sync._find_existing_pr") as pr_mock,
+            patch(_PATCH) as run_mock,
+        ):
+            result = _reclaim_orphan_branch_if_safe("fraisier/sync/staging-from-dev")
+
+        assert result is True
+        pr_mock.assert_not_called()
+        assert run_mock.call_args_list == []
+
+    def test_deletes_orphan_with_no_pr_history(self):
+        from fraisier.cli.sync import _reclaim_orphan_branch_if_safe
+
+        with (
+            patch("fraisier.cli.sync._remote_branch_exists", return_value=True),
+            patch("fraisier.cli.sync._find_existing_pr", return_value=None),
+            patch(_PATCH) as run_mock,
+        ):
+            run_mock.return_value = _mk()
+            result = _reclaim_orphan_branch_if_safe("fraisier/sync/staging-from-dev")
+
+        assert result is True
+        delete_calls = [
+            c.args[0] for c in run_mock.call_args_list if "--delete" in c.args[0]
+        ]
+        assert len(delete_calls) == 1
+
+    def test_refuses_non_fraisier_namespace(self):
+        from fraisier.cli.sync import _reclaim_orphan_branch_if_safe
+
+        with pytest.raises(ValueError, match="refusing to reclaim"):
+            _reclaim_orphan_branch_if_safe("sync/staging-from-dev")
+
+    def test_delete_failure_does_not_raise(self):
+        """Race: branch vanishes between exists-check and --delete.
+
+        Plan resolution #1: subprocess.run(..., check=False) on the delete.
+        """
+        from fraisier.cli.sync import _reclaim_orphan_branch_if_safe
+
+        with (
+            patch("fraisier.cli.sync._remote_branch_exists", return_value=True),
+            patch("fraisier.cli.sync._find_existing_pr", return_value=None),
+            patch(_PATCH) as run_mock,
+        ):
+            run_mock.return_value = _mk(
+                returncode=1, stderr="remote ref does not exist"
+            )
+            result = _reclaim_orphan_branch_if_safe("fraisier/sync/staging-from-dev")
+
+        assert result is True
+
+
+class TestNonFastForwardSniffer:
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "! [rejected] foo (non-fast-forward)\n",
+            "hint: Updates were rejected ... fetch first\n",
+        ],
+    )
+    def test_matches_canonical_git_wordings(self, stderr):
+        from fraisier.cli.sync import _is_non_fast_forward_rejection
+
+        exc = subprocess.CalledProcessError(
+            1, ["git", "push"], output="", stderr=stderr
+        )
+        assert _is_non_fast_forward_rejection(exc) is True
+
+    def test_does_not_match_unrelated_failures(self):
+        from fraisier.cli.sync import _is_non_fast_forward_rejection
+
+        exc = subprocess.CalledProcessError(
+            1, ["git", "push"], output="", stderr="fatal: Authentication failed"
+        )
+        assert _is_non_fast_forward_rejection(exc) is False
+
+
+class TestPushSyncBranch:
+    """Cycle 2: pre-flight + retry behaviour around `git push`."""
+
+    def test_clean_push_after_preflight_reclaim(self):
+        """Pre-flight reclaim runs first; push then succeeds without retry."""
+        from fraisier.cli.sync import _push_sync_branch
+
+        with (
+            patch(
+                "fraisier.cli.sync._reclaim_orphan_branch_if_safe",
+                return_value=True,
+            ) as reclaim_mock,
+            patch(_PATCH) as run_mock,
+        ):
+            run_mock.return_value = _mk(returncode=0)
+            _push_sync_branch("fraisier/sync/staging-from-dev")
+
+        reclaim_mock.assert_called_once_with("fraisier/sync/staging-from-dev")
+        push_calls = [c.args[0] for c in run_mock.call_args_list]
+        assert push_calls == [
+            ["git", "push", "origin", "fraisier/sync/staging-from-dev"]
+        ]
+        # LC_ALL=C set so the sniffer can rely on English stderr.
+        env = run_mock.call_args_list[0].kwargs.get("env") or {}
+        assert env.get("LC_ALL") == "C"
+
+    def test_retries_after_non_fast_forward_when_pr_now_merged(self):
+        """Race: PR was OPEN at pre-flight, merged before push, push rejects.
+
+        The retry path re-runs the reclaim (now sees MERGED), deletes the
+        branch, and pushes a second time. This anchors specifically on the
+        retry — pre-flight returns False (live PR), so the reclaim only
+        bites on the second call.
+        """
+        from fraisier.cli.sync import _push_sync_branch
+
+        with (
+            patch(
+                "fraisier.cli.sync._reclaim_orphan_branch_if_safe",
+                side_effect=[False, True],
+            ) as reclaim_mock,
+            patch(_PATCH) as run_mock,
+        ):
+            run_mock.side_effect = [
+                _mk(
+                    returncode=1,
+                    stderr="! [rejected] foo (non-fast-forward)\n",
+                ),
+                _mk(returncode=0),
+            ]
+            _push_sync_branch("fraisier/sync/staging-from-dev")
+
+        assert reclaim_mock.call_count == 2
+        push_argvs = [c.args[0] for c in run_mock.call_args_list]
+        assert push_argvs == [
+            ["git", "push", "origin", "fraisier/sync/staging-from-dev"],
+            ["git", "push", "origin", "fraisier/sync/staging-from-dev"],
+        ]
+        # No force-with-lease on this path — orphan reclaim cleared the way.
+        assert not any("--force-with-lease" in argv for argv in push_argvs)
+
+    def test_force_with_lease_only_when_live_pr_blocks_retry(self):
+        """If the PR stays OPEN on retry, fall back to --force-with-lease.
+
+        Force-push is scoped to the fraisier-owned namespace and only fires
+        on the live-PR-race case — per plan §2.2.
+        """
+        from fraisier.cli.sync import _push_sync_branch
+
+        with (
+            patch(
+                "fraisier.cli.sync._reclaim_orphan_branch_if_safe",
+                side_effect=[False, False],
+            ),
+            patch(_PATCH) as run_mock,
+        ):
+            run_mock.side_effect = [
+                _mk(returncode=1, stderr="hint: fetch first\n"),
+                _mk(returncode=0),
+            ]
+            _push_sync_branch("fraisier/sync/staging-from-dev")
+
+        push_argvs = [c.args[0] for c in run_mock.call_args_list]
+        assert push_argvs[0] == [
+            "git",
+            "push",
+            "origin",
+            "fraisier/sync/staging-from-dev",
+        ]
+        assert push_argvs[1] == [
+            "git",
+            "push",
+            "--force-with-lease",
+            "origin",
+            "fraisier/sync/staging-from-dev",
+        ]
+
+    def test_does_not_retry_on_unrelated_failure(self):
+        """Permission denied / auth failure must propagate, never retry."""
+        from fraisier.cli.sync import _push_sync_branch
+
+        with (
+            patch(
+                "fraisier.cli.sync._reclaim_orphan_branch_if_safe",
+                return_value=True,
+            ),
+            patch(_PATCH) as run_mock,
+        ):
+            run_mock.return_value = _mk(
+                returncode=1, stderr="fatal: Authentication failed"
+            )
+            with pytest.raises(subprocess.CalledProcessError):
+                _push_sync_branch("fraisier/sync/staging-from-dev")
+
+        # Single push attempt, no retry.
+        assert run_mock.call_count == 1
