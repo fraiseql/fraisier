@@ -211,5 +211,15 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        callers, not from
 #                                                        fraises.yaml.
 #
+#   cli/_helpers.py:68 (_LazyConsole.print)  non-config  Runtime dispatch in
+#                                                        the output layer:
+#                                                        chooses the markup-
+#                                                        strip path for plain
+#                                                        strings vs the Rich
+#                                                        passthrough for Panel
+#                                                        / Table objects.
+#                                                        Not a fraises.yaml
+#                                                        value.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.

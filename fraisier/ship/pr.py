@@ -60,7 +60,9 @@ class GitHubPRBackend(PRBackend):
         )
         if result.returncode == 0:
             url = result.stdout.strip()
-            console.print(f"[green]PR created:[/green] {url}")
+            from fraisier._output import success
+
+            success(f"PR created: {url}")
             return url
         console.print(f"[red]PR creation failed:[/red] {result.stderr.strip()}")
         return None
@@ -93,9 +95,9 @@ class GitHubPRBackend(PRBackend):
             check=False,
         )
         if result.returncode == 0:
-            console.print(
-                f"[green]Auto-merge enabled ({merge_method}):[/green] {pr_url}"
-            )
+            from fraisier._output import success
+
+            success(f"Auto-merge enabled ({merge_method}): {pr_url}")
         else:
             console.print(
                 f"[yellow]Auto-merge not enabled:[/yellow] {result.stderr.strip()}"

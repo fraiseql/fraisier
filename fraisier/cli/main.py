@@ -27,7 +27,6 @@ from ._envmap_help import CommandWithEnvvarEpilog
     type=click.Path(exists=True),
     help="Path to fraises.yaml configuration file",
 )
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose/debug output")
 @click.option(
     "--no-color",
     is_flag=True,
@@ -35,30 +34,39 @@ from ._envmap_help import CommandWithEnvvarEpilog
     help="Disable colored output (also honoured via NO_COLOR env var).",
 )
 @click.pass_context
-def main(ctx: click.Context, config: str | None, verbose: bool, no_color: bool) -> None:
+def main(ctx: click.Context, config: str | None, no_color: bool) -> None:
     """Fraisier - Deployment orchestrator for the FraiseQL ecosystem.
 
     Manage deployments for all your fraises (services) across multiple providers
     (Bare Metal, Docker Compose).
 
     \b
-    Machine-readable output:
-        Most commands accept --json for structured JSON output on stdout.
-        Errors are written to stderr so they don't corrupt JSON pipelines.
-        Set NO_COLOR=1 (or pass --no-color) to strip ANSI from all output.
+    Output modes (v0.31+):
+        Default is compact — one-line successes, focused failures, with
+        the full Rich story tee'd to ~/.local/share/fraisier/logs/ on
+        failure. Pass --verbose / -v to restore the human-friendly Rich
+        output for interactive sessions. Pass --json for a structured
+        machine-readable payload on stdout. Set NO_COLOR=1 (or pass
+        --no-color) to strip ANSI in verbose mode.
 
     \b
     Examples:
         fraisier list
-        fraisier trigger-deploy my_api production
-        fraisier deployment-status my_api
+        fraisier ship                              # compact (default)
+        fraisier ship --verbose                    # human Rich story
+        fraisier ship --json                       # structured payload
         fraisier history --json | jq '.[] | select(.status=="failed")'
-        NO_COLOR=1 fraisier validate --json
     """
     if no_color:
         os.environ["NO_COLOR"] = "1"
 
-    if verbose:
+    # The output context is installed by install_cli_flags below; mirror
+    # its verbosity into the legacy DEBUG-logging seam so any module
+    # using the logging API still sees verbose output when -v is passed.
+    from fraisier._output import OutputMode, get_context
+
+    out_ctx = get_context()
+    if out_ctx.mode is OutputMode.VERBOSE and out_ctx.verbosity >= 1:
         import logging
 
         logging.basicConfig(format="%(name)s %(levelname)s %(message)s")
@@ -70,6 +78,14 @@ def main(ctx: click.Context, config: str | None, verbose: bool, no_color: bool) 
     except FileNotFoundError:
         ctx.obj["config"] = None
     ctx.obj["skip_health"] = False
+
+
+# Install --verbose/-v/-vv/-vvv, --json, --no-tee onto the main group
+# and set the OutputContext for the entire subcommand subtree. Must
+# happen before sibling modules attach their commands.
+from fraisier._output import install_cli_flags  # noqa: E402
+
+install_cli_flags(main)
 
 
 # Default every @main.command(...) to the envvar-epilog-aware Command

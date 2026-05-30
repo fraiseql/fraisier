@@ -24,7 +24,7 @@ from pathlib import Path
 # that file contains the inventory comment (whose row text would also
 # match the regex), plus LazyEnv's own ``__eq__`` peer-check which is
 # internal-by-design.
-EXPECTED_INSTANCE_STR_COUNT = 15
+EXPECTED_INSTANCE_STR_COUNT = 16
 
 
 def test_isinstance_str_count_locked():

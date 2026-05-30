@@ -31,7 +31,7 @@ class TestGitHubPRBackend:
     """Test GitHubPRBackend via the gh CLI."""
 
     @patch("fraisier.ship.pr.subprocess.run")
-    def test_create_pr_success(self, mock_run):
+    def test_create_pr_success(self, mock_run, capsys):
         mock_run.return_value = MagicMock(
             returncode=0, stdout="https://github.com/user/repo/pull/123\n"
         )
@@ -39,8 +39,11 @@ class TestGitHubPRBackend:
         backend = GitHubPRBackend()
         result = backend.create_pr("1.2.3", "main", console)
         assert result == "https://github.com/user/repo/pull/123"
-        console.print.assert_called_once_with(
-            "[green]PR created:[/green] https://github.com/user/repo/pull/123"
+        # PR-created success line goes via fraisier._output.success(), which
+        # writes directly to stdout (capsys), not through the mocked console.
+        assert (
+            "PR created: https://github.com/user/repo/pull/123"
+            in capsys.readouterr().out
         )
         mock_run.assert_called_once_with(
             [
@@ -94,7 +97,7 @@ class TestGitHubPRBackend:
         assert "--pr" in output
 
     @patch("fraisier.ship.pr.subprocess.run")
-    def test_enable_auto_merge_squash(self, mock_run):
+    def test_enable_auto_merge_squash(self, mock_run, capsys):
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         console = MagicMock()
         GitHubPRBackend().enable_auto_merge(
@@ -113,8 +116,10 @@ class TestGitHubPRBackend:
             text=True,
             check=False,
         )
-        console.print.assert_called_once_with(
-            "[green]Auto-merge enabled (squash):[/green] https://github.com/user/repo/pull/1"
+        # Auto-merge success line goes via fraisier._output.success().
+        assert (
+            "Auto-merge enabled (squash): https://github.com/user/repo/pull/1"
+            in capsys.readouterr().out
         )
 
     @patch("fraisier.ship.pr.subprocess.run")

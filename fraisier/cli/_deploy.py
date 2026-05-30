@@ -237,13 +237,13 @@ def trigger_deploy(
             os.execvp("journalctl", ["journalctl", "-u", unit_pattern, "-f"])
         elif wait and response_data:
             # Parse and display result
+            from fraisier._output import success
+
             try:
                 result = json.loads(response_data.decode("utf-8"))
                 if result["success"]:
-                    console.print(
-                        f"[green]✓[/green] Deployment successful - "
-                        f"{result.get('message', '')}"
-                    )
+                    msg = f"Deployment successful - {result.get('message', '')}"
+                    success(msg)
                     if result.get("version"):
                         console.print(f"Version: {result['version']}")
                     if result.get("duration"):
@@ -260,9 +260,11 @@ def trigger_deploy(
                 console.print(
                     f"[yellow]Warning:[/yellow] Could not parse deployment result: {e}"
                 )
-                console.print("[green]✓[/green] Deployment triggered successfully")
+                success("Deployment triggered successfully")
         else:
-            console.print("[green]✓[/green] Deployment triggered successfully")
+            from fraisier._output import success
+
+            success("Deployment triggered successfully")
 
         sock.close()
 

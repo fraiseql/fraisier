@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import click
 
+from fraisier._output import success
+
 from ._helpers import console
 from .main import main
 
@@ -363,7 +365,7 @@ def ship(
 
     assert bump_type is not None  # guaranteed by the CLI argument validation above
     info = bump_version(pyproject_path, bump_type)
-    console.print(f"[green]Version bumped:[/green] {current_version} -> {info.version}")
+    success(f"Version bumped: {current_version} -> {info.version}")
 
     _ship_commit_push_deploy(
         info.version,
@@ -414,7 +416,7 @@ def _ship_commit_push_deploy(
     elif auto_merge:
         _ship_enable_auto_merge(merge_method)
 
-    console.print(f"[green]Shipped {label}[/green]")
+    success(f"Shipped {label}")
 
     if not no_deploy:
         _trigger_deploy_for_current_branch(
@@ -947,10 +949,7 @@ def _trigger_deploy_for_current_branch(
         raise
 
     if result.success:
-        console.print(
-            f"[green]Deploy successful![/green] "
-            f"{result.old_version} -> {result.new_version}"
-        )
+        success(f"Deploy successful! {result.old_version} -> {result.new_version}")
 
         # Poll health endpoint if requested
         if wait_deploy:
