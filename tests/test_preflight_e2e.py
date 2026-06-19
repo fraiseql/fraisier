@@ -208,6 +208,46 @@ class TestPreflightE2EHappyPath:
 
 
 @pytest.mark.integration
+class TestPreflightE2EInterdependent:
+    def test_interdependent_pending_passes(
+        self, admin_url, sample_backup, confiture_config, tmp_path
+    ):
+        """Two inter-dependent pending migrations preflight green (issue #250).
+
+        ``V2`` creates a view over the table ``V1`` creates.  Because
+        ``run_against`` applies pending migrations cumulatively (success →
+        ``RELEASE SAVEPOINT``), ``V2`` sees ``V1``'s table and both pass.
+        """
+        migrations_dir = tmp_path / "migrations"
+        migrations_dir.mkdir()
+        (migrations_dir / "20260429130000_create_widgets.up.sql").write_text(
+            "CREATE TABLE public.widgets (id BIGINT PRIMARY KEY);\n"
+        )
+        (migrations_dir / "20260429130000_create_widgets.down.sql").write_text(
+            "DROP TABLE public.widgets;\n"
+        )
+        (migrations_dir / "20260429140000_add_widgets_view.up.sql").write_text(
+            "CREATE OR REPLACE VIEW public.v_widgets AS "
+            "SELECT id FROM public.widgets;\n"
+        )
+        (migrations_dir / "20260429140000_add_widgets_view.down.sql").write_text(
+            "DROP VIEW public.v_widgets;\n"
+        )
+
+        result = run_migration_preflight(
+            backup_path=sample_backup,
+            admin_url=admin_url,
+            confiture_config=confiture_config,
+            migrations_dir=migrations_dir,
+        )
+
+        assert result.all_passed is True
+        assert result.failure_count == 0
+        versions = {m.version for m in result.migrations}
+        assert versions == {"20260429130000", "20260429140000"}
+
+
+@pytest.mark.integration
 class TestPreflightE2EFailureDetection:
     def test_bad_migration_caught_before_restore(
         self, admin_url, sample_backup, confiture_config, tmp_path

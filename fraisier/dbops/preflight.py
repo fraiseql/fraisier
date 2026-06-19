@@ -273,6 +273,57 @@ class MigrationPreflightResult:
         """Migrations that failed (not skipped)."""
         return [m for m in self.migrations if not m.skipped and not m.passed]
 
+    @property
+    def skipped_migrations(self) -> list[MigrationCheck]:
+        """Migrations skipped during preflight (non-transactional)."""
+        return [m for m in self.migrations if m.skipped]
+
+    @property
+    def suspected_false_positive_failures(self) -> list[MigrationCheck]:
+        """Failures that likely stem from an earlier skipped migration.
+
+        A non-transactional migration (e.g. ``CREATE INDEX CONCURRENTLY``,
+        ``ALTER TYPE … ADD VALUE``) is skipped during preflight because it
+        cannot run inside the SAVEPOINT the check uses.  A later pending
+        migration that depends on the object such a migration would create then
+        fails with ``"… does not exist"`` — a false alarm, since the skipped
+        migration runs for real during a normal ``migrate up``.
+
+        Returns the failures matching that signature: at least one earlier
+        migration was skipped, and the failure is a missing-object error on a
+        later version.  Empty when no migration was skipped (a missing-object
+        error with no skip is a genuine failure, not a false positive).
+        """
+        skipped = self.skipped_migrations
+        if not skipped:
+            return []
+        earliest_skipped = min(m.version for m in skipped)
+        return [
+            m
+            for m in self.failures
+            if m.error
+            and "does not exist" in m.error.lower()
+            and m.version > earliest_skipped
+        ]
+
+    @property
+    def false_positive_note(self) -> str | None:
+        """Diagnostic note when failures look like a non-transactional false alarm.
+
+        ``None`` when no failure matches the skipped-dependency signature.
+        """
+        suspected = self.suspected_false_positive_failures
+        if not suspected:
+            return None
+        return (
+            f"{len(suspected)} of the failing migration(s) reference objects "
+            "created by earlier pending migration(s) that were skipped as "
+            "non-transactional (they cannot run inside preflight's SAVEPOINT). "
+            "If these migrations apply cleanly in order during a normal "
+            "`migrate up`, this is likely a preflight false positive — re-run "
+            "the restore with `--skip-preflight` to bypass the check."
+        )
+
 
 def _run_confiture_preflight(
     confiture_config: Path,

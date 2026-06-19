@@ -16,6 +16,9 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 dependencies = [
+  # Floor 0.9.4: `migrate preflight --against` applies pending migrations
+  # cumulatively (RELEASE SAVEPOINT on success), so inter-dependent pending
+  # migrations preflight green — verified on 0.9.4/0.18.0/0.30.0 (issue #250).
   "fraiseql-confiture>=0.9.4,<1.0",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
@@ -31,7 +34,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.32.0"
+version = "0.33.0"
 
 [project.optional-dependencies]
 all-databases = [

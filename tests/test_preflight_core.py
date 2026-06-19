@@ -297,3 +297,101 @@ class TestMigrationPreflightResult:
         result = MigrationPreflightResult(migrations=[])
         assert result.all_passed is True
         assert result.failure_count == 0
+
+
+class TestSuspectedFalsePositive:
+    """Issue #250: a later migration failing only because an earlier
+    non-transactional migration was skipped is a false alarm, not a real bug."""
+
+    def _skipped_then_dependent_failure(self) -> MigrationPreflightResult:
+        return MigrationPreflightResult(
+            migrations=[
+                MigrationCheck(
+                    version="20240101120000",
+                    name="add_enum_value",
+                    passed=False,
+                    skipped=True,
+                    skipped_reason="non-transactional: cannot run inside SAVEPOINT",
+                ),
+                MigrationCheck(
+                    version="20240101130000",
+                    name="use_enum_value",
+                    passed=False,
+                    error='relation "public.gizmos" does not exist',
+                ),
+            ]
+        )
+
+    def test_skipped_migrations_collected(self):
+        result = self._skipped_then_dependent_failure()
+        assert [m.version for m in result.skipped_migrations] == ["20240101120000"]
+
+    def test_dependent_failure_flagged_as_suspected_false_positive(self):
+        result = self._skipped_then_dependent_failure()
+        suspected = result.suspected_false_positive_failures
+        assert [m.version for m in suspected] == ["20240101130000"]
+
+    def test_note_present_and_names_skip_preflight(self):
+        note = self._skipped_then_dependent_failure().false_positive_note
+        assert note is not None
+        assert "--skip-preflight" in note
+        assert "non-transactional" in note
+
+    def test_no_false_positive_without_a_skip(self):
+        """A missing-object error with no skipped migration is a genuine failure."""
+        result = MigrationPreflightResult(
+            migrations=[
+                MigrationCheck(version="001", name="ok", passed=True),
+                MigrationCheck(
+                    version="002",
+                    name="typo",
+                    passed=False,
+                    error='relation "typoo" does not exist',
+                ),
+            ]
+        )
+        assert result.suspected_false_positive_failures == []
+        assert result.false_positive_note is None
+
+    def test_failure_before_skip_not_flagged(self):
+        """Only failures *after* the skipped version match the dependency direction."""
+        result = MigrationPreflightResult(
+            migrations=[
+                MigrationCheck(
+                    version="20240101120000",
+                    name="earlier_failure",
+                    passed=False,
+                    error='relation "unrelated" does not exist',
+                ),
+                MigrationCheck(
+                    version="20240101130000",
+                    name="skipped_concurrent",
+                    passed=False,
+                    skipped=True,
+                    skipped_reason="non-transactional",
+                ),
+            ]
+        )
+        assert result.suspected_false_positive_failures == []
+
+    def test_non_missing_object_failure_not_flagged(self):
+        """A skip plus an unrelated (non does-not-exist) failure is not a false positive."""
+        result = MigrationPreflightResult(
+            migrations=[
+                MigrationCheck(
+                    version="20240101120000",
+                    name="skipped_concurrent",
+                    passed=False,
+                    skipped=True,
+                    skipped_reason="non-transactional",
+                ),
+                MigrationCheck(
+                    version="20240101130000",
+                    name="syntax_error",
+                    passed=False,
+                    error="syntax error at or near FROM",
+                ),
+            ]
+        )
+        assert result.suspected_false_positive_failures == []
+        assert result.false_positive_note is None

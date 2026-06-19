@@ -47,6 +47,29 @@ def _failing_result() -> MigrationPreflightResult:
     )
 
 
+def _false_positive_result() -> MigrationPreflightResult:
+    """Earlier non-transactional migration skipped; later dependent fails (#250)."""
+    return MigrationPreflightResult(
+        migrations=[
+            MigrationCheck(
+                version="20240101120000",
+                name="add_idx_concurrently",
+                passed=False,
+                skipped=True,
+                skipped_reason="non-transactional: cannot run inside SAVEPOINT",
+            ),
+            MigrationCheck(
+                version="20240101130000",
+                name="dependent_view",
+                passed=False,
+                error='relation "public.widgets" does not exist',
+            ),
+        ],
+        schema_extraction_ms=1200,
+        total_ms=1500,
+    )
+
+
 @pytest.fixture
 def runner():
     return CliRunner()
@@ -203,6 +226,30 @@ class TestDbPreflightTextOutput:
         # "1 of 2" migrations would fail
         assert "1" in result.output and "2" in result.output
 
+    def test_genuine_failure_mentions_skip_preflight_footer(self, runner, mock_config):
+        """A real failure surfaces --skip-preflight as the emergency escape hatch."""
+        with (
+            patch(_P_FIND_BACKUP, return_value=_BACKUP_FILE),
+            patch(_P_VALIDATE_AGE, return_value=True),
+            patch(_P_PREFLIGHT, return_value=_failing_result()),
+        ):
+            result = runner.invoke(main, ["db", "preflight", "myapp", "-e", "staging"])
+        assert "--skip-preflight" in result.output
+        # No false-positive diagnostic for a genuine failure.
+        assert "non-transactional" not in result.output
+
+    def test_false_positive_shows_diagnostic_note(self, runner, mock_config):
+        """Issue #250 false-alarm signature surfaces the non-transactional note."""
+        with (
+            patch(_P_FIND_BACKUP, return_value=_BACKUP_FILE),
+            patch(_P_VALIDATE_AGE, return_value=True),
+            patch(_P_PREFLIGHT, return_value=_false_positive_result()),
+        ):
+            result = runner.invoke(main, ["db", "preflight", "myapp", "-e", "staging"])
+        assert result.exit_code == 1
+        assert "non-transactional" in result.output
+        assert "--skip-preflight" in result.output
+
 
 # ---------------------------------------------------------------------------
 # db preflight — JSON output
@@ -265,6 +312,16 @@ class TestDbPreflightJsonOutput:
         data = json.loads(result.output)
         failed = next(m for m in data["migrations"] if not m["passed"])
         assert "cannot change name" in (failed["error"] or "")
+
+    def test_json_has_suspected_false_positive_count(self, runner, mock_config):
+        result = self._invoke_json(runner, mock_config, _false_positive_result())
+        data = json.loads(result.output)
+        assert data["suspected_false_positive_count"] == 1
+
+    def test_json_suspected_count_zero_for_genuine_failure(self, runner, mock_config):
+        result = self._invoke_json(runner, mock_config, _failing_result())
+        data = json.loads(result.output)
+        assert data["suspected_false_positive_count"] == 0
 
 
 # ---------------------------------------------------------------------------

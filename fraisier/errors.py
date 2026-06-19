@@ -31,6 +31,11 @@ RECOVERY_HINTS: dict[str, str] = {
         "rollback the restored snapshot, fix migrations, or run "
         "`confiture migrate baseline` to re-baseline."
     ),
+    "migration_preflight_false_positive": (
+        "if these migrations apply in order during a real `migrate up`, this is "
+        "a preflight false positive caused by a skipped non-transactional "
+        "migration — re-run `fraisier db restore` with `--skip-preflight`."
+    ),
     "migrate_partial": (
         "`fraisier rollback <fraise> <env>` to restore the previous SHA "
         "and reverse the partial migration."
