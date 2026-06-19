@@ -12,6 +12,8 @@ from fraisier.dbops.preflight import (
     MigrationCheck,
     MigrationPreflightResult,
     PreflightDatabase,
+    _read_tracking_table,
+    _write_preflight_config,
     extract_schema_only,
 )
 from fraisier.errors import DatabaseError
@@ -297,6 +299,47 @@ class TestMigrationPreflightResult:
         result = MigrationPreflightResult(migrations=[])
         assert result.all_passed is True
         assert result.failure_count == 0
+
+
+class TestReadTrackingTable:
+    """#250: pending must be resolved against the backup's tracking table."""
+
+    def test_default_when_file_missing(self, tmp_path):
+        assert _read_tracking_table(tmp_path / "nope.yaml") == "tb_confiture"
+
+    def test_default_when_no_migration_key(self, tmp_path):
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text("database_url: postgresql://x/y\n")
+        assert _read_tracking_table(cfg) == "tb_confiture"
+
+    def test_reads_custom_tracking_table(self, tmp_path):
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text("migration:\n  tracking_table: my_migrations\n")
+        assert _read_tracking_table(cfg) == "my_migrations"
+
+    def test_rejects_unsafe_identifier(self, tmp_path):
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text('migration:\n  tracking_table: "x; DROP TABLE y"\n')
+        assert _read_tracking_table(cfg) == "tb_confiture"
+
+    def test_default_on_unparseable_yaml(self, tmp_path):
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text("database_url: !envvar DB_URL\n: : :\n")
+        assert _read_tracking_table(cfg) == "tb_confiture"
+
+
+class TestWritePreflightConfig:
+    def test_writes_url_and_tracking_table(self, tmp_path):
+        cfg = _write_preflight_config(
+            "postgresql://postgres@localhost/preflight_x", "tb_confiture", tmp_path
+        )
+        text = cfg.read_text()
+        assert "postgresql://postgres@localhost/preflight_x" in text
+        assert "tracking_table: tb_confiture" in text
+
+    def test_file_is_owner_only(self, tmp_path):
+        cfg = _write_preflight_config("postgresql://x/y", "tb_confiture", tmp_path)
+        assert (cfg.stat().st_mode & 0o777) == 0o600
 
 
 class TestSuspectedFalsePositive:

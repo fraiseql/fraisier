@@ -207,6 +207,122 @@ class TestPreflightE2EHappyPath:
         assert result.migrations == []
 
 
+def _py_migration(
+    version: str, class_name: str, name: str, up_sql: str, down_sql: str
+) -> str:
+    return (
+        "from confiture.models.migration import Migration\n\n\n"
+        f"class {class_name}(Migration):\n"
+        f'    version = "{version}"\n'
+        f'    name = "{name}"\n\n'
+        "    def up(self):\n"
+        f'        self.connection.execute("{up_sql}")\n\n'
+        "    def down(self):\n"
+        f'        self.connection.execute("{down_sql}")\n'
+    )
+
+
+@pytest.mark.integration
+class TestPreflightBackupBehindTracking:
+    """Issue #250 root cause: backup is behind the live tracking state.
+
+    The predecessor (V0) is already applied in the backup, so it is *not*
+    pending; the dependent feature migrations (V1, V2) are.  Before the fix,
+    pending was resolved from the live config DB and V0 was wrongly re-run (or a
+    later dependent ran without V0's object); the fix resolves pending from the
+    backup-consistent preflight DB so only V1, V2 run — and pass.
+    """
+
+    def test_backup_behind_tracking_preflights_green(
+        self, admin_url, confiture_config, tmp_path
+    ):
+        # Source DB with V0 (baseline) applied via confiture, then backed up.
+        src = f"fraisier_test_src_{uuid.uuid4().hex[:8]}"
+        _run_psql(admin_url, f"CREATE DATABASE {src}")
+        src_url = _replace_db_in_url(admin_url, src)
+        try:
+            v0_dir = tmp_path / "v0"
+            v0_dir.mkdir()
+            (v0_dir / "20260101000000_baseline.py").write_text(
+                _py_migration(
+                    "20260101000000",
+                    "Baseline",
+                    "baseline",
+                    "CREATE TABLE public.base (id BIGINT PRIMARY KEY)",
+                    "DROP TABLE public.base",
+                )
+            )
+            src_cfg = tmp_path / "src.yaml"
+            src_cfg.write_text(f"database_url: {src_url}\n")
+            subprocess.run(
+                [
+                    "confiture",
+                    "migrate",
+                    "up",
+                    "--config",
+                    str(src_cfg),
+                    "--migrations-dir",
+                    str(v0_dir),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            backup = tmp_path / "behind.dump"
+            subprocess.run(
+                ["pg_dump", "-Fc", "-f", str(backup), src_url],
+                check=True,
+                capture_output=True,
+            )
+        finally:
+            _run_psql(admin_url, f"DROP DATABASE IF EXISTS {src}")
+
+        # Full migration set: V0 (already in backup) + inter-dependent V1, V2.
+        migrations_dir = tmp_path / "migrations"
+        migrations_dir.mkdir()
+        (migrations_dir / "20260101000000_baseline.py").write_text(
+            _py_migration(
+                "20260101000000",
+                "Baseline",
+                "baseline",
+                "CREATE TABLE public.base (id BIGINT PRIMARY KEY)",
+                "DROP TABLE public.base",
+            )
+        )
+        (migrations_dir / "20260102000000_create_widgets.py").write_text(
+            _py_migration(
+                "20260102000000",
+                "CreateWidgets",
+                "create_widgets",
+                "CREATE TABLE public.widgets (id BIGINT PRIMARY KEY)",
+                "DROP TABLE public.widgets",
+            )
+        )
+        (migrations_dir / "20260103000000_add_widgets_view.py").write_text(
+            _py_migration(
+                "20260103000000",
+                "AddWidgetsView",
+                "add_widgets_view",
+                "CREATE OR REPLACE VIEW public.v_widgets AS SELECT id FROM public.widgets",
+                "DROP VIEW public.v_widgets",
+            )
+        )
+
+        result = run_migration_preflight(
+            backup_path=backup,
+            admin_url=admin_url,
+            confiture_config=confiture_config,
+            migrations_dir=migrations_dir,
+        )
+
+        assert result.all_passed is True, (
+            "backup-behind-tracking should preflight green; got "
+            f"{[(m.version, m.error) for m in result.failures]}"
+        )
+        # V0 is already applied in the backup → not pending; only V1, V2 run.
+        versions = {m.version for m in result.migrations}
+        assert versions == {"20260102000000", "20260103000000"}
+
+
 @pytest.mark.integration
 class TestPreflightE2EInterdependent:
     def test_interdependent_pending_passes(
@@ -242,6 +358,54 @@ class TestPreflightE2EInterdependent:
         )
 
         assert result.all_passed is True
+        assert result.failure_count == 0
+        versions = {m.version for m in result.migrations}
+        assert versions == {"20260429130000", "20260429140000"}
+
+    def test_interdependent_python_pending_passes(
+        self, admin_url, sample_backup, confiture_config, tmp_path
+    ):
+        """Same as above but with transactional *Python* migrations (#250 repro).
+
+        The reporter's failing pair was two transactional Python migrations,
+        V2 a view over V1's table — predecessor passed, dependent failed.
+        """
+        migrations_dir = tmp_path / "migrations"
+        migrations_dir.mkdir()
+        (migrations_dir / "20260429130000_create_widgets.py").write_text(
+            "from confiture.models.migration import Migration\n\n\n"
+            "class CreateWidgets(Migration):\n"
+            '    version = "20260429130000"\n'
+            '    name = "create_widgets"\n\n'
+            "    def up(self):\n"
+            '        self.connection.execute("CREATE TABLE public.widgets (id BIGINT PRIMARY KEY)")\n\n'
+            "    def down(self):\n"
+            '        self.connection.execute("DROP TABLE public.widgets")\n'
+        )
+        (migrations_dir / "20260429140000_add_widgets_view.py").write_text(
+            "from confiture.models.migration import Migration\n\n\n"
+            "class AddWidgetsView(Migration):\n"
+            '    version = "20260429140000"\n'
+            '    name = "add_widgets_view"\n\n'
+            "    def up(self):\n"
+            "        self.connection.execute(\n"
+            '            "CREATE OR REPLACE VIEW public.v_widgets AS SELECT id FROM public.widgets"\n'
+            "        )\n\n"
+            "    def down(self):\n"
+            '        self.connection.execute("DROP VIEW public.v_widgets")\n'
+        )
+
+        result = run_migration_preflight(
+            backup_path=sample_backup,
+            admin_url=admin_url,
+            confiture_config=confiture_config,
+            migrations_dir=migrations_dir,
+        )
+
+        assert result.all_passed is True, (
+            "inter-dependent transactional Python migrations should preflight "
+            f"green; got failures: {[(m.version, m.error) for m in result.failures]}"
+        )
         assert result.failure_count == 0
         versions = {m.version for m in result.migrations}
         assert versions == {"20260429130000", "20260429140000"}
