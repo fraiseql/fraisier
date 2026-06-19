@@ -112,6 +112,9 @@ class TestCanonicalHintReachesRaiseSite:
             failures: ClassVar[list[_FakeMigration]] = [_FakeMigration()]
             migrations: ClassVar[list[_FakeMigration]] = [_FakeMigration()]
             total_ms = 5
+            # Genuine failure (syntax error), not a non-transactional false
+            # positive → canonical migration_preflight hint applies.
+            false_positive_note = None
 
         def _fake_run_preflight(**_kwargs):
             return _FakeResult()

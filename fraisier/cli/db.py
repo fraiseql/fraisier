@@ -418,6 +418,9 @@ def db_preflight(ctx: click.Context, fraise: str, env: str, fmt: str) -> None:
                     "schema_extraction_ms": result.schema_extraction_ms,
                     "migration_count": len(result.migrations),
                     "failure_count": result.failure_count,
+                    "suspected_false_positive_count": len(
+                        result.suspected_false_positive_failures
+                    ),
                     "migrations": [
                         {
                             "version": m.version,
@@ -459,6 +462,15 @@ def db_preflight(ctx: click.Context, fraise: str, env: str, fmt: str) -> None:
                 f"{len(result.migrations)} migration(s) would fail.",
                 style="red bold",
             )
+            note = result.false_positive_note
+            if note:
+                console.print(f"\n  Note: {note}", style="yellow")
+            else:
+                console.print(
+                    "\n  To bypass for an emergency restore: "
+                    "`fraisier db restore <fraise> <env> --skip-preflight`",
+                    style="dim",
+                )
         console.print("  [Rolled back — preflight DB dropped]\n", style="dim")
 
     raise SystemExit(0 if result.all_passed else 1)

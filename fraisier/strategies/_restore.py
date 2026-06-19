@@ -123,11 +123,24 @@ class RestoreMigrateStrategy(Strategy):
             )
             from fraisier.errors import RECOVERY_HINTS
 
-            raise MigrationPreflightError(
+            message = (
                 f"Migration preflight failed ({result.failure_count} of "
-                f"{len(result.migrations)} migrations would fail):\n{failures}",
+                f"{len(result.migrations)} migrations would fail):\n{failures}"
+            )
+            note = result.false_positive_note
+            if note:
+                # A later migration failed only because an earlier
+                # non-transactional one was skipped — surface the escape hatch
+                # rather than reading as a hard, mysterious block.
+                message += f"\n\nNote: {note}"
+                hint = RECOVERY_HINTS["migration_preflight_false_positive"]
+            else:
+                hint = RECOVERY_HINTS["migration_preflight"]
+
+            raise MigrationPreflightError(
+                message,
                 preflight_result=result,
-                recovery_hint=RECOVERY_HINTS["migration_preflight"],
+                recovery_hint=hint,
             )
 
     def execute(

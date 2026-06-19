@@ -60,6 +60,29 @@ def _failing_result() -> MigrationPreflightResult:
     )
 
 
+def _false_positive_result() -> MigrationPreflightResult:
+    """Earlier non-transactional migration skipped; later dependent fails (#250)."""
+    return MigrationPreflightResult(
+        migrations=[
+            MigrationCheck(
+                version="20240101120000",
+                name="add_idx_concurrently",
+                passed=False,
+                skipped=True,
+                skipped_reason="non-transactional: cannot run inside SAVEPOINT",
+            ),
+            MigrationCheck(
+                version="20240101130000",
+                name="dependent_view",
+                passed=False,
+                error='relation "public.widgets" does not exist',
+            ),
+        ],
+        schema_extraction_ms=500,
+        total_ms=600,
+    )
+
+
 _BACKUP_FILE = Path("/backups/latest.dump")
 
 
@@ -153,6 +176,42 @@ class TestRunPreflight:
         assert exc_info.value.code == "MIGRATION_PREFLIGHT_FAILED"
         assert exc_info.value.recoverable is True
 
+    def test_genuine_failure_keeps_standard_hint(self):
+        """A real failure (no skipped migration) does not advertise --skip-preflight."""
+        strategy = _make_strategy()
+        with (
+            patch(_P_PREFLIGHT, return_value=_failing_result()),
+            pytest.raises(MigrationPreflightError) as exc_info,
+        ):
+            strategy._run_preflight(
+                backup_path=Path("/backup.dump"),
+                confiture_config=Path("confiture.yaml"),
+                migrations_dir=Path("db/migrations"),
+            )
+
+        assert "false positive" not in str(exc_info.value).lower()
+        assert "--skip-preflight" not in exc_info.value.recovery_hint
+
+    def test_false_positive_appends_diagnostic_and_hint(self):
+        """Skipped non-transactional + dependent failure → diagnostic + escape hatch."""
+        strategy = _make_strategy()
+        with (
+            patch(_P_PREFLIGHT, return_value=_false_positive_result()),
+            pytest.raises(MigrationPreflightError) as exc_info,
+        ):
+            strategy._run_preflight(
+                backup_path=Path("/backup.dump"),
+                confiture_config=Path("confiture.yaml"),
+                migrations_dir=Path("db/migrations"),
+            )
+
+        err = exc_info.value
+        assert "false positive" in str(err).lower()
+        assert "non-transactional" in str(err)
+        assert "--skip-preflight" in err.recovery_hint
+        # The structured result is still attached for programmatic callers.
+        assert err.preflight_result is not None
+
 
 # ---------------------------------------------------------------------------
 # execute() integration
@@ -193,6 +252,43 @@ class TestExecutePreflight:
             result = strategy.execute(Path("confiture.yaml"))
 
         assert result.success is True
+
+    def test_interdependent_preflight_does_not_block_restore(self):
+        """Issue #250: an inter-dependent pending pair that preflights green
+        (V2's view over V1's table) must not raise — restore proceeds."""
+        strategy = _make_strategy()
+        interdependent = MigrationPreflightResult(
+            migrations=[
+                MigrationCheck(
+                    version="20240101120000",
+                    name="create_widgets",
+                    passed=True,
+                    time_ms=10,
+                ),
+                MigrationCheck(
+                    version="20240101130000",
+                    name="add_widgets_view",
+                    passed=True,
+                    time_ms=8,
+                ),
+            ],
+            schema_extraction_ms=500,
+            total_ms=600,
+        )
+        with (
+            patch(_P_FIND_BACKUP, return_value=_BACKUP_FILE),
+            patch(_P_VALIDATE_AGE, return_value=True),
+            patch(_P_PREFLIGHT, return_value=interdependent),
+            patch(_P_TERMINATE),
+            patch(_P_DROP, return_value=(0, "", "")),
+            patch(_P_CREATE, return_value=(0, "", "")),
+            patch(_P_RESTORE, return_value=MagicMock(success=True)) as mock_restore,
+            patch(_P_MIGRATE_UP, return_value=MagicMock(steps_applied=2)),
+        ):
+            result = strategy.execute(Path("confiture.yaml"))
+
+        assert result.success is True
+        mock_restore.assert_called_once()
 
     def test_skip_preflight_bypasses_check(self):
         strategy = _make_strategy()
