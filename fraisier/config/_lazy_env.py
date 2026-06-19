@@ -221,5 +221,14 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        Not a fraises.yaml
 #                                                        value.
 #
+#   dbops/preflight.py:_read_tracking_table  non-config  Reads
+#                                                        migration.tracking_table
+#                                                        from a *confiture*
+#                                                        config via plain
+#                                                        yaml.safe_load — never
+#                                                        fraisier's LazyEnv
+#                                                        loader, so the value is
+#                                                        a plain str|None.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.

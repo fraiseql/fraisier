@@ -166,6 +166,23 @@ class TestRunConfiturePreflight:
         assert "--config" in cmd
         assert "custom.yaml" in cmd
 
+    def test_command_omits_config_when_none(self):
+        stdout = _against_json([])
+        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+            _run_confiture_preflight(None, self._MIGRATIONS, self._URL)
+        cmd = mock_run.call_args[0][0]
+        assert "--config" not in cmd
+
+    def test_command_includes_since_when_set(self):
+        stdout = _against_json([])
+        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+            _run_confiture_preflight(
+                None, self._MIGRATIONS, self._URL, since="00000000000000"
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "--since" in cmd
+        assert "00000000000000" in cmd
+
     def test_command_includes_migrations_dir(self):
         stdout = _against_json([])
         with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:

@@ -11,9 +11,11 @@ full pg_restore:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -215,6 +217,65 @@ class PreflightDatabase:
                 f"Schema restore into {self.db_name} failed: {result.stderr}"
             )
 
+    def _conn_flags(self) -> tuple[list[str], dict[str, str] | None]:
+        """Build psql/pg_restore connection flags + env for this DB."""
+        from fraisier.dbops.operations import _parse_connection_flags
+
+        conn_flags, extra_env = _parse_connection_flags(self.url)
+        parsed = urlparse(self.url)
+        db = parsed.path.lstrip("/")
+        if db:
+            conn_flags = [*conn_flags, "-d", db]
+        run_env = {**os.environ, **extra_env} if extra_env else None
+        return conn_flags, run_env
+
+    def restore_tracking_data(self, backup_path: Path, tracking_table: str) -> None:
+        """Load the backup's migration-tracking rows into this preflight DB.
+
+        A schema-only restore creates the tracking table empty, so the preflight
+        DB cannot tell which migrations the backup already had applied.  Loading
+        just the tracking table's data makes the preflight DB *self-consistent*:
+        its schema and its applied-migration record both reflect the backup, so
+        pending-migration detection matches what ``migrate up`` would do after a
+        real restore (issue #250).
+
+        Best-effort: a backup with no tracking table (a DB never managed by
+        confiture) is tolerated — the table simply stays absent/empty and every
+        migration is treated as pending by the caller.
+        """
+        conn_flags, run_env = self._conn_flags()
+        subprocess.run(
+            [
+                "pg_restore",
+                *conn_flags,
+                "--data-only",
+                "--no-owner",
+                f"--table={tracking_table}",
+                str(backup_path),
+            ],
+            check=False,  # missing tracking table / no rows is not an error
+            capture_output=True,
+            text=True,
+            env=run_env,
+        )
+
+    def has_table(self, table_name: str) -> bool:
+        """Return ``True`` if *table_name* resolves to a relation in this DB."""
+        conn_flags, run_env = self._conn_flags()
+        result = subprocess.run(
+            [
+                "psql",
+                *conn_flags,
+                "-tAc",
+                f"SELECT to_regclass('{table_name}') IS NOT NULL",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=run_env,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "t"
+
 
 # ---------------------------------------------------------------------------
 # Phase 2: Result types + confiture integration
@@ -325,11 +386,57 @@ class MigrationPreflightResult:
         )
 
 
+_DEFAULT_TRACKING_TABLE = "tb_confiture"
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.$]*$")
+
+
+def _read_tracking_table(confiture_config: Path) -> str:
+    """Best-effort read of ``migration.tracking_table`` from a confiture config.
+
+    Falls back to confiture's own default (``tb_confiture``) when the file is
+    missing, unparseable, omits the key, or names something that is not a safe
+    SQL identifier (the value is interpolated into admin SQL / ``pg_restore``).
+    """
+    try:
+        import yaml
+
+        data = yaml.safe_load(confiture_config.read_text())
+    except Exception:
+        return _DEFAULT_TRACKING_TABLE
+    if isinstance(data, dict):
+        migration = data.get("migration")
+        if isinstance(migration, dict):
+            candidate = migration.get("tracking_table")
+            if isinstance(candidate, str) and _SAFE_IDENTIFIER.match(candidate):
+                return candidate
+    return _DEFAULT_TRACKING_TABLE
+
+
+def _write_preflight_config(
+    preflight_url: str, tracking_table: str, dest_dir: Path
+) -> Path:
+    """Write a minimal confiture config that points pending-migration detection
+    at the self-consistent preflight DB (issue #250).
+
+    Only ``database_url`` + ``migration.tracking_table`` are needed by
+    confiture's ``find_pending``.  Written ``0o600`` since the URL may carry
+    credentials.
+    """
+    cfg = dest_dir / "preflight_confiture.yaml"
+    cfg.write_text(
+        f"database_url: {preflight_url}\n"
+        f"migration:\n  tracking_table: {tracking_table}\n"
+    )
+    cfg.chmod(0o600)
+    return cfg
+
+
 def _run_confiture_preflight(
-    confiture_config: Path,
+    confiture_config: Path | None,
     migrations_dir: Path,
     against_url: str,
     *,
+    since: str | None = None,
     timeout_seconds: int = 120,
 ) -> MigrationPreflightResult:
     """Run ``confiture migrate preflight --against`` via subprocess.
@@ -340,10 +447,15 @@ def _run_confiture_preflight(
     preflight outcomes.  Any other exit code indicates a fatal error.
 
     Args:
-        confiture_config: Path to the confiture config file.  Used to connect
-            to the source database to determine which migrations are pending.
+        confiture_config: Config file used to resolve the pending set (its
+            tracking table is queried).  Pass the preflight DB's own config so
+            pending detection matches the restored backup; ``None`` to fall back
+            to ``since``/all-files resolution.
         migrations_dir: Directory containing migration files.
         against_url: PostgreSQL URL of the temporary preflight database.
+        since: When set (and ``confiture_config`` is ``None``), resolve pending
+            as every migration with version >= this value — used when the backup
+            carries no tracking table, so every migration is pending.
         timeout_seconds: Maximum wall-clock time for the preflight subprocess.
 
     Returns:
@@ -361,13 +473,15 @@ def _run_confiture_preflight(
         "preflight",
         "--against",
         against_url,
-        "--config",
-        str(confiture_config),
         "--migrations-dir",
         str(migrations_dir),
         "--format",
         "json",
     ]
+    if confiture_config is not None:
+        cmd += ["--config", str(confiture_config)]
+    if since is not None:
+        cmd += ["--since", since]
     result = subprocess.run(
         cmd,
         check=False,
@@ -417,10 +531,19 @@ def run_migration_preflight(
     1. Extract schema-only SQL from *backup_path* (~2 s).
     2. Create a temporary ``fraisier_preflight_*`` database.
     3. Restore the schema into the temporary database.
-    4. Run ``confiture migrate preflight --against <temp_db>`` to test every
-       pending migration inside a SAVEPOINT (always rolled back).
-    5. Drop the temporary database.
-    6. Return a structured ``MigrationPreflightResult``.
+    4. Load the backup's migration-tracking rows so the preflight DB is
+       *self-consistent* — its schema and its applied-migration record both
+       reflect the backup (issue #250).
+    5. Resolve the pending set from the preflight DB itself (not the live
+       config DB) and run ``confiture migrate preflight --against <temp_db>``
+       to test every pending migration inside a SAVEPOINT (always rolled back).
+    6. Drop the temporary database and return a ``MigrationPreflightResult``.
+
+    Resolving pending against the preflight DB is what fixes #250: the pending
+    set then matches what ``migrate up`` would apply after a real restore, so a
+    migration that the *live* DB already considers applied but that is absent
+    from an older backup is no longer wrongly excluded (which used to make a
+    later dependent migration fail against a base missing its object).
 
     The original database is **never touched**.  The temporary database is
     always dropped, even when a step raises an exception.
@@ -429,8 +552,8 @@ def run_migration_preflight(
         backup_path: Path to the pg_dump backup file (custom format).
         admin_url: PostgreSQL admin URL (maintenance DB, e.g.
             ``postgresql://admin@localhost/postgres``).
-        confiture_config: Path to the confiture config file (used to detect
-            pending migrations from the source database).
+        confiture_config: Path to the confiture config file (read only for the
+            migration tracking-table name).
         migrations_dir: Directory containing migration files.
         timeout_seconds: Maximum wall-clock time for the preflight subprocess
             (default 120 s).
@@ -448,21 +571,42 @@ def run_migration_preflight(
     start = time.monotonic()
 
     schema_path: Path | None = None
+    preflight_cfg: Path | None = None
     try:
         # Step 1: Extract schema
         t0 = time.monotonic()
         schema_path = extract_schema_only(backup_path)
         schema_ms = int((time.monotonic() - t0) * 1000)
 
-        # Steps 2-5: Create temp DB, restore schema, run preflight, drop DB
+        tracking_table = _read_tracking_table(confiture_config)
+
+        # Steps 2-6: Create temp DB, restore schema + tracking, run preflight.
         with PreflightDatabase(admin_url=admin_url) as preflight_db:
             preflight_db.restore_schema(schema_path)
-            result = _run_confiture_preflight(
-                confiture_config=confiture_config,
-                migrations_dir=migrations_dir,
-                against_url=preflight_db.url,
-                timeout_seconds=timeout_seconds,
-            )
+            preflight_db.restore_tracking_data(backup_path, tracking_table)
+
+            if preflight_db.has_table(tracking_table):
+                # Backup carries confiture tracking → resolve pending from the
+                # self-consistent preflight DB, matching a real restore (#250).
+                preflight_cfg = _write_preflight_config(
+                    preflight_db.url, tracking_table, schema_path.parent
+                )
+                result = _run_confiture_preflight(
+                    confiture_config=preflight_cfg,
+                    migrations_dir=migrations_dir,
+                    against_url=preflight_db.url,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                # Backup predates/omits confiture tracking → no migration is
+                # recorded as applied, so every migration is pending.
+                result = _run_confiture_preflight(
+                    confiture_config=None,
+                    migrations_dir=migrations_dir,
+                    against_url=preflight_db.url,
+                    since="00000000000000",
+                    timeout_seconds=timeout_seconds,
+                )
 
         total_ms = int((time.monotonic() - start) * 1000)
         return MigrationPreflightResult(
@@ -471,7 +615,11 @@ def run_migration_preflight(
             total_ms=total_ms,
         )
     finally:
-        # Clean up schema temp file
+        # Clean up temp files (preflight config first — it lives in the schema
+        # temp dir, which we rmdir afterwards).
+        if preflight_cfg is not None:
+            with contextlib.suppress(OSError):
+                preflight_cfg.unlink(missing_ok=True)
         if schema_path is not None:
             try:
                 schema_path.unlink(missing_ok=True)
