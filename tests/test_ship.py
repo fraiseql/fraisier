@@ -244,6 +244,54 @@ class TestShipPipelineIntegration:
         assert "Fix checks failed" in result.output
 
     @patch("subprocess.run")
+    @patch("fraisier.ship.pipeline.run_check")
+    def test_ship_check_failure_leaves_version_unbumped(
+        self, mock_check, mock_run, tmp_path
+    ):
+        """A failing check leaves pyproject.toml unbumped (issue #253).
+
+        The on-disk bump is deferred until *after* the check phases pass, so
+        an aborted ship leaves a clean working tree — no stray bump to revert,
+        and a retry bumps from the original version rather than the bumped one.
+        """
+        mock_run.return_value = MagicMock(returncode=0)
+        from fraisier.ship.checks import CheckResult
+
+        # Fix phase passes; the verify (test) phase fails — the latest point a
+        # check can fail, proving the bump is deferred past the whole pipeline.
+        def _check(check, _cwd):
+            return CheckResult(
+                name=check.name,
+                success=check.phase == "fix",
+                output="" if check.phase == "fix" else "boom",
+                duration_seconds=0.1,
+            )
+
+        mock_check.side_effect = _check
+        cfg = _setup_project_with_pipeline(tmp_path, version="1.0.0")
+        pp = tmp_path / "pyproject.toml"
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                cfg,
+                "ship",
+                "patch",
+                "--no-deploy",
+                "--pyproject",
+                str(pp),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Validation/test checks failed" in result.output
+        # Working tree must be clean: version is still 1.0.0, not bumped to 1.0.1.
+        assert 'version = "1.0.0"' in pp.read_text()
+        assert "1.0.1" not in pp.read_text()
+
+    @patch("subprocess.run")
     @patch("fraisier.ship.pr.create_pr")
     @patch("fraisier.ship.pipeline.run_check")
     def test_ship_pr_flag_creates_pr(
