@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-import pytest
 from rich.console import Console
 
 from fraisier.config import ShipCheckConfig, ShipConfig
 from fraisier.ship.checks import CheckResult, run_check
 from fraisier.ship.pipeline import ShipPipeline
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _make_check(
@@ -272,3 +276,96 @@ class TestCheckUntrackedMigrations:
             "--exclude-standard",
             "db/migrations",
         ]
+
+
+class TestPrintFailureOutput:
+    """Failing-check output shows the tail (the verdict) and keeps a full log (#255)."""
+
+    def _make_pipeline(self) -> tuple[ShipPipeline, Console]:
+        console = Console(file=io.StringIO(), width=500)
+        pipeline = ShipPipeline(
+            config=ShipConfig(checks=[]),
+            cwd=Path(),
+            console=console,
+        )
+        return pipeline, console
+
+    @staticmethod
+    def _text(console: Console) -> str:
+        assert isinstance(console.file, io.StringIO)
+        return console.file.getvalue()
+
+    def test_passing_check_prints_no_output(self) -> None:
+        """A passing check prints only its status line, never its output."""
+        pipeline, console = self._make_pipeline()
+        pipeline._print_result(
+            CheckResult(
+                name="pytest", success=True, output="noise", duration_seconds=0.1
+            )
+        )
+        text = self._text(console)
+        assert "pass pytest" in text
+        assert "noise" not in text
+
+    def test_failure_shows_tail_not_head(self) -> None:
+        """The verdict at the *end* of the output is shown; the head is dropped."""
+        pipeline, console = self._make_pipeline()
+        body = "\n".join(["STARTUP-BANNER", *[f"noise-{i}" for i in range(45)]])
+        output = body + "\nFAILED-VERDICT: assert 1 == 2"
+        pipeline._print_result(
+            CheckResult(
+                name="pytest", success=False, output=output, duration_seconds=2.0
+            )
+        )
+        text = self._text(console)
+        # The failure summary (tail) is what the operator needs — show it.
+        assert "FAILED-VERDICT: assert 1 == 2" in text
+        # The startup banner (head) is collection noise — drop it.
+        assert "STARTUP-BANNER" not in text
+
+    def test_truncation_note_and_full_log_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Long output is truncated in the console but preserved in full on disk."""
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        pipeline, console = self._make_pipeline()
+        body = "\n".join(["STARTUP-BANNER", *[f"noise-{i}" for i in range(45)]])
+        output = body + "\nFAILED-VERDICT: assert 1 == 2"
+        pipeline._print_result(
+            CheckResult(
+                name="pytest", success=False, output=output, duration_seconds=2.0
+            )
+        )
+        text = self._text(console)
+
+        # A note tells the operator some lines were hidden and where to find them.
+        assert "hidden" in text
+        logs = list((tmp_path / "fraisier" / "logs").glob("*.log"))
+        assert len(logs) == 1
+        log_path = logs[0]
+        # The console points at the full log...
+        assert str(log_path) in text
+        # ...and the log holds the *complete* output, head included.
+        contents = log_path.read_text()
+        assert "STARTUP-BANNER" in contents
+        assert "FAILED-VERDICT: assert 1 == 2" in contents
+        # 0o600 so a leaked token in the output isn't world-readable.
+        assert (log_path.stat().st_mode & 0o777) == 0o600
+
+    def test_short_output_shown_in_full_without_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Output that fits the window is shown whole — no note, no log file."""
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        pipeline, console = self._make_pipeline()
+        output = "first line\nsecond line\nthird line"
+        pipeline._print_result(
+            CheckResult(name="ruff", success=False, output=output, duration_seconds=0.3)
+        )
+        text = self._text(console)
+        assert "first line" in text
+        assert "third line" in text
+        assert "hidden" not in text
+        assert not (tmp_path / "fraisier" / "logs").exists() or not list(
+            (tmp_path / "fraisier" / "logs").glob("*.log")
+        )
