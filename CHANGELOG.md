@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-06-25
+
+### Fixed
+
+- **`fraisier ship` now shows *why* a check failed — the output tail, not the head** ([#255](https://github.com/fraiseql/fraisier/issues/255)). On a failed ship check, the pipeline printed only the **first 10 lines** of the captured output. Tools like pytest, ruff, and mypy print their verdict at the **end** (the failure summary, assertion diffs, the error list), so the ship log showed the startup banner / collection noise but not the actual cause — operators had to re-run the failing lane by hand to diagnose it (surfaced while fixing [#253](https://github.com/fraiseql/fraisier/issues/253)). `ShipPipeline._print_result` now prints the **last 30 lines** instead. When the output is longer than that window, it appends a `... N earlier line(s) hidden` note **and** writes the *full* captured output to a `0o600` log file under the XDG logs dir (`$XDG_DATA_HOME/fraisier/logs/ship-check-<name>-<stamp>.log`, shared with the existing `fraisier._output` tee layer), printing the path so nothing is lost. Output that fits the window is shown whole with no note and no log file (re-runs on a converged tree stay quiet). Log writes are best-effort — an `OSError` creating the directory or file degrades to "tail only" rather than masking the check failure. New regression guards in `tests/test_ship_pipeline.py::TestPrintFailureOutput` cover the tail-vs-head selection, the truncation note + full-log capture (including the `0o600` mode), and the short-output no-log path.
+
 ## [0.35.0] - 2026-06-25
 
 ### Fixed

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import fnmatch
+import os
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +19,10 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from fraisier.config import ShipCheckConfig, ShipConfig
+
+# Failed checks print their last N output lines — tools (pytest, ruff, mypy)
+# put the verdict at the end, so the tail is what diagnoses the failure (#255).
+_FAILURE_TAIL_LINES = 30
 
 
 @dataclass
@@ -179,5 +185,50 @@ class ShipPipeline:
             f"  {status} {result.name} ({result.duration_seconds:.1f}s)"
         )
         if not result.success and result.output:
-            for line in result.output.strip().split("\n")[:10]:
-                self._console.print(f"    {line}")
+            self._print_failure_output(result)
+
+    def _print_failure_output(self, result: CheckResult) -> None:
+        """Surface *why* a check failed (issue #255).
+
+        Tools like pytest and ruff print their verdict at the **end** of
+        their output, so the console shows the **tail** (not the head, which
+        is startup/collection noise). When the tail hides earlier lines, the
+        *full* output is written to a log file and its path is printed so
+        nothing is lost.
+        """
+        lines = result.output.strip().split("\n")
+        tail = lines[-_FAILURE_TAIL_LINES:]
+        hidden = len(lines) - len(tail)
+        if hidden > 0:
+            note = f"... {hidden} earlier line(s) hidden"
+            log_path = self._write_failure_log(result)
+            if log_path is not None:
+                note += f"; full output: {log_path}"
+            self._console.print(f"    [dim]{note}[/dim]")
+        for line in tail:
+            self._console.print(f"    {line}")
+
+    def _write_failure_log(self, result: CheckResult) -> Path | None:
+        """Write a failed check's full output to a 0o600 log file; return its path.
+
+        Best-effort: reuses the XDG-compliant log directory shared with the
+        ``fraisier._output`` tee layer. Returns ``None`` if the directory or
+        file cannot be created so a logging hiccup never masks the failure.
+        """
+        from fraisier._output import _log_dir, _now_stamp
+
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", result.name).strip("-") or "check"
+        try:
+            log_dir = _log_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / f"ship-check-{safe_name}-{_now_stamp()}.log"
+            fd = os.open(
+                str(log_path),
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            with os.fdopen(fd, "w") as log_file:
+                log_file.write(result.output)
+        except OSError:
+            return None
+        return log_path
