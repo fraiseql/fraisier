@@ -14,6 +14,8 @@ from ._helpers import console
 from .main import main
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from fraisier.config import ShipConfig
 
 logger = logging.getLogger(__name__)
@@ -364,11 +366,18 @@ def ship(
         return
 
     assert bump_type is not None  # guaranteed by the CLI argument validation above
-    info = bump_version(pyproject_path, bump_type)
-    success(f"Version bumped: {current_version} -> {info.version}")
+
+    # #253: defer the on-disk bump until after the check phases pass. The next
+    # version is fully determined now (``new``), but writing it before the
+    # checks means a failing check leaves a dirty, half-bumped tree the user
+    # must hand-revert. The pipeline calls ``_apply_bump`` only once all checks
+    # are green, so an aborted ship leaves the working tree exactly as it was.
+    def _apply_bump() -> None:
+        bump_version(pyproject_path, bump_type)
+        success(f"Version bumped: {current_version} -> {new}")
 
     _ship_commit_push_deploy(
-        info.version,
+        new,
         ship_config,
         create_pr,
         pr_base,
@@ -377,9 +386,10 @@ def ship(
         deploy_timeout,
         auto_merge=resolved_auto_merge,
         merge_method=resolved_merge_method,
-        label=f"v{info.version}",
+        label=f"v{new}",
         expected_base_version=current_version,
         bump_kind=bump_type,
+        apply_bump=_apply_bump,
     )
 
 
@@ -397,6 +407,7 @@ def _ship_commit_push_deploy(
     label: str,
     expected_base_version: str,
     bump_kind: str | None,
+    apply_bump: Callable[[], None] | None = None,
 ) -> None:
     """Run the commit-push-PR-deploy sequence."""
     # #232: race base is the PR target when --pr is set (origin/<pr_base> moves
@@ -406,7 +417,7 @@ def _ship_commit_push_deploy(
     race_base = resolved_pr_base if create_pr else None
 
     _ship_with_pipeline(
-        version, ship_config, expected_base_version, bump_kind, race_base
+        version, ship_config, expected_base_version, bump_kind, race_base, apply_bump
     )
 
     if create_pr:
@@ -645,6 +656,7 @@ def _ship_with_pipeline(
     expected_base_version: str,
     bump_kind: str | None,
     race_base: str | None,
+    apply_bump: Callable[[], None] | None = None,
 ) -> None:
     """Ship using the check pipeline (--no-verify commit).
 
@@ -652,6 +664,10 @@ def _ship_with_pipeline(
     at all) gets a synthetic empty config — the pipeline's check phases
     short-circuit when no checks are configured, but the
     migration-untracked check and commit/push still run.
+
+    *apply_bump*, when given, writes the version bump to disk. It is invoked
+    only after every check phase passes (issue #253), so a failed check leaves
+    a clean working tree. ``None`` for ``ship --no-bump`` (nothing to write).
     """
     import subprocess
 
@@ -669,22 +685,27 @@ def _ship_with_pipeline(
     if not migration_result.success:
         raise SystemExit(1)
 
-    # Phase 1: auto-fixers (before staging)
+    # Phase 1: auto-fixers (run against the working tree, before any staging)
     console.print("[bold]Running fix checks...[/bold]")
     fix_result = pipeline.run_fix_phase()
     if not fix_result.success:
         console.print("[red]Fix checks failed, aborting ship.[/red]")
         raise SystemExit(1)
 
-    # Stage all tracked dirty files (bump + fixer output)
-    subprocess.run(["git", "add", "--update"], check=True)
-
-    # Phase 2: validators + tests (after staging)
+    # Phase 2: validators + tests (also run against the working tree)
     console.print("[bold]Running validation and tests...[/bold]")
     verify_result = pipeline.run_verify_phase()
     if not verify_result.success:
         console.print("[red]Validation/test checks failed, aborting ship.[/red]")
         raise SystemExit(1)
+
+    # #253: every check is green — only now write the version bump. Deferring it
+    # to here means a failed check above leaves the working tree exactly as the
+    # user left it (no stray bump to revert, no double-bump on retry). The single
+    # `git add --update` then stages the bump together with any fixer output.
+    if apply_bump is not None:
+        apply_bump()
+    subprocess.run(["git", "add", "--update"], check=True)
 
     # #232: refuse to commit if origin advanced during local CI — the bump
     # we computed before CI would now produce a duplicate-version PR.

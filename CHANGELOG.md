@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-06-25
+
+### Fixed
+
+- **`fraisier ship` no longer leaves a dirty, half-bumped working tree when a check fails** ([#253](https://github.com/fraiseql/fraisier/issues/253)). `ship <bump>` wrote the version bump to `pyproject.toml` (plus its byproducts — `uv.lock`, a regenerated `detect-secrets` baseline, etc.) *before* the validation/test phases ran. When a check then failed, the ship aborted correctly — nothing pushed, no PR — but the bump was already on disk: the operator had to `git restore` several files by hand before retrying, and a naive retry would bump *again* from the already-bumped number (`X → Y → Z` instead of `X → Y`). Because `ship` auto-commits uncommitted tracked changes, a later successful ship could also silently sweep the stray bump into its commit. The bump is now **transactional with respect to the check phase**: the next version is still computed up front, but the on-disk write is deferred behind an `apply_bump` callback that `_ship_with_pipeline` invokes **only after both the fix and verify phases pass**, immediately before staging and committing. A failed check therefore leaves the working tree exactly as the user left it — no stray bump to revert, no double-bump on retry. The two `git add --update` calls collapse into a single staging point after the bump (the check phases run against the working tree, not the index, so the pre-verify stage was redundant). The `ship --no-bump` path passes no callback and is unaffected. New regression guard `tests/test_ship.py::TestShipPipelineIntegration::test_ship_check_failure_leaves_version_unbumped` lets the fix phase pass, fails the verify phase, and asserts `pyproject.toml` is still at the original version (it fails on 0.34.0 and earlier).
+
 ## [0.34.0] - 2026-06-19
 
 ### Fixed
