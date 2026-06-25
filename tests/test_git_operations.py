@@ -1,13 +1,19 @@
 """Tests for bare repo + worktree git operations."""
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
+from fraisier.errors import DeploymentError
 from fraisier.git.operations import (
     clone_bare_repo,
     fetch_and_checkout,
     get_worktree_sha,
+    verify_worktree_at_sha,
 )
+from tests.fixtures.git_env import DeployEnv
 
 REPOS_BASE = Path("/var/lib/fraisier/repos")
 
@@ -211,3 +217,103 @@ class TestFetchAndCheckout:
         assert old is not None
         assert old != new
         assert old == "aaa1111"
+
+    def test_verifies_worktree_matches_new_sha_after_checkout(self):
+        """A checkout that exits 0 but leaves stale files must be caught: the
+        deploy diffs the worktree against new_sha before recording a version."""
+        with patch("subprocess.run", side_effect=self._mock_run()) as mock_run:
+            fetch_and_checkout(self.bare_repo, self.worktree, self.branch)
+
+        verify_call = call(
+            [
+                "git",
+                f"--work-tree={self.worktree}",
+                f"--git-dir={self.bare_repo}",
+                "diff",
+                "--quiet",
+                "bbb2222",
+                "--",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert verify_call in mock_run.call_args_list
+
+    def test_raises_when_worktree_stale_after_checkout(self):
+        """Frozen worktree (checkout silently no-ops): version must NOT advance."""
+
+        def side_effect(cmd, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = ""
+            if cmd == ["git", "-C", str(self.worktree), "rev-parse", "HEAD"]:
+                result.stdout = "aaa1111\n"
+            if "rev-parse" in cmd and any(a.startswith("origin/") for a in cmd):
+                result.stdout = "bbb2222\n"
+            # Verification diff reports the worktree differs from new_sha.
+            if "diff" in cmd and "--quiet" in cmd:
+                result.returncode = 1
+            if "diff" in cmd and "--name-only" in cmd:
+                result.stdout = "app.py\nconfig/settings.toml\n"
+            return result
+
+        with (
+            patch("subprocess.run", side_effect=side_effect),
+            pytest.raises(DeploymentError) as exc_info,
+        ):
+            fetch_and_checkout(self.bare_repo, self.worktree, self.branch)
+
+        err = exc_info.value
+        assert err.context["expected_sha"] == "bbb2222"
+        assert "app.py" in err.context["stale_files"]
+
+
+class TestVerifyWorktreeAtSha:
+    """Guard added after the frozen-staging-worktree incident: confirm the
+    worktree's files actually match the deployed SHA, using a real git repo."""
+
+    def test_passes_when_worktree_matches_sha(self, git_deploy_env: DeployEnv):
+        """Fixture worktree is checked out at v1 — verifying v1 must not raise."""
+        verify_worktree_at_sha(
+            git_deploy_env.bare_repo,
+            git_deploy_env.worktree,
+            git_deploy_env.sha_v1,
+        )
+
+    def test_raises_when_worktree_is_stale(self, git_deploy_env: DeployEnv):
+        """Worktree files are v1; verifying against v2 must fail loudly."""
+        with pytest.raises(DeploymentError) as exc_info:
+            verify_worktree_at_sha(
+                git_deploy_env.bare_repo,
+                git_deploy_env.worktree,
+                git_deploy_env.sha_v2,
+            )
+
+        err = exc_info.value
+        assert err.context["expected_sha"] == git_deploy_env.sha_v2
+        assert "app.py" in err.context["stale_files"]
+        assert str(git_deploy_env.worktree) == err.context["worktree"]
+
+    def test_passes_after_real_checkout_to_v2(self, git_deploy_env: DeployEnv):
+        """The healthy path: after an actual checkout to v2, verification passes."""
+        subprocess.run(
+            [
+                "git",
+                f"--work-tree={git_deploy_env.worktree}",
+                f"--git-dir={git_deploy_env.bare_repo}",
+                "checkout",
+                "-f",
+                git_deploy_env.sha_v2,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        verify_worktree_at_sha(
+            git_deploy_env.bare_repo,
+            git_deploy_env.worktree,
+            git_deploy_env.sha_v2,
+        )
