@@ -1,5 +1,6 @@
 """Tests for deployment implementations."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -816,6 +817,172 @@ class TestAPIDeployer:
         mock_install.assert_not_called()
         # save_hash should not be called either
         mock_watcher.save_hash.assert_not_called()
+
+
+class TestVersionJsonAbortRollback:
+    """version.json must not be left advanced when a deploy aborts (issue #257).
+
+    version.json is regenerated *before* migrations run (the rebuild strategy
+    reads it to stamp app_version into the DB), so an aborted deploy would
+    otherwise leave it advanced ahead of the actual schema — making /health and
+    `fraisier health` report a version that was never successfully deployed.
+    """
+
+    def _migrate_deployer(self, app_dir):
+        return APIDeployer(
+            {"app_path": str(app_dir), "database": {"strategy": "apply"}}
+        )
+
+    def test_failed_migration_restores_prior_version_json(self, tmp_path):
+        """A migrate failure rolls version.json back to the pre-deploy value."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
+        version_file = app_dir / "version.json"
+        version_file.write_text('{"version": "1.0.0"}\n')
+
+        deployer = self._migrate_deployer(app_dir)
+
+        def advance_version():
+            version_file.write_text('{"version": "2.0.0"}\n')
+
+        with (
+            patch.object(deployer, "_git_pull", return_value=("oldsha", "newsha")),
+            patch.object(deployer, "_install_dependencies"),
+            patch.object(deployer, "_check_service_file_staleness"),
+            patch.object(deployer, "_validate_wrapper_scripts"),
+            patch.object(deployer, "_sync_config_if_needed"),
+            patch.object(
+                deployer, "_generate_version_json", side_effect=advance_version
+            ),
+            patch.object(
+                deployer,
+                "_run_database_migrations",
+                side_effect=DeploymentError("migrate boom"),
+            ),
+            patch.object(deployer, "_restore_previous_state"),
+            patch.object(deployer, "_write_status"),
+            patch.object(deployer, "_start_db_record", return_value=None),
+            patch.object(deployer, "_complete_db_record"),
+            patch.object(deployer, "_notify"),
+        ):
+            result = deployer.execute()
+
+        assert result.success is False
+        assert json.loads(version_file.read_text())["version"] == "1.0.0"
+
+    def test_failed_migration_removes_version_json_when_none_existed(self, tmp_path):
+        """A first-deploy migrate failure removes the prematurely-written file."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
+        version_file = app_dir / "version.json"
+
+        deployer = self._migrate_deployer(app_dir)
+
+        def advance_version():
+            version_file.write_text('{"version": "2.0.0"}\n')
+
+        with (
+            patch.object(deployer, "_git_pull", return_value=(None, "newsha")),
+            patch.object(deployer, "_install_dependencies"),
+            patch.object(deployer, "_check_service_file_staleness"),
+            patch.object(deployer, "_validate_wrapper_scripts"),
+            patch.object(deployer, "_sync_config_if_needed"),
+            patch.object(
+                deployer, "_generate_version_json", side_effect=advance_version
+            ),
+            patch.object(
+                deployer,
+                "_run_database_migrations",
+                side_effect=DeploymentError("migrate boom"),
+            ),
+            patch.object(deployer, "_restore_previous_state"),
+            patch.object(deployer, "_write_status"),
+            patch.object(deployer, "_start_db_record", return_value=None),
+            patch.object(deployer, "_complete_db_record"),
+            patch.object(deployer, "_notify"),
+        ):
+            result = deployer.execute()
+
+        assert result.success is False
+        assert not version_file.exists()
+
+    def test_successful_deploy_keeps_new_version_json(self, tmp_path):
+        """A clean deploy leaves the freshly generated version.json in place."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
+        version_file = app_dir / "version.json"
+        version_file.write_text('{"version": "1.0.0"}\n')
+
+        deployer = self._migrate_deployer(app_dir)
+
+        def advance_version():
+            version_file.write_text('{"version": "2.0.0"}\n')
+
+        with (
+            patch.object(deployer, "_git_pull", return_value=("oldsha", "newsha")),
+            patch.object(deployer, "_install_dependencies"),
+            patch.object(deployer, "_check_service_file_staleness"),
+            patch.object(deployer, "_validate_wrapper_scripts"),
+            patch.object(deployer, "_sync_config_if_needed"),
+            patch.object(
+                deployer, "_generate_version_json", side_effect=advance_version
+            ),
+            patch.object(deployer, "_run_database_migrations"),
+            patch.object(deployer, "_run_post_migrate"),
+            patch.object(deployer, "_write_status"),
+            patch.object(deployer, "_start_db_record", return_value=None),
+            patch.object(deployer, "_complete_db_record"),
+            patch.object(deployer, "_notify"),
+        ):
+            result = deployer.execute()
+
+        assert result.success is True
+        assert json.loads(version_file.read_text())["version"] == "2.0.0"
+
+    def test_health_check_rollback_restores_prior_version_json(self, tmp_path):
+        """A post-deploy health-check rollback also reverts version.json (#257)."""
+        app_dir = tmp_path / "api"
+        app_dir.mkdir()
+        version_file = app_dir / "version.json"
+        version_file.write_text('{"version": "1.0.0"}\n')
+
+        config = {
+            "app_path": str(app_dir),
+            "systemd_service": "api.service",
+            "health_check": {"url": "http://localhost:8000/health"},
+            "database": {"strategy": "apply"},
+        }
+        deployer = APIDeployer(config)
+        deployer._previous_sha = "oldsha"
+
+        def advance_version():
+            version_file.write_text('{"version": "2.0.0"}\n')
+
+        with (
+            patch.object(deployer, "_git_pull", return_value=("oldsha", "newsha")),
+            patch.object(deployer, "_install_dependencies"),
+            patch.object(deployer, "_check_service_file_staleness"),
+            patch.object(deployer, "_validate_wrapper_scripts"),
+            patch.object(deployer, "_sync_config_if_needed"),
+            patch.object(
+                deployer, "_generate_version_json", side_effect=advance_version
+            ),
+            patch.object(deployer, "_run_database_migrations"),
+            patch.object(deployer, "_run_post_migrate"),
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_wait_for_health", return_value=False),
+            patch.object(deployer, "_git_rollback"),
+            patch.object(deployer, "get_current_version", return_value="oldsha"),
+            patch.object(deployer, "_write_status"),
+            patch.object(deployer, "_start_db_record", return_value=None),
+            patch.object(deployer, "_complete_db_record"),
+            patch.object(deployer, "_notify"),
+        ):
+            result = deployer.execute()
+
+        assert result.success is False
+        assert result.status == DeploymentStatus.ROLLED_BACK
+        assert json.loads(version_file.read_text())["version"] == "1.0.0"
 
 
 class TestAPIDeployerRebuildAppVersion:
