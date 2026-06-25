@@ -51,6 +51,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.allow_irreversible = config.get("allow_irreversible", False)
         self.lock_timeout = config.get("lock_timeout", 300)
         self._migrations_applied: int = 0
+        self._version_json_snapshotted = False
+        self._version_json_existed = False
+        self._version_json_snapshot: bytes | None = None
 
     def _validate_wrapper_scripts(self) -> None:
         """Validate that required wrapper scripts exist and are executable.
@@ -173,6 +176,64 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 logger.info("Scaffold regenerated — config hash updated")
                 self._install_scaffold(config_path=opt_config)
                 logger.info("Scaffold regenerated and installed")
+
+    def _version_json_path(self) -> Path | None:
+        """Path to the deployed ``version.json``, or None when app_path is unset."""
+        if not self.app_path:
+            return None
+        return Path(self.app_path) / "version.json"
+
+    def _snapshot_version_json(self) -> None:
+        """Record version.json before it is regenerated, for abort rollback (#257).
+
+        version.json is regenerated *before* migrations run because the rebuild
+        strategy reads it to stamp ``app_version`` into the database. If the
+        deploy later aborts (e.g. migrations fail), the freshly written
+        version.json would otherwise be left advanced ahead of the actual
+        deployed schema, making ``/health`` and ``fraisier health`` report a
+        version that was never successfully deployed. Capturing the prior state
+        here lets the abort paths roll version.json back via
+        :meth:`_restore_version_json`.
+        """
+        self._version_json_snapshotted = True
+        self._version_json_existed = False
+        self._version_json_snapshot = None
+        path = self._version_json_path()
+        if path is None:
+            return
+        try:
+            if path.exists():
+                self._version_json_snapshot = path.read_bytes()
+                self._version_json_existed = True
+        except OSError as exc:
+            logger.warning("Could not snapshot version.json before deploy: %s", exc)
+
+    def _restore_version_json(self) -> None:
+        """Restore version.json to its pre-deploy state after an aborted deploy.
+
+        No-op unless this deploy snapshotted version.json first, so a standalone
+        :meth:`rollback` invocation never deletes a live version.json. Rewrites
+        the captured bytes, or removes the file when none existed before the
+        deploy (issue #257).
+        """
+        if not self._version_json_snapshotted:
+            return
+        path = self._version_json_path()
+        if path is None:
+            return
+        try:
+            if self._version_json_existed and self._version_json_snapshot is not None:
+                path.write_bytes(self._version_json_snapshot)
+                logger.info(
+                    "Restored version.json to its pre-deploy value after aborted deploy"
+                )
+            elif not self._version_json_existed and path.exists():
+                path.unlink()
+                logger.info("Removed version.json written during aborted deploy")
+        except OSError as exc:
+            logger.warning(
+                "Could not restore version.json after aborted deploy: %s", exc
+            )
 
     def _generate_version_json(self) -> None:
         """Write version.json to app_path from pyproject.toml + git metadata.
@@ -389,7 +450,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 # Step 2: Install dependencies
                 self._install_dependencies()
 
-                # Step 2.5: Generate version.json from pyproject.toml + git metadata
+                # Step 2.5: Generate version.json from pyproject.toml + git
+                # metadata. Snapshot first so an aborted deploy can roll
+                # version.json back instead of leaving it advanced ahead of the
+                # schema (issue #257). Generated before migrations because the
+                # rebuild strategy reads it to stamp the database.
+                self._snapshot_version_json()
                 self._generate_version_json()
 
                 # Step 3: Run database migrations via strategy if configured
@@ -440,6 +506,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             logger.exception(f"Deployment failed: {e}")
             wrapped = self._wrap_error(e)
             self._restore_previous_state()
+            self._restore_version_json()
 
             self._write_status("failed", error_message=str(e))
             result = DeploymentResult(
@@ -474,6 +541,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             )
 
         duration = time.time() - start_time
+        self._restore_version_json()
         self._write_status("failed", error_message=str(exc))
         return DeploymentResult(
             success=False,
@@ -865,6 +933,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         try:
             if not target:
                 raise ValueError("No previous SHA available for rollback")
+
+            # Revert version.json so a rolled-back deploy never reports the
+            # version it failed to ship (issue #257). Gated on this run having
+            # snapshotted, so a standalone rollback leaves version.json alone.
+            self._restore_version_json()
 
             db_details: dict[str, int] = {}
             if self._migrations_applied > 0 and self.database_config:
