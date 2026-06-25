@@ -431,6 +431,86 @@ def _write_preflight_config(
     return cfg
 
 
+_SKIP_PREFLIGHT_HINT = (
+    "If this is a false positive (e.g. a migration that reads sibling repo "
+    "files only present in a full checkout), re-run the restore with "
+    "--skip-preflight to bypass the check."
+)
+
+
+def _extract_preflight_issues(stdout: str) -> str | None:
+    """Pull human-readable issue lines from confiture's JSON preflight output.
+
+    Tolerant of both the 0.9.x (``{"against": {"migrations": [...]}}``) and the
+    0.30+ (``{"issues": [...]}``) schemas. Returns ``None`` when *stdout* is not
+    the expected JSON or carries no surfaced issues.
+    """
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    lines: list[str] = []
+    # 0.30+ schema: a top-level "issues" array of {code, message, migration,
+    # details.error}.
+    for issue in data.get("issues") or []:
+        code = issue.get("code", "")
+        message = issue.get("message", "")
+        migration = issue.get("migration")
+        error = (issue.get("details") or {}).get("error")
+        text = " ".join(p for p in (code, message) if p)
+        if migration:
+            text = f"{text} [migration {migration}]"
+        if error:
+            text = f"{text} — {error}"
+        if text:
+            lines.append(f"  - {text}")
+    # 0.9.x schema: per-migration success/error under against.migrations.
+    against = data.get("against", data)
+    if isinstance(against, dict):
+        lines.extend(
+            f"  - migration {m.get('version', '?')} "
+            f"({m.get('name', '?')}) failed: {m.get('error', '')}"
+            for m in (against.get("migrations") or [])
+            if not m.get("success", True) and not m.get("skipped", False)
+        )
+    return "\n".join(lines) if lines else None
+
+
+def _format_preflight_failure(returncode: int, stdout: str, stderr: str) -> str:
+    """Build a diagnostic message from a fatal confiture preflight exit.
+
+    confiture writes its structured failure report (issue code, offending
+    migration, the underlying error/path) to *stdout* as JSON. fraisier
+    historically surfaced only *stderr* — typically empty for these failures —
+    leaving operators with a bare ``exit N`` and no cause (#259). This extracts
+    the human detail from stdout when present, falls back to the raw stdout,
+    includes any stderr, and always appends the recovery hint.
+    """
+    lines = [f"confiture preflight failed (exit {returncode})."]
+    detail = _extract_preflight_issues(stdout)
+    if detail:
+        lines.append(detail)
+    elif stdout.strip():
+        lines.append(stdout.strip()[:2000])
+    if stderr.strip():
+        lines.append(f"stderr: {stderr.strip()[:1000]}")
+    lines.append(_SKIP_PREFLIGHT_HINT)
+    return "\n".join(lines)
+
+
+def _confiture_version() -> str | None:
+    """Installed ``fraiseql-confiture`` version, or ``None`` if undiscoverable."""
+    import importlib.metadata as _md
+
+    try:
+        return _md.version("fraiseql-confiture")
+    except _md.PackageNotFoundError:
+        return None
+
+
 def _run_confiture_preflight(
     confiture_config: Path | None,
     migrations_dir: Path,
@@ -491,14 +571,38 @@ def _run_confiture_preflight(
     )
 
     # 0 = all passed, 1 = failures detected — both are valid preflight outcomes.
+    # Any other code (e.g. confiture's exit 7 = PFLIGHT_REPLAY_FAILED) is fatal:
+    # surface confiture's own diagnostics, which it writes to *stdout* (#259).
     if result.returncode not in (0, 1):
         raise DatabaseError(
-            f"confiture preflight failed (exit {result.returncode}): {result.stderr}"
+            _format_preflight_failure(result.returncode, result.stdout, result.stderr)
         )
 
-    data = json.loads(result.stdout)
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise DatabaseError(
+            _format_preflight_failure(result.returncode, result.stdout, result.stderr)
+        ) from exc
+
     # Output format: {"static": {...}, "against": {...}} when --against is used.
     against_data: dict = data.get("against", data)
+
+    # A recognized result carries a per-migration "migrations" array (0.9.x).
+    # Newer confiture (0.30+) emits {"ok", "issues": [...]} with no such array:
+    # fraisier cannot map it and must NOT silently treat it as "no failures",
+    # which would hide real preflight failures under a skewed confiture (#259).
+    if not isinstance(against_data, dict) or "migrations" not in against_data:
+        detail = (
+            _extract_preflight_issues(result.stdout) or (result.stdout.strip()[:2000])
+        )
+        raise DatabaseError(
+            "confiture preflight returned an unrecognized output schema "
+            f"(fraiseql-confiture {_confiture_version() or 'unknown'}); fraisier "
+            "expects the confiture 0.9.x preflight format. This is a version "
+            "skew — pin fraiseql-confiture to a supported version.\n"
+            f"{detail}\n{_SKIP_PREFLIGHT_HINT}"
+        )
 
     migrations = [
         MigrationCheck(

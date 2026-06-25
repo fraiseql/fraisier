@@ -227,6 +227,96 @@ class TestRunConfiturePreflight:
         assert len(result.migrations) == 3
         assert result.failures[0].version == "002"
 
+    # -- #259: a fatal exit must surface confiture's *stdout* diagnostics --
+    # confiture writes its structured failure report (issue code, offending
+    # migration, the underlying error/path) to stdout; stderr is typically
+    # empty.  fraisier used to report only stderr, leaving a bare "exit N".
+
+    _REPLAY_FAILED_STDOUT = json.dumps(
+        {
+            "ok": False,
+            "summary": {"errors": 1, "warnings": 0, "migrations_checked": 1},
+            "issues": [
+                {
+                    "severity": "error",
+                    "code": "PFLIGHT_REPLAY_FAILED",
+                    "message": (
+                        "Migration 0001 (recreate_widget) failed to replay "
+                        "against the preflight DB."
+                    ),
+                    "migration": "0001",
+                    "details": {
+                        "error": (
+                            "[Errno 2] No such file or directory: "
+                            "'/app/db/0_schema/funcs/widget.sql'"
+                        )
+                    },
+                }
+            ],
+        }
+    )
+
+    def test_fatal_exit_surfaces_confiture_stdout_diagnostics(self):
+        with (
+            patch(
+                "subprocess.run",
+                return_value=_proc(7, self._REPLAY_FAILED_STDOUT, ""),
+            ),
+            pytest.raises(DatabaseError) as exc_info,
+        ):
+            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
+        msg = str(exc_info.value)
+        assert "exit 7" in msg
+        assert "PFLIGHT_REPLAY_FAILED" in msg
+        assert "0001" in msg
+        assert "0_schema/funcs/widget.sql" in msg
+
+    def test_fatal_exit_includes_skip_preflight_hint(self):
+        with (
+            patch(
+                "subprocess.run",
+                return_value=_proc(7, self._REPLAY_FAILED_STDOUT, ""),
+            ),
+            pytest.raises(DatabaseError) as exc_info,
+        ):
+            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
+        assert "--skip-preflight" in str(exc_info.value)
+
+    def test_fatal_exit_falls_back_to_stderr_when_stdout_empty(self):
+        with (
+            patch("subprocess.run", return_value=_proc(2, "", "boom on stderr")),
+            pytest.raises(DatabaseError, match="exit 2") as exc_info,
+        ):
+            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
+        assert "boom on stderr" in str(exc_info.value)
+
+    def test_unrecognized_schema_raises_instead_of_silent_pass(self):
+        """An exit-1 result whose schema lacks per-migration data must not be
+        silently treated as 'no failures' — that hides real failures under a
+        newer confiture (version skew, #259)."""
+        stdout = json.dumps(
+            {
+                "ok": False,
+                "summary": {"errors": 1},
+                "issues": [
+                    {
+                        "code": "PFLIGHT_REPLAY_FAILED",
+                        "message": "boom",
+                        "migration": "002",
+                    }
+                ],
+            }
+        )
+        with (
+            patch("subprocess.run", return_value=_proc(1, stdout)),
+            pytest.raises(DatabaseError) as exc_info,
+        ):
+            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
+        msg = str(exc_info.value)
+        assert "PFLIGHT_REPLAY_FAILED" in msg
+        # surfaces the version-skew nature so the operator can act
+        assert "schema" in msg.lower() or "version" in msg.lower()
+
 
 # ---------------------------------------------------------------------------
 # run_migration_preflight — orchestration and cleanup
