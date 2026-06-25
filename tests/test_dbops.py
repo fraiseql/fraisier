@@ -350,10 +350,22 @@ class TestParseConfitureOutput:
     def test_parse_migration_count_from_stdout(self):
         from fraisier.dbops.confiture import parse_migration_count
 
+        # 0.9.x phrasing
         assert parse_migration_count("Applied 5 migrations\n") == 5
         assert parse_migration_count("Applied 1 migration\n") == 1
         assert parse_migration_count("Nothing to do\n") == 0
         assert parse_migration_count("Rolled back 3 migrations\n") == 3
+        # confiture 0.32 phrasing: "Migrations: N" summary for up, lower-cased
+        # "rolled back N migration(s)" for down.
+        assert (
+            parse_migration_count(
+                "✅ Successfully applied migrations!\nMigrations: 2\n"
+            )
+            == 2
+        )
+        assert (
+            parse_migration_count("✅ Successfully rolled back 1 migration(s)!\n") == 1
+        )
 
     def test_classify_confiture_error(self):
         from fraisier.dbops.confiture import classify_error
@@ -458,7 +470,13 @@ class TestHookIntegration:
         not _has_confiture_hooks(),
         reason="confiture >= 0.8.22 hooks not installed",
     )
-    def test_register_slack_hook(self):
+    def test_notification_hook_skipped_when_unavailable(self):
+        """Notification hooks were removed from confiture's builtins in 0.30.
+
+        A configured slack/notification hook must degrade gracefully — skipped
+        with a warning, never registered, and never raising — rather than
+        disabling every other hook.
+        """
         from fraisier.dbops.confiture import _register_migration_hooks
 
         mock_migrator = MagicMock()
@@ -470,13 +488,18 @@ class TestHookIntegration:
         }
         _register_migration_hooks(mock_migrator, hooks_config)
 
-        mock_migrator.register_hook.assert_called_once()
+        mock_migrator.register_hook.assert_not_called()
 
     @pytest.mark.skipif(
         not _has_confiture_hooks(),
         reason="confiture >= 0.8.22 hooks not installed",
     )
     def test_register_multiple_hooks(self):
+        """Available hooks register; a removed notification hook is skipped.
+
+        With confiture 0.30+, backup is registered but the slack notification
+        hook no longer exists — so exactly one hook (backup) registers.
+        """
         from fraisier.dbops.confiture import _register_migration_hooks
 
         mock_migrator = MagicMock()
@@ -493,7 +516,34 @@ class TestHookIntegration:
         }
         _register_migration_hooks(mock_migrator, hooks_config)
 
-        assert mock_migrator.register_hook.call_count == 2
+        assert mock_migrator.register_hook.call_count == 1
+
+
+class TestLoadEnv:
+    """confiture 0.30+ Environment validation (name/include_dirs required)."""
+
+    def test_minimal_config_validates(self, tmp_path):
+        """A minimal database_url-only config must still load — fraisier supplies
+        defaults for confiture's now-required build-only fields."""
+        from fraisier.dbops.confiture import _load_env
+
+        cfg = tmp_path / "confiture.yaml"
+        cfg.write_text("database_url: postgresql://u@localhost/db\n")
+
+        env = _load_env(cfg)
+
+        assert env.database_url == "postgresql://u@localhost/db"
+        assert env.name  # defaulted, non-empty
+
+    def test_database_url_override_wins(self, tmp_path):
+        from fraisier.dbops.confiture import _load_env
+
+        cfg = tmp_path / "confiture.yaml"
+        cfg.write_text("database_url: postgresql://u@localhost/original\n")
+
+        env = _load_env(cfg, database_url="postgresql://u@localhost/override")
+
+        assert env.database_url == "postgresql://u@localhost/override"
 
 
 class TestSchemaHash:

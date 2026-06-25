@@ -76,11 +76,25 @@ def _load_env(
     *,
     database_url: str | None = None,
 ) -> Environment:
-    """Load a confiture Environment, optionally overriding database_url."""
+    """Load a confiture Environment, optionally overriding database_url.
+
+    confiture 0.30+ makes ``name`` and ``include_dirs`` required ``Environment``
+    fields, but fraisier's migrate/preflight configs are frequently minimal
+    (a ``database_url`` only). Supply sane defaults for the build-only fields so
+    a minimal config still validates, rather than failing before a migration
+    that never touches them.
+
+    confiture #168 (0.33) defaults these in ``Migrator.from_config(path)``, but
+    fraisier builds the ``Environment`` directly via ``model_validate`` (to
+    inject the ``database_url`` override), which is still strict — so this
+    defaulting remains necessary.
+    """
     import yaml
     from confiture.config.environment import Environment
 
-    raw: dict = yaml.safe_load(Path(config_path).read_text())  # type: ignore[assignment]
+    raw: dict = yaml.safe_load(Path(config_path).read_text()) or {}  # type: ignore[assignment]
+    raw.setdefault("name", Path(config_path).stem)
+    raw.setdefault("include_dirs", [])
     if database_url:
         raw["database_url"] = database_url
     return Environment.model_validate(raw)
@@ -96,95 +110,74 @@ def _resolve_config(
     return config_path
 
 
+def _confiture_dist_version() -> str:
+    """Installed ``fraiseql-confiture`` version, or ``"unknown"``."""
+    import importlib.metadata as _md
+
+    try:
+        return _md.version("fraiseql-confiture")
+    except _md.PackageNotFoundError:
+        return "unknown"
+
+
+# fraise hook-config key → (HookPhase name, builtin config class, builtin hook
+# class). The notification hooks (slack/teams/discord/email/webhook) were
+# dropped from confiture's builtin set in the 0.30 rewrite; fraisier registers
+# whichever hooks the installed confiture still ships and skips the rest with a
+# warning rather than letting one missing class disable *all* hooks.
+_HOOK_SPECS: dict[str, tuple[str, str, str]] = {
+    "backup": ("BEFORE_EXECUTE", "BackupConfig", "BackupHook"),
+    "audit": ("AFTER_EXECUTE", "AuditConfig", "AuditHook"),
+    "slack": ("AFTER_EXECUTE", "SlackConfig", "SlackNotificationHook"),
+    "teams": ("AFTER_EXECUTE", "TeamsConfig", "TeamsNotificationHook"),
+    "discord": ("AFTER_EXECUTE", "DiscordConfig", "DiscordNotificationHook"),
+    "email": ("AFTER_EXECUTE", "EmailConfig", "EmailNotificationHook"),
+    "webhook": ("AFTER_EXECUTE", "WebhookConfig", "WebhookNotificationHook"),
+}
+
+
 def _register_migration_hooks(
     migrator: Any, hooks_config: dict[str, Any] | None
 ) -> None:
-    """Register confiture v0.8.22 hooks with the migrator.
+    """Register confiture migration hooks with the migrator.
 
     Reads the ``hooks:`` sub-section of a fraise's database config and
-    registers the corresponding confiture built-in hooks.  Gracefully
-    skips if confiture hooks are not available.
+    registers the corresponding confiture built-in hooks.  Each hook class is
+    resolved individually, so a hook type the installed confiture no longer
+    ships (e.g. the notification hooks removed in the 0.30 rewrite) is skipped
+    with a warning instead of disabling every hook.
     """
     if not hooks_config:
         return
 
     try:
-        from confiture.core.hooks import HookPhase
-        from confiture.core.hooks.builtin import (
-            AuditConfig,
-            AuditHook,
-            BackupConfig,
-            BackupHook,
-            DiscordConfig,
-            DiscordNotificationHook,
-            EmailConfig,
-            EmailNotificationHook,
-            SlackConfig,
-            SlackNotificationHook,
-            TeamsConfig,
-            TeamsNotificationHook,
-            WebhookConfig,
-            WebhookNotificationHook,
-        )
+        from confiture.core.hooks import HookPhase, builtin
     except ImportError:
         log.warning("Confiture hooks not available (requires confiture >= 0.8.22)")
         return
 
-    _HOOK_BUILDERS: dict[str, tuple] = {
-        "backup": (
-            HookPhase.BEFORE_EXECUTE,
-            BackupConfig,
-            BackupHook,
-            {"backup_dir": Path, "database_url": str},
-        ),
-        "audit": (
-            HookPhase.AFTER_EXECUTE,
-            AuditConfig,
-            AuditHook,
-            {"database_url": str, "signing_key": str},
-        ),
-        "slack": (
-            HookPhase.AFTER_EXECUTE,
-            SlackConfig,
-            SlackNotificationHook,
-            {"webhook_url": str},
-        ),
-        "teams": (
-            HookPhase.AFTER_EXECUTE,
-            TeamsConfig,
-            TeamsNotificationHook,
-            {"webhook_url": str},
-        ),
-        "discord": (
-            HookPhase.AFTER_EXECUTE,
-            DiscordConfig,
-            DiscordNotificationHook,
-            {"webhook_url": str},
-        ),
-        "email": (
-            HookPhase.AFTER_EXECUTE,
-            EmailConfig,
-            EmailNotificationHook,
-            {"smtp_server": str},
-        ),
-        "webhook": (
-            HookPhase.AFTER_EXECUTE,
-            WebhookConfig,
-            WebhookNotificationHook,
-            {"url": str},
-        ),
-    }
-
-    for hook_key, (phase, config_cls, hook_cls, _) in _HOOK_BUILDERS.items():
+    for hook_key, (phase_name, config_name, hook_name) in _HOOK_SPECS.items():
         cfg = hooks_config.get(hook_key, {})
         if not cfg.get("enabled", False):
+            continue
+        config_cls = getattr(builtin, config_name, None)
+        hook_cls = getattr(builtin, hook_name, None)
+        if config_cls is None or hook_cls is None:
+            # This confiture release does not ship this hook (notification
+            # hooks were removed in 0.30). Surface it rather than silently
+            # dropping a configured notification.
+            log.warning(
+                "Confiture %s does not provide the %s hook; skipping it",
+                _confiture_dist_version(),
+                hook_key,
+            )
             continue
         try:
             # Strip 'enabled' before passing to config dataclass
             params = {k: v for k, v in cfg.items() if k != "enabled"}
             config = config_cls(**params)
             hook = hook_cls(config)
-            migrator.register_hook(phase, hook)
+            migrator.register_hook(getattr(HookPhase, phase_name), hook)
             log.info("Registered %s hook", hook_key)
         except Exception as exc:
             # Hook registration is best-effort: a misconfigured hook (bad
@@ -466,7 +459,14 @@ class StatusResult:
     raw: str = ""
 
 
-_MIGRATION_COUNT_RE = re.compile(r"(?:Applied|Rolled back)\s+(\d+)\s+migration")
+# confiture prints the applied/rolled-back count differently across versions:
+# 0.9.x "Applied N migration(s)" / "Rolled back N migration(s)"; 0.32 a
+# "Migrations: N" summary line for `up` and a lower-cased "rolled back N
+# migration(s)" for `down`. Match all, case-insensitively.
+_MIGRATION_COUNT_RES = (
+    re.compile(r"(?:Applied|Rolled back)\s+(\d+)\s+migration", re.IGNORECASE),
+    re.compile(r"Migrations:\s+(\d+)"),
+)
 
 _SCHEMA_ERROR_PATTERNS = (
     "already exists",
@@ -490,9 +490,12 @@ _LOCK_ERROR_PATTERNS = (
 
 
 def parse_migration_count(output: str) -> int:
-    """Extract migration count from confiture stdout."""
-    m = _MIGRATION_COUNT_RE.search(output)
-    return int(m.group(1)) if m else 0
+    """Extract the applied/rolled-back migration count from confiture stdout."""
+    for rx in _MIGRATION_COUNT_RES:
+        m = rx.search(output)
+        if m:
+            return int(m.group(1))
+    return 0
 
 
 def classify_error(stderr: str) -> str:

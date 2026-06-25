@@ -28,42 +28,61 @@ def _proc(
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
-def _against_json(migrations: list[dict]) -> str:
-    """Build the JSON envelope confiture emits when --against is used."""
+def _pf_json(
+    issues: list[dict] | None = None, *, ok: bool | None = None, checked: int = 0
+) -> str:
+    """Build the JSON confiture 0.32 emits for ``migrate preflight --against``.
+
+    Shape: ``{ok, window_safe, summary, issues[]}``. ``ok`` defaults to "no
+    error-severity issues"; ``checked`` is ``summary.migrations_checked``.
+    """
+    issues = issues or []
+    errors = sum(1 for i in issues if i.get("severity") == "error")
+    warnings = sum(1 for i in issues if i.get("severity") == "warning")
     return json.dumps(
         {
-            "static": {},
-            "against": {
-                "against_url": "postgresql://admin@localhost/fraisier_preflight_abc",
-                "migrations": migrations,
+            "ok": (errors == 0) if ok is None else ok,
+            "window_safe": True,
+            "summary": {
+                "errors": errors,
+                "warnings": warnings,
+                "info": 0,
+                "migrations_checked": checked,
+                "db_consumed": False,
             },
+            "issues": issues,
         }
     )
 
 
-def _mig(
-    version: str,
-    name: str,
-    success: bool,
-    *,
-    error: str | None = None,
-    skipped: bool = False,
-    skipped_reason: str | None = None,
-    time_ms: int = 50,
-) -> dict:
-    m: dict = {
-        "version": version,
-        "name": name,
-        "success": success,
-        "execution_time_ms": time_ms,
+def _replay_failed(version: str, name: str, error: str) -> dict:
+    """A confiture 0.32 PFLIGHT_REPLAY_FAILED error issue."""
+    return {
+        "severity": "error",
+        "code": "PFLIGHT_REPLAY_FAILED",
+        "message": (
+            f"Migration {version} ({name}) failed to replay against the preflight DB."
+        ),
+        "migration": version,
+        "file": None,
+        "line": None,
+        "details": {"error": error},
     }
-    if error is not None:
-        m["error"] = error
-    if skipped:
-        m["skipped"] = True
-    if skipped_reason is not None:
-        m["skipped_reason"] = skipped_reason
-    return m
+
+
+def _non_txn_warning(
+    version: str, name: str, stmt: str = "CREATE INDEX CONCURRENTLY: idx"
+) -> dict:
+    """A confiture 0.32 PFLIGHT_NON_TRANSACTIONAL warning issue."""
+    return {
+        "severity": "warning",
+        "code": "PFLIGHT_NON_TRANSACTIONAL",
+        "message": (
+            f"Migration {version} ({name}) has non-transactional statement(s): {stmt}."
+        ),
+        "migration": version,
+        "details": {"statements": [stmt]},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -77,22 +96,25 @@ class TestRunConfiturePreflight:
     _URL = "postgresql://admin@localhost/fraisier_preflight_abc"
 
     def test_exit_0_all_passed(self):
-        stdout = _against_json([_mig("001", "ok", True)])
+        # 0.32 enumerates only issues, not passing migrations; success is an
+        # empty issue list with the count in summary.migrations_checked.
+        stdout = _pf_json([], checked=1)
         with patch("subprocess.run", return_value=_proc(0, stdout)):
             result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         assert result.all_passed is True
-        assert len(result.migrations) == 1
-        assert result.migrations[0].version == "001"
-        assert result.migrations[0].passed is True
+        assert result.failure_count == 0
+        assert result.migrations_checked == 1
 
-    def test_exit_1_failures_recorded(self):
-        stdout = _against_json(
-            [_mig("001", "bad", False, error="column does not exist")]
+    def test_exit_7_failures_recorded(self):
+        stdout = _pf_json(
+            [_replay_failed("001", "bad", "column does not exist")], checked=1
         )
-        with patch("subprocess.run", return_value=_proc(1, stdout)):
+        with patch("subprocess.run", return_value=_proc(7, stdout)):
             result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         assert result.all_passed is False
         assert result.failure_count == 1
+        assert result.failures[0].version == "001"
+        assert result.failures[0].name == "bad"
         assert result.failures[0].error == "column does not exist"
 
     def test_exit_2_raises_database_error(self):
@@ -109,73 +131,47 @@ class TestRunConfiturePreflight:
         ):
             _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
 
-    def test_against_envelope_key_extracted(self):
-        """Output with "against" key uses the against sub-object."""
-        migrations = [_mig("001", "ok", True)]
-        stdout = json.dumps({"static": {}, "against": {"migrations": migrations}})
+    def test_non_transactional_recorded_as_skipped(self):
+        """confiture 0.33 skips a non-transactional migration in preflight — a
+        PFLIGHT_NON_TRANSACTIONAL warning and exit 0, not a replay failure
+        (#169). fraisier records it as a skipped check, never a block."""
+        stdout = _pf_json([_non_txn_warning("001", "conc_idx")], checked=1)
         with patch("subprocess.run", return_value=_proc(0, stdout)):
             result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
-        assert len(result.migrations) == 1
-
-    def test_flat_envelope_fallback(self):
-        """Output without "against" key falls back to root data."""
-        migrations = [_mig("001", "ok", True)]
-        stdout = json.dumps({"migrations": migrations})
-        with patch("subprocess.run", return_value=_proc(0, stdout)):
-            result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
-        assert len(result.migrations) == 1
-
-    def test_skipped_migration_recorded(self):
-        migrations = [
-            _mig(
-                "001",
-                "skip_me",
-                True,
-                skipped=True,
-                skipped_reason="non-transactional",
-            )
-        ]
-        stdout = _against_json(migrations)
-        with patch("subprocess.run", return_value=_proc(0, stdout)):
-            result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
-        assert result.migrations[0].skipped is True
-        assert result.migrations[0].skipped_reason == "non-transactional"
+        assert result.all_passed is True
+        assert result.failure_count == 0
+        assert any(m.skipped for m in result.migrations)
 
     def test_executable_resolved_from_venv(self):
         """confiture is resolved relative to sys.executable, not as a bare name."""
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         cmd = mock_run.call_args[0][0]
         expected_exe = str(Path(sys.executable).parent / "confiture")
         assert cmd[0] == expected_exe
 
     def test_command_includes_against_flag(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         cmd = mock_run.call_args[0][0]
         assert "--against" in cmd
         assert self._URL in cmd
 
     def test_command_includes_config_flag(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(Path("custom.yaml"), self._MIGRATIONS, self._URL)
         cmd = mock_run.call_args[0][0]
         assert "--config" in cmd
         assert "custom.yaml" in cmd
 
     def test_command_omits_config_when_none(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(None, self._MIGRATIONS, self._URL)
         cmd = mock_run.call_args[0][0]
         assert "--config" not in cmd
 
     def test_command_includes_since_when_set(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(
                 None, self._MIGRATIONS, self._URL, since="00000000000000"
             )
@@ -184,48 +180,45 @@ class TestRunConfiturePreflight:
         assert "00000000000000" in cmd
 
     def test_command_includes_migrations_dir(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(self._CFG, Path("custom/migrations"), self._URL)
         cmd = mock_run.call_args[0][0]
         assert "--migrations-dir" in cmd
         assert "custom/migrations" in cmd
 
     def test_command_includes_format_json(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         cmd = mock_run.call_args[0][0]
         assert "--format" in cmd
         assert "json" in cmd
 
     def test_empty_migrations_list(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)):
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())):
             result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         assert result.all_passed is True
         assert result.migrations == []
 
     def test_timeout_seconds_passed_to_subprocess(self):
-        stdout = _against_json([])
-        with patch("subprocess.run", return_value=_proc(0, stdout)) as mock_run:
+        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
             _run_confiture_preflight(
                 self._CFG, self._MIGRATIONS, self._URL, timeout_seconds=60
             )
         assert mock_run.call_args.kwargs.get("timeout") == 60
 
-    def test_multiple_migrations_mixed_results(self):
-        migrations = [
-            _mig("001", "ok", True),
-            _mig("002", "bad", False, error="table missing"),
-            _mig("003", "also_ok", True),
-        ]
-        stdout = _against_json(migrations)
-        with patch("subprocess.run", return_value=_proc(1, stdout)):
+    def test_multiple_failures_recorded(self):
+        stdout = _pf_json(
+            [
+                _replay_failed("002", "bad", "table missing"),
+                _replay_failed("004", "worse", "syntax error"),
+            ],
+            checked=3,
+        )
+        with patch("subprocess.run", return_value=_proc(7, stdout)):
             result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
-        assert result.failure_count == 1
-        assert len(result.migrations) == 3
-        assert result.failures[0].version == "002"
+        assert result.failure_count == 2
+        assert result.migrations_checked == 3
+        assert {m.version for m in result.failures} == {"002", "004"}
 
     # -- #259: a fatal exit must surface confiture's *stdout* diagnostics --
     # confiture writes its structured failure report (issue code, offending
@@ -237,50 +230,55 @@ class TestRunConfiturePreflight:
             "ok": False,
             "summary": {"errors": 1, "warnings": 0, "migrations_checked": 1},
             "issues": [
-                {
-                    "severity": "error",
-                    "code": "PFLIGHT_REPLAY_FAILED",
-                    "message": (
-                        "Migration 0001 (recreate_widget) failed to replay "
-                        "against the preflight DB."
-                    ),
-                    "migration": "0001",
-                    "details": {
-                        "error": (
-                            "[Errno 2] No such file or directory: "
-                            "'/app/db/0_schema/funcs/widget.sql'"
-                        )
-                    },
-                }
+                _replay_failed(
+                    "0001",
+                    "recreate_widget",
+                    "[Errno 2] No such file or directory: "
+                    "'/app/db/0_schema/funcs/widget.sql'",
+                )
             ],
         }
     )
 
-    def test_fatal_exit_surfaces_confiture_stdout_diagnostics(self):
+    def test_replay_failure_surfaces_error_detail(self):
+        """An exit-7 replay failure becomes a structured failure carrying the
+        offending migration + underlying error (the #259 diagnostic), rather
+        than a fatal raise — exit 7 is a valid preflight outcome in 0.32."""
+        with patch(
+            "subprocess.run",
+            return_value=_proc(7, self._REPLAY_FAILED_STDOUT, ""),
+        ):
+            result = _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
+        assert result.failure_count == 1
+        failure = result.failures[0]
+        assert failure.version == "0001"
+        assert "0_schema/funcs/widget.sql" in (failure.error or "")
+
+    def test_exit_7_without_mappable_migration_raises(self):
+        """An exit-7 error-severity issue not tied to a migration cannot be
+        represented per-migration → surface the raw diagnostics + skip hint
+        rather than silently report 'no failures'."""
+        stdout = json.dumps(
+            {
+                "ok": False,
+                "summary": {"errors": 1, "migrations_checked": 0},
+                "issues": [
+                    {
+                        "severity": "error",
+                        "code": "PFLIGHT_CONFIG_INVALID",
+                        "message": "boom",
+                    }
+                ],
+            }
+        )
         with (
-            patch(
-                "subprocess.run",
-                return_value=_proc(7, self._REPLAY_FAILED_STDOUT, ""),
-            ),
+            patch("subprocess.run", return_value=_proc(7, stdout)),
             pytest.raises(DatabaseError) as exc_info,
         ):
             _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         msg = str(exc_info.value)
-        assert "exit 7" in msg
-        assert "PFLIGHT_REPLAY_FAILED" in msg
-        assert "0001" in msg
-        assert "0_schema/funcs/widget.sql" in msg
-
-    def test_fatal_exit_includes_skip_preflight_hint(self):
-        with (
-            patch(
-                "subprocess.run",
-                return_value=_proc(7, self._REPLAY_FAILED_STDOUT, ""),
-            ),
-            pytest.raises(DatabaseError) as exc_info,
-        ):
-            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
-        assert "--skip-preflight" in str(exc_info.value)
+        assert "PFLIGHT_CONFIG_INVALID" in msg
+        assert "--skip-preflight" in msg
 
     def test_fatal_exit_falls_back_to_stderr_when_stdout_empty(self):
         with (
@@ -291,30 +289,16 @@ class TestRunConfiturePreflight:
         assert "boom on stderr" in str(exc_info.value)
 
     def test_unrecognized_schema_raises_instead_of_silent_pass(self):
-        """An exit-1 result whose schema lacks per-migration data must not be
-        silently treated as 'no failures' — that hides real failures under a
-        newer confiture (version skew, #259)."""
-        stdout = json.dumps(
-            {
-                "ok": False,
-                "summary": {"errors": 1},
-                "issues": [
-                    {
-                        "code": "PFLIGHT_REPLAY_FAILED",
-                        "message": "boom",
-                        "migration": "002",
-                    }
-                ],
-            }
-        )
+        """A result whose schema isn't the 0.30+ {ok,summary,issues} shape (e.g.
+        an old 0.9.x against.migrations envelope from a skewed confiture) must
+        not be silently treated as 'no failures' — surface the version skew."""
+        stdout = json.dumps({"static": {}, "against": {"migrations": []}})
         with (
-            patch("subprocess.run", return_value=_proc(1, stdout)),
+            patch("subprocess.run", return_value=_proc(0, stdout)),
             pytest.raises(DatabaseError) as exc_info,
         ):
             _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         msg = str(exc_info.value)
-        assert "PFLIGHT_REPLAY_FAILED" in msg
-        # surfaces the version-skew nature so the operator can act
         assert "schema" in msg.lower() or "version" in msg.lower()
 
 
@@ -474,6 +458,58 @@ class TestRunMigrationPreflightOrchestration:
 
         assert result.all_passed is True
         assert result.migrations == []
+
+    def test_empty_ledger_with_populated_schema_aborts(self, tmp_path):
+        """#262: tracking table present but its restored ledger is empty, while
+        the restored schema already holds application objects → abort, and never
+        invoke confiture to replay the already-applied history."""
+        schema_file = tmp_path / "schema.sql"
+        schema_file.write_text("")
+        mock_db = self._mock_preflight_db()
+        mock_db.has_table.return_value = True
+        mock_db.count_table_rows.return_value = 0  # empty ledger
+        mock_db.count_user_relations.return_value = 7  # populated schema
+
+        with (
+            patch(self._P_EXTRACT, return_value=schema_file),
+            patch(self._P_PREFLIGHT_DB, return_value=mock_db),
+            patch(self._P_CONFITURE) as mock_confiture,
+            pytest.raises(DatabaseError, match=r"262|0 rows"),
+        ):
+            run_migration_preflight(
+                backup_path=_BACKUP,
+                admin_url=_ADMIN_URL,
+                confiture_config=Path("confiture.yaml"),
+                migrations_dir=Path("db/migrations"),
+            )
+
+        # The already-applied migrations must NOT be replayed.
+        mock_confiture.assert_not_called()
+
+    def test_empty_ledger_with_empty_schema_proceeds(self, tmp_path):
+        """A genuinely fresh backup (empty ledger AND no application objects) is
+        not a #262 case — replaying all is safe, so the guard stays out of the
+        way and confiture runs."""
+        schema_file = tmp_path / "schema.sql"
+        schema_file.write_text("")
+        mock_db = self._mock_preflight_db()
+        mock_db.has_table.return_value = True
+        mock_db.count_table_rows.return_value = 0  # empty ledger
+        mock_db.count_user_relations.return_value = 0  # nothing to collide with
+
+        with (
+            patch(self._P_EXTRACT, return_value=schema_file),
+            patch(self._P_PREFLIGHT_DB, return_value=mock_db),
+            patch(self._P_CONFITURE, return_value=_make_passing_result()) as mock_cf,
+        ):
+            run_migration_preflight(
+                backup_path=_BACKUP,
+                admin_url=_ADMIN_URL,
+                confiture_config=Path("confiture.yaml"),
+                migrations_dir=Path("db/migrations"),
+            )
+
+        mock_cf.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

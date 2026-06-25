@@ -276,6 +276,48 @@ class PreflightDatabase:
         )
         return result.returncode == 0 and result.stdout.strip() == "t"
 
+    def _scalar_int(self, sql: str) -> int | None:
+        """Run *sql* expecting a single integer; ``None`` on any failure."""
+        conn_flags, run_env = self._conn_flags()
+        result = subprocess.run(
+            ["psql", *conn_flags, "-tAc", sql],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=run_env,
+        )
+        out = result.stdout.strip()
+        if result.returncode != 0 or not out.isdigit():
+            return None
+        return int(out)
+
+    def count_table_rows(self, table_name: str) -> int | None:
+        """Return the row count of *table_name*, or ``None`` if it can't be read.
+
+        Used to tell a *populated* migration ledger (the backup recorded which
+        migrations are applied) from an *empty* one — the signal the #262 guard
+        keys off.
+        """
+        if not _SAFE_IDENTIFIER.match(table_name):
+            return None
+        return self._scalar_int(f"SELECT count(*) FROM {table_name}")
+
+    def count_user_relations(self, exclude_table: str) -> int | None:
+        """Count user tables/views in this DB, excluding *exclude_table*.
+
+        A schema-only restore of a real production backup recreates the
+        application's tables and views; a brand-new (never-migrated) database
+        has none.  This distinguishes a *populated schema with an empty ledger*
+        (a failed tracking-data restore → #262) from a *genuinely fresh* backup
+        (legitimately empty ledger, nothing to collide with).
+        """
+        base = exclude_table.rsplit(".", 1)[-1].replace("'", "''")
+        return self._scalar_int(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            f"AND table_name <> '{base}'"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Phase 2: Result types + confiture integration
@@ -318,6 +360,7 @@ class MigrationPreflightResult:
     migrations: list[MigrationCheck]
     schema_extraction_ms: int = 0
     total_ms: int = 0
+    migrations_checked: int = 0
 
     @property
     def all_passed(self) -> bool:
@@ -441,9 +484,9 @@ _SKIP_PREFLIGHT_HINT = (
 def _extract_preflight_issues(stdout: str) -> str | None:
     """Pull human-readable issue lines from confiture's JSON preflight output.
 
-    Tolerant of both the 0.9.x (``{"against": {"migrations": [...]}}``) and the
-    0.30+ (``{"issues": [...]}``) schemas. Returns ``None`` when *stdout* is not
-    the expected JSON or carries no surfaced issues.
+    Reads confiture's 0.30+ ``{"issues": [...]}`` schema (an array of
+    ``{severity, code, message, migration, details.error}``). Returns ``None``
+    when *stdout* is not the expected JSON or carries no surfaced issues.
     """
     try:
         data = json.loads(stdout)
@@ -453,29 +496,19 @@ def _extract_preflight_issues(stdout: str) -> str | None:
         return None
 
     lines: list[str] = []
-    # 0.30+ schema: a top-level "issues" array of {code, message, migration,
-    # details.error}.
     for issue in data.get("issues") or []:
+        severity = issue.get("severity", "")
         code = issue.get("code", "")
         message = issue.get("message", "")
         migration = issue.get("migration")
         error = (issue.get("details") or {}).get("error")
-        text = " ".join(p for p in (code, message) if p)
+        text = " ".join(p for p in (severity, code, message) if p)
         if migration:
             text = f"{text} [migration {migration}]"
         if error:
             text = f"{text} — {error}"
         if text:
             lines.append(f"  - {text}")
-    # 0.9.x schema: per-migration success/error under against.migrations.
-    against = data.get("against", data)
-    if isinstance(against, dict):
-        lines.extend(
-            f"  - migration {m.get('version', '?')} "
-            f"({m.get('name', '?')}) failed: {m.get('error', '')}"
-            for m in (against.get("migrations") or [])
-            if not m.get("success", True) and not m.get("skipped", False)
-        )
     return "\n".join(lines) if lines else None
 
 
@@ -511,6 +544,83 @@ def _confiture_version() -> str | None:
         return None
 
 
+# A non-transactional statement (CREATE INDEX CONCURRENTLY, ALTER TYPE … ADD
+# VALUE, …) cannot run inside the SAVEPOINT confiture's preflight uses, so it is
+# skipped rather than replayed (`migrate up` runs it for real in autocommit).
+# confiture 0.33 surfaces such a migration as a PFLIGHT_NON_TRANSACTIONAL
+# warning and skips it (exit 0, confiture #169) — fraisier records the skip so a
+# later dependent failure reads as a possible false positive, not a hard block.
+_NON_TXN_CODE = "PFLIGHT_NON_TRANSACTIONAL"
+_MIGRATION_NAME_RE = re.compile(r"Migration \S+ \(([^)]+)\)")
+
+
+def _name_from_issue_message(message: str) -> str:
+    """Extract the migration name from a confiture issue message.
+
+    0.32 issue messages read ``"Migration <version> (<name>) …"``; returns the
+    captured name, or ``"?"`` when the message does not match.
+    """
+    m = _MIGRATION_NAME_RE.search(message or "")
+    return m.group(1) if m else "?"
+
+
+def _parse_against_issues(data: dict) -> MigrationPreflightResult | None:
+    """Map confiture 0.33 ``preflight --against`` JSON to a structured result.
+
+    confiture emits ``{"ok", "summary": {"migrations_checked": N}, "issues":
+    [...]}``. A ``PFLIGHT_NON_TRANSACTIONAL`` warning records a *skipped*
+    migration; every other error-severity issue becomes a failed
+    ``MigrationCheck``.
+
+    Returns ``None`` when an error-severity issue cannot be tied to a migration
+    (a structural/config error), signalling the caller to raise full diagnostics
+    rather than report a bare, unmappable failure.
+    """
+    summary = data.get("summary") or {}
+    checked = summary.get("migrations_checked", 0)
+    issues = data.get("issues") or []
+
+    checks: list[MigrationCheck] = []
+    skipped_versions: set[str] = set()
+
+    # Pass 1: non-transactional migrations are skipped during preflight.
+    for issue in issues:
+        version = issue.get("migration")
+        if issue.get("code") == _NON_TXN_CODE and version:
+            if version not in skipped_versions:
+                checks.append(
+                    MigrationCheck(
+                        version=version,
+                        name=_name_from_issue_message(issue.get("message", "")),
+                        passed=True,
+                        skipped=True,
+                        skipped_reason=issue.get("message"),
+                    )
+                )
+                skipped_versions.add(version)
+
+    # Pass 2: error-severity issues are real failures.
+    for issue in issues:
+        if issue.get("severity") != "error":
+            continue
+        version = issue.get("migration")
+        if version in skipped_versions:
+            continue
+        if not version:
+            return None
+        error = (issue.get("details") or {}).get("error") or issue.get("message", "")
+        checks.append(
+            MigrationCheck(
+                version=version,
+                name=_name_from_issue_message(issue.get("message", "")),
+                passed=False,
+                error=error,
+            )
+        )
+
+    return MigrationPreflightResult(migrations=checks, migrations_checked=checked)
+
+
 def _run_confiture_preflight(
     confiture_config: Path | None,
     migrations_dir: Path,
@@ -522,9 +632,10 @@ def _run_confiture_preflight(
     """Run ``confiture migrate preflight --against`` via subprocess.
 
     Invokes the confiture CLI with ``--format json`` so the output can be
-    parsed into a structured ``MigrationPreflightResult``.  Exit code 0 means
-    all passed; exit code 1 means failures were detected — both are valid
-    preflight outcomes.  Any other exit code indicates a fatal error.
+    parsed into a structured ``MigrationPreflightResult``.  With ``--against``,
+    confiture 0.32 exits 0 when all replays pass and 7 when one or more fail —
+    both valid outcomes that are parsed.  Any other exit code (validation,
+    connection, config) indicates a fatal error.
 
     Args:
         confiture_config: Config file used to resolve the pending set (its
@@ -570,10 +681,11 @@ def _run_confiture_preflight(
         timeout=timeout_seconds,
     )
 
-    # 0 = all passed, 1 = failures detected — both are valid preflight outcomes.
-    # Any other code (e.g. confiture's exit 7 = PFLIGHT_REPLAY_FAILED) is fatal:
-    # surface confiture's own diagnostics, which it writes to *stdout* (#259).
-    if result.returncode not in (0, 1):
+    # With --against, confiture 0.32 exits 0 = all replays passed, 7 = one or
+    # more replay failures — both valid, structured outcomes to parse. Any other
+    # code (2 validation, 3 connection, 5 config, …) is a fatal crash: surface
+    # confiture's own diagnostics, which it writes to *stdout* (#259).
+    if result.returncode not in (0, 7):
         raise DatabaseError(
             _format_preflight_failure(result.returncode, result.stdout, result.stderr)
         )
@@ -585,39 +697,68 @@ def _run_confiture_preflight(
             _format_preflight_failure(result.returncode, result.stdout, result.stderr)
         ) from exc
 
-    # Output format: {"static": {...}, "against": {...}} when --against is used.
-    against_data: dict = data.get("against", data)
-
-    # A recognized result carries a per-migration "migrations" array (0.9.x).
-    # Newer confiture (0.30+) emits {"ok", "issues": [...]} with no such array:
-    # fraisier cannot map it and must NOT silently treat it as "no failures",
-    # which would hide real preflight failures under a skewed confiture (#259).
-    if not isinstance(against_data, dict) or "migrations" not in against_data:
+    # 0.32 schema: {"ok", "summary", "issues": [...]}. A missing summary/issues
+    # means a skewed confiture (e.g. the old 0.9.x against.migrations format):
+    # fraisier must NOT silently treat it as "no failures", which would hide real
+    # preflight failures under a version skew (#259, #262).
+    if not isinstance(data, dict) or "summary" not in data or "issues" not in data:
         detail = (
-            _extract_preflight_issues(result.stdout) or (result.stdout.strip()[:2000])
+            _extract_preflight_issues(result.stdout) or result.stdout.strip()[:2000]
         )
         raise DatabaseError(
             "confiture preflight returned an unrecognized output schema "
             f"(fraiseql-confiture {_confiture_version() or 'unknown'}); fraisier "
-            "expects the confiture 0.9.x preflight format. This is a version "
-            "skew — pin fraiseql-confiture to a supported version.\n"
-            f"{detail}\n{_SKIP_PREFLIGHT_HINT}"
+            "expects the confiture 0.30+ preflight format ({ok, summary, issues}). "
+            "This is a version skew — pin fraiseql-confiture to a supported "
+            f"version.\n{detail}\n{_SKIP_PREFLIGHT_HINT}"
         )
 
-    migrations = [
-        MigrationCheck(
-            version=m["version"],
-            name=m["name"],
-            passed=m["success"],
-            error=m.get("error"),
-            time_ms=m.get("execution_time_ms", 0),
-            skipped=m.get("skipped", False),
-            skipped_reason=m.get("skipped_reason"),
+    parsed = _parse_against_issues(data)
+    if parsed is None:
+        # exit 7 carried an error-severity issue not tied to a migration
+        # (structural/config): not representable per-migration — surface the
+        # raw diagnostics rather than report a bare, unmappable failure.
+        raise DatabaseError(
+            _format_preflight_failure(result.returncode, result.stdout, result.stderr)
         )
-        for m in against_data.get("migrations", [])
-    ]
 
-    return MigrationPreflightResult(migrations=migrations)
+    return parsed
+
+
+def _guard_against_empty_ledger(
+    preflight_db: PreflightDatabase, tracking_table: str
+) -> None:
+    """Refuse to preflight a populated schema whose ledger restored empty (#262).
+
+    The preflight DB is a schema-only restore of the backup plus a data-only
+    restore of *tracking_table*.  When the table exists (the backup was
+    confiture-managed) and the restored schema already holds application
+    objects, but the tracking ledger is empty, confiture would treat the entire
+    history as pending and replay every already-applied migration against the
+    already-populated schema — a cascade of false ``already exists`` /
+    dependency failures (issue #262).  That is a failed tracking-data restore,
+    not a real preflight failure, so surface it precisely instead.
+
+    No-ops when the ledger has rows (the #250 happy path), when the schema is
+    genuinely empty (a fresh, never-migrated backup — replaying all is safe),
+    or when either count cannot be read (stay out of the way).
+    """
+    from fraisier.errors import DatabaseError
+
+    if preflight_db.count_table_rows(tracking_table) != 0:
+        return
+    if (preflight_db.count_user_relations(tracking_table) or 0) == 0:
+        return
+    raise DatabaseError(
+        "Migration preflight aborted: the backup's confiture tracking table "
+        f"({tracking_table}) restored with 0 rows, but the restored schema "
+        "already contains application objects. Replaying the full migration "
+        "history against it would produce false 'already exists' failures "
+        "(issue #262) — the backup's migration ledger did not restore. Verify "
+        "the backup contains tracking-table data and that the bundled confiture "
+        "matches the source database. If this backup genuinely has no applied "
+        "migrations, re-run the restore with --skip-preflight."
+    )
 
 
 def run_migration_preflight(
@@ -689,7 +830,20 @@ def run_migration_preflight(
             preflight_db.restore_schema(schema_path)
             preflight_db.restore_tracking_data(backup_path, tracking_table)
 
-            if preflight_db.has_table(tracking_table):
+            if not preflight_db.has_table(tracking_table):
+                # Backup predates/omits confiture tracking → no migration is
+                # recorded as applied, and with no tracking table there are no
+                # migration-managed objects to collide with, so every migration
+                # is genuinely pending.
+                result = _run_confiture_preflight(
+                    confiture_config=None,
+                    migrations_dir=migrations_dir,
+                    against_url=preflight_db.url,
+                    since="00000000000000",
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                _guard_against_empty_ledger(preflight_db, tracking_table)
                 # Backup carries confiture tracking → resolve pending from the
                 # self-consistent preflight DB, matching a real restore (#250).
                 preflight_cfg = _write_preflight_config(
@@ -701,22 +855,13 @@ def run_migration_preflight(
                     against_url=preflight_db.url,
                     timeout_seconds=timeout_seconds,
                 )
-            else:
-                # Backup predates/omits confiture tracking → no migration is
-                # recorded as applied, so every migration is pending.
-                result = _run_confiture_preflight(
-                    confiture_config=None,
-                    migrations_dir=migrations_dir,
-                    against_url=preflight_db.url,
-                    since="00000000000000",
-                    timeout_seconds=timeout_seconds,
-                )
 
         total_ms = int((time.monotonic() - start) * 1000)
         return MigrationPreflightResult(
             migrations=result.migrations,
             schema_extraction_ms=schema_ms,
             total_ms=total_ms,
+            migrations_checked=result.migrations_checked,
         )
     finally:
         # Clean up temp files (preflight config first — it lives in the schema
