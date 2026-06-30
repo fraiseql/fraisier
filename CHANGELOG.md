@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.1] - 2026-06-29
+
+### Fixed
+
+- **Restore-based migration preflight no longer replays the entire migration history against a populated schema** ([#262](https://github.com/fraiseql/fraisier/issues/262)). `PreflightDatabase.restore_tracking_data` makes the schema-only preflight DB *self-consistent* by loading the backup's migration-ledger rows, so the preflight replays only genuinely-pending migrations. It built that loader as `pg_restore --data-only --table={tracking_table}`, passing the configured tracking table **verbatim** — but the common configured value is schema-qualified (`public.tb_confiture`), and `pg_restore --table=` matches an *unqualified* relation name, so `public.tb_confiture` matched nothing and **silently loaded zero rows**. The ledger stayed empty, confiture saw nothing applied, and the preflight replayed the whole history (from the project baseline) against a DB that already had the full schema — failing en masse with `relation … already exists` / `cannot change name of view column …` and aborting the deploy on a false positive (exit 7) **before the real restore ever ran**, leaving the target DB untouched while the app version still advanced. (The 0.40.0 `count_user_relations` guard *detects* this populated-schema-but-empty-ledger state; this fixes the cause so the ledger actually loads.) `restore_tracking_data` now splits a schema-qualified value into `--schema=<schema> --table=<table>`. Verified empirically: `--table=public.tb_confiture` loads 0 rows; `--schema=public --table=tb_confiture` loads all. New regression guards in `tests/test_preflight_core.py` cover the qualified (split) and unqualified (passthrough, no `--schema`) cases.
+
 ## [0.39.0] - 2026-06-25
 
 ### Fixed
