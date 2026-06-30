@@ -7,6 +7,7 @@ from .base import GitProvider, WebhookEvent
 from .operations import (
     clone_bare_repo,
     fetch_and_checkout,
+    force_repopulate_worktree,
     get_worktree_sha,
     verify_worktree_at_sha,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "WebhookEvent",
     "clone_bare_repo",
     "fetch_and_checkout",
+    "force_repopulate_worktree",
     "get_provider",
     "get_worktree_sha",
     "list_providers",
