@@ -222,6 +222,47 @@ class TestPreflightDatabase:
         ):
             db.restore_schema(schema_path)
 
+    def test_restore_tracking_data_splits_schema_qualified_table(self, tmp_path):
+        """A schema-qualified tracking table must become --schema + --table.
+
+        ``pg_restore --table=`` matches an *unqualified* name, so passing
+        ``public.tb_confiture`` matches nothing → zero rows load → the preflight
+        ledger stays empty and every migration looks pending, aborting the
+        restore_migrate deploy on a false positive. Regression guard for the
+        staging preflight self-consistency bug (issue #250 follow-up).
+        """
+        backup = tmp_path / "prod.dump"
+        backup.write_bytes(b"")
+
+        db = self._make_db()
+        db.url = "postgresql://admin@localhost/fraisier_preflight_abc"
+
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with patch("subprocess.run", return_value=ok) as mock_run:
+            db.restore_tracking_data(backup, "public.tb_confiture")
+
+        cmd = mock_run.call_args[0][0]
+        assert "pg_restore" in cmd
+        assert "--schema=public" in cmd
+        assert "--table=tb_confiture" in cmd
+        assert "--table=public.tb_confiture" not in cmd
+
+    def test_restore_tracking_data_unqualified_table_has_no_schema_flag(self, tmp_path):
+        """A bare tracking table is passed through as --table with no --schema."""
+        backup = tmp_path / "prod.dump"
+        backup.write_bytes(b"")
+
+        db = self._make_db()
+        db.url = "postgresql://admin@localhost/fraisier_preflight_abc"
+
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with patch("subprocess.run", return_value=ok) as mock_run:
+            db.restore_tracking_data(backup, "tb_confiture")
+
+        cmd = mock_run.call_args[0][0]
+        assert "--table=tb_confiture" in cmd
+        assert not any(str(arg).startswith("--schema=") for arg in cmd)
+
 
 # ---------------------------------------------------------------------------
 # MigrationCheck + MigrationPreflightResult

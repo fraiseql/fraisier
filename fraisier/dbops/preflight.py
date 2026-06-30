@@ -244,13 +244,23 @@ class PreflightDatabase:
         migration is treated as pending by the caller.
         """
         conn_flags, run_env = self._conn_flags()
+        # ``pg_restore --table=`` matches an *unqualified* relation name; a
+        # schema-qualified value like ``public.tb_confiture`` matches nothing
+        # and silently loads zero rows (leaving the ledger empty → every
+        # migration looks pending). Split the qualifier into --schema/--table.
+        schema, _, table = tracking_table.rpartition(".")
+        table_flags = (
+            [f"--schema={schema}", f"--table={table}"]
+            if schema
+            else [f"--table={tracking_table}"]
+        )
         subprocess.run(
             [
                 "pg_restore",
                 *conn_flags,
                 "--data-only",
                 "--no-owner",
-                f"--table={tracking_table}",
+                *table_flags,
                 str(backup_path),
             ],
             check=False,  # missing tracking table / no rows is not an error
