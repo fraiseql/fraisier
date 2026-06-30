@@ -114,7 +114,7 @@ class RestoreMigrateStrategy(Strategy):
         if result.all_passed:
             log.info(
                 "Preflight passed: %d migrations validated in %dms",
-                len(result.migrations),
+                result.migrations_checked or len(result.migrations),
                 result.total_ms,
             )
         else:

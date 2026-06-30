@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.0] - 2026-06-30
+
+Combines the confiture 0.33 migration and restore-preflight guard (developed as 0.40.0, never published) with the bounded worktree self-heal feature. The #262 *root-cause* fix (schema-qualified `--table` in `restore_tracking_data`) shipped in 0.39.1 and is included here.
+
+### Added
+
+- **Bounded worktree self-heal on a stale checkout (heal-once-then-escalate).** A `git checkout` that exits 0 but leaves the working tree stale would advance the deployed version over old code; v0.39.0 verified the worktree and failed hard on a mismatch. `fetch_and_checkout` now attempts a bounded recovery — force-repopulate the worktree from the tree (`read-tree --reset -u` + `update-ref --no-deref HEAD`) and re-verify — before giving up. The recovery is **bounded to avoid the silent-masking trap** ([#257](https://github.com/fraiseql/fraisier/issues/257)): if the *same* worktree mismatches again within N deploys of its last heal, the deploy fails hard and alerts instead of self-healing on every deploy, surfacing a recurring environmental cause (read-only FS, bad perms, flapping mount). Per-worktree deploy/heal state persists in the bare repo; only tracked files are touched (untracked `version.json`, virtualenvs, build output preserved). New guards in `tests/test_git_operations.py`.
+
+### Changed
+
+- **Confiture integration migrated to fraiseql-confiture 0.33.x** (pinned `>=0.33.0,<0.34`). The previous loose pin (`>=0.9.4,<1.0`) let environments resolve a newer confiture whose preflight `--against` JSON schema (`{ok, summary, issues[]}`) and exit codes (0/7) fraisier could not parse — the proximate surface of [#262](https://github.com/fraiseql/fraisier/issues/262). The integration (result shapes, preflight parsing, exit-code handling) now targets 0.33.x, and the upper bound prevents silent drift onto a future schema change.
+
+### Fixed
+
+- **Restore preflight no longer replays the entire migration history against a populated schema with an empty ledger** ([#262](https://github.com/fraiseql/fraisier/issues/262)). A schema-only restore recreates `tb_confiture` without its rows; a data-only load of zero rows leaves the preflight DB with the full schema but an empty applied-migration ledger, so confiture treats the whole history as pending and replays every already-applied migration — a cascade of false `already exists` / dependency failures (exit 7). The preflight now branches on the `tb_confiture` **row count** (not table existence), and `count_user_relations` distinguishes a *populated schema with an empty ledger* (a failed tracking-data restore) from a *genuinely fresh* backup, refusing to replay-everything against the former rather than emitting a false-positive cascade. (The underlying cause — `restore_tracking_data` passing a schema-qualified name to `pg_restore --table=` so zero rows loaded — was fixed in 0.39.1 and is included here; this guard is the belt-and-suspenders layer.)
+
 ## [0.39.1] - 2026-06-29
 
 ### Fixed

@@ -319,8 +319,88 @@ class TestPreflightBackupBehindTracking:
             f"{[(m.version, m.error) for m in result.failures]}"
         )
         # V0 is already applied in the backup → not pending; only V1, V2 run.
-        versions = {m.version for m in result.migrations}
-        assert versions == {"20260102000000", "20260103000000"}
+        # confiture 0.32 reports the count of checked migrations (it does not
+        # enumerate passing ones): exactly 2 means V0 was excluded, not replayed.
+        assert result.migrations_checked == 2
+
+
+@pytest.mark.integration
+class TestPreflightEmptyLedgerGuard:
+    """Issue #262: a populated schema whose tracking ledger restored empty.
+
+    When the backup's ``tb_confiture`` data fails to restore, the preflight DB
+    has the full schema but an empty applied-migration ledger.  confiture would
+    then treat the entire history as pending and replay every already-applied
+    migration against the already-populated schema, failing en masse with false
+    ``already exists`` errors.  The preflight must refuse with a precise error
+    rather than emit that cascade — the already-applied migrations must NOT be
+    replayed.
+    """
+
+    def test_empty_ledger_populated_schema_aborts(
+        self, admin_url, confiture_config, tmp_path
+    ):
+        from fraisier.errors import DatabaseError
+
+        # Source DB with V0 applied via confiture (creates `widgets` + a
+        # tb_confiture row), then strip the ledger rows to mimic a backup whose
+        # tracking data won't restore. The dump keeps the `widgets` table but an
+        # empty tb_confiture — exactly the #262 shape.
+        src = f"fraisier_test_emptyledger_{uuid.uuid4().hex[:8]}"
+        _run_psql(admin_url, f"CREATE DATABASE {src}")
+        src_url = _replace_db_in_url(admin_url, src)
+        try:
+            v0 = tmp_path / "v0"
+            v0.mkdir()
+            (v0 / "20260101000000_widgets.up.sql").write_text(
+                "CREATE TABLE public.widgets (id BIGINT PRIMARY KEY);\n"
+            )
+            (v0 / "20260101000000_widgets.down.sql").write_text(
+                "DROP TABLE public.widgets;\n"
+            )
+            src_cfg = tmp_path / "src.yaml"
+            src_cfg.write_text(f"database_url: {src_url}\n")
+            subprocess.run(
+                [
+                    "confiture",
+                    "migrate",
+                    "up",
+                    "--config",
+                    str(src_cfg),
+                    "--migrations-dir",
+                    str(v0),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            _run_psql(src_url, "DELETE FROM tb_confiture")  # ledger lost
+            backup = tmp_path / "emptyledger.dump"
+            subprocess.run(
+                ["pg_dump", "-Fc", "-f", str(backup), src_url],
+                check=True,
+                capture_output=True,
+            )
+        finally:
+            _run_psql(admin_url, f"DROP DATABASE IF EXISTS {src}")
+
+        # Migration set still contains V0, whose object already exists in the
+        # restored schema. With an empty ledger it would be wrongly replayed.
+        migrations_dir = tmp_path / "migrations"
+        migrations_dir.mkdir()
+        (migrations_dir / "20260101000000_widgets.up.sql").write_text(
+            "CREATE TABLE public.widgets (id BIGINT PRIMARY KEY);\n"
+        )
+        (migrations_dir / "20260101000000_widgets.down.sql").write_text(
+            "DROP TABLE public.widgets;\n"
+        )
+
+        with pytest.raises(DatabaseError, match=r"262|0 rows|did not restore"):
+            run_migration_preflight(
+                backup_path=backup,
+                admin_url=admin_url,
+                confiture_config=confiture_config,
+                migrations_dir=migrations_dir,
+            )
 
 
 @pytest.mark.integration
@@ -359,8 +439,7 @@ class TestPreflightE2EInterdependent:
 
         assert result.all_passed is True
         assert result.failure_count == 0
-        versions = {m.version for m in result.migrations}
-        assert versions == {"20260429130000", "20260429140000"}
+        assert result.migrations_checked == 2
 
     def test_interdependent_python_pending_passes(
         self, admin_url, sample_backup, confiture_config, tmp_path
@@ -407,8 +486,7 @@ class TestPreflightE2EInterdependent:
             f"green; got failures: {[(m.version, m.error) for m in result.failures]}"
         )
         assert result.failure_count == 0
-        versions = {m.version for m in result.migrations}
-        assert versions == {"20260429130000", "20260429140000"}
+        assert result.migrations_checked == 2
 
 
 @pytest.mark.integration

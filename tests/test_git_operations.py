@@ -1,5 +1,6 @@
 """Tests for bare repo + worktree git operations."""
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -8,8 +9,10 @@ import pytest
 
 from fraisier.errors import DeploymentError
 from fraisier.git.operations import (
+    _should_escalate,
     clone_bare_repo,
     fetch_and_checkout,
+    force_repopulate_worktree,
     get_worktree_sha,
     verify_worktree_at_sha,
 )
@@ -317,3 +320,116 @@ class TestVerifyWorktreeAtSha:
             git_deploy_env.worktree,
             git_deploy_env.sha_v2,
         )
+
+    def test_force_repopulate_recovers_stale_worktree(self, git_deploy_env: DeployEnv):
+        """The self-heal mechanism: read-tree --reset -u rewrites the tracked
+        files to the target commit, recovering a worktree the porcelain checkout
+        left stale. Worktree is at v1; force-repopulate to v2 → verify passes."""
+        force_repopulate_worktree(
+            git_deploy_env.bare_repo,
+            git_deploy_env.worktree,
+            git_deploy_env.sha_v2,
+        )
+
+        verify_worktree_at_sha(
+            git_deploy_env.bare_repo,
+            git_deploy_env.worktree,
+            git_deploy_env.sha_v2,
+        )
+
+
+class TestShouldEscalate:
+    """The bounded-recovery decision: re-mismatch within N deploys → fail hard."""
+
+    def test_never_healed_does_not_escalate(self):
+        assert _should_escalate(deploy_no=1, last_heal_deploy=None, within=3) is False
+
+    def test_recurrence_within_window_escalates(self):
+        # healed at deploy 1, mismatch again at deploy 2 → within 3 → escalate
+        assert _should_escalate(deploy_no=2, last_heal_deploy=1, within=3) is True
+
+    def test_window_boundary_escalates(self):
+        # exactly N deploys later still counts as "within"
+        assert _should_escalate(deploy_no=4, last_heal_deploy=1, within=3) is True
+
+    def test_aged_out_heals_again(self):
+        # more than N deploys since the heal → treat as a fresh incident
+        assert _should_escalate(deploy_no=5, last_heal_deploy=1, within=3) is False
+
+
+class TestSelfHealEscalation:
+    """fetch_and_checkout heals a stale worktree once, then escalates if the
+    same worktree mismatches again within the escalation window."""
+
+    branch = "main"
+
+    def _env(self, tmp_path):
+        bare = tmp_path / "bare.git"
+        bare.mkdir()
+        return bare, tmp_path / "wt"
+
+    def _side_effect(self, worktree, diff_quiet_codes, *, new="bbb2222", old="aaa1111"):
+        """subprocess mock: drives `git diff --quiet` returncodes from a shared
+        queue so a sequence of deploys can be simulated across calls."""
+        codes = iter(diff_quiet_codes)
+
+        def se(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                r.stdout = f"{old}\n"
+            if "rev-parse" in cmd and any(a.startswith("origin/") for a in cmd):
+                r.stdout = f"{new}\n"
+            if "diff" in cmd and "--quiet" in cmd:
+                r.returncode = next(codes)
+            if "diff" in cmd and "--name-only" in cmd:
+                r.stdout = "app.py\n"
+            return r
+
+        return se
+
+    def _state(self, bare, worktree):
+        data = json.loads((bare / "fraisier_selfheal_state.json").read_text())
+        return data[str(worktree)]
+
+    def test_heals_once_on_first_mismatch(self, tmp_path):
+        bare, wt = self._env(tmp_path)
+        # deploy 1: first verify mismatches, post-repopulate verify passes.
+        se = self._side_effect(wt, [1, 0])
+        with patch("subprocess.run", side_effect=se) as mock_run:
+            old, new = fetch_and_checkout(bare, wt, self.branch)
+
+        assert (old, new) == ("aaa1111", "bbb2222")
+        # the forced repopulate ran (read-tree --reset -u)
+        assert any("read-tree" in c.args[0] for c in mock_run.call_args_list if c.args)
+        # the heal was recorded against this deploy
+        assert self._state(bare, wt)["last_heal_deploy"] == 1
+
+    def test_escalates_on_recurring_mismatch_within_window(self, tmp_path):
+        bare, wt = self._env(tmp_path)
+        # d1: [1,0] heal; d2: [1] mismatch again → escalate (no repopulate).
+        se = self._side_effect(wt, [1, 0, 1])
+        with patch("subprocess.run", side_effect=se):
+            fetch_and_checkout(bare, wt, self.branch)  # heals
+            with pytest.raises(DeploymentError) as exc_info:
+                fetch_and_checkout(bare, wt, self.branch)  # escalates
+
+        err = exc_info.value
+        assert err.context["deploy_number"] == 2
+        assert err.context["last_heal_deploy"] == 1
+        assert "recur" in str(err).lower() or "again" in str(err).lower()
+
+    def test_heals_again_after_escalation_window_passes(self, tmp_path):
+        bare, wt = self._env(tmp_path)
+        # d1 heal [1,0]; d2-d4 clean [0,0,0]; d5 mismatch [1,0] → heal again
+        # (5 - 1 = 4 > 3, so the prior heal has aged out).
+        se = self._side_effect(wt, [1, 0, 0, 0, 0, 1, 0])
+        with patch("subprocess.run", side_effect=se):
+            for _ in range(5):
+                fetch_and_checkout(bare, wt, self.branch)
+
+        entry = self._state(bare, wt)
+        assert entry["deploys"] == 5
+        assert entry["last_heal_deploy"] == 5
