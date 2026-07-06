@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.0] - 2026-07-06
+
+### Fixed
+
+- **`fraisier sync` no longer aborts with the generic "HEAD is not a merge commit … this is a fraisier bug" message for states that are operator-fixable or outright safe** ([#268](https://github.com/fraiseql/fraisier/issues/268)). Two distinct triggers produced that abort, both with git's actual diagnostics swallowed by `capture_output`:
+  - **`git merge` exiting non-zero without starting a merge** (e.g. `error: The following untracked working tree files would be overwritten by merge`). Sync treated every non-zero merge exit as "conflicts to resolve", found no unmerged paths, silently skipped the commit (nothing staged, no `MERGE_HEAD`), and tripped the pre-push guard with a single-parent HEAD — while the operator never saw git's stderr explaining the real problem. This failure class is now detected (non-zero exit + no unmerged paths + no `MERGE_HEAD`) and aborts immediately, printing git's own output verbatim plus remediation hints.
+  - **A target strictly behind the source.** The pre-merge answers "Already up to date": no merge commit exists or is needed, and the push is safe (`origin/<target>` is already an ancestor of the sync head) — but the guard's `parents >= 2` assertion rejected it with the same misleading message.
+
+### Changed
+
+- **The pre-push guard now asserts the actual push-safety invariant** — `origin/<target>` must be an ancestor of HEAD and `MERGE_HEAD` must be cleared (the exact condition under which GitHub will not mark the sync PR `CONFLICTING`) — instead of requiring a two-parent HEAD. Its abort output now includes a HEAD summary, parent SHAs, and a `git status --porcelain` snapshot, so "please file an issue with the output above" ships with usable output.
+- **`fraisier sync` now requires a clean working tree** and aborts pre-flight with the offending file list otherwise. `git checkout -B` carries uncommitted modifications onto the sync branch (where the pre-merge commit would silently sweep them into the sync PR), and untracked files can abort the merge mid-flow (#268's first trigger). fraisier never cleans, stashes, or deletes operator files itself; `--yes` does not bypass the guard. `--check` and `--dry-run` are unaffected.
+- New end-to-end regression tests drive `fraisier sync` against real git repositories (bare origin + work clone, only `gh` stubbed), covering the reported conflicts-only-in-auto-resolved-files promotion, the strictly-behind target, and the dirty-worktree abort.
+
 ## [0.41.0] - 2026-06-30
 
 Combines the confiture 0.33 migration and restore-preflight guard (developed as 0.40.0, never published) with the bounded worktree self-heal feature. The #262 *root-cause* fix (schema-qualified `--table` in `restore_tracking_data`) shipped in 0.39.1 and is included here.

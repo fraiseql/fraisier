@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,8 +30,11 @@ def _mk(returncode: int = 0, stdout: str = "", stderr: str = "") -> MagicMock:
     return m
 
 
-# Sentinel SHAs used in mocked `git log -1 --pretty=%P HEAD` output to satisfy
-# the pre-push merge-commit invariant (#233 Layer 2): HEAD must have 2 parents.
+# Sentinel SHAs kept for grandfathered ordered-mock tests. Historically this
+# answered `git log -1 --pretty=%P HEAD` (two parents); since #268 the
+# pre-push guard probes `git merge-base --is-ancestor origin/<tgt> HEAD`
+# instead, where only the mocked returncode (0 = contained) matters — the
+# stdout is ignored, and the call count is unchanged.
 _MERGE_PARENTS = "abcdef0123456789 fedcba9876543210\n"
 
 
@@ -43,10 +48,11 @@ def _no_source_deletions() -> MagicMock:
 
 
 def _merge_finalize_tail() -> list[MagicMock]:
-    """Mock the post-commit pre-push invariant check (#233 Layer 2).
+    """Mock the post-commit pre-push invariant check (#233 Layer 2, #268).
 
     Sequence:
-      1. `git log -1 --pretty=%P HEAD` returns two parent SHAs (merge commit).
+      1. `git merge-base --is-ancestor origin/<tgt> HEAD` exits 0
+         (target contained in HEAD).
       2. `git rev-parse --verify --quiet MERGE_HEAD` exits 1 (merge cleared).
     """
     return [_mk(stdout=_MERGE_PARENTS), _mk(returncode=1)]
@@ -455,6 +461,7 @@ class TestSyncAlreadyInSync:
         sha = "abc123" * 7
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),  # git rev-parse HEAD
                 _mk(),  # git fetch
                 _mk(stdout=sha + "\n"),  # git rev-parse origin/dev
@@ -472,6 +479,7 @@ class TestSyncAlreadyInSync:
         sha = "abc123" * 7
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=sha + "\n"),
@@ -497,6 +505,7 @@ class TestSyncHappyPath:
 
     def _side_effects(self):
         return [
+            _mk(stdout=""),  # status --porcelain: clean worktree (#268)
             _mk(stdout="main\n"),  # git rev-parse HEAD
             _mk(),  # git fetch
             _mk(stdout=self.SHA + "\n"),  # git rev-parse origin/dev
@@ -559,6 +568,7 @@ class TestSyncHappyPath:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -758,6 +768,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -794,6 +805,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -840,6 +852,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -887,6 +900,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -920,6 +934,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -949,6 +964,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -979,6 +995,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -1018,6 +1035,7 @@ class TestSyncConflicts:
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -1058,6 +1076,7 @@ class TestSyncConflicts:
         )
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -1096,6 +1115,7 @@ class TestSyncConflicts:
         )
         with patch(_PATCH) as m:
             m.side_effect = [
+                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
                 _mk(stdout="main\n"),
                 _mk(),
                 _mk(stdout=self.SHA + "\n"),
@@ -1142,6 +1162,7 @@ class TestSyncConfirmation:
 
     def _pre_confirm_effects(self):
         return [
+            _mk(stdout=""),  # status --porcelain: clean worktree (#268)
             _mk(stdout="main\n"),
             _mk(),
             _mk(stdout=self.SHA + "\n"),
@@ -1314,6 +1335,7 @@ class TestSyncBranchForceCreate:
 
     def _side_effects(self):
         return [
+            _mk(stdout=""),  # status --porcelain: clean worktree (#268)
             _mk(stdout="main\n"),  # git rev-parse HEAD
             _mk(),  # git fetch
             _mk(stdout=self.SHA + "\n"),  # git rev-parse origin/dev
@@ -1389,6 +1411,7 @@ class TestSyncExistingPR:
     def _calls_up_to_push(self):
         """Mocked subprocess calls from sync start through `git push`."""
         return [
+            _mk(stdout=""),  # status --porcelain: clean worktree (#268)
             _mk(stdout="main\n"),  # git rev-parse HEAD
             _mk(),  # git fetch
             _mk(stdout=self.SHA + "\n"),  # git rev-parse origin/dev
@@ -1817,60 +1840,69 @@ class TestSyncPropagatesSourceDeletions:
 
 
 class TestSyncAssertsMergeFinalized:
-    """Defence-in-depth: if any code path manages to skip the merge commit,
-    push must abort with a clear error rather than push a non-merge ref
-    and produce a CONFLICTING PR on GitHub."""
+    """Defence-in-depth: before pushing, ``origin/<tgt>`` must be an ancestor
+    of HEAD and MERGE_HEAD must be cleared — the exact condition under which
+    GitHub will NOT mark the sync PR CONFLICTING. A two-parent merge commit
+    satisfies it, and so does the "Already up to date" merge where the target
+    is strictly behind the source and no merge commit exists (#268).
+    """
 
-    def test_aborts_when_head_has_one_parent(self):
+    def test_passes_when_target_contained_and_merge_cleared(self):
         from fraisier.cli.sync import _assert_merge_finalized
 
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="single-parent-sha\n"),  # log -1 %P → 1 parent
-                _mk(returncode=1),  # MERGE_HEAD cleared
-            ]
-            with pytest.raises(SystemExit) as exc:
-                _assert_merge_finalized()
+        mg = (
+            MockGit()
+            .queue("git", "merge-base", "--is-ancestor", returncode=0)
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", returncode=1
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            _assert_merge_finalized("staging")  # no raise
+        assert mg.was_called(
+            ["git", "merge-base", "--is-ancestor", "origin/staging", "HEAD"]
+        )
+
+    def test_aborts_when_target_not_ancestor_of_head(self, capsys):
+        """The #268 shape: HEAD never absorbed origin/<tgt> (merge never
+        started, or the merge parent was dropped). Pushing would produce a
+        CONFLICTING PR — abort with diagnostics, since reaching this guard
+        now means an unknown fraisier bug."""
+        from fraisier.cli.sync import _assert_merge_finalized
+
+        mg = (
+            MockGit()
+            .queue("git", "merge-base", "--is-ancestor", returncode=1)
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", returncode=1
+            )
+            .queue("git", "log", "-1", "--pretty=%P", stdout="only-parent-sha\n")
+            .queue("git", "log", "-1", "--oneline", stdout="abc1234 some subject\n")
+            .queue("git", "status", "--porcelain", stdout="?? report.txt\n")
+        )
+        with patch(_PATCH, side_effect=mg), pytest.raises(SystemExit) as exc:
+            _assert_merge_finalized("staging")
         assert exc.value.code == 1
+        err = capsys.readouterr().err
+        # Diagnostics must be actionable: HEAD summary, parents, worktree
+        # snapshot — "file an issue with the output above" needs output.
+        assert "abc1234" in err
+        assert "only-parent-sha" in err
+        assert "report.txt" in err
+        assert "file an issue" in err
 
     def test_aborts_when_merge_head_still_set(self):
         from fraisier.cli.sync import _assert_merge_finalized
 
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="parent-a parent-b\n"),  # 2 parents
-                _mk(returncode=0),  # but MERGE_HEAD still set — corruption!
-            ]
-            with pytest.raises(SystemExit) as exc:
-                _assert_merge_finalized()
-        assert exc.value.code == 1
-
-    def test_passes_when_two_parents_and_merge_cleared(self):
-        from fraisier.cli.sync import _assert_merge_finalized
-
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="parent-a parent-b\n"),  # 2 parents (merge commit)
-                _mk(returncode=1),  # MERGE_HEAD cleared
-            ]
-            _assert_merge_finalized()  # no raise
-
-    def test_aborts_when_no_parents(self):
-        """Defensive isolation test: HEAD with zero parents would only happen
-        on the initial commit, which is unreachable in sync (we always
-        `git checkout -B sync/... origin/<source>` first). Still worth
-        asserting that the guard catches an empty parent list rather than
-        crashing on it, in case some future refactor changes how HEAD is
-        established before this assertion runs."""
-        from fraisier.cli.sync import _assert_merge_finalized
-
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="\n"),  # no parents
-                _mk(returncode=1),
-            ]
-            with pytest.raises(SystemExit) as exc:
-                _assert_merge_finalized()
+        mg = (
+            MockGit()
+            .queue("git", "merge-base", "--is-ancestor", returncode=0)
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", returncode=0
+            )
+        )
+        with patch(_PATCH, side_effect=mg), pytest.raises(SystemExit) as exc:
+            _assert_merge_finalized("staging")
         assert exc.value.code == 1
 
 
@@ -2183,3 +2215,338 @@ class TestPushSyncBranch:
 
         # Single push attempt, no retry.
         assert run_mock.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #268: pre-flight clean-worktree guard
+# ---------------------------------------------------------------------------
+
+
+class TestSyncCleanWorktreeGuard:
+    """Sync must refuse to run in a dirty worktree, before touching any
+    branch: `git checkout -B` would carry uncommitted modifications onto the
+    sync branch (and the pre-merge commit would swallow them into the PR),
+    and untracked files can abort `git merge` before it starts (#268).
+    fraisier never cleans, stashes, or deletes operator files itself.
+    """
+
+    def test_dirty_worktree_aborts_with_file_list(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = MockGit().queue(
+            "git", "status", "--porcelain", stdout=" M app.py\n?? junk.txt\n"
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 1
+        assert "app.py" in result.output
+        assert "junk.txt" in result.output
+        # Nothing was touched: no fetch, no branch creation, no merge.
+        assert not mg.calls_with_prefix("git", "fetch")
+        assert not mg.calls_with_prefix("git", "checkout")
+        assert not mg.calls_with_prefix("git", "merge")
+
+    def test_yes_flag_does_not_bypass_guard(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = MockGit().queue("git", "status", "--porcelain", stdout="?? junk.txt\n")
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 1
+
+    def test_check_flag_unaffected_by_dirty_worktree(self, tmp_path):
+        """--check reads refs only; it must not be blocked by a dirty tree."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            MockGit()
+            .queue("git", "status", "--porcelain", stdout="?? junk.txt\n")
+            .queue(
+                "git",
+                "show",
+                "origin/dev:version.json",
+                stdout='{"version": "1.1.0"}',
+            )
+            .queue(
+                "git",
+                "show",
+                "origin/staging:version.json",
+                stdout='{"version": "1.0.0"}',
+            )
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--check"])
+        assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# Issue #268: `git merge` failures that never started a merge
+# ---------------------------------------------------------------------------
+
+
+class TestSyncMergeNeverStarted:
+    """`git merge` exits non-zero both for conflicts AND when the merge
+    refuses to start at all (untracked/modified files would be overwritten).
+    The second case leaves no MERGE_HEAD and no unmerged paths; treating it
+    as "conflicts to resolve" used to fall through to a silent no-op commit
+    and trip the pre-push guard with a misleading "fraisier bug" message,
+    with git's actual stderr swallowed (#268). It must abort immediately,
+    surfacing git's own diagnostics.
+
+    This is defence-in-depth behind the clean-worktree pre-flight guard:
+    races and ignored-but-colliding files can still get here.
+    """
+
+    GIT_MERGE_STDERR = (
+        "error: The following untracked working tree files would be "
+        "overwritten by merge:\n"
+        "\treport.txt\n"
+        "Please move or remove them before you merge.\n"
+        "Aborting\n"
+    )
+    SHA = "deadbeef" * 5
+    MERGE_BASE = "cafe1234" * 5
+
+    def _mockgit(self) -> MockGit:
+        return (
+            MockGit()
+            .queue("git", "rev-parse", "--abbrev-ref", stdout="main\n")
+            .queue("git", "rev-parse", "origin/dev", stdout=self.SHA + "\n")
+            .queue("git", "merge-base", stdout=self.MERGE_BASE + "\n")
+            .queue(
+                "git",
+                "show",
+                "origin/dev:version.json",
+                stdout='{"version": "1.1.0"}',
+            )
+            .queue(
+                "git",
+                "show",
+                "origin/staging:version.json",
+                stdout='{"version": "1.0.0"}',
+            )
+            .queue("git", "merge", returncode=2, stderr=self.GIT_MERGE_STDERR)
+            # No source deletions to propagate.
+            .queue("git", "diff", "--name-only", "--diff-filter=D", stdout="")
+            # No unmerged paths (the merge never started) …
+            .queue("git", "diff", "--name-only", "--diff-filter=U", stdout="")
+            # … and no MERGE_HEAD.
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", returncode=1
+            )
+        )
+
+    def test_aborts_and_surfaces_git_stderr(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = self._mockgit()
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 1
+        # git's own diagnostics — previously swallowed — must be visible.
+        assert "report.txt" in result.output
+        assert "would be" in result.output and "overwritten" in result.output
+        # This is an operator-fixable state, not a fraisier bug.
+        assert "file an issue" not in result.output
+        assert "not a merge commit" not in result.output
+
+    def test_does_not_commit_or_push(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = self._mockgit()
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(
+                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+            )
+        assert result.exit_code == 1
+        assert not mg.calls_with_prefix("git", "commit")
+        assert not mg.calls_with_prefix("git", "push")
+        # Operator is returned to their original branch.
+        assert mg.was_called(["git", "checkout", "main"])
+
+
+# ---------------------------------------------------------------------------
+# Issue #268: real-git end-to-end coverage of the pre-merge machinery
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd, *argv: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(cwd), *argv],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+class _GhStub:
+    """subprocess.run replacement: stubs `gh`, passes everything else
+    (real git) through. Lets end-to-end tests exercise fraisier's actual
+    merge machinery against real repositories while faking only GitHub.
+    """
+
+    def __init__(self) -> None:
+        self.gh_calls: list[list[str]] = []
+        # Patching "fraisier.cli.sync.subprocess.run" mutates the shared
+        # subprocess module, so grab the real callable before the patch
+        # is active or pass-through would recurse into the mock.
+        self._real_run = subprocess.run
+
+    def __call__(self, cmd, *args, **kwargs):
+        if cmd and cmd[0] == "gh":
+            self.gh_calls.append(list(cmd))
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return _mk(returncode=1)  # no existing PR
+            if cmd[:3] == ["gh", "pr", "create"]:
+                return _mk(stdout="https://github.com/org/repo/pull/68\n")
+            return _mk()  # pr merge --auto etc.
+        return self._real_run(cmd, *args, **kwargs)
+
+
+def _make_promotion_repos(
+    tmp_path,
+    *,
+    target_diverged: bool = True,
+    target_extra_file: bool = False,
+):
+    """Bare origin + work clone shaped like #268.
+
+    ``dev`` (source) is ahead of ``staging`` (target). With
+    ``target_diverged`` the target also carries its own commit editing
+    exactly ``.gitignore`` (tier 4 under --prefer-source) and
+    ``.secrets.baseline`` (tier 1, fraisier-owned) — so the pre-merge
+    conflicts ONLY in auto-resolvable files, the reported state. With
+    ``target_extra_file`` the target also adds a non-conflicting file, so
+    the resolved tree differs from the source tree.
+    """
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--quiet", "--bare", str(origin)],
+        capture_output=True,
+        check=True,
+    )
+    work = tmp_path / "work"
+    subprocess.run(
+        ["git", "init", "--quiet", "-b", "main", str(work)],
+        capture_output=True,
+        check=True,
+    )
+    _git(work, "config", "user.email", "test@example.com")
+    _git(work, "config", "user.name", "Test")
+    _git(work, "config", "commit.gpgsign", "false")
+    _git(work, "remote", "add", "origin", str(origin))
+
+    (work / ".gitignore").write_text("*.pyc\n")
+    (work / ".secrets.baseline").write_text("base\n")
+    (work / "app.py").write_text("print('v1')\n")
+    (work / "version.json").write_text('{"version": "1.0.0"}\n')
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "base")
+
+    _git(work, "branch", "staging")
+    if target_diverged:
+        _git(work, "checkout", "-q", "staging")
+        (work / ".gitignore").write_text("*.pyc\nstaging-only\n")
+        (work / ".secrets.baseline").write_text("staging-baseline\n")
+        if target_extra_file:
+            (work / "NOTES.md").write_text("kept from staging\n")
+        _git(work, "add", "-A")
+        _git(work, "commit", "-q", "-m", "staging own commit")
+        _git(work, "checkout", "-q", "main")
+
+    _git(work, "checkout", "-q", "-b", "dev")
+    (work / ".gitignore").write_text("*.pyc\ndev-line\n")
+    (work / ".secrets.baseline").write_text("dev-baseline\n")
+    (work / "app.py").write_text("print('v2')\n")
+    (work / "version.json").write_text('{"version": "1.1.0"}\n')
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "dev work")
+
+    _git(work, "push", "-q", "origin", "dev", "staging")
+    _git(work, "checkout", "-q", "main")
+    return work
+
+
+class TestSync268EndToEnd:
+    """Reporter scenario from #268, against real git repositories."""
+
+    SYNC_BRANCH = "fraisier/sync/staging-from-dev"
+
+    def _invoke(self, tmp_path, work, *flags):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        gh = _GhStub()
+        cwd = Path.cwd()
+        os.chdir(work)
+        try:
+            with patch(_PATCH, side_effect=gh):
+                result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", *flags])
+        finally:
+            os.chdir(cwd)
+        return result, gh
+
+    def test_prefer_source_with_conflicts_only_in_auto_resolved_files(self, tmp_path):
+        """The exact #268 state: diverged branches, pre-merge conflicts
+        confined to auto-resolved files, resolution == source side. Must
+        produce a two-parent merge commit and reach the push/PR stage —
+        not the "HEAD is not a merge commit" abort."""
+        work = _make_promotion_repos(tmp_path, target_diverged=True)
+        result, gh = self._invoke(tmp_path, work, "--prefer-source")
+        assert result.exit_code == 0, result.output
+        assert "not a merge commit" not in result.output
+        assert "Auto-resolved (prefer-source): .gitignore" in result.output
+
+        parents = _git(work, "log", "-1", "--pretty=%P", self.SYNC_BRANCH)
+        assert len(parents.stdout.split()) == 2, "sync tip must be a merge commit"
+        # The push-safety invariant GitHub needs:
+        _git(work, "merge-base", "--is-ancestor", "origin/staging", self.SYNC_BRANCH)
+        # Branch was pushed and the PR flow ran.
+        _git(work, "fetch", "-q", "origin", self.SYNC_BRANCH)
+        assert any(c[:3] == ["gh", "pr", "create"] for c in gh.gh_calls)
+
+    def test_target_extra_file_survives_the_merge(self, tmp_path):
+        """Same state plus a non-conflicting target-side file: the merge
+        commit must carry it (this is what distinguishes a real merge from
+        blindly resetting to the source tree)."""
+        work = _make_promotion_repos(
+            tmp_path, target_diverged=True, target_extra_file=True
+        )
+        result, _ = self._invoke(tmp_path, work, "--prefer-source")
+        assert result.exit_code == 0, result.output
+        parents = _git(work, "log", "-1", "--pretty=%P", self.SYNC_BRANCH)
+        assert len(parents.stdout.split()) == 2
+        show = _git(work, "show", f"{self.SYNC_BRANCH}:NOTES.md")
+        assert "kept from staging" in show.stdout
+
+    def test_target_strictly_behind_source_is_pushable_without_merge_commit(
+        self, tmp_path
+    ):
+        """Second latent #268 trigger: target has no commits of its own, so
+        `git merge` answers "Already up to date" and no merge commit exists.
+        origin/<tgt> is already an ancestor of HEAD — pushing is safe and
+        must proceed instead of aborting with the old two-parents assert."""
+        work = _make_promotion_repos(tmp_path, target_diverged=False)
+        result, gh = self._invoke(tmp_path, work, "--prefer-source")
+        assert result.exit_code == 0, result.output
+        assert "not a merge commit" not in result.output
+        sync_sha = _git(work, "rev-parse", self.SYNC_BRANCH).stdout.strip()
+        dev_sha = _git(work, "rev-parse", "origin/dev").stdout.strip()
+        assert sync_sha == dev_sha, "no merge commit needed — head is origin/dev"
+        assert any(c[:3] == ["gh", "pr", "create"] for c in gh.gh_calls)
+
+    def test_dirty_worktree_aborts_before_creating_branches(self, tmp_path):
+        work = _make_promotion_repos(tmp_path, target_diverged=True)
+        (work / "junk.txt").write_text("uncommitted operator file\n")
+        result, gh = self._invoke(tmp_path, work, "--prefer-source")
+        assert result.exit_code == 1
+        assert "junk.txt" in result.output
+        assert gh.gh_calls == []
+        # Sync branch was never created; operator still on their branch.
+        probe = subprocess.run(
+            ["git", "-C", str(work), "rev-parse", "--verify", self.SYNC_BRANCH],
+            capture_output=True,
+            check=False,
+        )
+        assert probe.returncode != 0
+        branch = _git(work, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        assert branch == "main"
+        # And the operator's file is untouched.
+        assert (work / "junk.txt").read_text() == "uncommitted operator file\n"

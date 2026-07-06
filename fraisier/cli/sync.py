@@ -357,32 +357,110 @@ def _commit_merge_or_staged(message: str) -> None:
         raise SystemExit(1) from exc
 
 
-def _assert_merge_finalized() -> None:
-    """Fail loudly if a sync push would leave the PR in a CONFLICTING state.
+def _assert_clean_worktree() -> None:
+    """Refuse to sync from a dirty worktree — before touching any branch.
 
-    After all commit attempts and before pushing, HEAD must be a merge
-    commit (at least two parents — octopus merges with ≥3 are valid too)
-    and MERGE_HEAD must be cleared. If either invariant is broken, the
-    push would silently drop the merge parent and GitHub would mark the
-    PR ``mergeable=CONFLICTING``. Surface that locally so the operator
-    doesn't walk away thinking it worked.
+    ``git checkout -B`` carries uncommitted modifications onto the sync
+    branch, where the pre-merge commit would silently swallow them into
+    the sync PR; untracked files can abort ``git merge`` before it even
+    starts (#268). Abort with the file list instead. fraisier never
+    cleans, stashes, or deletes operator files itself.
     """
-    parents = subprocess.run(
-        ["git", "log", "-1", "--pretty=%P", "HEAD"],
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
         capture_output=True,
         text=True,
         check=False,
-    ).stdout.split()
+    )
+    dirty = [line for line in status.stdout.splitlines() if line.strip()]
+    if status.returncode == 0 and not dirty:
+        return
+    err_console.print(
+        "[red]✗ Sync abort:[/red] the working tree is not clean. "
+        "Sync creates branches and merge commits here; uncommitted or "
+        "untracked files could be swept into the sync PR or block the merge."
+    )
+    for line in dirty:
+        err_console.print(f"    {line}", markup=False)
+    if status.returncode != 0:
+        err_console.print(f"    (git status failed: {status.stderr.strip()})")
+    err_console.print(
+        "  Commit, stash, or move these files, then re-run fraisier sync."
+    )
+    raise SystemExit(1)
+
+
+def _abort_merge_never_started(merge_result: subprocess.CompletedProcess) -> None:
+    """``git merge`` exited non-zero without starting a merge.
+
+    No MERGE_HEAD and no unmerged paths means the merge refused to run at
+    all — e.g. untracked or locally modified files would be overwritten
+    (#268). There is nothing to resolve and nothing staged; falling
+    through to the commit step would produce a single-parent HEAD and a
+    misleading "fraisier bug" abort. Surface git's own diagnostics
+    (previously swallowed by ``capture_output``) and stop.
+    """
+    err_console.print(
+        "[red]✗ Sync abort:[/red] `git merge` failed before a merge started — "
+        "there are no conflicts to auto-resolve. git reported:"
+    )
+    for stream in (merge_result.stdout, merge_result.stderr):
+        for line in (stream or "").splitlines():
+            err_console.print(f"    {line}", markup=False)
+    err_console.print(
+        "  Fix the reported problem (commit, stash, or move the listed "
+        "files), then re-run fraisier sync."
+    )
+    raise SystemExit(1)
+
+
+def _assert_merge_finalized(tgt: str) -> None:
+    """Fail loudly if a sync push would leave the PR in a CONFLICTING state.
+
+    The push-safety invariant is: ``origin/<tgt>`` must be an ancestor of
+    HEAD (GitHub sees every target-side commit contained in the PR head)
+    and MERGE_HEAD must be cleared. A finalized two-parent merge commit
+    satisfies it; so does the "Already up to date" merge where the target
+    is strictly behind the source and no merge commit exists (#268 —
+    the previous ``len(parents) >= 2`` form rejected that safe state).
+    Anything else would push a ref GitHub marks ``mergeable=CONFLICTING``;
+    surface that locally so the operator doesn't walk away thinking it
+    worked.
+    """
+    contains_target = (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", f"origin/{tgt}", "HEAD"],
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
     in_merge_still = _merge_in_progress()
-    if in_merge_still or not parents or len(parents) < 2:
-        err_console.print(
-            "[red]✗ Sync abort:[/red] auto-resolve completed but HEAD is not "
-            "a merge commit "
-            f"(parents: {parents or '?'}, merge in progress: {in_merge_still}).\n"
-            "  Pushing now would leave a CONFLICTING PR on GitHub. "
-            "This is a fraisier bug; please file an issue with the output above."
-        )
-        raise SystemExit(1)
+    if contains_target and not in_merge_still:
+        return
+
+    def _snap(cmd: list[str]) -> str:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, check=False
+        ).stdout.strip()
+
+    parents = _snap(["git", "log", "-1", "--pretty=%P", "HEAD"]).split()
+    head = _snap(["git", "log", "-1", "--oneline"])
+    porcelain = _snap(["git", "status", "--porcelain"])
+    err_console.print(
+        "[red]✗ Sync abort:[/red] pre-merge finished but pushing HEAD would "
+        f"leave a CONFLICTING PR on GitHub (origin/{tgt} contained in HEAD: "
+        f"{contains_target}, merge in progress: {in_merge_still})."
+    )
+    err_console.print(f"  HEAD: {head} (parents: {parents or '?'})", markup=False)
+    if porcelain:
+        err_console.print("  git status --porcelain:")
+        for line in porcelain.splitlines():
+            err_console.print(f"    {line}", markup=False)
+    err_console.print(
+        "  This is a fraisier bug; please file an issue with the output above."
+    )
+    raise SystemExit(1)
 
 
 def _propagate_source_deletions(merge_base: str, source: str, tgt: str) -> list[str]:
@@ -460,6 +538,7 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print(f"[cyan]DRY RUN:[/cyan] sync {source} \u2192 {tgt}")
     console.print()
     console.print("  Would run:")
+    console.print("    git status --porcelain  # abort if the worktree is dirty")
     console.print(f"    git fetch origin {source} {tgt}")
     console.print(f"    git checkout -B {sync_branch} origin/{source}")
     console.print(f"    git merge origin/{tgt} --no-edit --no-commit")
@@ -475,7 +554,7 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
         ' (auto-resolved fraisier files)"'
     )
     console.print(
-        "    # pre-push guard: HEAD must be a merge commit (two parents) and"
+        f"    # pre-push guard: origin/{tgt} must be an ancestor of HEAD and"
         " MERGE_HEAD must be cleared, else abort"
     )
     console.print(f"    git push origin {sync_branch}")
@@ -564,6 +643,8 @@ def sync_cmd(
 
     console.print(f"==> Syncing [cyan]{source}[/cyan] → [cyan]{tgt}[/cyan]")
 
+    _assert_clean_worktree()
+
     original_branch = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         capture_output=True,
@@ -619,6 +700,12 @@ def sync_cmd(
             conflicted = _capture(
                 ["git", "diff", "--name-only", "--diff-filter=U"]
             ).stdout.splitlines()
+
+            # Non-zero exit with no unmerged paths and no MERGE_HEAD means
+            # the merge never started (#268) — a different failure class
+            # than conflicts, with nothing to resolve or commit.
+            if not any(f.strip() for f in conflicted) and not _merge_in_progress():
+                _abort_merge_never_started(merge_result)
 
             for raw_f in conflicted:
                 f = raw_f.strip()
@@ -685,7 +772,7 @@ def sync_cmd(
         else:
             _commit_merge_or_staged(f"Pre-merge {tgt} into sync branch")
 
-        _assert_merge_finalized()
+        _assert_merge_finalized(tgt)
 
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
         _push_sync_branch(sync_branch)

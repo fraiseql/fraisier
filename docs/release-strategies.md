@@ -166,6 +166,12 @@ fraisier-owned files (`pyproject.toml`, `version.json`, `uv.lock`,
 `.secrets.baseline`, `fraises.yaml`, `scripts/generated`) by taking the
 source branch's version on conflict.
 
+Sync requires a **clean working tree** and aborts pre-flight with the
+offending file list otherwise: branch creation would carry uncommitted
+modifications onto the sync branch (and into the sync PR), and
+untracked files can block the pre-merge. fraisier never cleans,
+stashes, or deletes your files itself.
+
 Under both workflows this is the right behavior in practice:
 
 - **Per-PR**: the source branch always contains the freshest bump.
