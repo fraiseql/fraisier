@@ -313,9 +313,17 @@ class TestBackupRestoreCycle:
             assert "audit_trail" in excluded
 
     def test_restore_runs_pg_restore(self):
-        """Restore runs pg_restore with --no-owner --no-acl."""
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
+        """Restore delegates to confiture with --no-owner --no-acl semantics."""
+        from types import SimpleNamespace
+
+        with patch("fraisier.dbops.restore.DatabaseRestorer") as restorer_cls:
+            restorer_cls.return_value.restore.return_value = SimpleNamespace(
+                success=True,
+                errors=[],
+                matviews_deferred=None,
+                matviews_refreshed=None,
+                analyze_ran=False,
+            )
 
             from fraisier.dbops.restore import restore_backup
 
@@ -326,14 +334,25 @@ class TestBackupRestoreCycle:
             )
 
             assert result.success is True
-            call_args = mock_cmd.call_args[0][0]
-            assert "pg_restore" in call_args
-            assert "--no-owner" in call_args
-            assert "--no-acl" in call_args
+            opts = restorer_cls.return_value.restore.call_args[0][0]
+            assert opts.no_owner is True
+            assert opts.no_acl is True
 
     def test_restore_with_ownership_fix(self):
         """Restore reassigns ownership when db_owner is set."""
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+        from types import SimpleNamespace
+
+        with (
+            patch("fraisier.dbops.restore.DatabaseRestorer") as restorer_cls,
+            patch("fraisier.dbops.restore._pg_cmd") as mock_cmd,
+        ):
+            restorer_cls.return_value.restore.return_value = SimpleNamespace(
+                success=True,
+                errors=[],
+                matviews_deferred=None,
+                matviews_refreshed=None,
+                analyze_ran=False,
+            )
             mock_cmd.return_value = (0, "", "")
 
             from fraisier.dbops.restore import restore_backup
@@ -346,9 +365,9 @@ class TestBackupRestoreCycle:
             )
 
             assert result.success is True
-            # Should have been called twice: restore + ownership fix
-            assert mock_cmd.call_count == 2
-            ownership_call = mock_cmd.call_args_list[1][0][0]
+            # confiture does the restore; _pg_cmd runs only the ownership fix.
+            mock_cmd.assert_called_once()
+            ownership_call = mock_cmd.call_args[0][0]
             assert any("REASSIGN" in str(a) for a in ownership_call)
 
     def test_backup_failure_returns_error(self):

@@ -1,9 +1,12 @@
 """Tests for fraisier.dbops.restore module."""
 
+import contextlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from confiture.exceptions import RestoreError
 
 from fraisier.dbops.restore import (
     find_latest_backup,
@@ -14,12 +17,57 @@ from fraisier.dbops.restore import (
 _TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
 
 
+def _confiture_result(
+    *,
+    success=True,
+    errors=None,
+    matviews_deferred=None,
+    matviews_refreshed=None,
+    analyze_ran=False,
+):
+    """Build a stand-in for confiture's ``RestoreResult``.
+
+    Mirrors the fields fraisier reads off ``DatabaseRestorer.restore``.
+    """
+    return SimpleNamespace(
+        success=success,
+        errors=errors or [],
+        warnings=[],
+        diagnostics=[],
+        phases_completed=[],
+        table_count=None,
+        matviews_deferred=matviews_deferred,
+        matviews_refreshed=matviews_refreshed,
+        analyze_ran=analyze_ran,
+    )
+
+
+@contextlib.contextmanager
+def _mock_restorer(result=None, *, raises=None):
+    """Patch ``DatabaseRestorer`` so ``.restore()`` returns *result* / *raises*.
+
+    Yields the patched class so tests can inspect the ``RestoreOptions`` passed
+    to ``DatabaseRestorer().restore(options)``.
+    """
+    with patch("fraisier.dbops.restore.DatabaseRestorer") as restorer_cls:
+        restore = restorer_cls.return_value.restore
+        if raises is not None:
+            restore.side_effect = raises
+        else:
+            restore.return_value = result if result is not None else _confiture_result()
+        yield restorer_cls
+
+
+def _options_from(restorer_cls):
+    """Return the ``RestoreOptions`` passed to the mocked restore call."""
+    return restorer_cls.return_value.restore.call_args[0][0]
+
+
 class TestRestoreBackup:
-    """Test restore_backup."""
+    """restore_backup delegates to confiture's three-phase DatabaseRestorer."""
 
     def test_restore_success(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
+        with _mock_restorer() as restorer_cls:
             result = restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",
@@ -28,14 +76,40 @@ class TestRestoreBackup:
 
         assert result.success is True
         assert result.error == ""
-        mock_cmd.assert_called_once()
-        cmd = mock_cmd.call_args[0][0]
-        assert "pg_restore" in cmd
-        assert "staging" in cmd
-        assert "/backups/prod.dump" in cmd
-        assert "--no-owner" in cmd
-        assert "--no-acl" in cmd
-        assert mock_cmd.call_args.kwargs["connection_url"] == _TEST_URL
+        restorer_cls.return_value.restore.assert_called_once()
+        opts = _options_from(restorer_cls)
+        assert opts.target_db == "staging"
+        assert opts.backup_path == Path("/backups/prod.dump")
+        assert opts.no_owner is True
+        assert opts.no_acl is True
+        # fraisier validates the table count itself after `migrate up`.
+        assert opts.min_tables == 0
+
+    def test_restore_maps_tcp_connection_url(self):
+        """Host/port/user from a TCP URL land on RestoreOptions (confiture has
+        no connection-URL entry point, only discrete -h/-p/-U)."""
+        with _mock_restorer() as restorer_cls:
+            restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
+
+        opts = _options_from(restorer_cls)
+        assert opts.host == "localhost"
+        assert opts.port == 5432
+        assert opts.username == "postgres"
+
+    def test_restore_maps_socket_host_query(self):
+        """A socket URL carries the host in a ?host= query parameter."""
+        with _mock_restorer() as restorer_cls:
+            restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url="postgresql:///staging?host=/var/run/postgresql",
+            )
+
+        assert _options_from(restorer_cls).host == "/var/run/postgresql"
 
     def test_restore_requires_connection_url(self):
         with pytest.raises(TypeError):
@@ -44,8 +118,8 @@ class TestRestoreBackup:
             )
 
     def test_restore_failure(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (1, "", "pg_restore: error")
+        result_obj = _confiture_result(success=False, errors=["pg_restore: error"])
+        with _mock_restorer(result_obj):
             result = restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",
@@ -55,20 +129,31 @@ class TestRestoreBackup:
         assert result.success is False
         assert "pg_restore: error" in result.error
 
-    def test_restore_backup_accepts_directory_dump_path(self, tmp_path: Path):
-        """restore_backup forwards a directory-format dump path to pg_restore unchanged.
+    def test_restore_raises_restoreerror_returns_failure(self):
+        """A RestoreError (e.g. unsupported dump format) becomes a failed result,
+        not a raised exception — the strategy expects to branch on .success."""
+        with _mock_restorer(raises=RestoreError("Unrecognised dump format")):
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
 
-        pg_restore auto-detects ``-Fd`` from the positional path being a
-        directory. Lock-in for #202 Phase 3 — once parallel pg_dump
-        starts producing directory dumps, every existing restore caller
-        must work without further changes.
+        assert result.success is False
+        assert "dump format" in result.error
+
+    def test_restore_backup_accepts_directory_dump_path(self, tmp_path: Path):
+        """restore_backup forwards a directory-format dump path unchanged.
+
+        confiture auto-detects ``-Fd`` from the archive; fraisier passes the
+        directory path straight through as ``RestoreOptions.backup_path``.
+        Lock-in for #202 Phase 3 directory dumps.
         """
         dir_dump = tmp_path / "mydb_full_20260520_1200_zstd.dump"
         dir_dump.mkdir()
         (dir_dump / "toc.dat").write_text("stub toc")
 
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
+        with _mock_restorer() as restorer_cls:
             result = restore_backup(
                 backup_path=str(dir_dump),
                 db_name="staging",
@@ -76,15 +161,10 @@ class TestRestoreBackup:
             )
 
         assert result.success is True
-        cmd = mock_cmd.call_args[0][0]
-        assert cmd[0] == "pg_restore"
-        assert str(dir_dump) in cmd
-        assert not any(arg.startswith("-F") for arg in cmd), (
-            "pg_restore must auto-detect dump format; no -F flag override"
-        )
+        assert _options_from(restorer_cls).backup_path == dir_dump
 
     def test_restore_with_owner_fix(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+        with _mock_restorer(), patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
             mock_cmd.return_value = (0, "", "")
             result = restore_backup(
                 backup_path="/backups/prod.dump",
@@ -94,21 +174,20 @@ class TestRestoreBackup:
             )
 
         assert result.success is True
-        # Two calls: pg_restore + REASSIGN OWNED
-        assert mock_cmd.call_count == 2
-        reassign_cmd = mock_cmd.call_args_list[1][0][0]
+        # confiture does the restore; _pg_cmd runs only the REASSIGN OWNED step.
+        mock_cmd.assert_called_once()
+        reassign_cmd = mock_cmd.call_args[0][0]
         assert "psql" in reassign_cmd
         assert any("REASSIGN OWNED" in arg for arg in reassign_cmd)
         assert any("appuser" in arg for arg in reassign_cmd)
 
     def test_restore_owner_fix_failure_reported(self):
         """REASSIGN OWNED BY failure sets success=False with error."""
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            # pg_restore succeeds, REASSIGN fails
-            mock_cmd.side_effect = [
-                (0, "", ""),
-                (1, "", "ERROR: role does not exist"),
-            ]
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore._pg_cmd") as mock_cmd,
+        ):
+            mock_cmd.return_value = (1, "", "ERROR: role does not exist")
             result = restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",
@@ -119,9 +198,8 @@ class TestRestoreBackup:
         assert result.success is False
         assert "baduser" in result.error or "role" in result.error
 
-    def test_restore_with_jobs(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
+    def test_restore_with_jobs_enables_parallel(self):
+        with _mock_restorer() as restorer_cls:
             result = restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",
@@ -130,14 +208,13 @@ class TestRestoreBackup:
             )
 
         assert result.success is True
-        cmd = mock_cmd.call_args[0][0]
-        assert "-j" in cmd
-        j_idx = cmd.index("-j")
-        assert cmd[j_idx + 1] == "4"
+        opts = _options_from(restorer_cls)
+        assert opts.jobs == 4
+        # jobs > 1 → parallel data phase; transient FK errors must not abort.
+        assert opts.parallel_restore is True
 
-    def test_restore_jobs_1_no_flag(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
+    def test_restore_jobs_1_serial(self):
+        with _mock_restorer() as restorer_cls:
             restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",
@@ -145,24 +222,50 @@ class TestRestoreBackup:
                 jobs=1,
             )
 
-        cmd = mock_cmd.call_args[0][0]
-        assert "-j" not in cmd
+        opts = _options_from(restorer_cls)
+        assert opts.jobs == 1
+        assert opts.parallel_restore is False
 
-    def test_restore_default_no_j_flag(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
+    def test_restore_default_serial(self):
+        with _mock_restorer() as restorer_cls:
             restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",
                 connection_url=_TEST_URL,
             )
 
-        cmd = mock_cmd.call_args[0][0]
-        assert "-j" not in cmd
+        assert _options_from(restorer_cls).parallel_restore is False
+
+    def test_restore_surfaces_matview_accounting(self):
+        """confiture's deferred-matview fields flow onto fraisier's RestoreResult."""
+        result_obj = _confiture_result(
+            matviews_deferred=2, matviews_refreshed=2, analyze_ran=True
+        )
+        with _mock_restorer(result_obj):
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
+
+        assert result.matviews_deferred == 2
+        assert result.matviews_refreshed == 2
+        assert result.analyze_ran is True
+
+    def test_restore_matview_fields_none_without_matviews(self):
+        with _mock_restorer():
+            result = restore_backup(
+                backup_path="/backups/prod.dump",
+                db_name="staging",
+                connection_url=_TEST_URL,
+            )
+
+        assert result.matviews_deferred is None
+        assert result.matviews_refreshed is None
+        assert result.analyze_ran is False
 
     def test_restore_returns_duration(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
+        with _mock_restorer():
             result = restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",
@@ -172,8 +275,8 @@ class TestRestoreBackup:
         assert result.duration_seconds > 0
 
     def test_restore_failure_still_has_duration(self):
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (1, "", "pg_restore: error")
+        result_obj = _confiture_result(success=False, errors=["pg_restore: error"])
+        with _mock_restorer(result_obj):
             result = restore_backup(
                 backup_path="/backups/prod.dump",
                 db_name="staging",

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.0] - 2026-07-07
+
+Continues the confiture 0.33 migration shipped in 0.41.0: adopts fraiseql-confiture 0.35 and — the substantive change — moves the staging restore off a bare `pg_restore` onto confiture's three-phase `DatabaseRestorer`, so the matview-refresh fix (confiture #172) actually reaches fraisier's `restore_migrate` strategy.
+
+### Changed
+
+- **Confiture integration bumped to fraiseql-confiture 0.35.x** (pinned `>=0.35.0,<0.36`, was `>=0.33.0,<0.34`). The migrate/build/preflight surface fraisier targets is unchanged across 0.33→0.35 (`Migrator.from_config` → `MigratorSession.up/down/status/preflight`; the preflight `--against` `{ok, summary, issues[]}` JSON + exit `0`/`7` contract); 0.34 additionally defaults `Environment.name`/`include_dirs` so a migrate-only config validates directly, and 0.35 carries the restore matview fix adopted below. The upper bound still prevents silent drift onto a future schema change ([#262](https://github.com/fraiseql/fraisier/issues/262)).
+- **Staging restore now runs through confiture's three-phase `DatabaseRestorer` instead of a single `pg_restore`** ([#270](https://github.com/fraiseql/fraisier/issues/270)). `dbops/restore.restore_backup` previously shelled out to `pg_restore -d <db> --no-owner --no-acl [-j N] <dump>` directly — so confiture's restorer, and its matview fix, never touched fraisier's restore path. A backup carrying a stats-sensitive materialized view then refreshed it **inside the parallel data phase on the empty `pg_statistic` of a freshly loaded database**, replanning into a catastrophic nested loop (25 min – 2h+) that hung the deploy and left staging unusable (the printoptim_backend#1960 incident: 2h+ on `REFRESH MATERIALIZED VIEW mv_maintenance_price` under `--jobs 4`). `restore_backup` now delegates to `confiture.core.restorer.DatabaseRestorer`, which holds every matview `REFRESH` out of the restore phases, runs a database-wide `ANALYZE`, then refreshes on real statistics (confiture #172). It maps the caller's `connection_url` to confiture's discrete `-h/-p/-U` (netloc **or** socket `?host=` form) with any password threaded through as `PGPASSWORD`, keeps the post-restore `REASSIGN OWNED` ownership fix and the identifier/path validation, sets `parallel_restore` for `jobs > 1`, and leaves confiture's own min-tables check off (the strategy validates the table count itself after `migrate up`). A confiture `RestoreError` (e.g. an unsupported plain-SQL dump) is returned as a failed `RestoreResult` rather than raised, so the strategy's `.success` branch is unchanged.
+
+### Added
+
+- **The restore phase breakdown now surfaces confiture's deferred-matview accounting.** `RestoreResult` carries `matviews_deferred` / `matviews_refreshed` / `analyze_ran` (`None`/`False` when the backup had no matviews), and `RestoreMigrateStrategy` logs them after the restore step so a deploy log shows when a refresh was held past `ANALYZE` ([#270](https://github.com/fraiseql/fraisier/issues/270), ask #3).
+- **Real-PostgreSQL end-to-end regression for the deferred refresh.** `tests/integration/test_restore_matview_deferral.py` dumps a database carrying a populated matview, restores it through `restore_backup`, and asserts the matview comes out **populated** (not left `WITH NO DATA`) for both the serial (`jobs=1`) and parallel (`jobs=4`, the incident condition) paths — proving confiture and fraisier run together, not just that fraisier passes the right options. Existing restore unit tests were migrated onto the `DatabaseRestorer` seam.
+
 ## [0.42.0] - 2026-07-06
 
 ### Fixed

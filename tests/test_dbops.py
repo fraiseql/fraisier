@@ -1,9 +1,22 @@
 """Tests for database and backup operations."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
+
+
+def _confiture_ok(**over):
+    """Stand-in for a successful confiture RestoreResult."""
+    return SimpleNamespace(
+        success=over.get("success", True),
+        errors=over.get("errors", []),
+        matviews_deferred=over.get("matviews_deferred"),
+        matviews_refreshed=over.get("matviews_refreshed"),
+        analyze_ran=over.get("analyze_ran", False),
+    )
+
 
 _TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
 
@@ -798,13 +811,17 @@ class TestBackupSchedule:
 
 
 class TestStagingRestore:
-    """Test restore from backup with table count validation."""
+    """Test restore from backup, delegated to confiture's DatabaseRestorer."""
 
-    def test_restore_runs_pg_restore(self):
+    def test_restore_delegates_to_confiture(self):
         from fraisier.dbops.restore import restore_backup
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with (
+            patch("fraisier.dbops.restore.DatabaseRestorer") as restorer_cls,
+            patch("fraisier.dbops.restore._pg_cmd") as mock_cmd,
+        ):
+            restorer_cls.return_value.restore.return_value = _confiture_ok()
+            mock_cmd.return_value = (0, "", "")
             result = restore_backup(
                 backup_path="/backup/prod/latest.dump",
                 db_name="staging_db",
@@ -813,15 +830,21 @@ class TestStagingRestore:
             )
 
         assert result.success is True
-        calls = mock_run.call_args_list
-        cmds = [" ".join(c[0][0]) for c in calls]
-        assert any("pg_restore" in c for c in cmds)
+        restorer_cls.return_value.restore.assert_called_once()
+        opts = restorer_cls.return_value.restore.call_args[0][0]
+        assert opts.target_db == "staging_db"
+        assert opts.no_owner is True
+        assert opts.no_acl is True
 
     def test_restore_fixes_ownership(self):
         from fraisier.dbops.restore import restore_backup
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with (
+            patch("fraisier.dbops.restore.DatabaseRestorer") as restorer_cls,
+            patch("fraisier.dbops.restore._pg_cmd") as mock_cmd,
+        ):
+            restorer_cls.return_value.restore.return_value = _confiture_ok()
+            mock_cmd.return_value = (0, "", "")
             restore_backup(
                 backup_path="/backup/prod/latest.dump",
                 db_name="staging_db",
@@ -829,16 +852,15 @@ class TestStagingRestore:
                 connection_url=_TEST_URL,
             )
 
-        calls = mock_run.call_args_list
-        cmds = [" ".join(c[0][0]) for c in calls]
-        assert any("REASSIGN" in c and "appuser" in c for c in cmds)
+        reassign = " ".join(mock_cmd.call_args[0][0])
+        assert "REASSIGN" in reassign and "appuser" in reassign
 
     def test_restore_failure(self):
         from fraisier.dbops.restore import restore_backup
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=1, stdout="", stderr="file not found"
+        with patch("fraisier.dbops.restore.DatabaseRestorer") as restorer_cls:
+            restorer_cls.return_value.restore.return_value = _confiture_ok(
+                success=False, errors=["file not found"]
             )
             result = restore_backup(
                 backup_path="/nonexistent.dump",
