@@ -249,6 +249,17 @@ class RestoreMigrateStrategy(Strategy):
             cfg.db_name,
             int(restore_secs * 1000),
         )
+        # Surface confiture's deferred-matview accounting (#172) so the deploy
+        # log shows when a matview refresh was held past ANALYZE. None means the
+        # backup carried no materialized views (classic three-phase restore).
+        if restore_result.matviews_deferred is not None:
+            log.info(
+                "Deferred %d matview refresh(es) past ANALYZE (analyze_ran=%s), "
+                "refreshed %s on real statistics",
+                restore_result.matviews_deferred,
+                restore_result.analyze_ran,
+                restore_result.matviews_refreshed,
+            )
 
         # Step 8: Create rollback template
         if cfg.create_template:

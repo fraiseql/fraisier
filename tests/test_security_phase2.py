@@ -84,9 +84,20 @@ class TestRestoreInputValidation:
 
     def test_restore_uses_psql_variable_binding(self):
         """db_owner must not be interpolated via f-string in SQL."""
+        from types import SimpleNamespace
         from unittest.mock import patch
 
-        with patch("fraisier.dbops.restore._pg_cmd") as mock_cmd:
+        with (
+            patch("fraisier.dbops.restore.DatabaseRestorer") as restorer_cls,
+            patch("fraisier.dbops.restore._pg_cmd") as mock_cmd,
+        ):
+            restorer_cls.return_value.restore.return_value = SimpleNamespace(
+                success=True,
+                errors=[],
+                matviews_deferred=None,
+                matviews_refreshed=None,
+                analyze_ran=False,
+            )
             mock_cmd.return_value = (0, "", "")
             restore_backup(
                 backup_path="/backups/prod.dump",
@@ -95,11 +106,10 @@ class TestRestoreInputValidation:
                 connection_url=_TEST_URL,
             )
 
-        # The REASSIGN OWNED call should use psql -v variable binding,
-        # not an f-string with the owner name directly in the SQL
-        reassign_call = mock_cmd.call_args_list[1]
-        cmd_args = reassign_call[0][0]
-        # Should contain -v for variable binding
+        # confiture runs the restore; the sole _pg_cmd call is REASSIGN OWNED,
+        # which must use psql -v variable binding, not an f-string with the
+        # owner name interpolated directly into the SQL.
+        cmd_args = mock_cmd.call_args[0][0]
         assert "-v" in cmd_args, (
             "REASSIGN OWNED should use psql -v variable binding, not f-string SQL"
         )

@@ -16,13 +16,18 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 dependencies = [
-  # Pinned to the 0.33.x line: fraisier's confiture integration (Python API
-  # result shapes, preflight --against JSON schema {ok,summary,issues[]} + exit
-  # codes 0/7) targets it. 0.33 also fixed confiture #168 (from_config accepts a
-  # minimal config) and #169 (non-transactional migrations skipped, not failed,
-  # in preflight). The upper bound prevents silent drift onto a future schema
+  # Pinned to the 0.35.x line: fraisier's confiture integration (Migrator /
+  # Environment Python API result shapes, preflight --against JSON schema
+  # {ok,summary,issues[]} + exit codes 0/7) targets it. 0.33 fixed confiture
+  # #168 (from_config accepts a minimal config) and #169 (non-transactional
+  # migrations skipped, not failed, in preflight); 0.34 defaulted
+  # Environment.name/include_dirs so a migrate-only config validates directly;
+  # 0.35 defers restore matview REFRESH past ANALYZE (#172). That 0.35 fix lives
+  # in confiture.core.restorer, which fraisier's own dbops/restore.py does not
+  # use, so it is API-neutral here — the migrate/build/preflight surface is
+  # unchanged. The upper bound prevents silent drift onto a future schema
   # change (issue #262).
-  "fraiseql-confiture>=0.33.0,<0.34",
+  "fraiseql-confiture>=0.35.0,<0.36",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
@@ -37,7 +42,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.42.0"
+version = "0.43.0"
 
 [project.optional-dependencies]
 all-databases = [
