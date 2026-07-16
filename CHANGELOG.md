@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.0] - 2026-07-16
+
+Closes the standalone-restore tail of the ACL-stripping bug first fixed for the deploy path in printoptim_backend#1681: `fraisier db restore` now re-applies the configured grant scripts, so a database refreshed outside a full deploy is no longer left grantless.
+
+### Fixed
+
+- **`fraisier db restore <fraise> <env>` now re-applies the configured `database.post_migrate` grant scripts after a successful restore** ([#273](https://github.com/fraiseql/fraisier/issues/273)). The `restore_migrate` strategy restores with `pg_restore --no-owner --no-acl` and, by design, applies no grants — re-applying `database.post_migrate` was the deployer's responsibility (`_run_post_migrate`). The webhook deploy path ran it; the standalone `db restore` CLI called `strategy.execute(...)` and returned on success **without** it. Any environment refreshed via the CLI — e.g. a nightly "restore staging from production backup" timer — therefore came back with every non-`public` schema stripped of `USAGE`, and any application/ETL/reporting role that isn't the schema owner could no longer connect. Real incident: a staging DB refreshed nightly by `restore-staging-from-production-backup.timer` wiped `printoptim_etl`'s grants every night at 00:00 UTC, yielding ~615 failed ETL runs over 7 days (`permission denied for schema tenant`) — each restore re-wiping the grants a human had manually replayed. `db_restore` now runs the post_migrate hooks after a successful restore and exits non-zero if a `halt` step fails.
+
+### Changed
+
+- **`post_migrate` load-and-run is now a single shared seam.** `deployers/api.py::_run_post_migrate` and the `db restore` CLI both delegate to `post_migrate.run_configured_post_migrate(database_config, *, app_path, runner)`, which resolves `database_url`, loads the configured steps, and runs them — a no-op when there is no `database_url` or no configured steps, and a `halt` step still raises `DeploymentError`. This keeps the deploy and CLI paths from drifting rather than duplicating the load-and-run logic in two places.
+
 ## [0.43.0] - 2026-07-07
 
 Continues the confiture 0.33 migration shipped in 0.41.0: adopts fraiseql-confiture 0.35 and — the substantive change — moves the staging restore off a bare `pg_restore` onto confiture's three-phase `DatabaseRestorer`, so the matview-refresh fix (confiture #172) actually reaches fraisier's `restore_migrate` strategy.

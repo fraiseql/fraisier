@@ -357,20 +357,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         ``post_migrate`` list is empty or ``database_url`` is missing —
         no app DB to connect to.
         """
-        database_url = self.database_config.get("database_url")
-        if not database_url:
-            return
         from fraisier import post_migrate
 
-        steps = post_migrate.load_post_migrate_steps(
+        post_migrate.run_configured_post_migrate(
             self.database_config,
             app_path=Path(self.app_path) if self.app_path else Path(),
-        )
-        if not steps:
-            return
-        post_migrate.run_post_migrate_steps(
-            steps,
-            database_url=database_url,
             runner=self.runner,
         )
 

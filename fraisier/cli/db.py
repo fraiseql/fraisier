@@ -674,19 +674,36 @@ def db_restore(
         console.print(f"[red]Restore failed:[/red] {exc}")
         raise SystemExit(1) from exc
 
-    if result.success:
-        msg = f"{result.migrations_applied} migration(s) applied"
-        console.print(f"[green]Restore complete:[/green] {msg}")
-        if result.total_duration_seconds > 0:
-            console.print(
-                f"  Restore: {result.restore_duration_seconds:.1f}s"
-                f" | Migration: {result.migration_duration_seconds:.1f}s"
-                f" | Total: {result.total_duration_seconds:.1f}s"
-            )
-    else:
+    if not result.success:
         errors = ", ".join(result.errors)
         console.print(f"[red]Restore failed:[/red] {errors}")
         raise SystemExit(1)
+
+    msg = f"{result.migrations_applied} migration(s) applied"
+    console.print(f"[green]Restore complete:[/green] {msg}")
+    if result.total_duration_seconds > 0:
+        console.print(
+            f"  Restore: {result.restore_duration_seconds:.1f}s"
+            f" | Migration: {result.migration_duration_seconds:.1f}s"
+            f" | Total: {result.total_duration_seconds:.1f}s"
+        )
+
+    # Re-apply configured grant scripts. The restore strategy restores with
+    # pg_restore --no-owner --no-acl, so without this the restored DB is
+    # grantless for every non-owner role — the deploy path already does this
+    # via _run_post_migrate, the standalone CLI path did not (issue #273).
+    from fraisier import post_migrate
+    from fraisier.errors import DeploymentError
+
+    try:
+        post_migrate.run_configured_post_migrate(
+            db_cfg,
+            app_path=app_path,
+            runner=runner,
+        )
+    except DeploymentError as exc:
+        console.print(f"[red]post_migrate failed:[/red] {exc}")
+        raise SystemExit(1) from exc
 
 
 @main.command(name="backup")

@@ -676,3 +676,106 @@ class TestDbRestore:
         call_args = mock_execute.call_args
         confiture_arg = call_args[0][0]
         assert confiture_arg == _Path("/var/www/api/confiture.yaml")
+
+    def test_db_restore_runs_post_migrate_after_success(self, runner, restore_config):
+        """A successful restore re-applies configured post_migrate grants (#273).
+
+        The restore strategy strips ACLs (pg_restore --no-owner --no-acl), so
+        the CLI must run the configured grant scripts exactly as the deploy
+        path does — otherwise every non-owner role is left grantless.
+        """
+        env = restore_config.get_fraise_environment.return_value
+        env["database"]["database_url"] = _APP_URL
+        env["database"]["post_migrate"] = [{"sql_file": "db/7_grant/grant.sql"}]
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=1,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch(
+                "fraisier.service_managers.get_service_manager",
+                return_value=MagicMock(),
+            ),
+            patch("fraisier.runners.LocalRunner"),
+            patch("fraisier.post_migrate.run_post_migrate_steps") as mock_run,
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 0
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["database_url"] == _APP_URL
+
+    def test_db_restore_without_post_migrate_is_noop(self, runner, restore_config):
+        """Restore with no post_migrate config does not invoke the hook."""
+        env = restore_config.get_fraise_environment.return_value
+        env["database"]["database_url"] = _APP_URL
+        # No post_migrate key configured.
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=1,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch(
+                "fraisier.service_managers.get_service_manager",
+                return_value=MagicMock(),
+            ),
+            patch("fraisier.runners.LocalRunner"),
+            patch("fraisier.post_migrate.run_post_migrate_steps") as mock_run,
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 0
+        mock_run.assert_not_called()
+
+    def test_db_restore_post_migrate_halt_failure_exits_1(self, runner, restore_config):
+        """A halt-mode post_migrate failure fails the restore command (#273)."""
+        from fraisier.errors import DeploymentError
+
+        env = restore_config.get_fraise_environment.return_value
+        env["database"]["database_url"] = _APP_URL
+        env["database"]["post_migrate"] = [
+            {"sql_file": "db/7_grant/grant.sql", "on_error": "halt"}
+        ]
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=1,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+        )
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch(
+                "fraisier.service_managers.get_service_manager",
+                return_value=MagicMock(),
+            ),
+            patch("fraisier.runners.LocalRunner"),
+            patch(
+                "fraisier.post_migrate.run_post_migrate_steps",
+                side_effect=DeploymentError("grant.sql failed"),
+            ),
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 1
+        assert "post_migrate failed" in result.output.lower()

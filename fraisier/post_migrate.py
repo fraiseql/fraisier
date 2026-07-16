@@ -130,3 +130,32 @@ def run_post_migrate_steps(
                     sql_file,
                     exc.stderr or exc,
                 )
+
+
+def run_configured_post_migrate(
+    database_config: dict,
+    *,
+    app_path: Path,
+    runner: CommandRunner,
+    database_url: str | None = None,
+) -> None:
+    """Load and run the configured ``database.post_migrate`` hooks.
+
+    Single orchestration seam shared by the webhook deploy path
+    (``deployers/api.py``) and the standalone ``fraisier db restore`` CLI
+    (``cli/db.py``). The ``restore_migrate`` strategy restores with
+    ``pg_restore --no-owner --no-acl``, so re-applying the configured grant
+    scripts is what makes a restored database usable by non-owner roles
+    (issue #273); before this seam only the deploy path re-applied them.
+
+    A no-op when *database_url* cannot be resolved (no app DB to connect to)
+    or the ``post_migrate`` list is empty. A ``halt`` step that fails raises
+    ``DeploymentError``; a ``warn`` step logs and continues.
+    """
+    database_url = database_url or database_config.get("database_url")
+    if not database_url:
+        return
+    steps = load_post_migrate_steps(database_config, app_path=app_path)
+    if not steps:
+        return
+    run_post_migrate_steps(steps, database_url=database_url, runner=runner)
