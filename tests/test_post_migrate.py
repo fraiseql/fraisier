@@ -26,6 +26,7 @@ from fraisier.errors import DeploymentError
 from fraisier.post_migrate import (
     PostMigrateStep,
     load_post_migrate_steps,
+    run_configured_post_migrate,
     run_post_migrate_steps,
 )
 
@@ -222,3 +223,97 @@ class TestRunPostMigrateStepsOnError:
         assert runner.run.call_count == 2
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert any("10_bad.sql" in r.getMessage() for r in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Shared orchestration seam (deploy path + `db restore` CLI, #273)
+# ---------------------------------------------------------------------------
+
+
+class TestRunConfiguredPostMigrate:
+    def test_skips_when_database_url_missing(self, tmp_path):
+        # No database_url and none passed — nothing to connect to.
+        sql = tmp_path / "grant.sql"
+        sql.write_text("GRANT USAGE ON SCHEMA tenant TO app;")
+        runner = _runner_ok()
+
+        run_configured_post_migrate(
+            {"post_migrate": [{"sql_file": str(sql)}]},
+            app_path=tmp_path,
+            runner=runner,
+        )
+
+        runner.run.assert_not_called()
+
+    def test_skips_when_no_steps_configured(self):
+        # database_url present but the post_migrate list is empty.
+        runner = _runner_ok()
+
+        run_configured_post_migrate(
+            {"database_url": "postgresql://u@h/db", "post_migrate": []},
+            app_path=Path("/srv/api"),
+            runner=runner,
+        )
+
+        runner.run.assert_not_called()
+
+    def test_runs_configured_steps_with_database_url_from_config(self, tmp_path):
+        sql = tmp_path / "grant.sql"
+        sql.write_text("GRANT USAGE ON SCHEMA tenant TO app;")
+        runner = _runner_ok()
+
+        run_configured_post_migrate(
+            {
+                "database_url": "postgresql://u@h/db",
+                "post_migrate": [{"sql_file": str(sql)}],
+            },
+            app_path=tmp_path,
+            runner=runner,
+        )
+
+        runner.run.assert_called_once()
+        cmd = runner.run.call_args.args[0]
+        assert cmd == [
+            "psql",
+            "postgresql://u@h/db",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-f",
+            str(sql),
+        ]
+
+    def test_explicit_database_url_overrides_config(self, tmp_path):
+        sql = tmp_path / "grant.sql"
+        sql.write_text("GRANT USAGE ON SCHEMA tenant TO app;")
+        runner = _runner_ok()
+
+        run_configured_post_migrate(
+            {
+                "database_url": "postgresql://ignored@h/db",
+                "post_migrate": [{"sql_file": str(sql)}],
+            },
+            app_path=tmp_path,
+            runner=runner,
+            database_url="postgresql://override@h/db",
+        )
+
+        cmd = runner.run.call_args.args[0]
+        assert cmd[1] == "postgresql://override@h/db"
+
+    def test_halt_failure_propagates_deployment_error(self, tmp_path):
+        sql = tmp_path / "grant.sql"
+        sql.write_text("boom")
+        runner = MagicMock()
+        runner.run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["psql"], stderr="permission denied"
+        )
+
+        with pytest.raises(DeploymentError):
+            run_configured_post_migrate(
+                {
+                    "database_url": "postgresql://u@h/db",
+                    "post_migrate": [{"sql_file": str(sql), "on_error": "halt"}],
+                },
+                app_path=tmp_path,
+                runner=runner,
+            )
