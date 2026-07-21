@@ -24,6 +24,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from fraisier.dbops.confiture_contract import (
+    classify_confiture_failure,
+    envelope_error_code,
+)
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -530,9 +535,12 @@ def _format_preflight_failure(returncode: int, stdout: str, stderr: str) -> str:
     historically surfaced only *stderr* — typically empty for these failures —
     leaving operators with a bare ``exit N`` and no cause (#259). This extracts
     the human detail from stdout when present, falls back to the raw stdout,
-    includes any stderr, and always appends the recovery hint.
+    includes any stderr, and always appends the recovery hint. The exit is named
+    by its canonical semantic class (the contract table), so the operator reads
+    "database unreachable" or "no migration ledger" rather than a bare integer.
     """
-    lines = [f"confiture preflight failed (exit {returncode})."]
+    failure_class = classify_confiture_failure(returncode, envelope_error_code(stdout))
+    lines = [f"confiture preflight failed (exit {returncode}, {failure_class})."]
     detail = _extract_preflight_issues(stdout)
     if detail:
         lines.append(detail)
@@ -691,10 +699,12 @@ def _run_confiture_preflight(
         timeout=timeout_seconds,
     )
 
-    # With --against, confiture 0.32 exits 0 = all replays passed, 7 = one or
-    # more replay failures — both valid, structured outcomes to parse. Any other
-    # code (2 validation, 3 connection, 5 config, …) is a fatal crash: surface
-    # confiture's own diagnostics, which it writes to *stdout* (#259).
+    # With --against, confiture exits 0 = all replays passed, 7 = one or more
+    # replay failures — both valid, structured outcomes to parse. Any other code
+    # is a fatal crash to surface with confiture's own diagnostics, which it
+    # writes to *stdout* (#259). Per confiture's exit-codes.md contract: 2 = no
+    # migration ledger (a precondition, NOT validation), 3 = database
+    # unreachable, 4 = schema/DDL, 5 = config invalid, 6 = lock contention.
     if result.returncode not in (0, 7):
         raise DatabaseError(
             _format_preflight_failure(result.returncode, result.stdout, result.stderr)
