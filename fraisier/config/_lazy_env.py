@@ -230,5 +230,12 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        loader, so the value is
 #                                                        a plain str|None.
 #
+#   dbops/confiture_contract.py:envelope_error_code      non-config  Narrows the
+#                                                        ``error.code`` field of a
+#                                                        *confiture* ``--format
+#                                                        json`` error envelope
+#                                                        (subprocess output), not
+#                                                        a fraises.yaml value.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.
