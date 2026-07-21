@@ -24,6 +24,11 @@ from typing import TYPE_CHECKING, Any
 from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
 
+from fraisier.dbops.confiture_contract import (
+    ConfitureFailureClass,
+    classify_confiture_failure,
+    envelope_error_code,
+)
 from fraisier.errors import MigrationError as FraisierMigrationError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -511,12 +516,17 @@ def classify_error(stderr: str) -> str:
 
 
 def _classify_exit_code(exit_code: int) -> str:
-    """Classify error type from confiture exit code."""
-    return {
-        2: "validation_error",
-        3: "migration_error",
-        6: "lock_error",
-    }.get(exit_code, "unknown")
+    """Classify an error type from a confiture exit code.
+
+    A thin projection of the canonical contract table
+    (:func:`fraisier.dbops.confiture_contract.classify_confiture_failure`,
+    mirrored from confiture's ``exit-codes.md``). The returned value is a
+    canonical class name — e.g. exit ``2`` is ``precondition_failed`` (no
+    migration ledger), ``3`` is ``db_unreachable``, ``5`` is ``invalid_config``,
+    ``6`` is ``lock_contention`` — **not** the pre-#146 ad-hoc strings that read
+    exit ``2`` as a validation error and ``3`` as a migration error.
+    """
+    return str(classify_confiture_failure(exit_code))
 
 
 def confiture_migrate(
@@ -595,12 +605,21 @@ def confiture_status(  # pragma: no cover
 
     status = StatusResult(exit_code=result.returncode, raw=result.stdout)
 
+    # Discriminate on confiture's structured error code (via the canonical
+    # contract table), not the bare exit integer. Under ``--format json`` a
+    # failure writes an error envelope to stdout; ``PRECON_1001`` is the
+    # "tracking table absent" signal (exit 2 under confiture's frozen contract),
+    # distinct from an unreachable database (exit 3).
+    failure_class = classify_confiture_failure(
+        result.returncode, envelope_error_code(result.stdout)
+    )
+
     if result.returncode == 3:
         status.fatal = True
         status.error = result.stderr.strip()
         return status
 
-    if result.returncode == 2:
+    if failure_class is ConfitureFailureClass.PRECONDITION_FAILED:
         status.tracking_table_missing = True
         status.error = result.stderr.strip()
         return status

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Unifies confiture's exit-code / error-code classification onto a single, confiture-owned source of truth shared by contract with the Rust adapter (`fraisier-core`), and corrects the pre-#146 misreadings that had drifted into the Python side.
+
+### Changed
+
+- **Confiture exit-code classification now derives from a confiture-owned table** (`dbops/confiture_contract.py`). Confiture is the single source of truth: it owns the `(exit_int → semantic class)` table (`confiture.core.error_codes.EXIT_CODE_SEMANTIC_CLASS`, emitted by `confiture --exit-codes-json`). fraisier prefers the installed confiture's table at runtime, falling back to a vendored copy while the pin stays `fraiseql-confiture < 0.36` (which predates the table). The nine classes are `ok`, `internal_error`, `precondition_failed`, `db_unreachable`, `schema_error`, `invalid_config`, `lock_contention`, `git_error`, `irreversible_rollback`, and the three confiture-facing call sites are thin projections of it rather than re-encoding the mapping ad hoc. `tests/test_confiture_contract.py` enumerates the matrix and asserts the vendored copy still matches confiture's live table whenever confiture exposes it (it skips against the current pin); the Rust adapter vendors and verifies the same `confiture --exit-codes-json` output. Replaces two independently hand-maintained copies that had drifted.
+
+### Fixed
+
+- **`_classify_exit_code` no longer encodes the pre-#146 world.** It mapped exit `2` → `validation_error` and `3` → `migration_error`, both wrong under confiture's current contract (exit `2` is a *reachable-but-uninitialised database* — no migration ledger, `PRECON_1001`; exit `3` is a *database connection failure*). It now projects the canonical table: exit `2` → `precondition_failed`, `3` → `db_unreachable`, `5` → `invalid_config`, `6` → `lock_contention`. Latent today (the `fraiseql-confiture>=0.35,<0.36` bound and a `classify_error` stderr match usually shadow it), it would have mislabelled real failures the moment either changed.
+- **`confiture_status` detects an uninitialised database by error code, not the bare exit integer.** It read `returncode == 2` directly; it now branches on the canonical `precondition_failed` class (which keys on `PRECON_1001` in confiture's `--format json` error envelope), so the "tracking table absent" signal is recognised by confiture's own code rather than by an integer that only *happens* to coincide.
+- **The preflight fatal-exit path no longer mislabels exit `2` as "validation".** The guard's comment claimed exit `2` was a validation error; it is the no-ledger precondition. The comment is corrected to confiture's real meanings, and `_format_preflight_failure` now names the failure by its canonical class (e.g. "database unreachable", "no migration ledger") instead of a bare `exit N`.
+
 ## [0.44.0] - 2026-07-16
 
 Closes the standalone-restore tail of the ACL-stripping bug first fixed for the deploy path in printoptim_backend#1681: `fraisier db restore` now re-applies the configured grant scripts, so a database refreshed outside a full deploy is no longer left grantless.
