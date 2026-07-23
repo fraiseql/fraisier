@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-07-23
+
+Follow-up to the 0.46 install-path work: the #279 re-bake was correct but never
+reached the unit, because deploy-time scaffold regeneration rendered into the
+wrong tree.
+
+### Fixed
+
+- **Deploy-time scaffold regeneration now renders into the app tree the install step reads from** (`deployers/base.py`, #282). `scaffold.output_dir` is relative (`scripts/generated`), so it resolves against the render process's CWD — and `_regenerate_scaffold` / the `_install_scaffold` subprocess fallback ran with `cwd = config_path.parent`, i.e. the fraisier daemon's config dir (`/opt/fraisier`). But the scaffold-install-helper socket runs a baked `install.sh` that self-locates under the project's app tree (`app_path`, `= /opt/{project}`) and copies the generated units into `/etc` from there. On any box where the project isn't literally named `fraisier`, regeneration wrote the fresh install-helper unit (with the new `--deploy-user` command) into `/opt/fraisier/scripts/generated/`, while the socket install re-installed the stale unit from `app_path/scripts/generated/` — so a changed `install.command` never reached the unit and every deploy failed at the install step with `command not allowed`, with no self-service recovery (the #279 re-bake was re-baking the wrong tree). Both the regeneration render and the subprocess-fallback install now resolve `output_dir` against `app_path` (via a shared `_scaffold_project_dir` helper), matching where the socket `install.sh`, the `scaffold-install` CLI, and `_check_service_file_staleness` already read from. Falls back to `config_path.parent` only when `app_path` is unset.
+
 ## [0.46.0] - 2026-07-22
 
 Install-path hardening. Five defects on one deploy path, all surfaced by a

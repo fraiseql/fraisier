@@ -685,6 +685,82 @@ class TestAPIDeployer:
         default = Path("/opt/fraisier/fraises.yaml")
         assert mock_sync.call_args.kwargs["dest_path"] == default
 
+    def test_regenerate_scaffold_renders_into_app_tree(self, tmp_path):
+        """Regeneration renders into the app tree, not the config dir (#282).
+
+        The scaffold-install-helper socket runs a baked ``install.sh`` that
+        self-locates under the project's ``app_path`` and copies the generated
+        units into ``/etc`` from there.  If regeneration renders against the
+        fraisier daemon's config dir (``config_path.parent``, e.g.
+        ``/opt/fraisier``) instead, the freshly-rendered install-helper unit
+        lands in a tree the install step never reads — so a changed
+        ``install.command`` never reaches the unit and every deploy fails at the
+        install step with ``command not allowed``.
+        """
+        app_dir = tmp_path / "opt" / "myproject"
+        app_dir.mkdir(parents=True)
+        opt_config = tmp_path / "opt" / "fraisier" / "fraises.yaml"
+        opt_config.parent.mkdir(parents=True)
+        opt_config.write_text("name: myproject")
+
+        runner = MagicMock()
+        runner.run.return_value = MagicMock(returncode=0, stdout="")
+        deployer = APIDeployer(
+            {"fraise_name": "api", "app_path": str(app_dir)}, runner=runner
+        )
+
+        with patch.object(
+            deployer, "_get_fraisier_executable", return_value="fraisier"
+        ):
+            deployer._regenerate_scaffold(config_path=opt_config)
+
+        run_call = runner.run.call_args
+        assert run_call.args[0] == ["fraisier", "-c", str(opt_config), "scaffold"]
+        assert run_call.kwargs["cwd"] == str(app_dir), (
+            "scaffold regeneration must render into the app tree the "
+            "install-helper reads from, not the fraisier config dir"
+        )
+
+    def test_install_scaffold_fallback_reads_from_app_tree(self, tmp_path):
+        """The subprocess-fallback install reads from the app tree (#282).
+
+        When the scaffold-install-helper socket is unavailable, the fallback
+        ``scaffold-install`` must read the generated units from the same app
+        tree regeneration wrote to — not from ``config_path.parent``.
+        """
+        app_dir = tmp_path / "opt" / "myproject"
+        app_dir.mkdir(parents=True)
+        opt_config = tmp_path / "opt" / "fraisier" / "fraises.yaml"
+        opt_config.parent.mkdir(parents=True)
+        opt_config.write_text("name: myproject")
+
+        runner = MagicMock()
+        runner.run.return_value = MagicMock(returncode=0, stdout="")
+        deployer = APIDeployer(
+            {"fraise_name": "api", "app_path": str(app_dir)}, runner=runner
+        )
+
+        with (
+            patch.object(deployer, "_get_fraisier_executable", return_value="fraisier"),
+            patch.object(
+                deployer, "_try_scaffold_install_via_socket", return_value=None
+            ),
+        ):
+            deployer._install_scaffold(config_path=opt_config)
+
+        run_call = runner.run.call_args
+        assert run_call.args[0] == [
+            "fraisier",
+            "-c",
+            str(opt_config),
+            "scaffold-install",
+            "--yes",
+        ]
+        assert run_call.kwargs["cwd"] == str(app_dir), (
+            "the subprocess-fallback install must read from the app tree "
+            "regeneration wrote to, not the fraisier config dir"
+        )
+
     def test_sync_config_called_after_git_pull(self, mock_subprocess):
         """_sync_config_if_needed is called after _git_pull to pick up new fraises.yaml.
 

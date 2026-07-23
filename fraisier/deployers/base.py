@@ -407,6 +407,24 @@ class BaseDeployer(ABC):
         """
         return _resolve_fraisier_executable()
 
+    def _scaffold_project_dir(self, config_path: Path) -> Path:
+        """Directory the (relative) ``scaffold.output_dir`` is resolved against.
+
+        The scaffold-install-helper socket runs a baked ``install.sh`` that
+        self-locates under the project's app tree (``app_path``) and copies the
+        generated units into ``/etc`` from there.  Regeneration and the
+        subprocess-fallback install must therefore resolve ``output_dir``
+        against that same app tree — not against the fraisier daemon's config
+        directory (``config_path.parent``, e.g. ``/opt/fraisier``) — otherwise
+        the freshly rendered units land in a tree the install step never reads
+        and a changed ``install.command`` never reaches the unit (#282).
+
+        Falls back to ``config_path.parent`` only when ``app_path`` is unset
+        (no git-deploy context), preserving the pre-#282 behaviour there.
+        """
+        app_path = getattr(self, "app_path", None)
+        return Path(app_path) if app_path else config_path.parent
+
     def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
         """Regenerate scaffold files based on current fraises.yaml.
 
@@ -428,7 +446,7 @@ class BaseDeployer(ABC):
         logger.info("Regenerating scaffold files")
 
         config_path = Path(config_path)
-        project_dir = config_path.parent
+        project_dir = self._scaffold_project_dir(config_path)
         fraisier_exe = self._get_fraisier_executable()
 
         result = self.runner.run(
@@ -509,7 +527,7 @@ class BaseDeployer(ABC):
 
         if config_path:
             config_path = Path(config_path)
-            project_dir = config_path.parent
+            project_dir = self._scaffold_project_dir(config_path)
 
             # Try socket helper first (compatible with NoNewPrivileges=true)
             socket_result = self._try_scaffold_install_via_socket(config_path)
