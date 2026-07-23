@@ -63,6 +63,8 @@ from fraisier.config.schema import (
 )
 from fraisier.errors import ConfigurationError, ValidationError
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_TIMEOUT = 600  # 10 minutes
 _MEMORY_SIZE_RE = re.compile(r"^\d+[KMGT]$")
 _VALID_SERVICE_TYPES = {
@@ -683,17 +685,84 @@ class FraisierConfig:
 
 # Global config instance (lazy loaded, thread-safe)
 _config: FraisierConfig | None = None
+_config_mtime: float | None = None
 _config_lock = threading.Lock()
 
 
+def _safe_mtime(path: Path | str) -> float | None:
+    """Return ``path``'s mtime, or ``None`` when it can't be stat-ed.
+
+    Powers the cheap staleness check in :func:`get_config`; a file that is
+    briefly absent mid-atomic-replace must never crash config access.
+    """
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return None
+
+
+def _load_and_stamp(config_path: Path | str | None) -> FraisierConfig:
+    """Build a config and record the mtime of the file it read, together.
+
+    Must be called with ``_config_lock`` held. Assigns ``_config`` and
+    ``_config_mtime`` as a pair so a concurrent staleness check never pairs
+    a fresh config with a stale mtime (or vice versa).
+    """
+    global _config, _config_mtime
+    cfg = FraisierConfig(config_path)
+    _config = cfg
+    _config_mtime = _safe_mtime(cfg.config_path)
+    return cfg
+
+
 def get_config(config_path: Path | str | None = None) -> FraisierConfig:
-    """Get or create global configuration instance."""
-    global _config
-    if _config is None or config_path:
+    """Get or create the global configuration instance.
+
+    A long-running process (e.g. the webhook) picks up an on-disk
+    ``fraises.yaml`` change without a restart: each call cheaply ``stat()``s
+    the resolved config path and rebuilds the singleton only when the mtime
+    moves (#278). An explicit ``config_path`` always (re)builds.
+
+    Resilience: a rebuild that fails — torn, removed, or invalid file —
+    keeps the last-good singleton, stamps the offending mtime so it does not
+    re-raise on every subsequent call, and logs a warning. A bad config sync
+    must not take down a running webhook.
+    """
+    global _config_mtime
+    if config_path:
         with _config_lock:
-            if _config is None or config_path:
-                _config = FraisierConfig(config_path)
-    return _config
+            return _load_and_stamp(config_path)
+
+    # Capture once: a concurrent reset_config() may null the global.
+    cfg = _config
+    if cfg is None:
+        with _config_lock:
+            if _config is None:
+                return _load_and_stamp(None)
+            return _config
+
+    current = _safe_mtime(cfg.config_path)
+    if current is None or current == _config_mtime:
+        return cfg
+
+    with _config_lock:
+        if _config is None:
+            return _load_and_stamp(None)
+        # Double-check under the lock: another thread may have reloaded
+        # already, or the file may have changed again.
+        if _safe_mtime(_config.config_path) == _config_mtime:
+            return _config
+        prev = _config
+        try:
+            return _load_and_stamp(_config.config_path)
+        except Exception:
+            _config_mtime = current
+            logger.warning(
+                "Reload of %s failed; keeping previous configuration",
+                prev.config_path,
+                exc_info=True,
+            )
+            return prev
 
 
 def reset_config() -> None:
@@ -701,6 +770,7 @@ def reset_config() -> None:
 
     Next call to ``get_config()`` will re-read from disk.
     """
-    global _config
+    global _config, _config_mtime
     with _config_lock:
         _config = None
+        _config_mtime = None

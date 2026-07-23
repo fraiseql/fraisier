@@ -139,6 +139,22 @@ class TestInputValidation:
         assert result["ok"] is False
         assert "command not allowed" in result["error"]
 
+    def test_rejection_names_expected_and_received(self):
+        """The rejection names both commands and points at the stale allowlist (#279)."""
+        result = _call(
+            {"command": ["bash", "-c", "echo hi"], "cwd": "/var/www/app"},
+            allowed_command=_DEFAULT_ALLOWED,
+        )
+        assert result["ok"] is False
+        # Both the received and the allowed command appear in the error.
+        assert "bash" in result["error"]
+        for token in _DEFAULT_ALLOWED:
+            assert token in result["error"]
+        # Advice points at the re-bake path + issue.
+        assert "advice" in result
+        assert "install.command" in result["advice"]
+        assert "279" in result["advice"]
+
     def test_accepts_exact_allowed_command(self):
         """Exact match of allowed command passes the allowlist check."""
         mock_result = MagicMock()

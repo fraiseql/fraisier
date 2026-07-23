@@ -227,6 +227,57 @@ service_manager: rc
 
 When set to `rc`, scaffold generates rc.d service scripts instead of systemd units.
 
+### Config reload
+
+The running webhook auto-detects changes to `fraises.yaml`: each deploy syncs
+the committed config to the server and the next `get_config()` re-reads it when
+the file's mtime moves — no `systemctl restart` needed. Staleness is bounded to
+a single deploy (a brand-new `install.command` shipped in commit *N* takes
+effect on deploy *N+1*, since the config that drives deploy *N* is read before
+*N* is pulled).
+
+To force an immediate refresh without waiting for the next deploy:
+
+```bash
+systemctl reload fraisier-<project>-webhook   # sends SIGHUP → reloads config
+```
+
+The generated webhook unit wires this via `ExecReload=/bin/kill -HUP $MAINPID`.
+A config that fails to parse is ignored: the webhook keeps serving the last-good
+config and logs a warning, rather than failing every request.
+
+### Install command
+
+When `install.user` differs from the deploy user, the install step runs through
+a per-fraise **install-helper** unit whose allowlist is the *exact*
+`install.command`, baked into the unit at scaffold time (this is the
+deploy-user → install-user security boundary). A deploy re-bakes that allowlist
+automatically when the command changes, but you avoid re-bakes entirely — and
+keep install *content* in code review — by making the allowlisted command a
+**stable entrypoint** and putting the real steps in a repo-owned script:
+
+```yaml
+install:
+  command: [bash, scripts/deploy-install.sh]   # stable — the allowlisted command
+  user: appuser
+```
+
+```bash
+#!/usr/bin/env bash
+# scripts/deploy-install.sh — edit freely; the allowlisted command never changes
+set -euo pipefail
+uv sync --frozen
+# add build steps here (uv run …, npm ci, cargo build, …)
+```
+
+The install-helper runs under `ProtectSystem=strict`; the caches/state of the
+common toolchains (uv, pip, cargo, npm) are relocated under `app_path` via
+`XDG_CACHE_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`/`UV_CACHE_DIR`/`CARGO_HOME`/
+`npm_config_cache`. `HOME` stays the install user's, read-only under the
+sandbox — so a tool that writes elsewhere in `$HOME` (e.g. `rustup` →
+`~/.rustup`) needs its location exported to a path under `app_path` inside the
+script (e.g. `export RUSTUP_HOME="$PWD/.rustup"`).
+
 ---
 
 ## Commands

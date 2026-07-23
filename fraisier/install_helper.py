@@ -100,8 +100,28 @@ def _handle_connection(conn: socket.socket, allowed_command: list[str]) -> None:
             return
 
         if command != allowed_command:
-            logger.warning("Command not allowed: %s", command)
-            _send_error(conn, "command not allowed")
+            logger.warning(
+                "Command not allowed: got %s, allowed %s", command, allowed_command
+            )
+            # Name both commands + the likely cause so a stale allowlist is
+            # self-diagnosing in the deploy journal (#279) instead of a bare
+            # "command not allowed". Surfaced by the deployer via _install_via_socket.
+            _send_response(
+                conn,
+                {
+                    "ok": False,
+                    "error": (
+                        f"command not allowed: this install-helper permits "
+                        f"{allowed_command}, but received {command}"
+                    ),
+                    "advice": (
+                        "The configured install.command no longer matches this "
+                        "install-helper unit's baked allowlist. Redeploy (which "
+                        "re-bakes and restarts the unit) or run scaffold-install. "
+                        "See: https://github.com/fraiseql/fraisier/issues/279"
+                    ),
+                },
+            )
             return
 
         logger.info("Running install command: %s in %s", command, cwd)

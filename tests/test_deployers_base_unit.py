@@ -80,10 +80,48 @@ class TestSyncFraisesYaml:
         deployer.runner = mock_runner
 
         deployer._sync_fraises_yaml(source_path=source, dest_path=dest)
-        assert mock_runner.run.call_count == 2
+        # Atomic write: mkdir, copy to a temp file, then rename onto dest (#278).
+        assert mock_runner.run.call_count == 3
         calls = mock_runner.run.call_args_list
         assert calls[0][0][0] == ["mkdir", "-p", str(tmp_path)]
-        assert calls[1][0][0] == ["cp", str(source), str(dest)]
+
+        cp_cmd = calls[1][0][0]
+        mv_cmd = calls[2][0][0]
+        assert cp_cmd[0] == "cp"
+        assert cp_cmd[1] == str(source)
+        tmp_target = cp_cmd[2]
+        # Temp file lives in dest's directory (same filesystem → atomic rename)
+        # and is not the live path itself.
+        assert tmp_target.startswith(str(dest) + ".tmp.")
+        assert mv_cmd == ["mv", "-f", tmp_target, str(dest)]
+
+    def test_sync_fraises_yaml_is_atomic(self, tmp_path):
+        """The live dest is written via rename, never a bare cp onto it (#278).
+
+        A concurrent reader (the mtime config auto-reload) must never observe a
+        half-written config, so the runner must see a ``mv`` onto ``dest`` and
+        the preceding ``cp`` must target a temp path, not ``dest`` directly.
+        """
+        source = tmp_path / "fraises.yaml"
+        source.write_text("fraises: []")
+        dest = tmp_path / "opt" / "fraises.yaml"
+
+        deployer = APIDeployer({})
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = MagicMock(ok=True)
+        deployer.runner = mock_runner
+
+        deployer._sync_fraises_yaml(source_path=source, dest_path=dest)
+
+        commands = [c[0][0] for c in mock_runner.run.call_args_list]
+        # No command copies directly onto the live destination path.
+        assert ["cp", str(source), str(dest)] not in commands
+        # Exactly one rename lands on dest, from a temp file in dest.parent.
+        mv_cmds = [c for c in commands if c[:2] == ["mv", "-f"]]
+        assert len(mv_cmds) == 1
+        mv = mv_cmds[0]
+        assert mv[3] == str(dest)
+        assert mv[2].startswith(str(dest) + ".tmp.")
 
     def test_creates_dest_directory_if_missing(self, tmp_path):
         source = tmp_path / "fraises.yaml"

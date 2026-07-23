@@ -33,6 +33,48 @@ logger = logging.getLogger("fraisier")
 DEFAULT_REPOS_BASE = Path("/var/lib/fraisier/repos")
 
 
+def _install_failure_advice(
+    stderr: str, *, app_path: str, via_socket: bool = False
+) -> str | None:
+    """Derive operator advice from an install command's captured ``stderr``.
+
+    Returns ``None`` when no known signature matches. The ``__pycache__``
+    signature is checked first (most specific); the generic
+    ``.cache``/``Permission denied`` signature is the HOME-cache hint that
+    points at the ``sudo -H`` fix for the sudo fallback (#276).
+
+    ``via_socket=True`` reshapes the ``.cache`` hint: the install-helper
+    socket already runs as the install user with a correct HOME by
+    construction, so a cache-write denial there is a genuinely unwritable
+    cache dir — never an unset HOME — and must not suggest ``sudo -H``.
+    """
+    if "__pycache__" in stderr and "Permission denied" in stderr:
+        return (
+            "Root-owned __pycache__ directories are blocking uv sync."
+            f" Fix: sudo find {app_path}/.venv -name __pycache__"
+            " -user root -type d -exec rm -rf {} +"
+            " then retry the deployment."
+            " The venv may be corrupted — run uv sync --frozen"
+            " manually after cleanup."
+            " See: https://github.com/fraiseql/fraisier/issues/196"
+        )
+    if ".cache" in stderr and "Permission denied" in stderr:
+        if via_socket:
+            return (
+                "A tool (uv/pip/cargo) could not write its cache directory."
+                " The install user's cache path (e.g. ~/.cache) is not"
+                " writable — check ownership and that the filesystem is not"
+                " full or mounted read-only."
+            )
+        return (
+            "The install user's HOME may be unset or unwritable, so a tool"
+            " (uv/pip/cargo) could not create its cache. Ensure the fallback"
+            " uses `sudo -H` or run via the install-helper socket."
+            " See: https://github.com/fraiseql/fraisier/issues/276"
+        )
+    return None
+
+
 class GitDeployMixin:
     """Mixin providing bare-repo git operations and status file writing.
 
@@ -162,30 +204,34 @@ class GitDeployMixin:
             resolved = shutil.which(cmd[0])
             if resolved:
                 cmd[0] = resolved
-            cmd = ["sudo", "-u", self.install_user, *cmd]
+            # -H sets HOME to the target user's home so HOME-writing tools
+            # (uv/pip/cargo/npm) can create their caches instead of failing on
+            # the invoker's /root/.cache. -H (not -i): no login shell, cwd stays
+            # app_path. See: https://github.com/fraiseql/fraisier/issues/276
+            cmd = ["sudo", "-H", "-u", self.install_user, *cmd]
         logger.info("Installing dependencies: %s", cmd)
         try:
             self.runner.run(cmd, cwd=self.app_path)
         except subprocess.CalledProcessError as exc:
             suggested = f"cd {self.app_path} && {shlex.join(cmd)}"
             stderr = exc.stderr or ""
-            advice = None
-            if "__pycache__" in stderr and "Permission denied" in stderr:
-                advice = (
-                    "Root-owned __pycache__ directories are blocking uv sync."
-                    f" Fix: sudo find {self.app_path}/.venv -name __pycache__"
-                    " -user root -type d -exec rm -rf {} +"
-                    " then retry the deployment."
-                    " The venv may be corrupted — run uv sync --frozen"
-                    " manually after cleanup."
-                    " See: https://github.com/fraiseql/fraisier/issues/196"
-                )
+            advice = _install_failure_advice(stderr, app_path=self.app_path)
             msg = (
                 f"Install command failed (exit code {exc.returncode}): "
                 f"{shlex.join(exc.cmd) if isinstance(exc.cmd, list) else exc.cmd}\n"
                 f"  Directory: {self.app_path}\n"
                 f"  To debug: {suggested}"
             )
+            # Surface the child's stderr tail so the real cause is visible in
+            # the deploy journal without re-running the command by hand (#277).
+            # Bounded to the last 2000 chars so a noisy build log can't flood
+            # the journal. Note: this folds stderr into the DeploymentError
+            # message, which is persisted as status.error_message and returned
+            # by the authenticated /api/status/<fraise>/details endpoint — a
+            # wider (token-gated, bounded) surface than the un-persisted
+            # context dict alone.
+            if stderr.strip():
+                msg += f"\n  stderr: {stderr.strip()[-2000:]}"
             if advice:
                 msg += f"\n  Advice: {advice}"
             raise DeploymentError(
@@ -246,7 +292,11 @@ class GitDeployMixin:
         if not response.get("ok"):
             error = response.get("error") or response.get("stderr") or "unknown error"
             suggested = f"cd {cwd} && {shlex.join(command)}"
-            advice = response.get("advice")
+            # Prefer advice the helper supplied; otherwise derive it from the
+            # returned stderr. Socket variant: no `sudo -H` hint (#277).
+            advice = response.get("advice") or _install_failure_advice(
+                response.get("stderr") or "", app_path=cwd, via_socket=True
+            )
             msg = (
                 "Install command failed"
                 f" (exit code {response.get('returncode', '?')}):"
