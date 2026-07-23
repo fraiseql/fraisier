@@ -1087,6 +1087,85 @@ class TestDrainingFlagDispatch:
                 assert not flag.exists()
 
 
+class TestSighupConfigReload:
+    """``lifespan`` wires SIGHUP to a config reload, safely (#278)."""
+
+    def test_registered_handler_resets_config(self):
+        """The SIGHUP handler installed on the loop calls reset_config()."""
+        import asyncio
+        import signal
+
+        from fraisier import webhook
+
+        if not hasattr(signal, "SIGHUP"):
+            pytest.skip("SIGHUP not available on this platform")
+
+        captured: dict[str, object] = {}
+
+        async def _run() -> None:
+            loop = asyncio.get_running_loop()
+            real_add = loop.add_signal_handler
+
+            def _spy(sig, cb, *a):
+                captured["sig"] = sig
+                captured["cb"] = cb
+                return real_add(sig, cb, *a)
+
+            with patch.object(loop, "add_signal_handler", side_effect=_spy):
+                result_loop = webhook._install_sighup_reload()
+
+            assert result_loop is loop
+            assert captured["sig"] == signal.SIGHUP
+
+            # Invoke the registered callback directly (deterministic — no
+            # dependence on real signal-delivery timing) and prove it reloads.
+            with patch("fraisier.webhook.reset_config") as mock_reset:
+                captured["cb"]()  # type: ignore[operator]
+                assert mock_reset.called
+
+            webhook._remove_sighup_reload(loop)
+
+        asyncio.run(_run())
+
+    def test_registration_failure_is_swallowed(self):
+        """A loop that can't take signal handlers degrades to no handler (B1).
+
+        Starlette's TestClient runs the loop off the main thread, where
+        add_signal_handler raises — startup must not crash.
+        """
+        import asyncio
+        import signal
+
+        from fraisier import webhook
+
+        if not hasattr(signal, "SIGHUP"):
+            pytest.skip("SIGHUP not available on this platform")
+
+        async def _run() -> None:
+            loop = asyncio.get_running_loop()
+            with patch.object(
+                loop,
+                "add_signal_handler",
+                side_effect=RuntimeError("loop not on main thread"),
+            ):
+                assert webhook._install_sighup_reload() is None
+
+        asyncio.run(_run())
+
+    def test_lifespan_enters_under_testclient(self, tmp_path):
+        """Entering the real lifespan under TestClient must not raise (B1)."""
+        from fraisier.webhook import app as webhook_app
+
+        with patch("fraisier.webhook.get_config") as mock_config:
+            mock_config_obj = MagicMock()
+            mock_config_obj.deployment.lock_dir = str(tmp_path)
+            mock_config.return_value = mock_config_obj
+
+            # No exception on enter/exit of the lifespan context.
+            with TestClient(webhook_app):
+                pass
+
+
 class TestUnavailableHelper:
     """``_unavailable`` builds a 503 JSONResponse with the right header."""
 

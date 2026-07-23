@@ -2566,6 +2566,56 @@ fraises:
         )
         assert "--deploy-user deployer" in execstart
 
+    def test_install_helper_relocates_caches_under_app_path(self, tmp_path):
+        """The install-helper relocates write-heavy tool dirs under app_path so
+        any toolchain works under ProtectSystem=strict (#280).
+
+        No dependency on a writable /home/<user>/.cache: a single writable root
+        (app_path) covers the venv plus every relocated cache/state dir.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: myproj
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/prod
+        install:
+          user: install_bot
+          command: ["bash", "scripts/deploy-install.sh"]
+"""
+        )
+        config = FraisierConfig(p)
+        ScaffoldRenderer(config).render()
+
+        svc = next(
+            p
+            for p in (tmp_path / "output" / "systemd").iterdir()
+            if p.name.endswith("-install-helper.service")
+            and "scaffold-install-helper" not in p.name
+        )
+        content = svc.read_text()
+
+        # Caches/state/data all under app_path.
+        assert "Environment=XDG_CACHE_HOME=/var/www/prod/.cache" in content
+        assert "Environment=XDG_DATA_HOME=/var/www/prod/.local/share" in content
+        assert "Environment=XDG_STATE_HOME=/var/www/prod/.local/state" in content
+        assert "Environment=UV_CACHE_DIR=/var/www/prod/.cache/uv" in content
+        assert "Environment=CARGO_HOME=/var/www/prod/.cargo" in content
+        # No dependency on a writable home cache in the sandbox allowlist.
+        assert "/home/install_bot/.cache" not in content
+        assert "ReadWritePaths=/var/www/prod" in content
+        # Still strictly sandboxed.
+        assert "ProtectSystem=strict" in content
+
     def test_collect_allowed_services_skips_jobs_on_non_scheduled_types(self):
         """Only type:scheduled fraises contribute jobs.* unit names to the
         allowlist. type:backup fraises (which also use jobs.*) must NOT —
@@ -3072,6 +3122,56 @@ fraises:
         content = (tmp_path / "output" / "install.sh").read_text()
         assert "myapp" in content
         assert "Creating app user myapp" in content
+
+    def test_install_sh_rebakes_install_helper_allowlist(self, tmp_path):
+        """install.sh re-bakes a changed install.command's allowlist (#279).
+
+        The running install-helper .service carries the old allowed_command in
+        its argv, and `enable --now` is a no-op on a running unit — so install.sh
+        must STOP the service and RESTART the socket, via _run_strict so a failed
+        re-bake surfaces (and the deploy's post-pull gate aborts) instead of
+        being swallowed by `_run … || true`.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"""
+name: tp
+scaffold:
+  deploy_user: deployer
+  output_dir: {tmp_path / "output"}
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+        install:
+          command: [uv, sync, --frozen]
+          user: myapp
+"""
+        )
+        config = FraisierConfig(p)
+        ScaffoldRenderer(config).render()
+
+        content = (tmp_path / "output" / "install.sh").read_text()
+        sock = "fraisier-tp-my_api-production-install-helper.socket"
+        svc = "fraisier-tp-my_api-production-install-helper.service"
+
+        # A fatal (non-swallowing) runner exists and gates the re-bake.
+        assert "_run_strict()" in content
+        # Copying the NEW unit files is fatal too — the load-bearing step: a
+        # swallowed cp would re-exec the stale unit behind a green re-bake.
+        assert "_run_strict sudo cp" in content
+        assert f"/etc/systemd/system/{svc}" in content
+        # ...and specifically the service copy is not swallowed by _run.
+        assert f'_run sudo cp "${{SCAFFOLD_DIR}}/systemd/{svc}"' not in content
+        # The stale-argv service is stopped and the socket restarted (fatal).
+        assert f"_run_strict sudo systemctl stop {svc}" in content
+        assert f"_run_strict sudo systemctl restart {sock}" in content
+        # The old no-op form for the install-helper socket is gone.
+        assert f"enable --now {sock}" not in content
 
     def test_install_sh_service_names_include_project_prefix(self, tmp_path):
         """install.sh copies service files with project-prefixed names."""

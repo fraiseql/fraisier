@@ -429,14 +429,34 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
                 # Step 1.5: Re-sync after checkout so a new fraises.yaml in this
                 # commit is always picked up before install/migrate (issue #158).
+                #
+                # Fatal by design (#279): this runs after checkout, so it is the
+                # step that re-bakes the install-helper allowlist when
+                # install.command changed. If it fails, the units on disk no
+                # longer match the deployed config and the install step would
+                # hit a stale allowlist ("command not allowed"). Abort here,
+                # naming the cause, instead of sailing into that masked failure.
                 try:
                     self._sync_config_if_needed()
                 except Exception as e:
-                    logger.error(
-                        f"Post-pull scaffold config sync/regeneration failed: {e}\n"
-                        "nginx config may be stale — run: "
-                        "fraisier scaffold && fraisier scaffold-install --yes"
-                    )
+                    raise DeploymentError(
+                        "Post-pull scaffold config sync/regeneration failed "
+                        "after checkout, so system units may not match the "
+                        "deployed fraises.yaml. The most common cause is a "
+                        "changed install.command whose install-helper allowlist "
+                        "could not be re-baked (#279). Deploy aborted before the "
+                        "install step to avoid a misleading 'command not "
+                        "allowed'.\n"
+                        "  Remediation: fix the underlying error below, then "
+                        "redeploy (or run `fraisier scaffold && fraisier "
+                        "scaffold-install --yes`).",
+                        context={"phase": "post_pull_config_sync"},
+                        cause=e,
+                        # Remediation is already inline above; suppress the
+                        # class-level trailing hint so it isn't duplicated with
+                        # the cause's own hint when e is a DeploymentError.
+                        recovery_hint="",
+                    ) from e
 
                 # Step 2: Install dependencies
                 self._install_dependencies()

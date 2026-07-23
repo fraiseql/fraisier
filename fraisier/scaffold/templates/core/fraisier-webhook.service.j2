@@ -8,6 +8,10 @@ Type=exec
 User={{ scaffold.deploy_user }}
 Group={{ scaffold.deploy_user }}
 ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-webhook
+# systemctl reload drops the cached fraises.yaml so a config change takes
+# effect without a full restart. The running server also auto-detects
+# fraises.yaml mtime changes on the next deploy; SIGHUP forces it immediately.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 # WatchdogSec intentionally omitted: uvicorn does not implement sd_notify

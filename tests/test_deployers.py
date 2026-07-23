@@ -123,8 +123,15 @@ class TestAPIDeployer:
         assert result.status == DeploymentStatus.FAILED
         assert result.error_message is not None
 
-    def test_execute_logs_error_on_scaffold_install_failure(self, tmp_path):
-        """Test execute logs ERROR (not WARNING) when scaffold install fails."""
+    def test_post_pull_config_sync_failure_aborts_before_install(self, tmp_path):
+        """A failed post-pull scaffold re-bake is FATAL and aborts before the
+        install step (#279).
+
+        Previously non-fatal: the deploy logged an error and continued into a
+        masked ``command not allowed`` at the install step. Now the post-pull
+        sync (which re-bakes the install-helper allowlist) hard-gates the
+        deploy — it fails there, naming the likely stale allowlist.
+        """
         config = {
             "app_path": str(tmp_path),
             "systemd_service": "api.service",
@@ -133,14 +140,13 @@ class TestAPIDeployer:
 
         deployer = APIDeployer(config)
 
-        # Set up a counter to track calls to _sync_config_if_needed
+        # Track calls to _sync_config_if_needed; fail only the 2nd (post-pull).
         call_count = {"count": 0}
 
         def sync_config_side_effect():
             call_count["count"] += 1
-            # Fail on the second call (post-pull)
             if call_count["count"] == 2:
-                raise DeploymentError("Post-pull scaffold install failed")
+                raise DeploymentError("boom: command not allowed")
 
         with (
             patch.object(deployer, "_validate_wrapper_scripts"),
@@ -151,27 +157,72 @@ class TestAPIDeployer:
                 "_sync_config_if_needed",
                 side_effect=sync_config_side_effect,
             ),
+            patch.object(deployer, "_install_dependencies") as mock_install,
             patch.object(deployer, "_write_status"),
             patch.object(deployer, "_start_db_record", return_value=None),
             patch.object(deployer, "_complete_db_record"),
             patch.object(deployer, "_notify"),
             patch.object(deployer, "_wrap_error"),
             patch.object(deployer, "_restore_previous_state"),
+            patch.object(deployer, "_restore_version_json"),
         ):
-            # Capture log records
-            import logging
+            result = deployer.execute()
 
-            with patch.object(logging.getLogger("fraisier"), "error") as mock_error:
-                result = deployer.execute()
+        # Fatal: deploy failed, and aborted BEFORE the install step, so the
+        # stale-allowlist "command not allowed" is never reached.
+        assert result.success is False
+        mock_install.assert_not_called()
+        # The surfaced error names the likely cause + the issue.
+        assert result.error_message is not None
+        assert "279" in result.error_message
+        lowered = result.error_message.lower()
+        assert "install.command" in lowered or "allowlist" in lowered
 
-            # Should still complete deployment (error is non-fatal)
-            assert result.success is False
+    def test_pre_pull_config_sync_failure_is_nonfatal(self, tmp_path):
+        """A pre-pull sync failure stays non-fatal (#279).
 
-            # Should log error, not warning
-            mock_error.assert_called()
-            # Check that the error message includes the expected text
-            calls = [str(call) for call in mock_error.call_args_list]
-            assert any("scaffold" in str(call).lower() for call in calls)
+        The pre-pull sync runs from the old, pre-checkout worktree, whose
+        install.command still matches the baked allowlist — not the trap. Only
+        the post-pull re-sync hard-gates. Reaching git pull proves the pre-pull
+        failure did not abort the deploy.
+        """
+        config = {
+            "app_path": str(tmp_path),
+            "systemd_service": "api.service",
+            "health_check": {"url": "http://localhost:8000/health"},
+        }
+        deployer = APIDeployer(config)
+
+        call_count = {"count": 0}
+
+        def sync_config_side_effect():
+            call_count["count"] += 1
+            if call_count["count"] == 1:
+                raise DeploymentError("pre-pull boom")
+
+        with (
+            patch.object(deployer, "_validate_wrapper_scripts"),
+            patch.object(deployer, "_check_service_file_staleness"),
+            # Stop the deploy right after git pull so the full pipeline isn't
+            # exercised; reaching git pull is what proves pre-pull was non-fatal.
+            patch.object(
+                deployer, "_git_pull", side_effect=RuntimeError("stop")
+            ) as mock_pull,
+            patch.object(
+                deployer, "_sync_config_if_needed", side_effect=sync_config_side_effect
+            ),
+            patch.object(deployer, "_write_status"),
+            patch.object(deployer, "_start_db_record", return_value=None),
+            patch.object(deployer, "_complete_db_record"),
+            patch.object(deployer, "_notify"),
+            patch.object(deployer, "_wrap_error"),
+            patch.object(deployer, "_restore_previous_state"),
+            patch.object(deployer, "_restore_version_json"),
+        ):
+            result = deployer.execute()
+
+        assert result.success is False
+        mock_pull.assert_called_once()
 
     def test_fetch_and_checkout_called_during_execute(
         self,
@@ -593,7 +644,7 @@ class TestAPIDeployer:
 
         # Verify sudo was used
         args, kwargs = mock_subprocess.call_args
-        assert args[0][:3] == ["sudo", "-u", "appuser"]
+        assert args[0][:4] == ["sudo", "-H", "-u", "appuser"]
         assert kwargs["cwd"] == "/var/www/api"
 
     def test_sync_config_uses_fraisier_config_env_var(self, tmp_path, monkeypatch):
@@ -696,7 +747,7 @@ class TestAPIDeployer:
         # Should call install command with sudo -u appuser
         assert mock_subprocess.call_count == 1
         install_call = mock_subprocess.call_args_list[0][0][0]
-        assert install_call[:3] == ["sudo", "-u", "appuser"]
+        assert install_call[:4] == ["sudo", "-H", "-u", "appuser"]
 
     def test_install_dependencies_skips_chown_when_no_venv(
         self, tmp_path, mock_subprocess
@@ -717,7 +768,7 @@ class TestAPIDeployer:
 
         assert mock_subprocess.call_count == 1
         install_call = mock_subprocess.call_args_list[0][0][0]
-        assert install_call[:3] == ["sudo", "-u", "appuser"]
+        assert install_call[:4] == ["sudo", "-H", "-u", "appuser"]
 
     def test_sync_config_saves_hash_after_successful_install(
         self, tmp_path, monkeypatch

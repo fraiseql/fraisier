@@ -108,6 +108,26 @@ _run() {
   fi
 }
 
+# Like _run, but failures are FATAL — no `|| true`, no stderr suppression — so
+# a broken step surfaces a non-zero exit (with `set -e`) instead of being
+# silently swallowed. Use for steps whose failure a caller must be able to
+# detect, e.g. the install-helper allowlist re-bake (#279): if the helper
+# can't be restarted, the deploy must fail loudly here rather than later at the
+# install step with a misleading "command not allowed".
+_run_strict() {
+  if [[ "$VALIDATE_ONLY" == "true" ]]; then
+    if [[ "$VERBOSE" == "true" ]]; then
+      echo "  [validate] $*"
+    fi
+    return 0
+  elif [[ "$DRY_RUN" == "true" ]]; then
+    echo "  [would run] $*"
+    return 0
+  else
+    "$@"
+  fi
+}
+
 # Helper function to check if file/directory exists
 _check_exists() {
   local path="$1"
@@ -447,12 +467,26 @@ if _env_active "{{ ish.env_name }}"; then
     if [ -f "${SCAFFOLD_DIR}/systemd/{{ ish.socket_unit }}" ] && \
        [ -f "${SCAFFOLD_DIR}/systemd/{{ ish.service_unit }}" ]; then
         echo "  Installing install helper for {{ ish.fraise_name }}-{{ ish.env_name }}"
-        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ ish.socket_unit }}" \
+        # Copying the NEW unit files is the load-bearing step of the re-bake, so
+        # it is _run_strict too (#279): if the new .service can't be written,
+        # the stop/restart below would re-exec the STALE unit and the deploy
+        # would hit a masked "command not allowed" behind a green re-bake.
+        _run_strict sudo cp "${SCAFFOLD_DIR}/systemd/{{ ish.socket_unit }}" \
            /etc/systemd/system/{{ ish.socket_unit }}
-        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ ish.service_unit }}" \
+        _run_strict sudo cp "${SCAFFOLD_DIR}/systemd/{{ ish.service_unit }}" \
            /etc/systemd/system/{{ ish.service_unit }}
-        _run sudo systemctl daemon-reload
-        _run sudo systemctl enable --now {{ ish.socket_unit }}
+        # Re-bake the allowlist (#279). The running .service still carries the
+        # OLD allowed_command in its argv, and `enable --now` is a no-op on an
+        # already-running unit — so the stale allowlist would persist. Instead:
+        # daemon-reload the new unit, STOP the stale-argv .service, then enable
+        # + restart the .socket so the next install connection re-execs the
+        # .service with the new argv. _run_strict (not _run): a failed re-bake
+        # must surface as a non-zero exit so the deploy aborts loudly (#279)
+        # rather than proceeding to a masked "command not allowed".
+        _run_strict sudo systemctl daemon-reload
+        _run_strict sudo systemctl stop {{ ish.service_unit }}
+        _run_strict sudo systemctl enable {{ ish.socket_unit }}
+        _run_strict sudo systemctl restart {{ ish.socket_unit }}
     fi
 fi
 {% endfor %}

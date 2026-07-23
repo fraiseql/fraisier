@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-07-22
+
+Install-path hardening. Five defects on one deploy path, all surfaced by a
+single incident: a `printoptim` `install.command` change (a `bash -c` wrapper)
+that failed to deploy, gave no useful error, then "succeeded but did nothing"
+once patched — and, when the socket path was investigated, turned out to be
+blocked by a stale allowlist under a strict sandbox.
+
+### Fixed
+
+- **`sudo -u` install fallback now sets `HOME` via `-H`** (`deployers/mixins.py`). Without it, `sudo` kept the invoker's `HOME` (`/root` when the deploy runs as root) and HOME-writing tools (`uv`/`pip`/`cargo`/`npm`) failed with `Permission denied` writing their caches under `/root/.cache`. The install-helper socket path was already correct — it runs as the install user via systemd `User=`, so its `HOME` is right by construction — which is why the failure only showed on the sudo fallback (#276).
+- **Install-failure errors now surface the captured `stderr`** in the `DeploymentError` message (bounded to the last 2000 chars), so the real cause lands in the deploy journal instead of only in the un-rendered context dict. A generic `.cache` + `Permission denied` heuristic points at the HOME fix above; the socket path gets the same surfacing with a reworded hint (it never uses sudo). Note: `stderr` now reaches `status.error_message` and the authenticated `/api/status/<fraise>/details` endpoint — a wider (token-gated, bounded) surface than before (#277).
+- **A changed `install.command` is now re-baked into the running install-helper allowlist during the deploy** (#279). The install-helper enforces an exact-match allowlist baked into its systemd unit; when the command changed, the running helper still accepted only the *previous* command and rejected the deploy with `command not allowed`. `install.sh` used `enable --now` on the socket (a no-op on a running unit), so the stale-argv service kept running — now it stops the service and restarts the socket so the next install re-execs with the new allowlist. Those re-bake steps run via a new fatal `_run_strict` (not the failure-swallowing `_run`), and a failed post-pull scaffold re-bake now **aborts the deploy loudly**, naming the stale allowlist, instead of continuing into a masked `command not allowed`. The install-helper rejection message now names the expected vs received command. The allowlist boundary is kept (request-time config validation was explicitly rejected — it would validate against attacker-writable config).
+- **Install caches relocated under `app_path` so the install step works under `ProtectSystem=strict` for any toolchain** (#280). The install-helper unit was hand-fitted for `uv` only (whitelisting `~/.cache/uv`); a wrapper running anything else hit the read-only sandbox. `XDG_CACHE_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`/`UV_CACHE_DIR`/`CARGO_HOME`/`npm_config_cache` are now redirected under `app_path` (already writable), covering uv's managed-Python store as well as pip/cargo/npm. Recommended convention: make `install.command` a stable entrypoint (`[bash, scripts/deploy-install.sh]`) so install content lives in a reviewed repo script and the allowlist effectively never changes.
+
+### Changed
+
+- **The running webhook now picks up a synced `fraises.yaml` without a restart** (#278). `get_config()` cheaply `stat()`s the resolved config path on each call and rebuilds the singleton only when the mtime moves, bounding config staleness to a single deploy instead of "forever, until `systemctl restart`". A failed reload (torn, removed, or invalid file) keeps the last-good config, stamps the offending mtime so it doesn't thrash, and logs a warning — a bad config sync can no longer take down the webhook. `SIGHUP` (wired in the webhook `lifespan`, guarded so it can never crash startup) forces an immediate reload, making `systemctl reload` a supported operation (`ExecReload=/bin/kill -HUP $MAINPID` added to the webhook unit template). Config sync (`deployers/base.py`) now writes atomically (copy to a pid-unique temp file in the destination directory, then rename) so a reader never observes a torn config.
+
 ## [0.45.0] - 2026-07-21
 
 Unifies confiture's exit-code / error-code classification onto a single, confiture-owned source of truth shared by contract with the Rust adapter (`fraisier-core`), and corrects the pre-#146 misreadings that had drifted into the Python side.

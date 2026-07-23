@@ -96,9 +96,35 @@ class TestInstallDependenciesExecution:
             deployer._install_dependencies()
 
         mock_runner.run.assert_called_once_with(
-            ["sudo", "-u", "myapp", "/usr/local/bin/uv", "sync", "--frozen"],
+            ["sudo", "-H", "-u", "myapp", "/usr/local/bin/uv", "sync", "--frozen"],
             cwd="/var/www/api",
         )
+
+    def test_sudo_fallback_sets_home_with_dash_h(self):
+        """The sudo fallback passes -H so HOME points at the install user (#276).
+
+        Without -H, sudo keeps the invoker's HOME (/root when the deploy runs
+        as root) and HOME-writing tools (uv/pip/cargo) fail writing their
+        caches under /root/.cache.
+        """
+        config = {
+            "app_path": "/var/www/api",
+            "install": {
+                "command": ["uv", "sync", "--frozen"],
+                "user": "myapp",
+            },
+        }
+        deployer = APIDeployer(config)
+        mock_runner = MagicMock()
+        deployer.runner = mock_runner
+
+        with patch(
+            "fraisier.deployers.mixins.shutil.which", return_value="/usr/local/bin/uv"
+        ):
+            deployer._install_dependencies()
+
+        called_cmd = mock_runner.run.call_args[0][0]
+        assert called_cmd[:4] == ["sudo", "-H", "-u", "myapp"]
 
     def test_no_sudo_when_install_user_equals_deploy_user(self):
         """When install.user equals deploy_user, command runs without sudo."""
@@ -143,7 +169,7 @@ class TestInstallDependenciesExecution:
 
         # Should use sudo since install_user != deploy_user
         mock_runner.run.assert_called_once_with(
-            ["sudo", "-u", "myapp", "/usr/local/bin/uv", "sync", "--frozen"],
+            ["sudo", "-H", "-u", "myapp", "/usr/local/bin/uv", "sync", "--frozen"],
             cwd="/var/www/api",
         )
 
@@ -165,7 +191,7 @@ class TestInstallDependenciesExecution:
             deployer._install_dependencies()
 
         mock_runner.run.assert_called_once_with(
-            ["sudo", "-u", "myapp", "uv", "sync", "--frozen"],
+            ["sudo", "-H", "-u", "myapp", "uv", "sync", "--frozen"],
             cwd="/var/www/api",
         )
 
@@ -256,6 +282,7 @@ class TestInstallViaSocket:
         mock_runner.run.assert_called_once_with(
             [
                 "sudo",
+                "-H",
                 "-u",
                 "appuser",
                 "/home/fraisier/.local/bin/uv",
@@ -293,6 +320,7 @@ class TestInstallViaSocket:
         mock_runner.run.assert_called_once_with(
             [
                 "sudo",
+                "-H",
                 "-u",
                 "appuser",
                 "/home/fraisier/.local/bin/uv",

@@ -13,8 +13,19 @@ Group={{ install_user }}
 ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-install-helper --deploy-user {{ scaffold.deploy_user }} {{ install_command | join(' ') }}
 
 Environment=PYTHONDONTWRITEBYTECODE=1
-# Pin the uv cache to a known path so ReadWritePaths can cover it exactly.
-Environment=UV_CACHE_DIR=/home/{{ install_user }}/.cache/uv
+# Relocate every write-heavy tool dir under app_path (already writable via
+# ReadWritePaths) so ANY install.command — not just `uv sync` — works under
+# ProtectSystem=strict (#280). Covers uv's wheel cache AND its managed-Python
+# store (XDG_DATA_HOME), plus pip/cargo/npm. HOME and XDG_CONFIG_HOME are left
+# at the install user's real home so credentials/config there (e.g. a private
+# index ~/.config/uv or ~/.netrc) remain readable; only writes are redirected.
+Environment=HOME=/home/{{ install_user }}
+Environment=XDG_CACHE_HOME={{ app_path }}/.cache
+Environment=XDG_DATA_HOME={{ app_path }}/.local/share
+Environment=XDG_STATE_HOME={{ app_path }}/.local/state
+Environment=UV_CACHE_DIR={{ app_path }}/.cache/uv
+Environment=CARGO_HOME={{ app_path }}/.cargo
+Environment=npm_config_cache={{ app_path }}/.npm
 
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -25,8 +36,9 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 # AF_INET/AF_INET6 are required for uv to reach PyPI when the cache is cold.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-# Project directory + uv wheel cache (uv sync writes to both)
-ReadWritePaths={{ app_path }} /home/{{ install_user }}/.cache/uv
+# App directory holds the venv + all relocated tool caches/state (Environment=
+# above), so a single writable root covers the whole install step.
+ReadWritePaths={{ app_path }}
 
 [Install]
 WantedBy=multi-user.target

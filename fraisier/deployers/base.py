@@ -326,8 +326,15 @@ class BaseDeployer(ABC):
         # Ensure destination directory exists before copying
         self.runner.run(["mkdir", "-p", str(dest_path.parent)])
 
-        # Copy file
-        self.runner.run(["cp", str(source_path), str(dest_path)])
+        # Write atomically: copy to a temp file in the destination directory,
+        # then rename onto the live path. A reader (the mtime-based config
+        # auto-reload, #278) never sees a torn file. The temp name is
+        # pid-unique because several fraises can sync to the same shared
+        # /opt/fraisier/fraises.yaml concurrently (the deploy lock is
+        # per-fraise), and a fixed temp name would let their copies collide.
+        tmp_path = dest_path.with_name(f"{dest_path.name}.tmp.{os.getpid()}")
+        self.runner.run(["cp", str(source_path), str(tmp_path)])
+        self.runner.run(["mv", "-f", str(tmp_path), str(dest_path)])
 
         logger.info(
             "Config synced successfully",

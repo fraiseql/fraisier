@@ -3,6 +3,7 @@
 Supports any Git provider: GitHub, GitLab, Gitea, Bitbucket, or custom.
 """
 
+import asyncio
 import hmac
 import json
 import logging
@@ -16,7 +17,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ._env import get_int_env
-from .config import get_config
+from .config import get_config, reset_config
 from .config._lazy_env import LazyEnv, to_str
 
 if TYPE_CHECKING:
@@ -67,12 +68,60 @@ def _clear_stale_drain_flag() -> None:
         logger.debug("Could not clear stale draining flag", exc_info=True)
 
 
+def _install_sighup_reload() -> asyncio.AbstractEventLoop | None:
+    """Register a SIGHUP handler that forces a config reload, if possible.
+
+    Makes ``systemctl reload`` (``ExecReload=/bin/kill -HUP $MAINPID``) drop
+    the cached config so the next ``get_config()`` re-reads ``fraises.yaml``
+    immediately (#278). Returns the loop the handler was bound to, so the
+    caller can unregister it on shutdown, or ``None`` when registration is
+    unavailable: no SIGHUP on this platform, or the loop is not on the main
+    thread (Starlette's TestClient, some multi-worker setups). Registration
+    must never crash startup — every failure degrades to "no handler", and
+    SIGHUP then falls back to its default (terminate) disposition.
+    """
+    import signal
+
+    if not hasattr(signal, "SIGHUP"):
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+
+        def _reload() -> None:
+            logger.info("SIGHUP received — reloading configuration")
+            reset_config()
+
+        loop.add_signal_handler(signal.SIGHUP, _reload)
+    except (NotImplementedError, RuntimeError, ValueError):
+        logger.debug(
+            "SIGHUP config reload unavailable in this runtime; skipping",
+            exc_info=True,
+        )
+        return None
+    logger.info("SIGHUP config reload enabled (systemctl reload re-reads config)")
+    return loop
+
+
+def _remove_sighup_reload(loop: asyncio.AbstractEventLoop | None) -> None:
+    """Best-effort removal of the SIGHUP handler installed at startup."""
+    import signal
+
+    if loop is None or not hasattr(signal, "SIGHUP"):
+        return
+    try:
+        loop.remove_signal_handler(signal.SIGHUP)
+    except (NotImplementedError, RuntimeError, ValueError):
+        logger.debug("Could not remove SIGHUP handler", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage webhook server lifecycle."""
     logger.info("Fraisier webhook server starting")
     _clear_stale_drain_flag()
+    sighup_loop = _install_sighup_reload()
     yield
+    _remove_sighup_reload(sighup_loop)
     logger.info("Fraisier webhook server shutting down")
 
 
