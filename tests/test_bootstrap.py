@@ -319,6 +319,16 @@ class TestCreateDirectories:
         assert "/opt/fraisier" in cmd_str
         assert "/run/fraisier" in cmd_str
 
+    def test_creates_and_owns_state_dir(self, bootstrapper, mock_runner):
+        """The persistent scaffold state_dir is created + owned by deploy_user (#283)."""
+        step = bootstrapper._create_directories()
+        assert step.success is True
+        cmd_str = " ".join(mock_runner.run.call_args[0][0])
+        assert "/var/lib/fraisier/myapp/scaffold" in cmd_str
+        # chown must cover state_dir so deploy-time regeneration can write it.
+        chown_part = cmd_str.split("chown", 1)[1]
+        assert "/var/lib/fraisier/myapp/scaffold" in chown_part
+
 
 class TestUploadConfig:
     def test_dry_run_no_io(self, dry_bootstrapper, mock_runner):
@@ -351,8 +361,19 @@ class TestUploadScaffoldFiles:
     def test_dry_run_no_io(self, dry_bootstrapper, mock_runner):
         step, remote_dir = dry_bootstrapper._upload_scaffold_files()
         assert step.success is True
-        assert remote_dir == "/tmp/fraisier-bootstrap"
+        assert remote_dir == "/var/lib/fraisier/myapp/scaffold"
         mock_runner.upload_tree.assert_not_called()
+
+    def test_uploads_into_state_dir(self, bootstrapper, mock_runner):
+        """The rendered tree is persisted at state_dir for the socket helper (#283)."""
+        with patch("fraisier.scaffold.renderer.ScaffoldRenderer") as mock_renderer_cls:
+            mock_renderer_cls.return_value = MagicMock()
+            step, remote_dir = bootstrapper._upload_scaffold_files()
+
+        assert step.success is True
+        assert remote_dir == "/var/lib/fraisier/myapp/scaffold"
+        dest = mock_runner.upload_tree.call_args[0][1]
+        assert dest == "/var/lib/fraisier/myapp/scaffold"
 
     def test_renders_and_uploads(self, bootstrapper, mock_runner, tmp_path):
         with patch("fraisier.scaffold.renderer.ScaffoldRenderer") as mock_renderer_cls:
@@ -552,6 +573,16 @@ class TestBootstrapFlow:
         assert len(result.steps) == 2
         assert result.failed_step is not None
         assert result.failed_step.name == "Add deploy user to www-data"
+
+    def test_cleanup_preserves_state_dir(self, bootstrapper, mock_runner):
+        """Cleanup must never delete the persistent scaffold state_dir (#283)."""
+        bootstrapper._cleanup("/var/lib/fraisier/myapp/scaffold")
+        rm_calls = [
+            c
+            for c in mock_runner.run.call_args_list
+            if c[0] and c[0][0] and c[0][0][0] == "rm"
+        ]
+        assert rm_calls == [], f"state_dir must not be rm'd, got: {rm_calls}"
 
     def test_cleanup_called_on_late_failure(self, bootstrapper, mock_runner):
         """Cleanup runs even when a post-upload step fails."""

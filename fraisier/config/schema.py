@@ -395,6 +395,7 @@ class ScaffoldConfig:
     """Parsed scaffold: section from fraises.yaml."""
 
     output_dir: str = "scripts/generated"
+    state_dir: str = ""
     deploy_user: str = "fraisier"
     config_path: str = "/opt/fraisier/fraises.yaml"
     deploy_environment_file: str | None = None

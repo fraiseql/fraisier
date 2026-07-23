@@ -407,6 +407,22 @@ class BaseDeployer(ABC):
         """
         return _resolve_fraisier_executable()
 
+    def _scaffold_state_dir(self, config_path: Path) -> Path:
+        """The single server-side scaffold state tree (#283).
+
+        Every deploy-path scaffold operation — regeneration, the socket and
+        subprocess install, and the staleness check — targets this one
+        project-level directory (``scaffold.state_dir``, default
+        ``/var/lib/fraisier/{project}/scaffold``).  It is decoupled from the
+        per-env ``app_path`` and from the CWD-relative ``scaffold.output_dir``
+        (a local render/review concern only), so the freshly rendered units and
+        the install step can never disagree about where the tree lives (#282,
+        #283).
+        """
+        from fraisier.config import get_config
+
+        return Path(get_config(config_path).scaffold_state_dir)
+
     def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
         """Regenerate scaffold files based on current fraises.yaml.
 
@@ -428,12 +444,19 @@ class BaseDeployer(ABC):
         logger.info("Regenerating scaffold files")
 
         config_path = Path(config_path)
-        project_dir = config_path.parent
+        state_dir = self._scaffold_state_dir(config_path)
         fraisier_exe = self._get_fraisier_executable()
 
         result = self.runner.run(
-            [fraisier_exe, "-c", str(config_path), "scaffold"],
-            cwd=str(project_dir),
+            [
+                fraisier_exe,
+                "-c",
+                str(config_path),
+                "scaffold",
+                "--output-dir",
+                str(state_dir),
+            ],
+            cwd=str(config_path.parent),
         )
 
         if result.returncode != 0:
@@ -464,6 +487,11 @@ class BaseDeployer(ABC):
             return None
 
         socket_path = _get_scaffold_socket_path(project_name)
+        # Distinguish "socket not deployed" (expected on pre-helper deploys →
+        # quiet) from "socket present but the daemon is broken" (#283). The
+        # latter silently drops onto the subprocess fallback, whose sudo path is
+        # neutered under NoNewPrivileges — so surface it loudly.
+        socket_present = Path(socket_path).exists()
 
         try:
             with _socket_mod.socket(
@@ -485,7 +513,24 @@ class BaseDeployer(ABC):
             OSError,
             json.JSONDecodeError,
             UnicodeDecodeError,
-        ):
+        ) as exc:
+            if socket_present:
+                logger.warning(
+                    "Scaffold-install-helper socket %s is present but "
+                    "unreachable (%s). The helper likely failed to start — e.g. "
+                    "its baked install.sh is missing at the scaffold state_dir. "
+                    "Falling back to the subprocess install, which is neutered "
+                    "under NoNewPrivileges; re-run scaffold-install / redeploy "
+                    "to repair the socket.",
+                    socket_path,
+                    exc,
+                )
+            else:
+                logger.debug(
+                    "Scaffold-install-helper socket %s not present; "
+                    "falling back to subprocess.",
+                    socket_path,
+                )
             return None
 
     def _install_scaffold(self, config_path: Path | None = None) -> None:
@@ -497,8 +542,8 @@ class BaseDeployer(ABC):
 
         Args:
             config_path: Path to fraises.yaml; when provided, the subprocess
-                is run with ``cd <project_dir>`` so relative paths in the
-                config (e.g. ``output_dir``) resolve correctly.
+                fallback installs from the server-side scaffold ``state_dir``
+                resolved from that config (#283).
 
         Raises:
             DeploymentError: If scaffold installation fails
@@ -509,7 +554,6 @@ class BaseDeployer(ABC):
 
         if config_path:
             config_path = Path(config_path)
-            project_dir = config_path.parent
 
             # Try socket helper first (compatible with NoNewPrivileges=true)
             socket_result = self._try_scaffold_install_via_socket(config_path)
@@ -527,10 +571,19 @@ class BaseDeployer(ABC):
                 "Scaffold-install-helper socket not available;"
                 " falling back to subprocess"
             )
+            state_dir = self._scaffold_state_dir(config_path)
             fraisier_exe = self._get_fraisier_executable()
             result = self.runner.run(
-                [fraisier_exe, "-c", str(config_path), "scaffold-install", "--yes"],
-                cwd=str(project_dir),
+                [
+                    fraisier_exe,
+                    "-c",
+                    str(config_path),
+                    "scaffold-install",
+                    "--output-dir",
+                    str(state_dir),
+                    "--yes",
+                ],
+                cwd=str(config_path.parent),
             )
         else:
             logger.warning(

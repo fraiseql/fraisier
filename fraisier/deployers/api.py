@@ -129,32 +129,39 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     def _check_service_file_staleness(self) -> None:
         """Warn if the installed service file differs from the scaffold-generated one.
 
-        Compares ``{app_path}/{scaffold_output_dir}/systemd/{service}.service``
-        against ``/etc/systemd/system/{service}.service``.  A mismatch means the
-        server was not re-provisioned after a scaffold template change and the live
+        Compares ``{state_dir}/systemd/{service}.service`` against
+        ``/etc/systemd/system/{service}.service``.  A mismatch means the server
+        was not re-provisioned after a scaffold template change and the live
         service unit may contain stale configuration.
 
         Non-fatal: logs a WARNING and suggests running ``fraisier install``.
         """
-        if not self.systemd_service or not self.app_path:
+        if not self.systemd_service:
             return
 
-        scaffold_output_dir = (self.config.get("scaffold", {}) or {}).get(
-            "output_dir", "scripts/generated"
-        )
+        try:
+            state_dir = self._scaffold_state_dir(self._opt_config_path())
+        except Exception:
+            # Diagnostic only — never let a config-resolution hiccup break deploy.
+            logger.debug(
+                "Could not resolve state_dir for staleness check", exc_info=True
+            )
+            return
 
-        generated = (
-            Path(self.app_path) / scaffold_output_dir / "systemd" / self.systemd_service
-        )
+        generated = state_dir / "systemd" / self.systemd_service
         live = Path("/etc/systemd/system") / self.systemd_service
         self._check_service_file_staleness_paths(generated, live)
+
+    @staticmethod
+    def _opt_config_path() -> Path:
+        """Path to the server-side fraises.yaml the deploy reads/writes."""
+        return Path(os.environ.get("FRAISIER_CONFIG") or "/opt/fraisier/fraises.yaml")
 
     def _sync_config_if_needed(self) -> None:
         """Sync fraises.yaml from git checkout and regenerate scaffold if changed."""
         if not self.app_path:
             return
-        fraisier_config_env = os.environ.get("FRAISIER_CONFIG")
-        opt_config = Path(fraisier_config_env or "/opt/fraisier/fraises.yaml")
+        opt_config = self._opt_config_path()
         app_config = Path(self.app_path) / "fraises.yaml"
 
         if app_config.exists():

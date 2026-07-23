@@ -685,6 +685,136 @@ class TestAPIDeployer:
         default = Path("/opt/fraisier/fraises.yaml")
         assert mock_sync.call_args.kwargs["dest_path"] == default
 
+    def _write_state_dir_config(self, tmp_path):
+        """Write an opt-config pinning an explicit scaffold.state_dir.
+
+        Returns (opt_config_path, state_dir_str).
+        """
+        state_dir = tmp_path / "srv" / "myproject" / "scaffold"
+        opt_config = tmp_path / "opt" / "fraisier" / "fraises.yaml"
+        opt_config.parent.mkdir(parents=True)
+        opt_config.write_text(
+            f"name: myproject\nscaffold:\n  state_dir: {state_dir}\nfraises: {{}}\n"
+        )
+        return opt_config, str(state_dir)
+
+    def test_socket_present_but_unreachable_logs_warning(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """A present-but-dead scaffold-install socket warns, not silently degrades (#283).
+
+        When the helper daemon fails to start (e.g. its baked install.sh is
+        missing), the socket path exists but connections fail — the deploy must
+        surface that loudly rather than quietly fall through to the neutered
+        subprocess path.
+        """
+        import logging
+
+        from fraisier.deployers import base as base_mod
+
+        opt_config = tmp_path / "fraises.yaml"
+        opt_config.write_text("name: myproject\nfraises: {}\n")
+        fake_socket = tmp_path / "scaffold-install.sock"
+        fake_socket.write_text("")  # a plain file, not a listening socket
+        monkeypatch.setattr(
+            base_mod, "_get_scaffold_socket_path", lambda _p: str(fake_socket)
+        )
+
+        deployer = APIDeployer({"fraise_name": "api", "app_path": str(tmp_path)})
+        with caplog.at_level(logging.WARNING, logger="fraisier"):
+            result = deployer._try_scaffold_install_via_socket(opt_config)
+
+        assert result is None
+        assert any("present but" in r.message for r in caplog.records)
+
+    def test_socket_absent_falls_back_quietly(self, tmp_path, monkeypatch, caplog):
+        """An absent socket (pre-helper deploy) falls back without a warning (#283)."""
+        import logging
+
+        from fraisier.deployers import base as base_mod
+
+        opt_config = tmp_path / "fraises.yaml"
+        opt_config.write_text("name: myproject\nfraises: {}\n")
+        missing = tmp_path / "nope.sock"
+        monkeypatch.setattr(
+            base_mod, "_get_scaffold_socket_path", lambda _p: str(missing)
+        )
+
+        deployer = APIDeployer({"fraise_name": "api", "app_path": str(tmp_path)})
+        with caplog.at_level(logging.WARNING, logger="fraisier"):
+            result = deployer._try_scaffold_install_via_socket(opt_config)
+
+        assert result is None
+        assert not any("present but" in r.message for r in caplog.records)
+
+    def test_regenerate_scaffold_renders_into_state_dir(self, tmp_path):
+        """Regeneration renders into the server-side scaffold state tree (#283).
+
+        The scaffold-install-helper socket runs a baked ``install.sh`` in the
+        single project-level ``state_dir``.  Regeneration must materialize that
+        same tree (via ``scaffold --output-dir <state_dir>``) so a changed
+        ``install.command`` reaches the installed unit — independently of the
+        per-env ``app_path`` or the CWD-relative ``output_dir``.
+        """
+        opt_config, state_dir = self._write_state_dir_config(tmp_path)
+
+        runner = MagicMock()
+        runner.run.return_value = MagicMock(returncode=0, stdout="")
+        deployer = APIDeployer(
+            {"fraise_name": "api", "app_path": str(tmp_path / "var/www/api")},
+            runner=runner,
+        )
+
+        with patch.object(
+            deployer, "_get_fraisier_executable", return_value="fraisier"
+        ):
+            deployer._regenerate_scaffold(config_path=opt_config)
+
+        run_call = runner.run.call_args
+        assert run_call.args[0] == [
+            "fraisier",
+            "-c",
+            str(opt_config),
+            "scaffold",
+            "--output-dir",
+            state_dir,
+        ]
+
+    def test_install_scaffold_fallback_reads_from_state_dir(self, tmp_path):
+        """The subprocess-fallback install reads from the state tree (#283).
+
+        When the scaffold-install-helper socket is unavailable, the fallback
+        ``scaffold-install`` must read the generated units from the same
+        ``state_dir`` regeneration wrote to.
+        """
+        opt_config, state_dir = self._write_state_dir_config(tmp_path)
+
+        runner = MagicMock()
+        runner.run.return_value = MagicMock(returncode=0, stdout="")
+        deployer = APIDeployer(
+            {"fraise_name": "api", "app_path": str(tmp_path / "var/www/api")},
+            runner=runner,
+        )
+
+        with (
+            patch.object(deployer, "_get_fraisier_executable", return_value="fraisier"),
+            patch.object(
+                deployer, "_try_scaffold_install_via_socket", return_value=None
+            ),
+        ):
+            deployer._install_scaffold(config_path=opt_config)
+
+        run_call = runner.run.call_args
+        assert run_call.args[0] == [
+            "fraisier",
+            "-c",
+            str(opt_config),
+            "scaffold-install",
+            "--output-dir",
+            state_dir,
+            "--yes",
+        ]
+
     def test_sync_config_called_after_git_pull(self, mock_subprocess):
         """_sync_config_if_needed is called after _git_pull to pick up new fraises.yaml.
 
@@ -1151,6 +1281,28 @@ class TestServiceFileStaleness:
             deployer._check_service_file_staleness()
 
         assert not any("out of sync" in r.message for r in caplog.records)
+
+    def test_generated_path_uses_state_dir(self, tmp_path, monkeypatch):
+        """The staleness check compares against {state_dir}/systemd/... (#283)."""
+        from fraisier.deployers.api import APIDeployer
+
+        state_dir = tmp_path / "state"
+        opt_config = tmp_path / "fraises.yaml"
+        opt_config.write_text(
+            f"name: myproject\nscaffold:\n  state_dir: {state_dir}\nfraises: {{}}\n"
+        )
+        monkeypatch.setenv("FRAISIER_CONFIG", str(opt_config))
+
+        deployer = APIDeployer(
+            {"app_path": str(tmp_path), "systemd_service": "myapp-api.service"}
+        )
+        with patch.object(
+            deployer, "_check_service_file_staleness_paths"
+        ) as mock_paths:
+            deployer._check_service_file_staleness()
+
+        generated = mock_paths.call_args.args[0]
+        assert generated == state_dir / "systemd" / "myapp-api.service"
 
 
 class TestETLDeployer:
