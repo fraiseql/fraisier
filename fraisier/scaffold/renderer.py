@@ -861,8 +861,10 @@ class ScaffoldRenderer:
         if not dry_run:
             # _render_template() does template.render(**self.context) with no
             # extra_context support.  Inject scaffold_install_script temporarily.
+            # The helper's allowed_script is the install.sh in the single
+            # server-side scaffold state tree (#283), NOT app_path / /opt/{project}.
             self.context["scaffold_install_script"] = (
-                f"/opt/{project}/{self.config.scaffold.output_dir}/install.sh"
+                f"{self.config.scaffold_state_dir}/install.sh"
             )
             try:
                 self._render_template(

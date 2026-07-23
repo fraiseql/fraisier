@@ -286,6 +286,28 @@ fraises:
         assert "install.sh" in content
         assert "fraisier-scaffold-install-helper" in content
 
+    def test_service_bakes_state_dir_install_script(self, tmp_path):
+        """The baked install.sh path is the project state_dir, not /opt/{project} (#283).
+
+        The scaffold-install-helper's allowed_script must point at the single
+        server-side scaffold tree the deploy actually materializes, so it stays
+        in lockstep with regeneration regardless of app_path.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(tmp_path)
+        renderer = ScaffoldRenderer(config)
+        renderer.render(dry_run=False)
+
+        service_file = (
+            renderer.output_dir
+            / "systemd"
+            / "fraisier-myproject-scaffold-install-helper.service"
+        )
+        content = service_file.read_text()
+        assert "/var/lib/fraisier/myproject/scaffold/install.sh" in content
+        assert "/opt/myproject" not in content
+
     def test_socket_file_content_has_correct_socket_path(self, tmp_path):
         """Socket unit must have the correct ListenStream path."""
         from fraisier.scaffold.renderer import ScaffoldRenderer

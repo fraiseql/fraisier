@@ -87,6 +87,34 @@ fraises:
         assert sample_config.get_fraise("data_pipeline")["type"] == "etl"
         assert sample_config.get_fraise("backup_job")["type"] == "scheduled"
 
+    def test_scaffold_state_dir_defaults_under_var_lib(self, tmp_path):
+        """scaffold_state_dir defaults to /var/lib/fraisier/{project}/scaffold (#283).
+
+        The server-side scaffold tree lives in a single, sandbox-writable,
+        project-level location decoupled from the per-env app_path.
+        """
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text("name: myproject\nfraises: {}\n")
+
+        config = FraisierConfig(str(config_file))
+
+        assert config.scaffold_state_dir == "/var/lib/fraisier/myproject/scaffold"
+
+    def test_scaffold_state_dir_honours_explicit_value(self, tmp_path):
+        """An explicit scaffold.state_dir overrides the default (#283)."""
+        config_file = tmp_path / "fraises.yaml"
+        config_file.write_text(
+            "name: myproject\n"
+            "scaffold:\n"
+            "  state_dir: /opt/myproject/scaffold\n"
+            "fraises: {}\n"
+        )
+
+        config = FraisierConfig(str(config_file))
+
+        assert config.scaffold.state_dir == "/opt/myproject/scaffold"
+        assert config.scaffold_state_dir == "/opt/myproject/scaffold"
+
     def test_invalid_yaml_raises_error(self, tmp_path):
         """Test that invalid YAML raises error."""
         config_file = tmp_path / "bad.yaml"

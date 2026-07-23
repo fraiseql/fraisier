@@ -142,9 +142,9 @@ class TestInstallScaffold:
     """_install_scaffold() must pass cwd and -c config_path to the runner."""
 
     def test_install_scaffold_uses_cwd_and_config(self, tmp_path):
-        """With config_path, runner receives cwd and -c flag as distinct args."""
+        """With config_path, the fallback install targets the state_dir (#283)."""
         config_path = tmp_path / "fraises.yaml"
-        config_path.touch()
+        config_path.write_text("name: myproj\nfraises: {}\n")
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
@@ -158,6 +158,8 @@ class TestInstallScaffold:
         assert "-c" in cmd
         assert str(config_path) in cmd
         assert "scaffold-install" in cmd
+        assert "--output-dir" in cmd
+        assert "/var/lib/fraisier/myproj/scaffold" in cmd
         assert kwargs.get("cwd") == str(tmp_path)
 
     def test_install_scaffold_no_config_falls_back(self):

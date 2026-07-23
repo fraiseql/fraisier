@@ -4238,6 +4238,52 @@ class TestScaffoldCLI:
         assert not (tmp_path / "output").exists()
         assert "would generate" in result.output.lower() or len(result.output) > 0
 
+    def test_scaffold_output_dir_override(self, tmp_path):
+        """--output-dir renders into the given dir, not scaffold.output_dir (#283)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_SCAFFOLD_YAML.format(output=str(tmp_path / "output")))
+        override = tmp_path / "state"
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["-c", str(cfg), "scaffold", "--output-dir", str(override)]
+        )
+        assert result.exit_code == 0
+        assert (override / "install.sh").exists()
+        assert not (tmp_path / "output").exists()
+
+    def test_scaffold_install_output_dir_override_looked_up(self, tmp_path):
+        """scaffold-install --output-dir reads install.sh from that dir (#283)."""
+        from click.testing import CliRunner
+
+        from fraisier.cli import main
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_SCAFFOLD_YAML.format(output=str(tmp_path / "output")))
+        override = tmp_path / "state"
+        override.mkdir()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-c",
+                str(cfg),
+                "scaffold-install",
+                "--output-dir",
+                str(override),
+                "--yes",
+            ],
+        )
+        # No install.sh in the override dir → the error must name that path,
+        # proving --output-dir (not scaffold.output_dir) was consulted.
+        assert result.exit_code != 0
+        assert str(override / "install.sh") in result.output
+
     def test_scaffold_gateway_generated_for_multi_fraise(self, tmp_path):
         """Gateway templates generated when >1 fraise."""
         cfg = tmp_path / "fraises.yaml"

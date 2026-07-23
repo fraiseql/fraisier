@@ -125,8 +125,19 @@ def scaffold_diff(
     default=None,
     help="Only include paths for this server",
 )
+@click.option(
+    "--output-dir",
+    "output_dir",
+    default=None,
+    help=(
+        "Render into this directory instead of scaffold.output_dir. Used by the "
+        "deploy path to materialize the server-side scaffold state tree."
+    ),
+)
 @click.pass_context
-def scaffold(ctx: click.Context, dry_run: bool, server: str | None) -> None:
+def scaffold(
+    ctx: click.Context, dry_run: bool, server: str | None, output_dir: str | None
+) -> None:
     """Generate infrastructure files from fraises.yaml.
 
     Renders systemd units, nginx configs, GitHub Actions workflows,
@@ -142,17 +153,17 @@ def scaffold(ctx: click.Context, dry_run: bool, server: str | None) -> None:
 
     config = ctx.obj["config"]
     renderer = ScaffoldRenderer(config, server=server)
+    if output_dir:
+        renderer.output_dir = Path(output_dir)
     files = renderer.render(dry_run=dry_run)
+    dest_dir = str(renderer.output_dir)
 
     if dry_run:
         console.print("[cyan]Would generate the following files:[/cyan]")
         for f in files:
-            console.print(f"  {config.scaffold.output_dir}/{f}")
+            console.print(f"  {dest_dir}/{f}")
     else:
-        console.print(
-            f"[green]Generated {len(files)} files "
-            f"in {config.scaffold.output_dir}[/green]"
-        )
+        console.print(f"[green]Generated {len(files)} files in {dest_dir}[/green]")
         for f in files:
             console.print(f"  {f}")
 
@@ -321,6 +332,16 @@ def _print_sudoers_diff(
         "/etc/sudoers.d/<project> can't be read. Intended for CI/automation."
     ),
 )
+@click.option(
+    "--output-dir",
+    "output_dir_opt",
+    default=None,
+    help=(
+        "Read the generated scaffold tree from this directory instead of "
+        "scaffold.output_dir. Used by the deploy path to install from the "
+        "server-side scaffold state tree."
+    ),
+)
 @click.pass_context
 def scaffold_install(
     ctx: click.Context,
@@ -329,6 +350,7 @@ def scaffold_install(
     yes: bool,
     verbose: bool,
     strict_sudoers: bool,
+    output_dir_opt: str | None,
 ) -> None:
     """Install generated scaffold files to system locations.
 
@@ -351,7 +373,7 @@ def scaffold_install(
     config = require_config(ctx)
 
     # Locate the install.sh script
-    output_dir = Path(config.scaffold.output_dir)
+    output_dir = Path(output_dir_opt or config.scaffold.output_dir)
     install_script = output_dir / "install.sh"
 
     # Path.exists() only swallows ENOENT/ENOTDIR/ELOOP/EBADF; EACCES on a

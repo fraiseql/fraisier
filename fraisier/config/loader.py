@@ -281,6 +281,7 @@ class FraisierConfig:
 
         return ScaffoldConfig(
             output_dir=raw.get("output_dir", "scripts/generated"),
+            state_dir=raw.get("state_dir", ""),
             deploy_user=deploy_user,
             config_path=raw.get("config_path", "/opt/fraisier/fraises.yaml"),
             deploy_environment_file=raw.get("deploy_environment_file"),
@@ -408,6 +409,26 @@ class FraisierConfig:
             )
 
         return Path.cwd().name
+
+    @property
+    def scaffold_state_dir(self) -> str:
+        """Absolute, project-level directory holding the server-side scaffold tree.
+
+        This is the single source of truth for where the deploy path renders,
+        installs, and reads the generated units — decoupled from the per-env
+        ``app_path`` and from the CWD-relative ``scaffold.output_dir`` (which
+        remains a local render/review concern only).
+
+        Defaults to ``/var/lib/fraisier/{project}/scaffold``: already writable
+        by every ``ProtectSystem=strict`` deploy unit and readable by the
+        root-privileged install helper, so no ``ReadWritePaths`` changes are
+        needed. Override with ``scaffold.state_dir`` (e.g. ``/opt/{project}``,
+        which additionally requires whitelisting that path in the deploy units).
+        """
+        explicit = self.scaffold.state_dir
+        if explicit:
+            return explicit
+        return f"/var/lib/fraisier/{self.project_name}/scaffold"
 
     @property
     def fraises(self) -> dict[str, dict[str, Any]]:

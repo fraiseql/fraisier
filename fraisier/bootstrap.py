@@ -256,13 +256,19 @@ class ServerBootstrapper:
 
     def _create_directories(self) -> StepResult:
         project_dir = f"/opt/{self.project_name}"
+        # The persistent scaffold state tree (#283): the deploy renders here and
+        # the socket helper reads its baked install.sh from here. Owned by
+        # deploy_user so deploy-time regeneration (which runs as that user) can
+        # refresh it.
+        state_dir = self.config.scaffold_state_dir
         return self._run_remote(
             "Create directories",
             [
                 "bash",
                 "-c",
-                f"mkdir -p {project_dir} /opt/fraisier /run/fraisier"
-                f" && chown {self.deploy_user}:{self.deploy_user} {project_dir}",
+                f"mkdir -p {project_dir} {state_dir} /opt/fraisier /run/fraisier"
+                f" && chown {self.deploy_user}:{self.deploy_user}"
+                f" {project_dir} {state_dir}",
             ],
         )
 
@@ -284,7 +290,10 @@ class ServerBootstrapper:
 
     def _upload_scaffold_files(self) -> tuple[StepResult, str]:
         name = "Upload scaffold files"
-        remote_dir = "/tmp/fraisier-bootstrap"
+        # Persist the rendered tree at the state_dir the socket helper reads
+        # from, so the helper is valid immediately after bootstrap (#283) rather
+        # than only after the first config-changing deploy.
+        remote_dir = self.config.scaffold_state_dir
 
         if self.dry_run:
             return (
@@ -447,8 +456,15 @@ class ServerBootstrapper:
             )
 
     def _cleanup(self, remote_scaffold_dir: str) -> None:
-        """Remove the temporary scaffold directory from the remote server."""
+        """Remove the temporary scaffold directory from the remote server.
+
+        Never removes the persistent scaffold ``state_dir`` (#283): the socket
+        helper reads its baked install.sh from there, so it must survive
+        bootstrap (including a late-step failure).
+        """
         if self.dry_run:
+            return
+        if remote_scaffold_dir == self.config.scaffold_state_dir:
             return
         with contextlib.suppress(Exception):
             self.runner.run(["rm", "-rf", remote_scaffold_dir], check=False)
