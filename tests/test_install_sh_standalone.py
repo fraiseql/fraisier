@@ -383,3 +383,34 @@ scaffold:
         assert "not registered" in result.stderr
         assert "Known machines:" in result.stderr
         assert "backend-prod-01" in result.stderr or "backend-prod-02" in result.stderr
+
+
+class TestScaffoldInstallHelperSelfRestartGuard:
+    """The generated install.sh must not restart the scaffold-install-helper's own
+    socket when it is being executed BY that helper — doing so SIGTERMs the helper
+    mid-request and the deploy aborts before the DB step (the self-restart race)."""
+
+    def test_self_restart_is_guarded_by_via_helper_marker(self, rendered_install_sh):
+        text = rendered_install_sh.read_text()
+        lines = text.splitlines()
+        restart_idxs = [
+            i
+            for i, ln in enumerate(lines)
+            if "systemctl restart" in ln and "scaffold-install-helper.socket" in ln
+        ]
+        assert restart_idxs, "expected a scaffold-install-helper.socket restart line"
+        for i in restart_idxs:
+            window = "\n".join(lines[max(0, i - 8) : i])
+            assert "FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER" in window, (
+                "scaffold-install-helper.socket restart must be guarded by the "
+                "FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER marker (self-restart race)"
+            )
+
+    def test_guard_skips_restart_when_marker_set(self, rendered_install_sh):
+        """With the marker set, the guarded block takes the skip branch (bash -n +
+        a targeted eval of the guard condition)."""
+        text = rendered_install_sh.read_text()
+        # The skip branch must exist for the marker path.
+        assert "skipping scaffold-install-helper self-restart" in text
+        # And the guard uses the -z (unset/empty) test so an empty value also skips.
+        assert 'if [ -z "${FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER:-}" ]; then' in text

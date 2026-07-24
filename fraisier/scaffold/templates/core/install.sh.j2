@@ -353,7 +353,18 @@ if [ -f "${SCAFFOLD_INSTALL_HELPER_SVC}" ] && [ -f "${SCAFFOLD_INSTALL_HELPER_SO
        /etc/systemd/system/fraisier-{{ project_name }}-scaffold-install-helper.socket
     _run sudo systemctl daemon-reload
     _run sudo systemctl enable fraisier-{{ project_name }}-scaffold-install-helper.socket
-    _run sudo systemctl restart fraisier-{{ project_name }}-scaffold-install-helper.socket
+    # Do NOT restart our own socket when install.sh is being executed BY the
+    # scaffold-install-helper: restarting fraisier-*-scaffold-install-helper.socket
+    # SIGTERMs this very helper mid-request, so the webhook's socket call reads an
+    # empty reply and — under NoNewPrivileges, unable to fall back — the deploy
+    # aborts before the DB step (the scaffold-install-helper self-restart race).
+    # The freshly-copied unit above is loaded (daemon-reload) and takes effect on
+    # the next non-helper scaffold-install (manual re-bake / post-upgrade restart).
+    if [ -z "${FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER:-}" ]; then
+        _run sudo systemctl restart fraisier-{{ project_name }}-scaffold-install-helper.socket
+    else
+        echo "  (skipping scaffold-install-helper self-restart — invoked via the helper)"
+    fi
 fi
 
 # Install sudoers fragment

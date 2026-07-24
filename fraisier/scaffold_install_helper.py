@@ -96,6 +96,13 @@ def _handle_connection(conn: socket.socket, allowed_script: str) -> None:
             _send_error(conn, f"install script not found: {allowed_script}")
             return
 
+        # Tell install.sh it is being executed BY this helper so it skips
+        # restarting THIS helper's own socket. `systemctl restart
+        # …scaffold-install-helper.socket` would SIGTERM this very process
+        # mid-request; the client would then read an empty reply and — under the
+        # webhook's NoNewPrivileges (which cannot fall back) — the deploy aborts
+        # before the DB step. See install.sh.j2's scaffold-install-helper block.
+        helper_env = {**os.environ, "FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER": "1"}
         try:
             result = subprocess.run(
                 [_BASH, allowed_script],
@@ -103,6 +110,7 @@ def _handle_connection(conn: socket.socket, allowed_script: str) -> None:
                 text=True,
                 timeout=300,
                 check=False,
+                env=helper_env,
             )
         except subprocess.TimeoutExpired:
             logger.error("install.sh timed out: %s", allowed_script)
