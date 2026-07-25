@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-07-25
+
 ### Fixed
 
 - **`install.sh` no longer restarts the scaffold-install-helper's own socket when it is being run *by* that helper** (`scaffold/templates/core/install.sh.j2`, `scaffold_install_helper.py`). Follow-up to #283: now that the socket daemon is valid at startup, a config-changing deploy under `NoNewPrivileges` finally *reaches* the socket install — and hit a self-inflicted race. The helper serves a request by running the baked `install.sh` as root, and that `install.sh` unconditionally ran `systemctl restart …scaffold-install-helper.socket`, which SIGTERMs the very helper process serving the request. The client then read an empty reply (`json.loads("")` → `Expecting value: line 1 column 1`), and because the webhook runs `NoNewPrivileges=true` it could not fall back to the neutered subprocess — so every config-changing deploy aborted *before* the DB step with a misleading "install-helper allowlist could not be re-baked" error, and no re-trigger or manual re-bake could clear it. The helper now exports `FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER=1` when invoking `install.sh`, and `install.sh` skips restarting its own socket under that marker (the freshly-copied unit is `daemon-reload`ed and takes effect on the next non-helper `scaffold-install` / post-upgrade restart). Manual and subprocess-fallback runs are unchanged.

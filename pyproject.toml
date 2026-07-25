@@ -40,7 +40,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.47.0"
+version = "0.47.1"
 
 [project.optional-dependencies]
 all-databases = [
