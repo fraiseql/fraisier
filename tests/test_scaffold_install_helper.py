@@ -101,6 +101,26 @@ class TestHandleConnection:
         args = mock_run.call_args[0][0]
         assert args == ["/usr/bin/bash", str(script)]
 
+    def test_install_runs_with_via_helper_env_marker(self, tmp_path):
+        """install.sh is executed with FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER=1 so it
+        skips restarting this helper's own socket (the self-restart race)."""
+        script = tmp_path / "install.sh"
+        script.write_text("#!/bin/bash\necho ok")
+        script.chmod(0o755)
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            _call({"action": "install"}, allowed_script=str(script))
+
+        env = mock_run.call_args.kwargs["env"]
+        assert env["FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER"] == "1"
+        # Inherits the ambient environment rather than replacing it wholesale.
+        assert "PATH" in env
+
     def test_unknown_action_is_rejected(self, tmp_path):
         """Unknown actions are rejected without running the script."""
         script = tmp_path / "install.sh"
