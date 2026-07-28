@@ -235,21 +235,33 @@ fi
 {% endfor %}
 {% endfor %}
 
-# Clean up root-owned __pycache__ dirs that block uv sync (issue #196)
-# When fraisier runs as root it may leave __pycache__/ owned by root inside app
-# venvs, causing Permission denied errors on the next `uv sync --frozen`.
-echo "  Cleaning root-owned __pycache__ directories"
+# Clean up stray __pycache__ dirs that block uv sync / uv tool install (#196, #286)
+# A process running as another user (root, or an install_user helper) can leave
+# byte-compiled files inside a directory the deploy user owns, and the deploy
+# user cannot unlink them — breaking the next `uv sync --frozen` or
+# `uv tool install --force`.
+#
+# These run under sudo deliberately: the whole point is removing files owned by
+# *another* user, which an unprivileged find cannot do (the failure would be
+# swallowed by _run's error suppression, making the sweep a silent no-op).
+# Bounded to `-name "__pycache__" -type d` — never a bare rm -rf on a computed path.
+echo "  Cleaning stray __pycache__ directories"
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set app_path = env_config.get('app_path') %}
 {% if app_path %}
 if _env_active "{{ env_name }}"; then
-    find "{{ app_path }}/.venv" -name "__pycache__" -user root -type d -exec rm -rf {} + 2>/dev/null || true
+    _run sudo find "{{ app_path }}/.venv" -name "__pycache__" -user root -type d -exec rm -rf {} + || true
 fi
 {% endif %}
 {% endfor %}
 {% endfor %}
-find "/home/${DEPLOY_USER}/.local/lib" -name "__pycache__" -user root -type d -exec rm -rf {} + 2>/dev/null || true
+_run sudo find "/home/${DEPLOY_USER}/.local/lib" -name "__pycache__" -user root -type d -exec rm -rf {} + || true
+# uv installs tools under XDG_DATA_HOME, not ~/.local/lib — the sweep above never
+# reached the tool venv. Match any foreign owner here, not just root: the residue
+# reported in #286 is install_user-owned (the helper runs as install_user but
+# executes the deploy user's uv-tool venv).
+_run sudo find "/home/${DEPLOY_USER}/.local/share/uv/tools" -name "__pycache__" ! -user "${DEPLOY_USER}" -type d -exec rm -rf {} + || true
 
 # Create project directory
 if [ ! -d "${PROJECT_DIR}" ]; then
