@@ -47,6 +47,17 @@ def _no_source_deletions() -> MagicMock:
     return _mk(stdout="")
 
 
+def _no_source_reverts() -> MagicMock:
+    """Mock the post-merge `git diff --filter=M` pre-pass returning nothing.
+
+    The second half of #290. Sits immediately after `_no_source_deletions()`
+    for the same reason: `_propagate_source_reverts` fires once per sync run
+    whether or not the merge conflicted, because a source-side revert to base
+    content merges cleanly and never reaches the conflict loop.
+    """
+    return _mk(stdout="")
+
+
 def _merge_finalize_tail() -> list[MagicMock]:
     """Mock the post-commit pre-push invariant check (#233 Layer 2, #268).
 
@@ -567,6 +578,7 @@ class TestSyncHappyPath:
             _mk(),  # git checkout -b
             _mk(),  # git merge (clean)
             _no_source_deletions(),  # diff --filter=D pre-pass
+            _no_source_reverts(),  # diff --filter=M pre-pass
             _in_merge(),  # rev-parse MERGE_HEAD (in merge)
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),  # pre-push merge-commit invariant check
@@ -630,6 +642,7 @@ class TestSyncHappyPath:
                 _mk(),  # git checkout -b
                 _mk(),  # git merge (clean)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
@@ -830,6 +843,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="version.json\npyproject.toml\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:version.json (exists)
                 _mk(),  # checkout origin/dev -- version.json
@@ -867,6 +881,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="version.json\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:version.json (exists)
                 _mk(),  # checkout origin/dev -- version.json
@@ -914,6 +929,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="pyproject.toml\n"),  # diff --filter=U
                 _mk(returncode=0),  # cat-file origin/dev:pyproject.toml (exists)
                 _mk(),  # checkout origin/dev -- pyproject.toml
@@ -962,6 +978,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="old_script.py\n"),  # diff --filter=U (first)
                 _mk(
                     returncode=1
@@ -996,6 +1013,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(
                     returncode=0
@@ -1026,6 +1044,7 @@ class TestSyncConflicts:
                 _mk(),
                 _mk(returncode=1),
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="src/routes.py\n"),
                 _mk(
                     returncode=0
@@ -1057,6 +1076,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 # Tier 3 now asks "is staging's blob source-derived?" instead
@@ -1100,6 +1120,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 _mk(
@@ -1141,6 +1162,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 _mk(
@@ -1180,6 +1202,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout -b
                 _mk(returncode=1),  # git merge (conflict)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
                 _mk(
@@ -1245,6 +1268,7 @@ class TestSyncConfirmation:
                 _mk(),  # git checkout -b
                 _mk(),  # git merge (clean)
                 _no_source_deletions(),  # diff --filter=D pre-pass
+                _no_source_reverts(),  # diff --filter=M pre-pass
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
@@ -1400,6 +1424,7 @@ class TestSyncBranchForceCreate:
             _mk(),  # git checkout -B
             _mk(),  # git merge (clean)
             _no_source_deletions(),  # diff --filter=D pre-pass
+            _no_source_reverts(),  # diff --filter=M pre-pass
             _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),
@@ -1476,6 +1501,7 @@ class TestSyncExistingPR:
             _mk(),  # git checkout -B
             _mk(),  # git merge (clean)
             _no_source_deletions(),  # diff --filter=D pre-pass
+            _no_source_reverts(),  # diff --filter=M pre-pass
             _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),
@@ -1621,6 +1647,31 @@ class TestSyncExistingPR:
 # ---------------------------------------------------------------------------
 
 
+_PROP_SHA = "deadbeef" * 5
+_PROP_MERGE_BASE = "cafe1234" * 5
+_PROP_PR_URL = "https://github.com/org/repo/pull/42"
+
+
+def _propagation_scaffold() -> MockGit:
+    """Common scaffolding for the two post-merge pre-passes (#235, #290).
+
+    Covers rev-parse, fetch, version reads, checkout, push and the gh PR ops.
+    Tests layer on the merge + propagation calls they care about.
+    """
+    return (
+        MockGit()
+        .queue("git", "rev-parse", "--abbrev-ref", stdout="main\n")
+        .queue("git", "rev-parse", "origin/dev", stdout=_PROP_SHA + "\n")
+        .queue("git", "merge-base", stdout=_PROP_MERGE_BASE + "\n")
+        .queue("git", "show", "origin/dev:version.json", stdout='{"version": "1.1.0"}')
+        .queue(
+            "git", "show", "origin/staging:version.json", stdout='{"version": "1.0.0"}'
+        )
+        .queue("gh", "pr", "view", returncode=1)
+        .queue("gh", "pr", "create", stdout=_PROP_PR_URL + "\n")
+    )
+
+
 class TestSyncPropagatesSourceDeletions:
     """End-to-end regression for #235: source deletes a file, target unchanged,
     `git merge` succeeds clean. Pre-pass must `git rm` the file and the sync
@@ -1631,34 +1682,8 @@ class TestSyncPropagatesSourceDeletions:
     added or reordered elsewhere in `sync_cmd`.
     """
 
-    SHA = "deadbeef" * 5
-    MERGE_BASE = "cafe1234" * 5
-    PR_URL = "https://github.com/org/repo/pull/42"
-
     def _scaffold_mockgit(self) -> MockGit:
-        """Common scaffolding: rev-parse, fetch, version reads, checkout, push,
-        gh PR ops. Tests layer on the merge + propagation calls they care about.
-        """
-        return (
-            MockGit()
-            .queue("git", "rev-parse", "--abbrev-ref", stdout="main\n")
-            .queue("git", "rev-parse", "origin/dev", stdout=self.SHA + "\n")
-            .queue("git", "merge-base", stdout=self.MERGE_BASE + "\n")
-            .queue(
-                "git",
-                "show",
-                "origin/dev:version.json",
-                stdout='{"version": "1.1.0"}',
-            )
-            .queue(
-                "git",
-                "show",
-                "origin/staging:version.json",
-                stdout='{"version": "1.0.0"}',
-            )
-            .queue("gh", "pr", "view", returncode=1)
-            .queue("gh", "pr", "create", stdout=self.PR_URL + "\n")
-        )
+        return _propagation_scaffold()
 
     def test_clean_merge_with_source_deletion_propagates(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -1817,6 +1842,82 @@ class TestSyncPropagatesSourceDeletions:
             "could not propagate deletion" in result.output
             or "submodules/legacy" in result.output
         )
+
+
+class TestSyncPropagatesSourceReverts:
+    """End-to-end for #290's content-revert half: source reverts a promoted
+    file back to its base content, so `git merge` resolves it silently in
+    target's favour and the conflict loop never sees it.
+
+    Shares `_propagation_scaffold` with the deletion pre-pass above; the
+    behaviour under test is the second pre-pass, which runs right after it.
+    """
+
+    def test_clean_merge_with_source_revert_restores_source_content(self, tmp_path):
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            _propagation_scaffold()
+            # Clean merge — the revert is silently resolved in target's favour.
+            .queue("git", "merge")
+            # Deletion pre-pass finds nothing...
+            .queue("git", "diff", "--name-only", "-z", stdout="")
+            # ...then the revert pre-pass reports the modified path. Both share
+            # the same argv prefix, so these are consumed FIFO in call order.
+            .queue("git", "diff", "--name-only", "-z", stdout="app/shared.py\0")
+            # target blob, then the merged index blob — equal, so the merge
+            # took target's side wholesale.
+            .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "rev-parse", stdout="blob1\n")
+            # gate 3: target holds source-derived content
+            .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "rev-list", stdout="sha1\n")
+            .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "checkout", "origin/dev")  # the restore
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", returncode=1
+            )
+            .queue("git", "ls-remote", returncode=2)  # orphan absent
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "Auto-resolved (source revert): app/shared.py" in result.output
+        assert mg.was_called(["git", "checkout", "origin/dev", "--", "app/shared.py"])
+
+    def test_target_authored_content_is_not_restored(self, tmp_path):
+        """Same merge shape, but target's blob never appears in source's
+        history — the operator keeps target's version and is told so."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        mg = (
+            _propagation_scaffold()
+            .queue("git", "merge")
+            .queue("git", "diff", "--name-only", "-z", stdout="")
+            .queue("git", "diff", "--name-only", "-z", stdout="app/hotfix.py\0")
+            .queue("git", "rev-parse", stdout="blobT\n")  # target blob
+            .queue("git", "rev-parse", stdout="blobT\n")  # merged == target
+            # gate 3 fails: source's history of the path never held blobT
+            .queue("git", "rev-parse", stdout="blobT\n")
+            .queue("git", "rev-list", stdout="sha1\n")
+            .queue("git", "rev-parse", stdout="blobOTHER\n")
+            .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+            .queue("git", "commit")
+            .queue("git", "log", "-1", "--pretty=%P", stdout=_MERGE_PARENTS)
+            .queue(
+                "git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", returncode=1
+            )
+            .queue("git", "ls-remote", returncode=2)
+        )
+        with patch(_PATCH, side_effect=mg):
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "Auto-resolved (source revert): app/hotfix.py" not in result.output
+        assert not mg.was_called(
+            ["git", "checkout", "origin/dev", "--", "app/hotfix.py"]
+        )
+        assert "not source-derived" in result.output
 
 
 # ---------------------------------------------------------------------------

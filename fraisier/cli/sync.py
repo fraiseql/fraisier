@@ -50,6 +50,37 @@ def _z_lines(result: subprocess.CompletedProcess) -> list[str]:
     return [item for item in (result.stdout or "").split("\0") if item]
 
 
+def _diff_paths(tgt: str, source: str, diff_filter: str) -> list[str]:
+    """Paths differing between ``origin/<tgt>`` and ``origin/<source>``.
+
+    Shared by both #290 pre-passes — ``D`` for deletions, ``M`` for content
+    reverts. Computed target-side rather than from ``merge-base..source``:
+    sync PRs are squash-merged, so the merge-base never advances past the
+    original fork point and anchoring on it is what hid the deletions.
+
+    ``--no-renames`` is required, not cosmetic: ``git diff`` applies rename
+    detection by default, which reports a rename as ``R`` rather than ``D``+``A``
+    and would hide every rename-shaped deletion from the scan.
+    """
+    return _z_lines(
+        subprocess.run(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "-z",
+                "--no-renames",
+                f"--diff-filter={diff_filter}",
+                f"origin/{tgt}",
+                f"origin/{source}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    )
+
+
 def _target_blob_is_source_derived(source: str, tgt: str, path: str) -> bool:
     """Return True when target's copy of *path* is content it received from source.
 
@@ -560,21 +591,13 @@ def _propagate_source_deletions(source: str, tgt: str) -> list[str]:
     UU-style conflict — it silently keeps target's copy. This pre-pass finds
     those files and mirrors the deletion with ``git rm``.
 
-    Candidates are computed from the **target** side — files present in
-    ``origin/<tgt>`` and absent from ``origin/<source>``:
-
-        git diff --diff-filter=D --no-renames origin/<tgt> origin/<source>
-
-    not from ``merge-base..origin/<source>`` as before. Sync PRs are
-    squash-merged, so the merge-base never advances past the original fork
-    point; a file created on source *after* that ancient base and later deleted
-    there is absent at both ends of that range and was never listed, while
-    target still carried a copy from an earlier squash-sync. The result was a
-    file resurrecting on every single sync (#290).
-
-    ``--no-renames`` is required, not cosmetic: ``git diff`` applies rename
-    detection by default, which reports a rename as R rather than D+A and would
-    hide every rename-shaped deletion from this scan.
+    Candidates are the ``D`` set from :func:`_diff_paths` — present on target,
+    absent from source — not ``merge-base..origin/<source>`` as before. Sync
+    PRs are squash-merged, so the merge-base never advances past the original
+    fork point; a file created on source *after* that ancient base and later
+    deleted there is absent at both ends of that range and was never listed,
+    while target still carried a copy from an earlier squash-sync. The result
+    was a file resurrecting on every single sync (#290).
 
     Two gates narrow the candidate set, both failing closed:
 
@@ -588,23 +611,7 @@ def _propagate_source_deletions(source: str, tgt: str) -> list[str]:
     — we don't lie to the operator log that resolution succeeded when the index
     is unchanged.
     """
-    candidates = _z_lines(
-        subprocess.run(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                "-z",
-                "--no-renames",
-                "--diff-filter=D",
-                f"origin/{tgt}",
-                f"origin/{source}",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    )
+    candidates = _diff_paths(tgt, source, "D")
 
     propagated: list[str] = []
     for path in candidates:
@@ -649,6 +656,91 @@ def _propagate_source_deletions(source: str, tgt: str) -> list[str]:
     return propagated
 
 
+def _propagate_source_reverts(source: str, tgt: str) -> list[str]:
+    """Restore source's content where the merge silently took target's stale copy.
+
+    The other half of #290. ``_propagate_source_deletions`` handles source
+    removing a file; this handles source *reverting* one.
+
+    When source reverts a path to exactly its merge-base content, git's 3-way
+    merge sees ``ours == base`` and resolves it as *take theirs* — with a zero
+    exit code and no conflict, so the tier loop never sees it. Given a correct
+    base that is right. Under squash promotion the base is the ancient fork
+    point that never advances, so ``ours == base`` stops meaning "source never
+    touched this" and starts meaning "source added it and then reverted it",
+    while target still carries the promoted copy. The revert is lost on every
+    sync.
+
+    A revert to any *other* content leaves ``ours != base != theirs`` and does
+    conflict, where tier 3 already resolves it. Only the exact return to base
+    content is silent, which is why this half survived the deletion fix.
+
+    Detection deliberately computes no merge-base — anchoring on one is what
+    broke the deletion half. It asks what the merge actually did:
+
+    1. ``origin/<tgt>`` and ``origin/<source>`` differ on the path;
+    2. the merged **index** blob equals *target's* blob — git took theirs whole;
+    3. target's blob is source-derived, the same gate the deletion pass uses.
+
+    Gate 2 replaces a merge-base computation and excludes two classes for free:
+    a conflicted path has no stage-0 entry, so ``git rev-parse :<path>`` fails
+    and it falls through to the tier loop untouched; and a clean auto-merge of
+    non-overlapping hunks produces a blob equal to neither side, so both changes
+    survive.
+
+    Only paths whose checkout actually succeeds are returned — the operator log
+    must not claim a resolution the index does not reflect.
+    """
+    candidates = _diff_paths(tgt, source, "M")
+
+    restored: list[str] = []
+    for path in candidates:
+        target_blob = subprocess.run(
+            ["git", "rev-parse", f"origin/{tgt}:{path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        merged_blob = subprocess.run(
+            ["git", "rev-parse", f":{path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if target_blob.returncode != 0 or merged_blob.returncode != 0:
+            # No stage-0 entry means the path is still unmerged: a real
+            # conflict, which the tier loop owns.
+            continue
+        if merged_blob.stdout.strip() != target_blob.stdout.strip():
+            # The merge did not take target's side wholesale — either source
+            # won or the hunks merged cleanly. Nothing was silently lost.
+            continue
+        if not _target_blob_is_source_derived(source, tgt, path):
+            err_console.print(
+                f"[yellow]Warning:[/yellow] [bold]{path}[/bold] differs on "
+                f"{source} but {tgt}'s copy is not source-derived — keeping "
+                f"{tgt}'s version for you to decide."
+            )
+            continue
+        # `git checkout <tree-ish> -- <path>` updates the index as well as the
+        # worktree, so no separate `git add` is needed to stage the restore.
+        checkout = subprocess.run(
+            ["git", "checkout", f"origin/{source}", "--", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if checkout.returncode == 0:
+            restored.append(path)
+        else:
+            detail = checkout.stderr.strip() or "git checkout failed"
+            err_console.print(
+                f"[yellow]Warning:[/yellow] could not restore "
+                f"[bold]{path}[/bold] from {source}: {detail}"
+            )
+    return restored
+
+
 def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     """Print the shell commands that sync would execute, without running them."""
     auto_owned = ", ".join(_AUTO_RESOLVED)
@@ -665,6 +757,9 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print(
         f"    # files present on {tgt} but deleted on {source} are 'git rm'-ed to"
         f" propagate the deletion, when {source}'s history shows the deletion and"
+        f" {tgt}'s copy is source-derived;"
+        f" files {source} reverted to their merge-base content — which the merge"
+        f" silently resolves in {tgt}'s favour — are restored from {source} when"
         f" {tgt}'s copy is source-derived;"
         f" conflicts in [{auto_owned}] auto-resolved from {source};"
         f" conflicts where {tgt} holds source-derived content also resolved from"
@@ -817,6 +912,12 @@ def sync_cmd(
         # source-deleted-target-modified files still flow through tier 1.
         for deleted in _propagate_source_deletions(source, tgt):
             console.print(f"  Auto-resolved (source deletion): {deleted}")
+
+        # The other half of #290, and unconditional for the same reason: a
+        # source-side revert to base content merges *cleanly* and takes
+        # target's stale copy, so it never reaches the conflict loop below.
+        for restored in _propagate_source_reverts(source, tgt):
+            console.print(f"  Auto-resolved (source revert): {restored}")
 
         if merge_result.returncode != 0:
             conflicted = _capture(
