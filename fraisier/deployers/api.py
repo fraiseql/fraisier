@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,25 @@ from .base import BaseDeployer, DeploymentResult, DeploymentStatus
 from .mixins import GitDeployMixin
 
 logger = logging.getLogger("fraisier")
+
+
+@dataclass(frozen=True)
+class RestoreOutcome:
+    """What :meth:`APIDeployer._restore_previous_state` actually did.
+
+    The failure handler needs two things to report a deploy honestly (#293):
+    which status to use, and — when the database rollback failed — the incident
+    text, so it does not overwrite it with the original deploy error.
+
+    Only *database* rollbacks are described here. A git-only revert is not
+    reported as a rollback: ``_restore_previous_state`` git-reverts on every
+    failed deploy that has a previous SHA, so claiming one would change the
+    reported status of nearly every deployment failure.
+    """
+
+    db_rollback_attempted: bool = False
+    db_rollback_succeeded: bool = False
+    error_message: str | None = None
 
 
 class APIDeployer(GitDeployMixin, BaseDeployer):
@@ -523,21 +543,50 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             duration = time.time() - start_time
             logger.exception(f"Deployment failed: {e}")
             wrapped = self._wrap_error(e)
-            self._restore_previous_state()
+            outcome = self._restore_previous_state()
             self._restore_version_json()
 
-            self._write_status("failed", error_message=str(e))
+            status, state, message = self._classify_failure(outcome, str(e))
+            # Written after the restore, and with the restore's own message when
+            # it has one — otherwise this overwrote the "do NOT restart" incident
+            # text with the original deploy error (#293).
+            self._write_status(state, error_message=message)
             result = DeploymentResult(
                 success=False,
-                status=DeploymentStatus.FAILED,
+                status=status,
                 old_version=old_version,
                 duration_seconds=duration,
-                error_message=str(e),
+                error_message=message,
                 error=wrapped,
             )
             self._complete_db_record(db_pk, result)
             self._notify(result)
             return result
+
+    @staticmethod
+    def _classify_failure(
+        outcome: RestoreOutcome, deploy_error: str
+    ) -> tuple[DeploymentStatus, str, str]:
+        """Map a restore outcome onto (result status, status-file state, message).
+
+        Only a database rollback changes the reported status. A failed deploy
+        that was merely git-reverted stays ``FAILED``, as it always has —
+        promoting it would change the status of nearly every deployment
+        failure, which is a separate call from #293.
+        """
+        if not outcome.db_rollback_attempted:
+            return DeploymentStatus.FAILED, "failed", deploy_error
+        if outcome.db_rollback_succeeded:
+            return (
+                DeploymentStatus.ROLLED_BACK,
+                "rolled_back",
+                f"{deploy_error} — database rolled back to the previous state",
+            )
+        return (
+            DeploymentStatus.ROLLBACK_FAILED,
+            "rollback_failed",
+            outcome.error_message or deploy_error,
+        )
 
     def _handle_timeout(
         self,
@@ -569,28 +618,47 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             error_message=str(exc),
         )
 
-    def _restore_previous_state(self) -> None:
+    def _restore_previous_state(self) -> RestoreOutcome:
         """Restore database, git, and service to previous state after a failure.
 
         Order matters: database first (to avoid running old code against new
         schema), then git checkout, then service restart.
+
+        Returns what was attempted so the caller can report it (#293). A DB
+        rollback that ran and succeeded, one that left the schema dirty, and a
+        plain failure are three different outcomes and used to be one.
         """
         if not self._previous_sha:
-            return
+            return RestoreOutcome()
+
+        attempted = self._migrations_applied > 0 and bool(self.database_config)
         try:
-            if self._migrations_applied > 0 and self.database_config:
+            if attempted:
                 db_result = self._rollback_database(None, self._previous_sha)
                 if not db_result.success:
                     logger.critical(
                         "Database rollback failed during restore: %s",
                         db_result.error_message,
                     )
-                    return
+                    # Deliberately skip the git rollback: old code against a
+                    # half-migrated schema is worse than leaving the tree.
+                    return RestoreOutcome(
+                        db_rollback_attempted=True,
+                        error_message=db_result.error_message,
+                    )
             self._git_rollback(self._previous_sha)
             if self.systemd_service:
                 self._restart_service()
         except Exception as rollback_exc:
             logger.critical("Rollback after failure also failed: %s", rollback_exc)
+            return RestoreOutcome(
+                db_rollback_attempted=attempted,
+                error_message=f"Rollback after failure also failed: {rollback_exc}",
+            )
+        return RestoreOutcome(
+            db_rollback_attempted=attempted,
+            db_rollback_succeeded=attempted,
+        )
 
     def _resolve_strategy(self) -> tuple[Any, Path, Path, str | None]:
         """Resolve database strategy, config path, migrations dir, and database_url."""

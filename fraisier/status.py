@@ -36,7 +36,14 @@ def _validate_fraise_name(name: str) -> None:
 class DeploymentStatusFile:
     """Deployment status as a state machine.
 
-    States: idle -> pending -> deploying -> success | failed
+    States: idle -> pending -> deploying -> success | failed | rolled_back
+    | rollback_failed
+
+    ``rolled_back`` means the deploy failed and the previous state was restored;
+    ``rollback_failed`` means the restore itself failed and the database schema
+    may be half-migrated — the service must not be restarted until an operator
+    has resolved it. Consumers that branch on this field must handle both, or
+    they will silently mis-report a dirty schema.
     """
 
     fraise_name: str
