@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-07-28
+
+Completes the other half of #272. v0.48.0 made the automatic database rollback
+*run* when a migration batch partially applies; this makes the deploy *report*
+what it did, so an operator can tell a clean schema revert from a dirty one.
+
+### Fixed
+
+- **A deploy now reports the outcome of its automatic database rollback** (`deployers/api.py`, #293). `_restore_previous_state` returned `None` and its only caller unconditionally built `DeploymentStatus.FAILED`, so `ROLLBACK_FAILED` was reachable from exactly two sites — the health-check and timeout paths — and never from a migration failure. A deploy that rolled the schema back cleanly and one that left it half-migrated reported identically. It now returns a `RestoreOutcome` the caller honours: `ROLLED_BACK` when the DB rollback succeeded, `ROLLBACK_FAILED` when it did not.
+- **The rollback incident message is no longer overwritten** (`deployers/api.py`, #293). `_rollback_database` writes the operative text — *"Rolled back N of M migrations; K still applied. Do NOT restart the service until resolved."* — to the status file, and the failure handler then clobbered it with the original deploy error. The status write is now ordered after the restore and carries the restore's own message when it produced one. The incident *file* was always correct; this is about where an operator looks first.
+- **`fraisier status` no longer shows a rolled-back deploy as a green success** (`cli/_info.py`). `_compute_deployment_state` matched `deploying|pending|failed|idle|success` only, so the `rolled_back` state — written since well before this change, by both `_finalize_rollback` and the timeout path — fell through to version comparison and rendered as `deployed ✓` whenever the reverted tree happened to match the latest tag. `rolled_back` and the new `rollback_failed` are now rendered explicitly, the latter as `ROLLBACK FAILED — schema dirty`.
+
+### Changed
+
+- `DeploymentStatusFile.state` may now be `rollback_failed`, in addition to the `rolled_back` it could already hold. The docstring documented neither. Anything branching on this field should handle both — a consumer that treats an unknown state as benign will silently mis-report a dirty schema.
+
+### Known limitations
+
+- **A failed deploy that was only git-reverted still reports `FAILED`.** `_restore_previous_state` git-reverts and restarts the service on *every* deploy failure that has a previous SHA, not just migration failures. Promoting those to `ROLLED_BACK` would change the reported status of nearly every deployment failure and break anyone alerting on `FAILED`, so it is deliberately out of scope here. Whether it *should* change is an open question on #293.
+- `_migrations_applied` is set in `__init__` and never reset between deploys within a single deployer instance.
+- A **first** deploy (no previous SHA) with a partial batch still leaves the schema dirty — `_restore_previous_state` early-returns without one. Unchanged from v0.48.0.
+
 ## [0.48.0] - 2026-07-28
 
 Five reported issues, plus five adjacent faults found while tracing them. Three
