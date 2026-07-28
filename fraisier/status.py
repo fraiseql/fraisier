@@ -32,6 +32,13 @@ def _validate_fraise_name(name: str) -> None:
         raise ValidationError(msg)
 
 
+#: States meaning the deploy did not ship. Branch on membership here rather
+#: than ``state == "failed"``: a consumer that tests equality reports
+#: ``rollback_failed`` — the state where the schema may be half-migrated — as
+#: though nothing were wrong (#293).
+FAILURE_STATES = frozenset({"failed", "rolled_back", "rollback_failed"})
+
+
 @dataclass
 class DeploymentStatusFile:
     """Deployment status as a state machine.

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentStatus
 from fraisier.strategies import StrategyResult
@@ -302,3 +304,67 @@ class TestRollbackStatesAreRenderable:
     def test_failed_still_renders_as_before(self):
         """Neither new branch may capture the ordinary failed state."""
         assert self._state("failed") == "[red]failed[/red]"
+
+
+class TestDetailsEndpointReportsRollbackFailures:
+    """`/api/status/{name}/details` gates failure detail on the state string.
+
+    It returned "No failure to report" for anything but ``failed``. Emitting
+    ``rollback_failed`` from the deploy path would therefore have hidden the
+    single most severe outcome behind that message — on the authenticated
+    endpoint whose whole purpose is surfacing failure detail.
+    """
+
+    _SECRET = "a" * 32
+
+    @pytest.fixture
+    def webhook_client(self):
+        from fastapi.testclient import TestClient
+
+        from fraisier.webhook import app
+
+        return TestClient(app)
+
+    def _details(self, webhook_client, state: str):
+        import os
+
+        from fraisier.status import DeploymentStatusFile
+
+        status = DeploymentStatusFile(
+            fraise_name="my_api",
+            environment="production",
+            state=state,
+            error_message="Rolled back 1 of 3 migrations; 2 still applied. "
+            "Do NOT restart the service until resolved.",
+            migration_report={"applied": ["001", "002"]},
+        )
+        with (
+            patch("fraisier.webhook.read_status", return_value=status),
+            patch.dict(os.environ, {"FRAISIER_WEBHOOK_SECRET": self._SECRET}),
+        ):
+            return webhook_client.get(
+                "/api/status/my_api/details",
+                headers={"X-Deployment-Token": self._SECRET},
+            ).json()
+
+    def test_rollback_failed_returns_the_incident_detail(self, webhook_client):
+        """A dirty schema must never answer 'No failure to report'."""
+        data = self._details(webhook_client, "rollback_failed")
+
+        assert "message" not in data
+        assert "Do NOT restart" in data["error_message"]
+        assert data["migration_report"] == {"applied": ["001", "002"]}
+
+    def test_rolled_back_returns_detail_too(self, webhook_client):
+        """A rolled-back deploy is still a failed deploy."""
+        data = self._details(webhook_client, "rolled_back")
+
+        assert "message" not in data
+        assert data["error_message"] is not None
+
+    def test_success_still_reports_no_failure(self, webhook_client):
+        """The healthy path must keep its terse answer."""
+        data = self._details(webhook_client, "success")
+
+        assert data["message"] == "No failure to report"
+        assert "error_message" not in data
