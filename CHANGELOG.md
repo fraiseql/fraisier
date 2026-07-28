@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-07-28
+
+Closes #294. The issue was filed explicitly unverified because it needed
+`sudo -l` on a real box; it has now been settled against sudo's own policy
+engine, and it was right.
+
+### Fixed
+
+- **The generated sudoers rule now authorises the command the deploy actually runs** (`core/sudoers.j2`, #294). Every rule was rendered as `NOPASSWD: <cmd> *`, but `deployers/mixins.py:211` invokes `sudo -H -u <install_user> <install.command>` and appends nothing. sudo requires a trailing ` *` to match **at least one** further argument, so the rule never matched: the `sudo -u` install fallback has never been authorised for any project, and would have prompted for a password and failed non-interactively. The wildcard is gone.
+
+### How it was settled
+
+A fragment of exactly the rendered shape, installed and queried with `sudo -l` (which checks the policy and never executes), sudo 1.9.17p2:
+
+| rule `/usr/bin/true sync --frozen *` | query | result |
+|---|---|---|
+| the real invocation | `sync --frozen` | **NO MATCH** |
+| control — the wildcard has an argument to eat | `sync --frozen --offline` | MATCH |
+| negative controls | `build`, no args | NO MATCH |
+
+With the wildcard dropped, `sync --frozen` matches. Both controls behaving is what makes that readable as cause rather than coincidence. The fixed fragment was then re-probed the same way.
+
+### Notes for operators
+
+- **Re-run `fraisier scaffold && sudo fraisier scaffold-install --yes`** to pick this up. Until you do, the installed fragment keeps the old rule — which is not a regression, since that rule never authorised anything, but the fallback stays broken.
+- **This is a tightening, not a loosening.** The rule now authorises exactly the configured `install.command` and nothing else. If you were relying on the fragment to run the install command with *extra* arguments by hand (`sudo -u <user> uv sync --frozen --offline`), that stops working — deliberately. Nothing automated did so.
+- **The socket path was never affected.** For `install.user != deploy_user` the steady state is the install-helper socket, which does not use sudo at all (`deployers/mixins.py:177-184`). That is why this went unnoticed: the broken fallback only runs on a first bootstrap, before the socket unit exists.
+
+### Known limitations
+
+- **Only the dependency-install rules go through this template.** `_collect_deduplicated_sudoers_rules` (`renderer.py:350-397`) reads `install.command` and nothing else, so this fix says nothing about any other privilege fraisier grants.
+- **A second, permissive rule was deliberately not rendered.** Emitting both the exact and the wildcard form would preserve the ability to append arbitrary arguments under NOPASSWD; no caller in fraisier appends any, so that would be authorisation granted to nobody.
+- **Verified on sudo 1.9.17p2 only.** Argument matching has been stable across sudo releases for a long time, but the probe answered for one version. The behaviour it relies on — that ` *` needs something to match — is the documented shell-style wildcard semantics, not a version quirk.
+
 ## [0.50.1] - 2026-07-28
 
 Closes #292. Found while re-auditing the unit templates for #286 — not a cause
