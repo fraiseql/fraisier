@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-07-28
+
+Three fresh-box provisioning defects reported against 0.47.0, plus two adjacent
+faults found while tracing them. #287 and #288 each independently prevent a
+`install.user != deploy_user` fraise from deploying on a new machine; the
+sudoers install-ordering fault and the ownership-reconciliation change were not
+reported by anyone.
+
 ### Fixed
 
 - **Sudoers `NOPASSWD` rules now carry a fully-qualified command path** (`scaffold/renderer.py`, #287). `_resolve_command_path` was a lookup against a six-entry dict, so any other `install.command[0]` — `bash`, `sh`, `python3`, `make` — was written into the `Cmnd` position verbatim. sudoers requires an absolute path there, so `visudo` rejected the whole fragment and `scaffold-install` aborted: the systemd units, the per-fraise install-helper socket, nginx and the PostgreSQL config were all left uninstalled (the apt packages and the systemctl-helper unit install run earlier and did complete). Resolution is now `_COMMAND_PATH_MAP` → `shutil.which` → a fixed FHS search list, with the hardcoded map deliberately outranking `PATH` because `fraisier scaffold` often runs on a machine that is not the target server. A token that resolves nowhere raises at scaffold time, naming the fraise, the environment and the directories searched, instead of emitting a fragment we know the parser will reject. Note this is a regression against our own advice — `README.md` recommends `command: [bash, scripts/deploy-install.sh]` as the stable-entrypoint convention introduced in 0.46.
