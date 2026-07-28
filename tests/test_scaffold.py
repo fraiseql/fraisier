@@ -1868,6 +1868,61 @@ scaffold:
         assert "RuntimeDirectory" not in content
         assert "LogsDirectory" not in content
 
+    def test_bytecode_writing_disabled(self, tmp_path):
+        """The app unit sets PYTHONDONTWRITEBYTECODE=1 (#292).
+
+        service.user may be a third identity, distinct from both
+        scaffold.deploy_user and install.user. Without this the running app
+        byte-compiles into app_path/.venv/**/__pycache__ owned by that identity,
+        which the install user cannot unlink on the next `uv sync --frozen`.
+        """
+        content = self._render_service(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          user: myapp_user
+scaffold:
+  output_dir: {output}
+  deploy_user: fraisier
+""".format(output=str(tmp_path / "output")),
+        )
+        assert "Environment=PYTHONDONTWRITEBYTECODE=1" in content
+
+    def test_bytecode_default_precedes_user_environment(self, tmp_path):
+        """A user-supplied override renders after ours, so it wins (#292).
+
+        systemd resolves a repeated Environment= assignment last-wins. Emitting
+        the default before service.environment keeps it overridable by anyone
+        who measures the per-start compile cost and decides against it.
+        """
+        content = self._render_service(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/app
+        service:
+          environment:
+            PYTHONDONTWRITEBYTECODE: "0"
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        assert content.index("Environment=PYTHONDONTWRITEBYTECODE=1") < content.index(
+            "Environment=PYTHONDONTWRITEBYTECODE=0"
+        )
+
 
 class TestNginxPerEnvConfig:
     """Issue #4: per-environment nginx config files."""

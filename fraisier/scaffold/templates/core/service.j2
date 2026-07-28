@@ -75,6 +75,10 @@ ReadWritePaths=/var/lib/postgresql
 {% endif %}
 
 # Environment
+# Keep bytecode out of the venv: service.user may differ from the install user,
+# whose next `uv sync --frozen` could not then unlink these __pycache__ dirs.
+# Declared before service.environment so an explicit override there wins.
+Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=ENVIRONMENT={{ env_name }}
 {% if fraise.get('type') == 'api' %}
 Environment=WORKERS={{ worker_count }}
