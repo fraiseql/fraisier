@@ -9,13 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.48.0] - 2026-07-28
 
-Three fresh-box provisioning defects reported against 0.47.0, plus two adjacent
-faults found while tracing them. #287 and #288 each independently prevent a
-`install.user != deploy_user` fraise from deploying on a new machine; the
-sudoers install-ordering fault and the ownership-reconciliation change were not
-reported by anyone.
+Five reported issues, plus five adjacent faults found while tracing them. Three
+are fresh-box provisioning defects (#287, #288, #286); the other two are silent
+data-correctness bugs — a partially-applied migration batch left a production
+schema dirty (#272), and `sync` resurrected deleted files on every run (#290).
 
 ### Fixed
+
+- **A partially-applied migration batch is now rolled back** (`dbops/confiture.py`, `errors.py`, `deployers/api.py`, #272). Confiture commits each migration as it goes, so a batch that fails part-way leaves the earlier ones applied and tracked — and it reports that via `MigrateUpResult.migrations_applied` even on the failure path. `migrate_up` discarded the count when raising, and `_run_strategy` only recorded it after a *successful* return, so `_migrations_applied` stayed `0` and `_restore_previous_state` took the "nothing applied, skip DB rollback" branch. A deploy could end `FAILED` with migration N still applied, no `migrate down`, and no incident file. `MigrationError` now carries `steps_applied` — distinct from the pre-existing `step`, which is a 1-indexed position rather than a count — and the deployer reads it off the exception before re-raising. `steps_applied=None` means "unknown" and deliberately skips the DB rollback: rolling back a guessed number of migrations is worse than leaving the schema for an operator. **This widens beyond `MigrateStrategy`** — `migrate_up` is shared with `ConfitureMigrateStrategy` and `RestoreMigrateStrategy`, and `RestoreMigrateStrategy.rollback` performs a template reset / drop+create, which previously never fired on this path.
+- **`sync` no longer resurrects files deleted on the source branch** (`cli/sync.py`, #290). fraisier squash-merges its own sync PRs, so `git merge-base origin/<source> origin/<tgt>` never advances past the original fork point — the promotion model keeps its own anchor stale by construction. Deletion detection was anchored on it, so a file created on source *after* that ancient base and later deleted there was invisible, while the target still carried a copy from an earlier squash-sync; it resurrected on every subsequent sync. Candidates now come from the target side (present on target, absent on source), gated on source's history actually containing the deletion and on target's blob being source-derived rather than target-authored. Two further faults surfaced while building real-repo fixtures: `git rm` needs `-f` (the pre-merge stages the file's *addition*, so a plain `git rm` refused and the deletion degraded to a warning — the feature could not remove a file even when it found one), and tier-3 conflict resolution used the same stale anchor, so it almost never fired and resolvable conflicts fell through to a hard abort.
 
 - **Sudoers `NOPASSWD` rules now carry a fully-qualified command path** (`scaffold/renderer.py`, #287). `_resolve_command_path` was a lookup against a six-entry dict, so any other `install.command[0]` — `bash`, `sh`, `python3`, `make` — was written into the `Cmnd` position verbatim. sudoers requires an absolute path there, so `visudo` rejected the whole fragment and `scaffold-install` aborted: the systemd units, the per-fraise install-helper socket, nginx and the PostgreSQL config were all left uninstalled (the apt packages and the systemctl-helper unit install run earlier and did complete). Resolution is now `_COMMAND_PATH_MAP` → `shutil.which` → a fixed FHS search list, with the hardcoded map deliberately outranking `PATH` because `fraisier scaffold` often runs on a machine that is not the target server. A token that resolves nowhere raises at scaffold time, naming the fraise, the environment and the directories searched, instead of emitting a fragment we know the parser will reject. Note this is a regression against our own advice — `README.md` recommends `command: [bash, scripts/deploy-install.sh]` as the stable-entrypoint convention introduced in 0.46.
 - **`install.sh` validates the sudoers fragment before installing it** (`scaffold/templates/core/install.sh.j2`). It previously ran `sudo install` and *then* `visudo -c -f` against the **installed** copy, so a bad fragment was left in `/etc/sudoers.d/` — which sudo treats as fatal — while printing "File was not installed." Validation now runs against the staged source, and nothing is written unless it passes.
@@ -26,6 +28,12 @@ reported by anyone.
 ### Changed
 
 - **Ownership reconciliation no longer deletes non-regenerable paths** (`deployers/preflight_ownership.py`). A wrong-owner manifest path was `shutil.rmtree`d so it could "be recreated" — but that premise holds only for the venv. The check runs inside `_install_dependencies`, i.e. *after* the git checkout, so a wrong-owner `app_path` deleted the freshly checked-out tree and then ran the install command in a directory that no longer existed; nothing in the deploy path recreates it. Deletion is now opt-in via `ManagedPath.reconcile_ownership`, set on the venv alone; every other path raises `DeploymentError` naming the path, the actual owner, the expected owner and the `chown` that fixes it. This affects the sudo-fallback path only (first bootstrap) — the socket path never ran this check.
+
+### Known limitations
+
+- A deploy whose migration batch partially applies now **rolls the schema back**, but still reports `FAILED` rather than `ROLLBACK_FAILED`, and `_write_status` overwrites the rollback message in the status file. The incident *file* is written correctly. Tracked in #293.
+- A **first** deploy (no previous SHA) with a partial batch still leaves the schema dirty — `_restore_previous_state` early-returns without one.
+- #290's **content-revert** half is not fixed: when source reverts a change it previously promoted, the squash topology hides that from the 3-way merge in the same way. Different mechanism, separate fix; #290 stays open.
 
 ### Note for operators
 
