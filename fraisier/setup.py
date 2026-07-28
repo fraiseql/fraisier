@@ -58,6 +58,7 @@ class ServerSetup:
         actions: list[SetupAction] = []
         actions.extend(self._plan_users())
         actions.extend(self._plan_directories())
+        actions.extend(self._plan_scaffold_state())
         actions.extend(self._plan_app_permissions())
         actions.extend(self._plan_git_safe_directory())
         actions.extend(self._plan_symlinks())
@@ -147,6 +148,11 @@ class ServerSetup:
             ("/var/lib/fraisier", deploy_user),
             ("/var/lib/fraisier/repos", deploy_user),
             ("/var/lib/fraisier/status", deploy_user),
+            # The persistent scaffold state tree (#283) that the socket helper
+            # reads its baked install.sh from. Owned by deploy_user so
+            # deploy-time regeneration (which runs as that user) can refresh
+            # it — the same reason bootstrap chowns it (#284).
+            (self.config.scaffold_state_dir, deploy_user),
             ("/run/fraisier", deploy_user),
         ]
         root_dirs = [
@@ -172,6 +178,56 @@ class ServerSetup:
                     )
                 )
         return actions
+
+    def _plan_scaffold_state(self) -> list[SetupAction]:
+        """Persist the rendered tree into the server-side scaffold state tree.
+
+        ``fraisier setup`` renders into, and installs from, the CWD-relative
+        ``scaffold.output_dir`` — the tree the operator reviews before
+        installing.  The deploy path never looks there: it regenerates into,
+        installs from and staleness-checks ``scaffold_state_dir`` (#283), and
+        the scaffold-install-helper's baked ``allowed_script`` is
+        ``{state_dir}/install.sh``.  Left unpopulated, that helper exits at
+        startup and every deploy silently falls back to the subprocess install
+        path until the first config-changing deploy regenerates the tree (#284).
+
+        Copying rather than moving keeps ``output_dir`` as the review surface.
+        The webhook env file is excluded: it carries
+        ``FRAISIER_WEBHOOK_SECRET`` and belongs only at
+        ``/etc/fraisier/{project}.webhook.env`` (installed 0640 by
+        :meth:`_plan_env_files`), never in a world-readable state directory —
+        and the deploy path's renderer never writes it there either.
+        """
+        output_dir = shlex.quote(self.config.scaffold.output_dir)
+        state_dir = self.config.scaffold_state_dir
+        deploy_user = self.config.scaffold.deploy_user
+        env_file = f"fraisier-{self.config.project_name}.webhook.env"
+
+        quoted_state_dir = shlex.quote(state_dir)
+        secret_copy = shlex.quote(f"{state_dir}/{env_file}")
+        return [
+            SetupAction(
+                description=f"Persist rendered scaffold tree to {state_dir}",
+                command=[
+                    "sudo",
+                    "bash",
+                    "-c",
+                    f"cp -a {output_dir}/. {quoted_state_dir}/ && rm -f {secret_copy}",
+                ],
+                category="scaffold",
+            ),
+            SetupAction(
+                description=f"Set ownership of {state_dir} to {deploy_user}",
+                command=[
+                    "sudo",
+                    "chown",
+                    "-R",
+                    f"{deploy_user}:{deploy_user}",
+                    state_dir,
+                ],
+                category="scaffold",
+            ),
+        ]
 
     def _plan_app_permissions(self) -> list[SetupAction]:
         """Configure ownership when app_user differs from deploy_user."""
