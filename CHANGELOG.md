@@ -26,7 +26,7 @@ what it did, so an operator can tell a clean schema revert from a dirty one.
 
 ### Known limitations
 
-- **A failed deploy that was only git-reverted still reports `FAILED`.** `_restore_previous_state` git-reverts and restarts the service on *every* deploy failure that has a previous SHA, not just migration failures. Promoting those to `ROLLED_BACK` would change the reported status of nearly every deployment failure and break anyone alerting on `FAILED`, so it is deliberately out of scope here. Whether it *should* change is an open question on #293.
+- **A failed deploy that was only git-reverted still reports `FAILED`.** `_restore_previous_state` git-reverts and restarts the service on *every* deploy failure that has a previous SHA, not just migration failures. Promoting those to `ROLLED_BACK` would change the reported status of nearly every deployment failure and break anyone alerting on `FAILED`, so it is deliberately out of scope here. Whether it *should* change is tracked as #296, which records both sides of the argument; two tests in `tests/test_rollback_status_reporting.py` pin the current behaviour on purpose.
 - `_migrations_applied` is set in `__init__` and never reset between deploys within a single deployer instance.
 - A **first** deploy (no previous SHA) with a partial batch still leaves the schema dirty — `_restore_previous_state` early-returns without one. Unchanged from v0.48.0.
 
