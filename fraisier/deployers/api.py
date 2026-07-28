@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fraisier.errors import DeploymentError, HealthCheckError
+from fraisier.errors import DeploymentError, HealthCheckError, MigrationError
 
 if TYPE_CHECKING:
     from fraisier.runners import CommandRunner
@@ -697,6 +697,16 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 database_url=database_url,
                 hooks_config=hooks_config,
             )
+        except MigrationError as exc:
+            # A batch that fails part-way has still applied — and committed —
+            # everything before the failure. Record that count before the
+            # exception escapes, or `_restore_previous_state` sees 0 and skips
+            # the DB rollback, leaving the schema half-migrated (#272).
+            # `steps_applied is None` means the count is unknown; stay at 0 and
+            # skip, rather than rolling back a guessed number of migrations.
+            if exc.steps_applied:
+                self._migrations_applied = exc.steps_applied
+            raise
         finally:
             os.chdir(old_cwd)
 
