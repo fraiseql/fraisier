@@ -372,15 +372,19 @@ SUDOERS_SRC="${SCAFFOLD_DIR}/sudoers"
 SUDOERS_DST="/etc/sudoers.d/{{ project_name }}"
 if [ -f "${SUDOERS_SRC}" ]; then
     echo "  Installing sudoers fragment"
-    _run sudo install -m 0440 "${SUDOERS_SRC}" "${SUDOERS_DST}"
+    # Validate the STAGED file before installing it. Validating the installed
+    # copy would leave an invalid fragment in /etc/sudoers.d/ — which sudo
+    # treats as fatal, potentially locking the box out — while printing that
+    # nothing was installed.
     if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
-        if ! sudo visudo -c -f "${SUDOERS_DST}"; then
+        if ! sudo visudo -c -f "${SUDOERS_SRC}"; then
             echo "  ✗ Sudoers syntax error! File was not installed." >&2
             exit 1
         fi
     elif [[ "$DRY_RUN" == "true" ]]; then
-        echo "    [would validate] sudo visudo -c -f ${SUDOERS_DST}"
+        echo "    [would validate] sudo visudo -c -f ${SUDOERS_SRC}"
     fi
+    _run sudo install -m 0440 "${SUDOERS_SRC}" "${SUDOERS_DST}"
 fi
 
 # Install systemd units
