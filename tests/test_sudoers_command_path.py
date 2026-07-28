@@ -212,3 +212,68 @@ class TestSudoersValidatedBeforeInstall:
         content = _render_install_sh(tmp_path)
 
         assert "File was not installed." in content
+
+
+class TestCmndArgumentsMatchTheInvocation:
+    """The rendered `Cmnd` must authorise the argv the deploy path builds (#294).
+
+    `sudoers.j2` used to append ` *` to every rule. Verified against sudo
+    1.9.17p2's own policy engine (`sudo -l`, which checks without executing): a
+    trailing ` *` requires *at least one* further argument, so a rule
+    `/usr/bin/uv sync --frozen *` does **not** match an invocation of
+    `/usr/bin/uv sync --frozen`. `mixins.py:211` appends nothing after
+    `install.command`, so the rule never authorised the `sudo -u` fallback.
+    """
+
+    def test_no_trailing_wildcard(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "shutil.which", lambda cmd: "/usr/local/bin/uv" if cmd == "uv" else None
+        )
+        content = _render_sudoers(tmp_path, "[uv, sync, --frozen]")
+
+        assert not _cmnd_line(content).rstrip().endswith(" *")
+
+    def test_argument_tail_is_exactly_the_configured_command(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "shutil.which", lambda cmd: "/usr/local/bin/uv" if cmd == "uv" else None
+        )
+        content = _render_sudoers(tmp_path, "[uv, sync, --frozen]")
+
+        authorised = _cmnd_line(content).split("NOPASSWD:", 1)[1].strip()
+        assert authorised == "/usr/local/bin/uv sync --frozen"
+
+    def test_authorised_cmnd_equals_what_the_deployer_hands_to_sudo(
+        self, tmp_path, monkeypatch
+    ):
+        """The drift guard: render and invoke from the same `install:` block.
+
+        Nothing previously tied the two sides together — `grep NOPASSWD tests/`
+        hit only synthetic strings — which is how #294 survived.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.deployers.api import APIDeployer
+
+        monkeypatch.setattr(
+            "shutil.which", lambda cmd: "/usr/local/bin/uv" if cmd == "uv" else None
+        )
+        content = _render_sudoers(tmp_path, "[uv, sync, --frozen]")
+        authorised = _cmnd_line(content).split("NOPASSWD:", 1)[1].strip()
+
+        deployer = APIDeployer(
+            {
+                "app_path": "/var/www/prod",
+                "install": {"command": ["uv", "sync", "--frozen"], "user": "appuser"},
+            }
+        )
+        deployer.runner = MagicMock()
+        with patch(
+            "fraisier.deployers.mixins.shutil.which", return_value="/usr/local/bin/uv"
+        ):
+            deployer._install_dependencies()
+
+        argv = deployer.runner.run.call_args[0][0]
+        assert argv[:4] == ["sudo", "-H", "-u", "appuser"]
+        assert " ".join(argv[4:]) == authorised
