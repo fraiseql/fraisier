@@ -189,9 +189,166 @@ class TestPlanDirectories:
         setup = ServerSetup(config, FakeRunner())
         actions = setup._plan_directories()
         chown_actions = [a for a in actions if "ownership" in a.description]
-        assert len(chown_actions) == 4
+        assert len(chown_actions) == 5
         for a in chown_actions:
             assert "fraisier:fraisier" in " ".join(a.command)
+
+    def test_creates_scaffold_state_dir(self, tmp_path):
+        """setup provisions the tree the socket helper reads from (#284).
+
+        Until this directory holds an install.sh the helper daemon exits at
+        startup (``scaffold_install_helper.py:228-230``), so the deploy silently
+        drops onto the subprocess fallback.
+        """
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_directories()
+
+        state_dir = config.scaffold_state_dir
+        assert state_dir == "/var/lib/fraisier/tp/scaffold"
+        mkdirs = [a for a in actions if a.command[:3] == ["sudo", "mkdir", "-p"]]
+        assert any(a.command[3] == state_dir for a in mkdirs)
+
+    def test_scaffold_state_dir_owned_by_deploy_user(self, tmp_path):
+        """Deploy-time regeneration runs as deploy_user and must refresh it.
+
+        Same reason ``bootstrap.py:257-273`` chowns it.
+        """
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup._plan_directories()
+
+        state_dir = config.scaffold_state_dir
+        chowns = [a for a in actions if a.command[:2] == ["sudo", "chown"]]
+        assert any(
+            a.command[2] == "fraisier:fraisier" and a.command[3] == state_dir
+            for a in chowns
+        )
+
+
+class TestPlanScaffoldState:
+    """`setup` also persists its rendered tree into scaffold_state_dir (#284)."""
+
+    def test_copies_rendered_tree_into_state_dir(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup.plan()
+
+        copies = [
+            a for a in actions if a.category == "scaffold" and "cp" in a.command[-1]
+        ]
+        assert len(copies) == 1
+        assert (
+            "cp -a scripts/generated/. /var/lib/fraisier/tp/scaffold/"
+            in copies[0].command[-1]
+        )
+
+    def test_webhook_env_file_is_not_persisted(self, tmp_path):
+        """It holds FRAISIER_WEBHOOK_SECRET and state_dir is world-readable.
+
+        Its only install target is /etc/fraisier/{project}.webhook.env at 0640
+        (``_plan_env_files``), and the deploy path's renderer never writes it
+        into state_dir either.
+        """
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup.plan()
+
+        copies = [
+            a for a in actions if a.category == "scaffold" and "cp" in a.command[-1]
+        ]
+        assert (
+            "rm -f /var/lib/fraisier/tp/scaffold/fraisier-tp.webhook.env"
+            in copies[0].command[-1]
+        )
+
+    def test_persisted_tree_is_chowned_to_deploy_user(self, tmp_path):
+        """`cp -a` preserves the operator's ownership; deploy_user must own it."""
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup.plan()
+
+        chowns = [
+            a
+            for a in actions
+            if a.category == "scaffold" and a.command[:3] == ["sudo", "chown", "-R"]
+        ]
+        assert len(chowns) == 1
+        assert chowns[0].command[3:] == [
+            "fraisier:fraisier",
+            "/var/lib/fraisier/tp/scaffold",
+        ]
+
+    def test_copy_ordered_after_the_directory_that_receives_it(self, tmp_path):
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+        actions = setup.plan()
+
+        mkdir_idx = next(
+            i
+            for i, a in enumerate(actions)
+            if a.command[:3] == ["sudo", "mkdir", "-p"]
+            and a.command[3] == "/var/lib/fraisier/tp/scaffold"
+        )
+        copy_idx = next(
+            i
+            for i, a in enumerate(actions)
+            if a.category == "scaffold" and "cp" in a.command[-1]
+        )
+        chown_idx = next(
+            i
+            for i, a in enumerate(actions)
+            if a.category == "scaffold" and a.command[:3] == ["sudo", "chown", "-R"]
+        )
+        assert mkdir_idx < copy_idx < chown_idx
+
+    def test_install_sources_still_resolve_against_output_dir(self, tmp_path):
+        """Option 2, not Option 1 — the review-then-install loop is unchanged.
+
+        `setup` renders into a CWD-relative tree the operator inspects and
+        installs what they just read; `state_dir` is added as what the machine
+        consumes, not substituted as the install source.
+        """
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        setup = ServerSetup(config, FakeRunner())
+
+        sources = [
+            *setup._plan_sudoers(),
+            *setup._plan_app_services(),
+            *setup._plan_webhook_service(),
+            *setup._plan_env_files(),
+            *setup._plan_nginx(),
+        ]
+        installs = [a for a in sources if a.command[1] in {"cp", "install"}]
+        assert len(installs) == 6
+        for action in installs:
+            src = action.command[-2]
+            assert src.startswith("scripts/generated/"), action.description
+
+    def test_persisted_tree_supplies_the_helpers_allowed_script(self, tmp_path):
+        """The copied tree carries exactly the path baked into the helper unit.
+
+        The unit's ExecStart argument is ``{state_dir}/install.sh``
+        (``renderer.py:936-941``) and the daemon exits 1 at startup when that
+        path is absent (``scaffold_install_helper.py:228-230``).  `install.sh`
+        renders at the *root* of the tree `setup` copies, so copying
+        ``output_dir/.`` into ``state_dir/`` is what closes the gap — this is
+        the assertion that makes the two command strings above mean something.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = _make_config(tmp_path, MINIMAL_CONFIG)
+        renderer = ScaffoldRenderer(config)
+        renderer.output_dir = tmp_path / "generated"
+        renderer.render()
+
+        assert (renderer.output_dir / "install.sh").is_file()
+        unit = (
+            renderer.output_dir
+            / "systemd"
+            / "fraisier-tp-scaffold-install-helper.service"
+        ).read_text()
+        assert "/var/lib/fraisier/tp/scaffold/install.sh" in unit
 
 
 class TestPlanSymlinks:
