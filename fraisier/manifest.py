@@ -7,6 +7,28 @@ from pathlib import Path
 from fraisier.config import FraisierConfig
 from fraisier.naming import deploy_socket_name
 
+# Tool cache/state dirs the install-helper unit relocates under app_path so they
+# fall inside the single ReadWritePaths root that ProtectSystem=strict allows.
+# ReadWritePaths lifts systemd's sandbox but does NOT change ownership, so these
+# must be pre-created owned by the install user or the first `uv sync` on a fresh
+# box dies with "Permission denied" creating them (#288).
+#
+# MUST stay in step with core/install-helper.service.j2's Environment= lines.
+# tests/test_install_cache_manifest.py::TestUnitAndManifestDoNotDrift enforces it.
+#
+# `.local` is listed in its own right, not just as a prefix of `.local/share`:
+# install.sh's _ensure_dir runs `mkdir -p` then chowns only the LEAF, so an
+# unlisted parent would be left owned by root.
+_RELOCATED_INSTALL_DIRS = (
+    ".cache",
+    ".cache/uv",
+    ".local",
+    ".local/share",
+    ".local/state",
+    ".cargo",
+    ".npm",
+)
+
 
 @dataclass(frozen=True)
 class ManagedPath:
@@ -19,6 +41,12 @@ class ManagedPath:
         mode: Permission bits (e.g., 0o755)
         read_write_units: Tuple of systemd unit stems that need ReadWritePaths
         create_if_missing: Whether to create if missing during provisioning
+        reconcile_ownership: Whether a wrong-owner path may be DELETED and
+            recreated. Defaults to False so a path added later fails safe:
+            deletion is only correct for a path the deploy itself regenerates,
+            which today is the venv alone. Every other managed path — app_path,
+            git_repo, config_dir, the relocated caches — holds state no deploy
+            step recreates, so a mismatch there is raised, not deleted.
     """
 
     path: Path
@@ -27,6 +55,7 @@ class ManagedPath:
     mode: int
     read_write_units: tuple[str, ...]
     create_if_missing: bool = True
+    reconcile_ownership: bool = False
 
     def __str__(self) -> str:
         """Readable representation for logging."""
@@ -209,6 +238,30 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                                     owner=install_user,
                                     group=install_user,
                                     mode=0o755,
+                                    read_write_units=(),
+                                    create_if_missing=True,
+                                    # The venv is fully derived from the lockfile
+                                    # by the install command that runs moments
+                                    # later, so it is the one path a deploy can
+                                    # safely delete and rebuild.
+                                    reconcile_ownership=True,
+                                )
+                            )
+                        for relative in _RELOCATED_INSTALL_DIRS:
+                            cache_path = Path(app_path) / relative
+                            cache_path_str = str(cache_path)
+                            if cache_path_str in seen_paths:
+                                continue
+                            seen_paths.add(cache_path_str)
+                            env_paths.append(
+                                ManagedPath(
+                                    path=cache_path,
+                                    owner=install_user,
+                                    group=install_user,
+                                    mode=0o755,
+                                    # The install-helper unit hardcodes
+                                    # ReadWritePaths=<app_path>, which already
+                                    # covers everything beneath it.
                                     read_write_units=(),
                                     create_if_missing=True,
                                 )

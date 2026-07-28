@@ -4,20 +4,31 @@ import logging
 import pwd
 import shutil
 
+from fraisier.errors import DeploymentError
 from fraisier.manifest import PathManifest
 
 logger = logging.getLogger("fraisier")
 
 
 def _verify_manifest_ownership(manifest: PathManifest) -> None:
-    """Delete manifest paths owned by the wrong user so they can be recreated.
+    """Reconcile manifest paths owned by the wrong user.
 
-    For each path in the manifest, if the path exists and is owned by a user
-    different from the path's declared owner, delete it. This allows subsequent
-    install steps to recreate the path with the correct ownership.
+    A wrong-owner path is only *deleted* when it carries
+    ``reconcile_ownership=True`` — i.e. when the deploy itself regenerates it,
+    which today is the venv alone. Every other managed path (``app_path``,
+    ``git_repo``, ``config_dir``, the relocated tool caches) holds state that no
+    later deploy step recreates, so a mismatch raises instead.
+
+    That distinction matters because this runs inside ``_install_dependencies``,
+    *after* the git checkout: deleting ``app_path`` here would destroy the tree
+    that was just checked out and leave the install command running in a
+    directory that no longer exists.
 
     Args:
         manifest: PathManifest containing all managed paths and their owners
+
+    Raises:
+        DeploymentError: A non-regenerable path is owned by the wrong user.
 
     Logs:
         - info: When a path is deleted due to wrong ownership
@@ -36,11 +47,22 @@ def _verify_manifest_ownership(manifest: PathManifest) -> None:
             )
             continue
 
-        if actual_owner != mp.owner:
-            logger.info(
-                "%s owned by %s (expected %s) — removing for recreation",
-                mp.path,
-                actual_owner,
-                mp.owner,
+        if actual_owner == mp.owner:
+            continue
+
+        if not mp.reconcile_ownership:
+            raise DeploymentError(
+                f"{mp.path} is owned by {actual_owner!r} but should be owned by "
+                f"{mp.owner!r}. Refusing to delete it — nothing in the deploy "
+                f"recreates this path, so removing it would destroy state. Fix "
+                f"the ownership on the host "
+                f"(chown -R {mp.owner}:{mp.group} {mp.path}) and redeploy."
             )
-            shutil.rmtree(mp.path)
+
+        logger.info(
+            "%s owned by %s (expected %s) — removing for recreation",
+            mp.path,
+            actual_owner,
+            mp.owner,
+        )
+        shutil.rmtree(mp.path)

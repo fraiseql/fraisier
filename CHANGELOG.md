@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sudoers `NOPASSWD` rules now carry a fully-qualified command path** (`scaffold/renderer.py`, #287). `_resolve_command_path` was a lookup against a six-entry dict, so any other `install.command[0]` — `bash`, `sh`, `python3`, `make` — was written into the `Cmnd` position verbatim. sudoers requires an absolute path there, so `visudo` rejected the whole fragment and `scaffold-install` aborted: the systemd units, the per-fraise install-helper socket, nginx and the PostgreSQL config were all left uninstalled (the apt packages and the systemctl-helper unit install run earlier and did complete). Resolution is now `_COMMAND_PATH_MAP` → `shutil.which` → a fixed FHS search list, with the hardcoded map deliberately outranking `PATH` because `fraisier scaffold` often runs on a machine that is not the target server. A token that resolves nowhere raises at scaffold time, naming the fraise, the environment and the directories searched, instead of emitting a fragment we know the parser will reject. Note this is a regression against our own advice — `README.md` recommends `command: [bash, scripts/deploy-install.sh]` as the stable-entrypoint convention introduced in 0.46.
+- **`install.sh` validates the sudoers fragment before installing it** (`scaffold/templates/core/install.sh.j2`). It previously ran `sudo install` and *then* `visudo -c -f` against the **installed** copy, so a bad fragment was left in `/etc/sudoers.d/` — which sudo treats as fatal — while printing "File was not installed." Validation now runs against the staged source, and nothing is written unless it passes.
+- **Relocated install-tool cache dirs are pre-created with the right owner** (`manifest.py`, #288). The install-helper unit points `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `UV_CACHE_DIR`, `CARGO_HOME` and `npm_config_cache` at paths under `app_path`, because `ProtectSystem=strict` makes that the only writable root. But `ReadWritePaths` lifts systemd's sandbox without changing ownership, and `app_path` is `deploy_user`-owned `0755` — so on a fresh box the install user could not create them and the first `uv sync` died with `Permission denied`. All seven paths (including `.local`, whose parent would otherwise be left root-owned by `_ensure_dir`, which chowns only the leaf) are now manifest-managed and created by `scaffold-install` owned by the install user. A drift test asserts every cache path the unit exports is manifest-registered.
+
+### Changed
+
+- **Ownership reconciliation no longer deletes non-regenerable paths** (`deployers/preflight_ownership.py`). A wrong-owner manifest path was `shutil.rmtree`d so it could "be recreated" — but that premise holds only for the venv. The check runs inside `_install_dependencies`, i.e. *after* the git checkout, so a wrong-owner `app_path` deleted the freshly checked-out tree and then ran the install command in a directory that no longer existed; nothing in the deploy path recreates it. Deletion is now opt-in via `ManagedPath.reconcile_ownership`, set on the venv alone; every other path raises `DeploymentError` naming the path, the actual owner, the expected owner and the `chown` that fixes it. This affects the sudo-fallback path only (first bootstrap) — the socket path never ran this check.
+
+### Note for operators
+
+- After upgrading, `fraisier validate-remote` will report **NOT READY** on existing boxes until `scaffold-install` is re-run, because the seven relocated cache dirs are new `create_if_missing` manifest entries. Re-running `scaffold-install` creates them and clears the report.
+- `_ensure_dir` chowns only the leaf directory. On a box where a relocated cache dir already exists with wrong-owned *contents* (e.g. created root-owned by an earlier run), run `chown -R <install_user> <app_path>/.cache <app_path>/.local <app_path>/.cargo <app_path>/.npm` once.
+
 ## [0.47.1] - 2026-07-25
 
 ### Fixed
