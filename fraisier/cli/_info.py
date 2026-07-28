@@ -201,6 +201,15 @@ def _compute_deployment_state(
             return "[yellow]pending[/yellow]"
         elif status.state == "failed":
             return "[red]failed[/red]"
+        elif status.state == "rollback_failed":
+            # The schema is dirty and the service must not be restarted. This
+            # is the loudest state the CLI has (#293).
+            return "[bold red]ROLLBACK FAILED — schema dirty[/bold red]"
+        elif status.state == "rolled_back":
+            # Written since before #293 but never matched here, so a rolled-back
+            # deploy fell through to version comparison and showed as a green
+            # "deployed ✓" whenever the reverted tree matched the latest tag.
+            return "[yellow]rolled back[/yellow]"
         elif status.state in ("idle", "success"):
             # If status file shows idle/success, check if versions match
             if current == latest and current is not None:
