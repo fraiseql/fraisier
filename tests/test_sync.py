@@ -323,38 +323,90 @@ class TestReadBranchVersion:
 # ---------------------------------------------------------------------------
 
 
-class TestTargetUnchangedSinceBase:
-    def test_returns_true_when_git_diff_exits_0(self):
-        from fraisier.cli.sync import _target_unchanged_since_base
+class TestTargetBlobIsSourceDerived:
+    """Replaces TestTargetUnchangedSinceBase.
+
+    `_target_unchanged_since_base` was removed with #290: under squash-merge
+    promotion the merge-base never advances, so "unchanged since merge-base"
+    was False for nearly every path. The question is now "is target holding
+    source-derived content?", answered by walking source's history for the
+    path. Behavioural coverage lives in tests/test_sync_deletion_squash.py,
+    which uses real repositories rather than an ordered subprocess script;
+    what is pinned here is the fail-closed posture.
+    """
+
+    def test_returns_false_when_target_blob_cannot_be_read(self):
+        from fraisier.cli.sync import _target_blob_is_source_derived
 
         with patch(_PATCH) as m:
-            m.return_value = _mk(returncode=0)
-            assert _target_unchanged_since_base("abc123", "staging", "file.txt") is True
+            m.side_effect = [_mk(returncode=128, stdout="")]
+            assert _target_blob_is_source_derived("dev", "staging", "x.py") is False
 
-    def test_returns_false_when_git_diff_exits_1(self):
-        from fraisier.cli.sync import _target_unchanged_since_base
-
-        with patch(_PATCH) as m:
-            m.return_value = _mk(returncode=1)
-            assert (
-                _target_unchanged_since_base("abc123", "staging", "file.txt") is False
-            )
-
-    def test_returns_true_when_file_absent_at_merge_base_and_target(self):
-        from fraisier.cli.sync import _target_unchanged_since_base
+    def test_returns_false_when_rev_list_fails(self):
+        from fraisier.cli.sync import _target_blob_is_source_derived
 
         with patch(_PATCH) as m:
-            m.return_value = _mk(returncode=0)
-            assert _target_unchanged_since_base("abc123", "staging", "file.txt") is True
+            m.side_effect = [
+                _mk(stdout="blob1\n"),
+                _mk(returncode=128, stdout=""),
+            ]
+            assert _target_blob_is_source_derived("dev", "staging", "x.py") is False
 
-    def test_returns_false_when_git_diff_exits_with_unexpected_error(self):
-        from fraisier.cli.sync import _target_unchanged_since_base
+    def test_returns_true_on_blob_match(self):
+        from fraisier.cli.sync import _target_blob_is_source_derived
 
         with patch(_PATCH) as m:
-            m.return_value = _mk(returncode=128)
-            assert (
-                _target_unchanged_since_base("abc123", "staging", "file.txt") is False
-            )
+            m.side_effect = [
+                _mk(stdout="blob1\n"),  # target blob
+                _mk(stdout="shaA\n"),  # source history for the path
+                _mk(stdout="blob1\n"),  # same content on source
+            ]
+            assert _target_blob_is_source_derived("dev", "staging", "x.py") is True
+
+    def test_returns_false_when_no_source_commit_matches(self):
+        from fraisier.cli.sync import _target_blob_is_source_derived
+
+        with patch(_PATCH) as m:
+            m.side_effect = [
+                _mk(stdout="blob-target\n"),
+                _mk(stdout="shaA\n"),
+                _mk(stdout="blob-other\n"),
+            ]
+            assert _target_blob_is_source_derived("dev", "staging", "x.py") is False
+
+
+class TestSourceDeletedPath:
+    """Gate 1: did source's own history remove this path?"""
+
+    def test_true_when_log_reports_a_deleting_commit(self):
+        from fraisier.cli.sync import _source_deleted_path
+
+        with patch(_PATCH) as m:
+            m.side_effect = [_mk(stdout="shaD\n")]
+            assert _source_deleted_path("dev", "gone.py") is True
+
+    def test_false_when_source_never_had_the_path(self):
+        from fraisier.cli.sync import _source_deleted_path
+
+        with patch(_PATCH) as m:
+            m.side_effect = [_mk(stdout="")]
+            assert _source_deleted_path("dev", "target-only.md") is False
+
+    def test_false_on_git_error(self):
+        from fraisier.cli.sync import _source_deleted_path
+
+        with patch(_PATCH) as m:
+            m.side_effect = [_mk(returncode=128, stdout="")]
+            assert _source_deleted_path("dev", "x.py") is False
+
+    def test_excludes_merge_commits(self):
+        """--no-merges keeps the answer about a real authored deletion."""
+        from fraisier.cli.sync import _source_deleted_path
+
+        with patch(_PATCH) as m:
+            m.side_effect = [_mk(stdout="shaD\n")]
+            _source_deleted_path("dev", "x.py")
+            assert "--no-merges" in m.call_args_list[0][0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -1007,9 +1059,12 @@ class TestSyncConflicts:
                 _no_source_deletions(),  # diff --filter=D pre-pass
                 _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
                 _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
-                _mk(
-                    returncode=0
-                ),  # git diff merge_base origin/staging -- src/routes.py (unchanged)
+                # Tier 3 now asks "is staging's blob source-derived?" instead
+                # of "unchanged since merge-base" — the merge-base is
+                # permanently stale under squash promotion (#290).
+                _mk(stdout="blob1\n"),  # rev-parse origin/staging:src/routes.py
+                _mk(stdout="shaA\n"),  # rev-list dev history for the path
+                _mk(stdout="blob1\n"),  # rev-parse shaA:src/routes.py — match
                 _mk(),  # checkout origin/dev -- src/routes.py
                 _mk(),  # git add src/routes.py
                 _mk(stdout=""),  # diff --filter=U (remaining: clean)
@@ -1027,7 +1082,7 @@ class TestSyncConflicts:
         assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
         assert (
-            "Auto-resolved (staging unchanged since merge-base): src/routes.py"
+            "Auto-resolved (staging holds source-derived content): src/routes.py"
             in result.output
         )
 
@@ -1562,91 +1617,6 @@ class TestSyncExistingPR:
 
 
 # ---------------------------------------------------------------------------
-# Unit: _propagate_source_deletions (#235)
-# ---------------------------------------------------------------------------
-
-
-class TestPropagateSourceDeletions:
-    """`git merge` silently keeps target's copy when source deleted a file
-    target never touched. The pre-pass detects that case via the merge-base→
-    source `--diff-filter=D` list and runs `git rm` to mirror the deletion."""
-
-    def test_propagates_deletion_when_target_unchanged(self):
-        from fraisier.cli.sync import _propagate_source_deletions
-
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                # diff --filter=D base origin/dev: source deleted legacy.sql
-                _mk(stdout="db/legacy.sql\n"),
-                # ls-files --error-unmatch: still in index
-                _mk(returncode=0),
-                # _target_unchanged_since_base: target unchanged
-                _mk(returncode=0),
-                # git rm
-                _mk(),
-            ]
-            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
-        assert propagated == ["db/legacy.sql"]
-        commands = [c[0][0] for c in m.call_args_list]
-        assert ["git", "rm", "--", "db/legacy.sql"] in commands
-
-    def test_does_not_propagate_when_target_modified(self):
-        from fraisier.cli.sync import _propagate_source_deletions
-
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="db/legacy.sql\n"),  # source deleted
-                _mk(returncode=0),  # still in index
-                _mk(returncode=1),  # target MODIFIED since merge-base
-            ]
-            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
-        assert propagated == []
-        commands = [c[0][0] for c in m.call_args_list]
-        assert not any(cmd[:2] == ["git", "rm"] for cmd in commands), (
-            "must not propagate a deletion when target modified the file — "
-            "that's a real conflict for the operator to resolve"
-        )
-
-    def test_skips_when_file_no_longer_in_index(self):
-        """If the merge already resolved a deletion (e.g. via tier 1 in a
-        prior pass), `ls-files --error-unmatch` exits non-zero and we
-        skip — no double-rm."""
-        from fraisier.cli.sync import _propagate_source_deletions
-
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="db/legacy.sql\n"),
-                _mk(returncode=1),  # not in index
-            ]
-            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
-        assert propagated == []
-
-    def test_empty_when_no_deletions(self):
-        from fraisier.cli.sync import _propagate_source_deletions
-
-        with patch(_PATCH) as m:
-            m.side_effect = [_mk(stdout="")]
-            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
-        assert propagated == []
-
-    def test_handles_multiple_deletions(self):
-        from fraisier.cli.sync import _propagate_source_deletions
-
-        with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout="a.sql\nb.sql\nc.sql\n"),
-                _mk(returncode=0),  # a in index
-                _mk(returncode=0),  # a target unchanged
-                _mk(),  # rm a
-                _mk(returncode=0),  # b in index
-                _mk(returncode=1),  # b target MODIFIED
-                _mk(returncode=1),  # c NOT in index (already resolved)
-            ]
-            propagated = _propagate_source_deletions("base-sha", "dev", "staging")
-        assert propagated == ["a.sql"]
-
-
-# ---------------------------------------------------------------------------
 # CLI: source-deletion propagation end-to-end (#235)
 # ---------------------------------------------------------------------------
 
@@ -1701,11 +1671,16 @@ class TestSyncPropagatesSourceDeletions:
                 "git",
                 "diff",
                 "--name-only",
-                "--diff-filter=D",
-                stdout="db/legacy.sql\n",
+                "-z",
+                stdout="db/legacy.sql\0",
             )
             .queue("git", "ls-files", "--error-unmatch")  # in index
-            .queue("git", "diff", "--quiet")  # target unchanged since merge-base
+            # gate 1: source history shows the deletion
+            .queue("git", "log", "--max-count=1", stdout="sha1\n")
+            # gate 2: target holds source-derived content
+            .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "rev-list", stdout="sha1\n")
+            .queue("git", "rev-parse", stdout="blob1\n")
             .queue("git", "rm")  # propagation
             # Merge finalize: MERGE_HEAD set → commit; assert sees 2 parents
             # and MERGE_HEAD cleared.
@@ -1728,7 +1703,7 @@ class TestSyncPropagatesSourceDeletions:
             )
         assert result.exit_code == 0, result.output
         assert "Auto-resolved (source deletion): db/legacy.sql" in result.output
-        assert mg.was_called(["git", "rm", "--", "db/legacy.sql"])
+        assert mg.was_called(["git", "rm", "-f", "--", "db/legacy.sql"])
 
     def test_rename_on_source_propagates_old_path_deletion(self, tmp_path):
         """Headline use-case from #235: source renames a file (`git mv old new`).
@@ -1747,11 +1722,16 @@ class TestSyncPropagatesSourceDeletions:
                 "git",
                 "diff",
                 "--name-only",
-                "--diff-filter=D",
-                stdout="db/old.sql\n",
+                "-z",
+                stdout="db/old.sql\0",
             )
             .queue("git", "ls-files", "--error-unmatch")
-            .queue("git", "diff", "--quiet")  # target unchanged
+            # gate 1: source history shows the deletion
+            .queue("git", "log", "--max-count=1", stdout="sha1\n")
+            # gate 2: target holds source-derived content
+            .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "rev-list", stdout="sha1\n")
+            .queue("git", "rev-parse", stdout="blob1\n")
             .queue("git", "rm")
             .queue("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
             .queue("git", "commit")
@@ -1772,7 +1752,7 @@ class TestSyncPropagatesSourceDeletions:
             )
         assert result.exit_code == 0, result.output
         assert "Auto-resolved (source deletion): db/old.sql" in result.output
-        assert mg.was_called(["git", "rm", "--", "db/old.sql"])
+        assert mg.was_called(["git", "rm", "-f", "--", "db/old.sql"])
 
     def test_failed_git_rm_does_not_appear_in_propagated_log(self, tmp_path):
         """If `git rm` fails (submodule, sparse-checkout exclusion), the
@@ -1788,11 +1768,16 @@ class TestSyncPropagatesSourceDeletions:
                 "git",
                 "diff",
                 "--name-only",
-                "--diff-filter=D",
-                stdout="submodules/legacy\n",
+                "-z",
+                stdout="submodules/legacy\0",
             )
             .queue("git", "ls-files", "--error-unmatch")
-            .queue("git", "diff", "--quiet")  # target unchanged
+            # gate 1: source history shows the deletion
+            .queue("git", "log", "--max-count=1", stdout="sha1\n")
+            # gate 2: target holds source-derived content
+            .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "rev-list", stdout="sha1\n")
+            .queue("git", "rev-parse", stdout="blob1\n")
             .queue(
                 "git",
                 "rm",

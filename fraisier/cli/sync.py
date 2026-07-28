@@ -35,27 +35,117 @@ def _is_auto_resolved(path: str) -> bool:
     return False
 
 
-def _target_unchanged_since_base(merge_base: str, tgt: str, path: str) -> bool:
-    """Return True if *path* in origin/{tgt} is identical to the merge-base version.
+#: Cap on how far back to walk source's history for one path when deciding
+#: whether target's copy came from source. Exhausting it is treated as "no
+#: match" — conservative in the safe direction (we leave the file alone).
+_SOURCE_HISTORY_SCAN_LIMIT = 200
 
-    When True, the target branch never touched this file — only the source did.
-    It is safe to auto-resolve by taking the source version.
 
-    Reads from refs (``merge_base`` and ``origin/{tgt}``), not the index, so
-    the answer is meaningful mid-conflict — callers can ask "did target ever
-    touch this file?" without worrying about whatever transient stage-1/2/3
-    state ``git merge`` left behind.
+def _z_lines(result: subprocess.CompletedProcess) -> list[str]:
+    """Split NUL-delimited git output, dropping empties.
 
-    Any non-zero exit — including unexpected git errors — returns False, which
-    causes the file to fall through to tier 5 (abort). This is intentional: we
-    would rather fail loudly than silently claim a file is unmodified.
+    ``-z`` avoids both the quoting ``core.quotepath`` applies to non-ASCII
+    paths and the ambiguity of splitting on newlines when a path contains one.
     """
-    result = subprocess.run(
-        ["git", "diff", "--quiet", merge_base, f"origin/{tgt}", "--", path],
+    return [item for item in (result.stdout or "").split("\0") if item]
+
+
+def _target_blob_is_source_derived(source: str, tgt: str, path: str) -> bool:
+    """Return True when target's copy of *path* is content it received from source.
+
+    This replaces the old merge-base comparison, which is unusable here: sync
+    PRs are squash-merged, so ``git merge-base origin/<source> origin/<tgt>``
+    never advances past the original fork point no matter how many promotions
+    run. Anchoring on it made this answer False for almost every path.
+
+    The question that actually matters is not "has target changed this since
+    some ancestor" but "is target holding a stale copy of *source's* content, or
+    did target author its own version?". So: take target's blob for the path and
+    look for it anywhere in source's history of that path.
+
+    A match means target's copy originated on source — safe to take source's
+    side. No match means target has its own content — leave it for the operator.
+
+    Any git error returns False, so a bad signal never authorises an edit or a
+    deletion. Same posture as the helper this replaces: fail closed.
+    """
+    target_blob = subprocess.run(
+        ["git", "rev-parse", f"origin/{tgt}:{path}"],
         capture_output=True,
+        text=True,
         check=False,
     )
-    return result.returncode == 0
+    if target_blob.returncode != 0:
+        return False
+    wanted = target_blob.stdout.strip()
+
+    commits = subprocess.run(
+        [
+            "git",
+            "rev-list",
+            f"--max-count={_SOURCE_HISTORY_SCAN_LIMIT}",
+            f"origin/{source}",
+            "--",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if commits.returncode != 0:
+        return False
+
+    shas = commits.stdout.split()
+    for sha in shas:
+        blob = subprocess.run(
+            ["git", "rev-parse", f"{sha}:{path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if blob.returncode == 0 and blob.stdout.strip() == wanted:
+            return True
+
+    if len(shas) == _SOURCE_HISTORY_SCAN_LIMIT:
+        err_console.print(
+            f"[yellow]Warning:[/yellow] stopped after "
+            f"{_SOURCE_HISTORY_SCAN_LIMIT} commits scanning {source} history "
+            f"for [bold]{path}[/bold]; treating as target-authored."
+        )
+    return False
+
+
+def _source_deleted_path(source: str, path: str) -> bool:
+    """Return True when *source*'s history contains a deletion of *path*.
+
+    Distinguishes "source deliberately removed this file" from "source never
+    had this file" — the latter being a target-owned artifact (release notes,
+    target-only config) that must not be touched.
+
+    ``--no-merges`` keeps the answer about a real authored deletion rather than
+    a merge commit that happens to drop the path on its first-parent side.
+
+    Unlike ``git diff``, ``git log`` does not apply rename detection by default,
+    so a rename on source correctly registers here as a deletion of the old
+    path.
+    """
+    result = subprocess.run(
+        [
+            "git",
+            "log",
+            "--max-count=1",
+            "--no-merges",
+            "--diff-filter=D",
+            "--format=%H",
+            source if source.startswith("origin/") else f"origin/{source}",
+            "--",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def _resolve_pair(target: str | None, pairs: list[SyncPair]) -> SyncPair:
@@ -463,44 +553,61 @@ def _assert_merge_finalized(tgt: str) -> None:
     raise SystemExit(1)
 
 
-def _propagate_source_deletions(merge_base: str, source: str, tgt: str) -> list[str]:
-    """Propagate source-side deletions that target didn't touch since merge-base.
+def _propagate_source_deletions(source: str, tgt: str) -> list[str]:
+    """Propagate source-side deletions that target is only holding a stale copy of.
 
-    ``git merge`` doesn't surface "source deleted X, target unchanged" as
-    a UU-style conflict — it silently keeps target's copy. This pre-pass
-    walks files deleted on source since merge-base; for each one still
-    in the index where target hasn't modified it, run ``git rm`` to
-    mirror the source-side deletion.
+    ``git merge`` doesn't surface "source deleted X, target unchanged" as a
+    UU-style conflict — it silently keeps target's copy. This pre-pass finds
+    those files and mirrors the deletion with ``git rm``.
 
-    Files that target *did* modify since merge-base are left alone — the
-    operator (or the conflict loop) decides, and the existing tier-1
-    auto-resolver already handles the "source deleted, target modified"
-    conflict case via ``cat-file -e``.
+    Candidates are computed from the **target** side — files present in
+    ``origin/<tgt>`` and absent from ``origin/<source>``:
 
-    Only paths whose ``git rm`` actually succeeds are returned; this
-    matters when a deletion can't be applied (submodule, sparse-checkout
-    exclusion, …) — we don't lie to the operator log that resolution
-    succeeded when the index is unchanged.
+        git diff --diff-filter=D --no-renames origin/<tgt> origin/<source>
+
+    not from ``merge-base..origin/<source>`` as before. Sync PRs are
+    squash-merged, so the merge-base never advances past the original fork
+    point; a file created on source *after* that ancient base and later deleted
+    there is absent at both ends of that range and was never listed, while
+    target still carried a copy from an earlier squash-sync. The result was a
+    file resurrecting on every single sync (#290).
+
+    ``--no-renames`` is required, not cosmetic: ``git diff`` applies rename
+    detection by default, which reports a rename as R rather than D+A and would
+    hide every rename-shaped deletion from this scan.
+
+    Two gates narrow the candidate set, both failing closed:
+
+    1. source's history actually contains a deletion of the path — otherwise it
+       is a target-owned file source never had, and must not be touched;
+    2. target's blob for the path appears somewhere in source's history of it —
+       proving target holds source-derived content rather than its own work.
+
+    Only paths whose ``git rm`` actually succeeds are returned; this matters
+    when a deletion can't be applied (submodule, sparse-checkout exclusion, …)
+    — we don't lie to the operator log that resolution succeeded when the index
+    is unchanged.
     """
-    deleted_on_source = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--name-only",
-            "--diff-filter=D",
-            merge_base,
-            f"origin/{source}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.splitlines()
+    candidates = _z_lines(
+        subprocess.run(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "-z",
+                "--no-renames",
+                "--diff-filter=D",
+                f"origin/{tgt}",
+                f"origin/{source}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    )
 
     propagated: list[str] = []
-    for raw in deleted_on_source:
-        path = raw.strip()
-        if not path:
-            continue
+    for path in candidates:
         in_index = (
             subprocess.run(
                 ["git", "ls-files", "--error-unmatch", "--", path],
@@ -511,21 +618,34 @@ def _propagate_source_deletions(merge_base: str, source: str, tgt: str) -> list[
         )
         if not in_index:
             continue
-        if _target_unchanged_since_base(merge_base, tgt, path):
-            rm_result = subprocess.run(
-                ["git", "rm", "--", path],
-                capture_output=True,
-                text=True,
-                check=False,
+        if not _source_deleted_path(source, path):
+            # Target owns this file; source never had it.
+            continue
+        if not _target_blob_is_source_derived(source, tgt, path):
+            err_console.print(
+                f"[yellow]Warning:[/yellow] [bold]{path}[/bold] was deleted on "
+                f"{source} but {tgt}'s copy is not source-derived — leaving it "
+                f"in place for you to decide."
             )
-            if rm_result.returncode == 0:
-                propagated.append(path)
-            else:
-                detail = rm_result.stderr.strip() or "git rm failed"
-                err_console.print(
-                    f"[yellow]Warning:[/yellow] could not propagate deletion "
-                    f"of [bold]{path}[/bold]: {detail}"
-                )
+            continue
+        # -f is required, not defensive: the pre-merge has just staged this
+        # file's *addition* (target has it, the source-based branch does not),
+        # so a plain `git rm` refuses with "changes staged in the index" and
+        # the deletion silently degrades to a warning.
+        rm_result = subprocess.run(
+            ["git", "rm", "-f", "--", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rm_result.returncode == 0:
+            propagated.append(path)
+        else:
+            detail = rm_result.stderr.strip() or "git rm failed"
+            err_console.print(
+                f"[yellow]Warning:[/yellow] could not propagate deletion "
+                f"of [bold]{path}[/bold]: {detail}"
+            )
     return propagated
 
 
@@ -543,10 +663,12 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print(f"    git checkout -B {sync_branch} origin/{source}")
     console.print(f"    git merge origin/{tgt} --no-edit --no-commit")
     console.print(
-        f"    # files deleted on {source} with {tgt} unchanged since merge-base"
-        f" are 'git rm'-ed to propagate the deletion;"
+        f"    # files present on {tgt} but deleted on {source} are 'git rm'-ed to"
+        f" propagate the deletion, when {source}'s history shows the deletion and"
+        f" {tgt}'s copy is source-derived;"
         f" conflicts in [{auto_owned}] auto-resolved from {source};"
-        f" files unchanged in {tgt} since merge-base also auto-resolved from {source};"
+        f" conflicts where {tgt} holds source-derived content also resolved from"
+        f" {source};"
         " others cause a hard failure unless --prefer-source is used"
     )
     console.print(
@@ -693,7 +815,7 @@ def sync_cmd(
         # whether the merge as a whole was clean or had unrelated conflicts.
         # See #235. By running before the conflict loop, surviving
         # source-deleted-target-modified files still flow through tier 1.
-        for deleted in _propagate_source_deletions(merge_base, source, tgt):
+        for deleted in _propagate_source_deletions(source, tgt):
             console.print(f"  Auto-resolved (source deletion): {deleted}")
 
         if merge_result.returncode != 0:
@@ -730,8 +852,13 @@ def sync_cmd(
                         check=False,
                     )
                     subprocess.run(["git", "add", f], capture_output=True, check=False)
-                elif _target_unchanged_since_base(merge_base, tgt, f):
-                    # Tier 3: target hasn't changed file since merge-base
+                elif _target_blob_is_source_derived(source, tgt, f):
+                    # Tier 3: target is holding a stale copy of source's own
+                    # content, so taking source's side loses nothing. Asked as
+                    # "is this blob source-derived?" rather than "unchanged
+                    # since merge-base" — under squash promotion the merge-base
+                    # is permanently stale, which made this tier almost never
+                    # fire and pushed resolvable conflicts to a tier-5 abort.
                     subprocess.run(
                         ["git", "checkout", f"origin/{source}", "--", f],
                         capture_output=True,
@@ -739,7 +866,7 @@ def sync_cmd(
                     )
                     subprocess.run(["git", "add", f], capture_output=True, check=False)
                     console.print(
-                        f"  Auto-resolved ({tgt} unchanged since merge-base): {f}"
+                        f"  Auto-resolved ({tgt} holds source-derived content): {f}"
                     )
                 elif prefer_source or pair.prefer_source:
                     # Tier 4: explicit preference — source wins
