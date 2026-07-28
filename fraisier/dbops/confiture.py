@@ -358,13 +358,17 @@ def migrate_up(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
-    if result.has_errors:  # pragma: no cover
-        # Raise FraisierMigrationError with detailed context
+    if result.has_errors:
+        # Carry how many migrations DID apply. Confiture commits each migration
+        # as it goes, so a batch that fails part-way leaves the earlier ones
+        # applied and tracked. Dropping this count made the deployer believe
+        # nothing had been applied and skip the DB rollback entirely (#272).
         raise FraisierMigrationError(
             message=f"Migration failed: {result.error_summary}",
             direction="up",
             db_error=result.error_summary or "Unknown migration error",
             rollback_attempted=False,
+            steps_applied=len(result.migrations_applied),
         )
 
     return MigrationResult(

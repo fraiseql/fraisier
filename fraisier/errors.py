@@ -283,6 +283,7 @@ class MigrationError(DatabaseError):
         db_error: str | None = None,
         rollback_attempted: bool | None = None,
         rollback_succeeded: bool | None = None,
+        steps_applied: int | None = None,
     ):
         """Initialize MigrationError with migration context.
 
@@ -299,6 +300,12 @@ class MigrationError(DatabaseError):
             db_error: Raw database error message from database engine
             rollback_attempted: Whether automatic rollback was attempted
             rollback_succeeded: Whether rollback succeeded (None if not attempted)
+            steps_applied: How many migrations in the batch DID apply before it
+                failed. Distinct from *step*, which is a 1-indexed position in
+                the sequence — this is a count, and it is what a caller needs to
+                roll the right number back. ``None`` means "unknown", which
+                callers treat as "do not attempt a DB rollback"; use ``0`` to
+                state positively that nothing was applied.
         """
         self.migration_file = migration_file
         self.direction = direction
@@ -306,6 +313,7 @@ class MigrationError(DatabaseError):
         self.db_error = db_error
         self.rollback_attempted = rollback_attempted
         self.rollback_succeeded = rollback_succeeded
+        self.steps_applied = steps_applied
 
         # Auto-classify error if db_error provided
         self.classification: ErrorClassification | None = None
@@ -322,6 +330,7 @@ class MigrationError(DatabaseError):
             "db_error": db_error,
             "rollback_attempted": rollback_attempted,
             "rollback_succeeded": rollback_succeeded,
+            "steps_applied": steps_applied,
         }
         # Remove None values from context
         migration_context = {
