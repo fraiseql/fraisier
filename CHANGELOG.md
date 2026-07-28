@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-07-28
+
+Closes #290. v0.48.0 fixed the half where source *deletes* a file and named the
+half it did not fix; this is that half — source *reverting* a previously
+promoted change.
+
+### Fixed
+
+- **A source-side content revert is no longer silently undone by the pre-merge** (`cli/sync.py`, #290). When source reverts a file to exactly its merge-base content, git's 3-way merge sees `ours == base` and resolves it as *take theirs* — with a zero exit code and no conflict, so the tier loop never saw it and target's stale promoted copy won. Given a correct merge-base that resolution is right; under squash promotion the base is the ancient fork point that never advances, so `ours == base` no longer means "source never touched this" but "source added it and then reverted it". A new pre-pass restores source's version when target's copy is source-derived. This is the same stale-anchor root cause as the deletion half, reached through a different code path.
+- The `--dry-run` plan describes the second pre-pass alongside the first.
+
+### Notes for operators
+
+- **Only the exact revert to base content was affected.** A revert to any *other* content produces a real conflict, which tier 3 has resolved since v0.48.0; and a revert in one hunk while target edits a different hunk auto-merges correctly with both changes surviving. If you worked around this by hand-deleting or hand-reverting files directly on the target branch, that is no longer needed.
+- **Target-authored content is never overwritten.** When target's copy of a differing file is not source-derived, sync keeps target's version and prints a warning naming the path. Promotion silently clobbering a target-side hotfix is a worse failure than a missed revert, so the gate fails closed in that direction.
+
+### Changed
+
+- `_propagate_source_deletions` and the new `_propagate_source_reverts` share a `_diff_paths` helper. Both compute candidates target-side (`origin/<tgt>` vs `origin/<source>`) rather than from a merge-base, and both keep `--no-renames`, without which git's default rename detection reports a rename as `R` and hides every rename-shaped deletion.
+
+### Known limitations
+
+- Detection is anchored on what the merge did to the **index**, so it only applies to the pre-merge inside `fraisier sync`. A revert lost by a merge performed outside the tool is not recovered retroactively.
+- `_target_blob_is_source_derived` stops after 200 commits of source history for one path and treats exhaustion as "target-authored", leaving the file alone and warning. A revert to a file with a very long history on source can therefore still need a manual decision.
+
 ## [0.49.0] - 2026-07-28
 
 Completes the other half of #272. v0.48.0 made the automatic database rollback
