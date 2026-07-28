@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-07-28
+
+Closes #284. Completes the #283 unification: `fraisier setup` was the last
+server-side consumer that had never been moved onto `scaffold.state_dir`.
+
+### Fixed
+
+- **`fraisier setup` now populates `scaffold.state_dir`** (`setup.py`, #284). After a bare `setup`, `{state_dir}/install.sh` did not exist. That exact path is baked into the scaffold-install-helper unit as its `ExecStart` argument (`renderer.py:936-941`), and the helper daemon exits 1 at startup when it is missing (`scaffold_install_helper.py:228-230`) — so the socket never came up and every deploy silently fell back to the slower subprocess install path, until the first config-changing deploy regenerated the tree. Same silent-degradation class #283 closed for `bootstrap`, narrowed to the manual-`setup`-without-a-deploy window. `setup` now creates and chowns `state_dir` (as `bootstrap` does) and copies its rendered tree in.
+
+### Changed
+
+- `fraisier setup --dry-run` lists two new actions under a `scaffold` category: the copy into `state_dir` and the recursive chown of the result. No existing action changed.
+- `/var/lib/fraisier/<project>/scaffold` is now created and owned by `deploy_user` by `setup`, matching what `bootstrap` already did.
+
+### Docs
+
+- **The two provisioning flows differ on purpose, and that is now written down** (`docs/deployment-guide.md`, `docs/cli-reference.md`). A table contrasting `output_dir` (what you render and review) with `state_dir` (what the machine reads at deploy time), why `setup` writes both while `bootstrap` writes only the second, and a pointer from `setup` to `bootstrap` for fresh servers.
+
+### Notes for operators
+
+- **The install source is unchanged.** `setup` still installs from `scaffold.output_dir`, so the render → `git diff` → install loop that makes it the manual flow works exactly as before. `state_dir` is added as what the machine consumes, not substituted as what you install from. A test pins this.
+- **The webhook env file is deliberately excluded from the copy.** It carries `FRAISIER_WEBHOOK_SECRET`, its only install target is `/etc/fraisier/<project>.webhook.env` at mode `0640`, and `state_dir` is a world-readable system directory. The deploy path's renderer never writes it there either, so excluding it also keeps the two trees comparable.
+- Re-run `sudo fraisier setup` on any host provisioned by `setup` rather than `bootstrap` to close the window without waiting for a config-changing deploy. Hosts already past their first such deploy are unaffected — the tree is already there.
+
+### Known limitations
+
+- **`setup` still installs from `output_dir`, so the trees can diverge.** If you edit files under `state_dir` on the server, the next `setup` overwrites them from `output_dir` without warning. Making `state_dir` the install source too (Option 1 on #284) was rejected: it would break the review-then-install loop for a flow that is not otherwise broken.
+- **The copy is unconditional, not a sync.** Files present in `state_dir` but not in `output_dir` — a unit for an environment you have since removed, say — survive it. Nothing prunes `state_dir`, here or on the deploy path, which regenerates into it the same way. Stale files there are inert (`install.sh` only ever copies files it names), but they are not cleaned up.
+
 ## [0.50.1] - 2026-07-28
 
 Closes #292. Found while re-auditing the unit templates for #286 — not a cause

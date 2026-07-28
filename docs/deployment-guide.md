@@ -302,13 +302,17 @@ sudo fraisier setup
 2. Creates system directories:
    - `/var/lib/fraisier/repos/` — bare git repositories
    - `/var/lib/fraisier/status/` — deployment status files
+   - `/var/lib/fraisier/<project>/scaffold/` — the server-side scaffold state tree
+     (`scaffold.state_dir`)
    - `/run/fraisier/` — lock files
-3. Sets ownership and permissions on `app_path` so the deploy user can write to the
+3. Copies the rendered scaffold tree into `scaffold.state_dir` and gives it to the
+   deploy user — see [Two trees: `output_dir` and `state_dir`](#two-trees-output_dir-and-state_dir)
+4. Sets ownership and permissions on `app_path` so the deploy user can write to the
    worktree while the application user owns the running code
-4. Configures `git config --global safe.directory` for the app paths
-5. Installs the sudoers fragment (`/etc/sudoers.d/<project>`)
-6. Installs the webhook systemd unit and application service units
-7. Reloads systemd: `systemctl daemon-reload`
+5. Configures `git config --global safe.directory` for the app paths
+6. Installs the sudoers fragment (`/etc/sudoers.d/<project>`)
+7. Installs the webhook systemd unit and application service units
+8. Reloads systemd: `systemctl daemon-reload`
 
 Filter to a specific environment or server:
 
@@ -316,6 +320,34 @@ Filter to a specific environment or server:
 sudo fraisier setup --environment production
 sudo fraisier setup --server prod.myserver.com
 ```
+
+### Two trees: `output_dir` and `state_dir`
+
+The two provisioning flows render the same files but keep them in different places,
+and the distinction matters if you ever have to debug one.
+
+| | `scaffold.output_dir` | `scaffold.state_dir` |
+|---|---|---|
+| Default | `scripts/generated` (relative to CWD) | `/var/lib/fraisier/<project>/scaffold` |
+| Purpose | what **you** render and review before installing | what the **machine** reads at deploy time |
+| Written by | `fraisier scaffold`, `fraisier setup` | `fraisier bootstrap`, every config-changing deploy, `fraisier setup` |
+| Read by | `fraisier setup` (its install sources) | scaffold regeneration, the scaffold-install-helper socket, the staleness check |
+
+`fraisier setup` installs from `output_dir` — that is deliberate, and it is what makes
+the manual flow reviewable: you render into a directory, read the diff, and install
+exactly what you read. It *also* copies that tree into `state_dir`, because the
+scaffold-install-helper's systemd unit has `<state_dir>/install.sh` baked into its
+`ExecStart` and the helper refuses to start if that file is missing. Without the copy,
+deploys fall back to a slower subprocess install path until the first config-changing
+deploy regenerates the tree.
+
+The webhook env file is the one rendered file **not** copied into `state_dir`: it holds
+`FRAISIER_WEBHOOK_SECRET` and belongs only at `/etc/fraisier/<project>.webhook.env`,
+installed mode `0640`.
+
+`fraisier bootstrap` skips `output_dir` entirely — it renders to a temporary directory
+locally and uploads straight into `state_dir` on the server. There is nothing to review
+because you are not on the machine being provisioned.
 
 ---
 
