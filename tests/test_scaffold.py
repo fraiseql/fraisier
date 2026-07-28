@@ -2974,7 +2974,9 @@ fraises:
 
         content = (tmp_path / "output" / "sudoers").read_text()
         assert "ALL=(myapp)" in content
-        assert "/home/myapp/.local/bin/uv sync --frozen *" in content
+        # No trailing wildcard — sudo requires ` *` to match at least one further
+        # argument, and the deploy path appends none (#294).
+        assert "/home/myapp/.local/bin/uv sync --frozen" in content
 
     def test_sudoers_omits_install_when_no_user(self, tmp_path):
         """Sudoers omits install rule when install.user is not set (#44)."""
@@ -3337,7 +3339,7 @@ fraises:
         body = content.split("# Dependency install rules (deduplicated)\n", 1)[1]
         rule_blocks = [b for b in body.split("/usr/bin/") if b]
         assert len(rule_blocks) >= 2, "expected both rules to render"
-        between = body.split("/usr/bin/apt-get install *", 1)[1]
+        between = body.split("/usr/bin/apt-get install", 1)[1]
         between = between.split("# Dependency install", 1)[0]
         assert "\n\n" in between, (
             "blank line between rules should be preserved for human-readability"
