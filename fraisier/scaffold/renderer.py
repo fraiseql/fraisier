@@ -8,6 +8,7 @@ to the configured output_dir.
 """
 
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -95,6 +96,55 @@ _COMMAND_PATH_MAP = {
 }
 
 
+# Where to look for a command when it is in neither _COMMAND_PATH_MAP nor the
+# scaffolding host's PATH. These are the target *server's* likely locations —
+# scaffold often runs on a dev box or in a container whose PATH bears no
+# relation to the box the sudoers rule will be installed on.
+_COMMAND_SEARCH_DIRS = (
+    "/usr/bin",
+    "/bin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/sbin",
+)
+
+
+def _is_executable_file(path: Path) -> bool:
+    """Return True when *path* is an existing regular file (seam for tests)."""
+    return path.is_file()
+
+
+def _absolute_command(token: str) -> str:
+    """Resolve a single command token to an absolute path.
+
+    sudoers requires a fully-qualified path in the ``Cmnd`` position; a bare
+    token makes the parser reject the whole fragment (#287).
+
+    Resolution order matters. ``_COMMAND_PATH_MAP`` wins over ``shutil.which``
+    because ``fraisier scaffold`` frequently runs on a machine that is *not* the
+    target server, where ``which`` would return a dev-box path (e.g. a per-user
+    ``~/.local/bin/uv``) that is wrong for the box the rule is installed on.
+
+    Returns the token unchanged when nothing resolves it; callers decide how
+    loudly to complain.
+    """
+    if token.startswith("/"):
+        return token
+    if token in _COMMAND_PATH_MAP:
+        return _COMMAND_PATH_MAP[token]
+
+    found = shutil.which(token)
+    if found:
+        return found
+
+    for directory in _COMMAND_SEARCH_DIRS:
+        candidate = Path(directory) / token
+        if _is_executable_file(candidate):
+            return str(candidate)
+
+    return token
+
+
 def _resolve_command_path(cmd: str) -> str:
     """Resolve a command to its absolute path.
 
@@ -108,8 +158,7 @@ def _resolve_command_path(cmd: str) -> str:
     if not parts:
         return cmd
 
-    first_word = parts[0]
-    absolute = _COMMAND_PATH_MAP.get(first_word, first_word)
+    absolute = _absolute_command(parts[0])
 
     if len(parts) == 1:
         return absolute
@@ -277,6 +326,27 @@ def _any_fraise_has_database(fraises_list: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _assert_absolute_cmnd(abs_cmd: str, *, fraise_name: str, env_name: str) -> None:
+    """Fail before emitting a sudoers rule the parser will reject (#287).
+
+    sudoers requires a fully-qualified path in the ``Cmnd`` position. Writing a
+    bare token there makes ``visudo`` reject the entire fragment, which aborts
+    ``scaffold-install`` — taking down the systemd units, the per-fraise
+    install-helper socket, nginx and the PostgreSQL config with it. Failing here
+    costs one clear message instead.
+    """
+    token = abs_cmd.split(None, 1)[0]
+    if token.startswith("/"):
+        return
+    searched = ", ".join(_COMMAND_SEARCH_DIRS)
+    raise ValidationError(
+        f"install.command[0] must resolve to an absolute path so the sudoers "
+        f"rule is valid: got {token!r} for fraise {fraise_name!r} "
+        f"({env_name}), which was not found on PATH or in {searched}. "
+        f"Set an absolute path in fraises.yaml, e.g. '/usr/bin/{token}'."
+    )
+
+
 def _collect_deduplicated_sudoers_rules(
     config: FraisierConfig, fraises_list: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -309,6 +379,9 @@ def _collect_deduplicated_sudoers_rules(
                     # Resolve command to absolute path
                     cmd_str = " ".join(install_cmd)
                     abs_cmd = _resolve_command_path(cmd_str)
+                    _assert_absolute_cmnd(
+                        abs_cmd, fraise_name=fraise["name"], env_name=env_name
+                    )
 
                     rule_key = (deploy_user, install_user, abs_cmd)
                     if rule_key not in rules_dict:
