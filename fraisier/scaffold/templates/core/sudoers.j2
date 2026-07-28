@@ -7,7 +7,10 @@
 {% for rule in sudoers_rules %}
 # {{ rule.description }}
 # Environments: {{ rule.environments | join(', ') }}
-{{ rule.from_user }} ALL=({{ rule.as_user }}) NOPASSWD: {{ rule.cmd }} *
+{# No trailing wildcard: sudo requires a ` *` tail to match at least one further
+   argument, and the deploy path invokes install.command with no extra arguments
+   (deployers/mixins.py), so a wildcard rule never matched at all (#294). #}
+{{ rule.from_user }} ALL=({{ rule.as_user }}) NOPASSWD: {{ rule.cmd }}
 {% if not loop.last %}
 
 {% endif %}
