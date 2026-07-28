@@ -32,7 +32,7 @@ from .locking import (
     is_deployment_locked,
     is_draining,
 )
-from .status import read_status
+from .status import FAILURE_STATES, read_status
 from .webhook_rate_limit import check_rate_limit
 from .webhook_self_upgrade import maybe_self_upgrade
 
@@ -883,7 +883,10 @@ async def get_deploy_details(fraise_name: str, request: Request) -> dict[str, An
     if status is None:
         raise _structured_error(404, "not_found", f"Fraise '{fraise_name}' not found")
 
-    if status.state != "failed":
+    # Membership, not equality: `rollback_failed` means the schema may be dirty,
+    # and answering "No failure to report" on the endpoint an operator queries
+    # for failure detail is the worst possible reply (#293).
+    if status.state not in FAILURE_STATES:
         return {
             "state": status.state,
             "version": status.version,
