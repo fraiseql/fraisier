@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.1] - 2026-07-28
+
+Closes #292. Found while re-auditing the unit templates for #286 — not a cause
+of #286, whose residue is elsewhere.
+
+### Fixed
+
+- **The app unit no longer byte-compiles into its own venv** (`core/service.j2`, #292). It was the only Python-invoking unit template without `Environment=PYTHONDONTWRITEBYTECODE=1`; the other eight all set it. It is also the one unit whose `User=` can be a **third** identity — `service.user`, independent of both `scaffold.deploy_user` and `install.user` — so the running app wrote `__pycache__` under `app_path/.venv/` owned by an identity the install user cannot unlink on the next `uv sync --frozen`. That is the #196 failure class from a direction #196 did not cover.
+
+### Notes for operators
+
+- **This costs startup time, deliberately.** `--compile-bytecode` is used nowhere, so the venv has never been precompiled at install time; with bytecode writing off, every start recompiles site-packages *and* your app modules. On a `Restart=on-failure` unit that starts rarely this is the right trade against an un-cleanable venv, but it is a real cost on a large codebase.
+- **It is overridable.** The directive is emitted *before* the `service.environment` loop, and systemd resolves a repeated `Environment=` assignment last-wins, so `service.environment: {PYTHONDONTWRITEBYTECODE: "0"}` restores the old behaviour if you measure the cost and decide against it.
+- Re-run `fraisier scaffold` and reinstall the unit to pick this up; an already-running service keeps its current environment until restarted. Existing `__pycache__` residue is cleared by the stale-cache sweep at `scaffold-install` time, as it was in v0.48.0.
+
+### Known limitations
+
+- **Redirecting the cache rather than disabling it is not implemented.** `PYTHONPYCACHEPREFIX` pointed at a `service.user`-writable directory would keep both the compile cache and the ownership guarantee, but needs a state directory, its creation and ownership in scaffold, a `ReadWritePaths` entry and an uninstall sweep. Tracked separately (#298) rather than bundled here.
+- The guard added over the unit templates classifies fail-closed from `ExecStart`: a unit whose executable is a Jinja variable is assumed to be Python. Only a concretely shell `ExecStart` is exempt, and the exempt set is pinned by name, so a wrong exemption fails the suite rather than passing silently.
+
 ## [0.50.0] - 2026-07-28
 
 Closes #290. v0.48.0 fixed the half where source *deletes* a file and named the
