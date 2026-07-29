@@ -163,3 +163,145 @@ class TestCli:
         r = _invoke(["doctor", "--check", "python_version"])
         # python_version always passes on this CI matrix.
         assert r.exit_code == 0
+
+
+class TestInstallCompileBytecodeCheck:
+    """`uv sync` without --compile-bytecode leaves the venv uncompiled (#298).
+
+    Since v0.50.1 every app unit sets PYTHONDONTWRITEBYTECODE=1, so nothing
+    ever writes the cache at runtime either. Measured on a 49 MB site-packages
+    app: ~434 ms of avoidable recompilation on every single start. The two
+    settings compose — PYTHONDONTWRITEBYTECODE only blocks *writes*, so a cache
+    laid down at install time is still read.
+    """
+
+    class _Cfg:
+        """Minimal stand-in for FraisierConfig's fraise iteration."""
+
+        def __init__(self, command, *, install_user="appuser"):
+            install = {"command": command}
+            if install_user:
+                install["user"] = install_user
+            self._f = {
+                "api": {
+                    "install": install,
+                    "environments": {"production": {"app_path": "/var/www/api"}},
+                }
+            }
+
+        @property
+        def fraises(self):
+            return self._f
+
+    def _run(self, cfg):
+        return doctor.DOCTOR_CHECKS["install_compile_bytecode"].fn(cfg)
+
+    def test_registered(self):
+        assert "install_compile_bytecode" in doctor.DOCTOR_CHECKS
+
+    def test_warns_for_uv_sync_without_the_flag(self):
+        result = self._run(self._Cfg(["uv", "sync", "--frozen"]))
+
+        assert result.status == "warn"
+        assert "api" in result.detail
+        assert result.fix_hint is not None
+        assert "--compile-bytecode" in result.fix_hint
+
+    def test_passes_when_the_flag_is_present(self):
+        result = self._run(self._Cfg(["uv", "sync", "--frozen", "--compile-bytecode"]))
+
+        assert result.status == "pass"
+
+    def test_skips_non_uv_install_commands(self):
+        """poetry/npm/pip say nothing about uv's bytecode behaviour.
+
+        `skip`, not `pass` — nothing was checked, and the doctor framework
+        already uses skip for inapplicable checks (see helper_sudoers). Skip
+        counts as pass for the exit code.
+        """
+        for cmd in (
+            ["npm", "ci"],
+            ["poetry", "install"],
+            ["pip", "install", "-e", "."],
+        ):
+            result = self._run(self._Cfg(cmd))
+            assert result.status == "skip", f"{cmd} should not warn: {result.detail}"
+
+    def test_matches_an_absolute_uv_path(self):
+        """install.command[0] is often resolved to an absolute path."""
+        result = self._run(self._Cfg(["/usr/local/bin/uv", "sync", "--frozen"]))
+
+        assert result.status == "warn"
+
+    def test_skips_uv_subcommands_other_than_sync(self):
+        """`uv run` does not create the venv, so it says nothing about .pyc."""
+        result = self._run(self._Cfg(["uv", "run", "something"]))
+
+        assert result.status == "skip"
+
+    def test_skips_without_a_config(self):
+        assert self._run(None).status == "skip"
+
+    def test_skips_when_no_install_command_configured(self):
+        class _Empty:
+            def __init__(self):
+                self.fraises = {"api": {"environments": {"production": {}}}}
+
+        assert self._run(_Empty()).status == "skip"
+
+
+class TestInstallCompileBytecodeEnvLevel:
+    """`install:` may be set per-environment, overriding the fraise level.
+
+    `renderer.py:372` resolves it as `env_config.get("install") or fraise_install`,
+    so a check that only reads the fraise level misses these entirely.
+    """
+
+    def _run(self, cfg):
+        return doctor.DOCTOR_CHECKS["install_compile_bytecode"].fn(cfg)
+
+    def _cfg(self, fraise_install, env_install):
+        class _Cfg:
+            def __init__(self):
+                self.fraises = {
+                    "api": {
+                        **({"install": fraise_install} if fraise_install else {}),
+                        "environments": {
+                            "production": {
+                                "app_path": "/var/www/api",
+                                **({"install": env_install} if env_install else {}),
+                            }
+                        },
+                    }
+                }
+
+        return _Cfg()
+
+    def test_warns_on_env_level_install_command(self):
+        result = self._run(
+            self._cfg(None, {"command": ["uv", "sync", "--frozen"], "user": "appuser"})
+        )
+
+        assert result.status == "warn"
+        assert "api" in result.detail
+
+    def test_env_level_overrides_a_compliant_fraise_level(self):
+        """Env-level wins, so a compliant fraise default must not mask it."""
+        result = self._run(
+            self._cfg(
+                {"command": ["uv", "sync", "--frozen", "--compile-bytecode"]},
+                {"command": ["uv", "sync", "--frozen"]},
+            )
+        )
+
+        assert result.status == "warn"
+
+    def test_env_level_compliant_overrides_a_warning_fraise_level(self):
+        result = self._run(
+            self._cfg(
+                {"command": ["uv", "sync", "--frozen"]},
+                {"command": ["uv", "sync", "--frozen", "--compile-bytecode"]},
+            )
+        )
+
+        assert result.status == "pass"
