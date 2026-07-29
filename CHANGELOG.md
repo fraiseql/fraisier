@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-07-29
+
+Closes #296. **This changes the status reported by nearly every failed
+deployment.** Read the compatibility note before upgrading.
+
+### Compatibility — read this first
+
+A failed deploy that reverted the working tree and restarted the service now reports **`rolled_back`** where it previously reported **`failed`**. Most deploy failures on a box with history fall into this case: `_restore_previous_state` git-reverts on *every* failure that has a previous SHA, migrations or not.
+
+- **Alerting that tests `state == "failed"` will stop seeing most failed deploys.** Test membership in `status.FAILURE_STATES` (`{failed, rolled_back, rollback_failed}`) instead — the set exists for exactly this reason and has since v0.49.0.
+- **Deployment-history stats shift too.** `mixins.py:478-479` maps a `rolled_back` result onto `mark_deployment_rolled_back`, so `fraisier ops` will show these under "Rolled back" rather than "Failed". The underlying deploy is still recorded as unsuccessful.
+- Nothing inside fraisier needed changing: `cli/_info.py`, `cli/ops.py`, `notifications/base.py` and the webhook already handle `rolled_back`.
+
+### Changed
+
+- **A git-only revert reports `ROLLED_BACK`** (`deployers/api.py`, #296). It is what actually happened: the tree is back on the previous commit and the service is running it. Reporting `FAILED` left an operator unable to tell that from an undefined half-deployed state — the same ambiguity #293 closed on the database axis, on the axis #293 deliberately left open.
+- The status message names what was restored ("reverted to the previous commit and the service restarted on it") and does not mention the database when no migrations ran.
+
+### Notes for operators
+
+- **A revert that itself failed still reports `FAILED`, deliberately.** `ROLLBACK_FAILED` means "the schema may be half-migrated, do not restart the service"; that is false when no migrations ever ran, so a failed git-only revert must not borrow it. It restored nothing, and `FAILED` says so.
+- **No new state was introduced.** A third status (`failed_reverted`) was considered and rejected: it preserves the `failed` contract but every consumer, internal and external, has to learn it.
+
+### Known limitations
+
+- **Only the automatic post-failure restore changed.** The explicit `rollback()` entry point already reported `ROLLED_BACK` for a git-only revert in `ETLDeployer` (`etl.py:80`) and `ScheduledDeployer` (`scheduled.py:249`); those are untouched.
+- **The timeout path is untouched.** `_handle_timeout` routes through `self.rollback()` and builds its own result; it was out of scope here.
+- **`fraisier status` cannot distinguish the two rollback shapes.** A database rollback and a git-only revert both write `rolled_back`. Only the message differs — there is no machine-readable field saying which axis moved.
+
 ## [0.50.1] - 2026-07-28
 
 Closes #292. Found while re-auditing the unit templates for #286 — not a cause
