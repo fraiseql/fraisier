@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-07-29
+
+Four fixes that had been carried as separate branches, released together.
+Closes #284, #294, #296, #303. **Read the compatibility note first** — #296
+changes the status reported by nearly every failed deployment.
+
+### ⚠️ Compatibility — deployment status
+
+A failed deploy that reverted the working tree and restarted the service now reports **`rolled_back`** where it previously reported **`failed`** (#296). Most deploy failures on a box with history fall into this case: the automatic restore git-reverts on *every* failure that has a previous SHA, migrations or not.
+
+- **Alerting that tests `state == "failed"` will stop seeing most failed deploys.** Test membership in `status.FAILURE_STATES` (`{failed, rolled_back, rollback_failed}`) instead — that set exists for exactly this reason and has since v0.49.0.
+- **Deployment-history stats shift too.** A `rolled_back` result is mapped onto `mark_deployment_rolled_back`, so `fraisier ops` shows these under "Rolled back" rather than "Failed". The deploy is still recorded as unsuccessful.
+- Nothing inside fraisier needed changing: `cli/_info.py`, `cli/ops.py`, `notifications/base.py` and the webhook already handle `rolled_back`.
+
+### Fixed
+
+- **The generated sudoers rule now authorises the command the deploy actually runs** (`core/sudoers.j2`, #294). Every rule was rendered as `NOPASSWD: <cmd> *`, but the deploy invokes `sudo -H -u <install_user> <install.command>` and appends nothing. sudo requires a trailing ` *` to match **at least one** further argument, so the rule never matched: the `sudo -u` install fallback has never been authorised for any project, and would have prompted for a password and failed non-interactively. Settled against sudo's own policy engine (1.9.17p2) with `sudo -l`, which checks the policy without executing — the real invocation reported NO MATCH while a control with a trailing argument matched. The wildcard is gone.
+- **`fraisier setup` now populates `scaffold.state_dir`** (`setup.py`, #284). After a bare `setup`, `{state_dir}/install.sh` did not exist. That exact path is baked into the scaffold-install-helper unit as its `ExecStart` argument, and the helper daemon exits 1 at startup when it is missing — so the socket never came up and every deploy silently fell back to the slower subprocess install path, until the first config-changing deploy regenerated the tree. Same silent-degradation class #283 closed for `bootstrap`, narrowed to the manual-`setup`-without-a-deploy window.
+- **Stale `__pycache__` sweeps now match any foreign owner, not just root** (`core/install.sh.j2`, #303). v0.48.0 widened the owner filter for the *new* uv-tool sweep only; the app-venv and `~/.local/lib` sweeps kept `-user root`. Residue written by `service.user` — an identity independent of both `deploy_user` and `install.user`, i.e. exactly the #292 failure class — therefore survived every sweep. The app-venv sweep now targets the identity that actually owns that venv (`install.user`, falling back to `deploy_user`).
+- **The `__pycache__` remediation advice no longer hands you a command that cannot work** (`deployers/mixins.py`, `install_helper.py`, #303). Both `Permission denied` advice strings hardcoded `find … -user root`. The writer can be `service.user` (#292) or `install.user` (#286) — neither is root — so an operator hitting this exact error was told to run something that would match nothing. Both now resolve the venv's owner at paste time with `stat -c %U`.
+
+### Changed
+
+- **A git-only revert reports `ROLLED_BACK`** (`deployers/api.py`, #296). It is what actually happened: the tree is back on the previous commit and the service is running it. Reporting `FAILED` left an operator unable to tell that from an undefined half-deployed state — the same ambiguity #293 closed on the database axis, on the axis #293 deliberately left open. The status message names what was restored and does not mention the database when no migrations ran.
+- `fraisier setup --dry-run` lists two new actions under a `scaffold` category: the copy into `state_dir` and the recursive chown of the result. No existing action changed.
+- `/var/lib/fraisier/<project>/scaffold` is now created and owned by `deploy_user` by `setup`, matching what `bootstrap` already did.
+
+### Docs
+
+- **The two provisioning flows differ on purpose, and that is now written down** (`docs/deployment-guide.md`, `docs/cli-reference.md`, #284). A table contrasting `output_dir` (what you render and review) with `state_dir` (what the machine reads at deploy time), why `setup` writes both while `bootstrap` writes only the second, and a pointer from `setup` to `bootstrap` for fresh servers.
+
+### Corrected
+
+- **v0.50.1's release notes claimed existing `__pycache__` residue was already cleared by the sweep.** It was not, for the residue that entry is about. The v0.50.1 entry below now carries a correction pointing here. On v0.50.1 that residue must be cleared by hand:
+  ```sh
+  sudo find <app_path>/.venv -name __pycache__ ! -user "$(stat -c %U <app_path>/.venv)" -type d -exec rm -rf {} +
+  ```
+
+### Notes for operators
+
+- **Re-run `fraisier scaffold && sudo fraisier scaffold-install --yes`** on every host. This release changes three generated artifacts — the sudoers fragment, `install.sh`'s sweeps, and (via `setup`) the scaffold state tree. Until you do, the installed copies keep the old behaviour.
+- **The sudoers change is a tightening.** The rule now authorises exactly the configured `install.command` and nothing else. If you ran `sudo -u <user> uv sync --frozen --offline` by hand and relied on the fragment, that stops working — deliberately. Nothing automated did.
+- **`fraisier setup` still installs from `output_dir`.** The render → `git diff` → install loop that makes it the manual flow is unchanged; `state_dir` is added as what the machine consumes, not substituted as what you install from.
+- **The webhook env file is deliberately excluded from the `state_dir` copy.** It carries `FRAISIER_WEBHOOK_SECRET`, its only install target is `/etc/fraisier/<project>.webhook.env` at mode `0640`, and `state_dir` is world-readable.
+- **A revert that itself failed still reports `FAILED`, deliberately.** `ROLLBACK_FAILED` means "the schema may be half-migrated, do not restart the service"; that is false when no migrations ever ran.
+
+### Known limitations
+
+- **#294 was verified on sudo 1.9.17p2 only.** The behaviour relied on is documented shell-style wildcard semantics, not a version quirk, but the probe answered for one version. A second, permissive rule was deliberately **not** rendered: it would authorise arbitrary extra arguments under NOPASSWD, for a caller that does not exist.
+- **`setup` still installs from `output_dir`, so the trees can diverge** (#284). Hand-edit something under `state_dir` and the next `setup` overwrites it. The copy is also unconditional, not a sync — files present in `state_dir` with no counterpart in `output_dir` survive it, and nothing prunes `state_dir`.
+- **Only the automatic post-failure restore changed** (#296). The explicit `rollback()` entry point already reported `ROLLED_BACK` in `ETLDeployer` and `ScheduledDeployer`; the timeout path builds its own result and is untouched. `fraisier status` still cannot distinguish a database rollback from a git-only revert — both write `rolled_back`, and only the message differs.
+- **The sweep clears residue; it does not stop every writer** (#303). A process invoked *outside* systemd (a manual `sudo -u <user> …` while debugging) is still unconstrained — the leading candidate for #286's residue, and why #286 closed without a code cause being found. The sweep also runs at `scaffold-install` time only.
+
 ## [0.50.1] - 2026-07-28
 
 Closes #292. Found while re-auditing the unit templates for #286 — not a cause
@@ -21,6 +74,7 @@ of #286, whose residue is elsewhere.
 - **This costs startup time, deliberately.** `--compile-bytecode` is used nowhere, so the venv has never been precompiled at install time; with bytecode writing off, every start recompiles site-packages *and* your app modules. On a `Restart=on-failure` unit that starts rarely this is the right trade against an un-cleanable venv, but it is a real cost on a large codebase.
 - **It is overridable.** The directive is emitted *before* the `service.environment` loop, and systemd resolves a repeated `Environment=` assignment last-wins, so `service.environment: {PYTHONDONTWRITEBYTECODE: "0"}` restores the old behaviour if you measure the cost and decide against it.
 - Re-run `fraisier scaffold` and reinstall the unit to pick this up; an already-running service keeps its current environment until restarted. Existing `__pycache__` residue is cleared by the stale-cache sweep at `scaffold-install` time, as it was in v0.48.0.
+  - **Correction (v0.52.0, #303):** that last sentence was wrong. The app-venv sweep filtered `-user root` only, so `service.user`-owned residue — exactly what this entry is about — survived it. Fixed in v0.52.0; on v0.50.1 the residue must be cleared by hand.
 
 ### Known limitations
 
