@@ -1098,7 +1098,7 @@ class TestSighupConfigReload:
         from fraisier import webhook
 
         if not hasattr(signal, "SIGHUP"):
-            pytest.skip("SIGHUP not available on this platform")
+            pytest.skip("SIGHUP not available on this platform")  # ty: ignore[too-many-positional-arguments]
 
         captured: dict[str, object] = {}
 
@@ -1120,7 +1120,7 @@ class TestSighupConfigReload:
             # Invoke the registered callback directly (deterministic — no
             # dependence on real signal-delivery timing) and prove it reloads.
             with patch("fraisier.webhook.reset_config") as mock_reset:
-                captured["cb"]()  # type: ignore[operator]
+                captured["cb"]()  # ty: ignore[call-non-callable]
                 assert mock_reset.called
 
             webhook._remove_sighup_reload(loop)
@@ -1139,7 +1139,7 @@ class TestSighupConfigReload:
         from fraisier import webhook
 
         if not hasattr(signal, "SIGHUP"):
-            pytest.skip("SIGHUP not available on this platform")
+            pytest.skip("SIGHUP not available on this platform")  # ty: ignore[too-many-positional-arguments]
 
         async def _run() -> None:
             loop = asyncio.get_running_loop()

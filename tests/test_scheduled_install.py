@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -20,20 +21,27 @@ from fraisier.scheduled_install import (
 
 
 class FakeRunner:
-    """Records every ``run`` call for assertion. Does NOT execute anything."""
+    """Records every ``run`` call for assertion. Does NOT execute anything.
+
+    The signature mirrors ``runners.CommandRunner`` exactly: it is a structural
+    stand-in for that Protocol, so a fake whose ``run`` returns a duck-typed
+    object rather than a real ``CompletedProcess`` is drift, not shorthand.
+    """
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
 
-    def run(self, cmd: list[str], **_kwargs: object) -> object:
+    def run(
+        self,
+        cmd: list[str],
+        *,
+        cwd: str | None = None,
+        timeout: int = 300,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(cmd))
-
-        class _Completed:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return _Completed()
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
 
 def _sandbox_dirs(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -350,7 +358,7 @@ def test_unit_diff_is_a_dataclass(tmp_path):
     assert diff.install is install
     assert diff.state in UnitState
     with pytest.raises((AttributeError, TypeError)):
-        diff.state = UnitState.ABSENT  # type: ignore[misc]
+        diff.state = UnitState.ABSENT  # ty: ignore[invalid-assignment]
 
 
 # -- Phase 3: apply (the only write-the-filesystem path) ---------------------
@@ -608,4 +616,4 @@ def test_apply_report_is_a_frozen_dataclass(tmp_path):
 
     assert isinstance(report, ApplyReport)
     with pytest.raises((AttributeError, TypeError)):
-        report.reloaded = False  # type: ignore[misc]
+        report.reloaded = False  # ty: ignore[invalid-assignment]

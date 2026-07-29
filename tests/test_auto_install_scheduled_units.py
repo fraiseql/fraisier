@@ -167,7 +167,8 @@ def test_drift_overwrite_records_units_and_calls_with_force(
         "fraisier.scheduled_install.classify_unit", lambda _u: drifted_diff
     )
 
-    captured_force: list[bool] = []
+    # kwargs.get returns None when the key is absent — the list holds that too.
+    captured_force: list[bool | None] = []
 
     def fake_apply(diffs, **kwargs):
         captured_force.append(kwargs.get("force"))
