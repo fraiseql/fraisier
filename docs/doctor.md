@@ -34,6 +34,14 @@ passed.
 | `fraises_yaml_resolves` | every reachable `!envvar` resolves to a set var | no | export the missing variables or move them to `~/.config/fraisier/secrets.env` |
 | `secrets_env_readable` | `~/.config/fraisier/secrets.env` exists and is mode 0600 | no | `chmod 600 ~/.config/fraisier/secrets.env` |
 | `helper_sudoers` | `/etc/sudoers.d/<project>` exists and is mode 0440 | no | `fraisier scaffold-install` |
+| `install_compile_bytecode` | a `uv sync` `install.command` passes `--compile-bytecode` | no | add `--compile-bytecode` to `install.command` — see [bytecode and startup time](deployment-guide.md#bytecode-and-startup-time) |
+
+`install_compile_bytecode` is **advisory** — it returns `warn`, never `fail`,
+because the cost is startup latency rather than correctness. It resolves
+`install:` the way the scaffold renderer does (per-environment overrides the
+per-fraise default), and returns `skip` when no `uv sync` command is configured
+at all — a project installing with `npm ci` or `poetry install` has nothing for
+this check to say.
 
 ## Safety notes
 

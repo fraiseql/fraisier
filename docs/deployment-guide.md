@@ -102,6 +102,54 @@ DATABASE_ADMIN_URL=postgresql://postgres@/postgres?host=/var/run/postgresql
 `hooks:` blocks (expanded at fire time by their dispatchers). Use `!envvar` for everything
 else — most consumers read the YAML value literally and will not expand `${VAR}`.
 
+### Bytecode and startup time
+
+If your `install.command` is `uv sync`, add `--compile-bytecode`:
+
+```yaml
+install:
+  command: [uv, sync, --frozen, --compile-bytecode]
+  user: myapp
+```
+
+**Why.** `uv sync` does not byte-compile by default, and since v0.50.1 every
+generated app unit sets `Environment=PYTHONDONTWRITEBYTECODE=1` — so without the
+flag the venv holds no `.pyc` and nothing ever writes one. Every service start
+then recompiles the whole imported dependency tree from source.
+
+Measured on a FastAPI + SQLAlchemy + psycopg app (49 MB site-packages, plus a
+612 KB app package), median of 11 runs:
+
+| install | app unit | median start |
+|---|---|---|
+| `uv sync` | `PYTHONDONTWRITEBYTECODE=1` | **1005 ms** |
+| `uv sync --compile-bytecode` | `PYTHONDONTWRITEBYTECODE=1` | **612 ms** |
+| both compiled (no env var) | — | 565 ms |
+
+`--compile-bytecode` recovers ~88% of the difference for **+151 ms** on a fresh
+`uv sync`, +62 ms on a no-op re-sync, and +19 MB of disk. The residual ~47 ms is
+your own app package, which `uv` does not compile because an editable project's
+source lives outside the venv. The cost scales with source volume, not package
+count — on this hardware roughly 13 MB of source per second.
+
+**The two settings compose; they do not conflict.** `PYTHONDONTWRITEBYTECODE`
+disables bytecode *writing* only — a cache already on disk is still read. So the
+`.pyc` are written once, at install time, by the **install user**, and the app
+process never writes any. That is strictly safer than the pre-v0.50.1 behaviour:
+the third-identity `__pycache__` that blocked `uv sync --frozen` can no longer
+appear at all. Those install-user-owned `.pyc` are also excluded from the
+stale-cache sweep, which only removes caches owned by someone *other* than the
+venv's owner.
+
+`fraisier doctor` warns when a `uv sync` install command is missing the flag —
+see [`install_compile_bytecode`](doctor.md#check-catalog). It is advisory: this
+is startup latency, not correctness.
+
+**When not to bother.** A short-lived or rarely-restarted service, or a small
+dependency tree, will not notice 400 ms. Measure your own startup before
+changing anything — the numbers above are one app on one machine, and the ratios
+transfer better than the milliseconds.
+
 ---
 
 ## Token providers for authenticated smoke tests

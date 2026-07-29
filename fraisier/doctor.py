@@ -245,6 +245,78 @@ def _check_helper_sudoers(config: FraisierConfig | None) -> CheckResult:
     return CheckResult("helper_sudoers", "pass", f"{path} (mode 0440)")
 
 
+def _is_uv_sync(command: list[str]) -> bool:
+    """True when *command* invokes ``uv sync``, absolute path or not."""
+    if len(command) < 2:
+        return False
+    return Path(command[0]).name == "uv" and command[1] == "sync"
+
+
+@register_check("install_compile_bytecode")
+def _check_install_compile_bytecode(config: FraisierConfig | None) -> CheckResult:
+    """Warn when ``uv sync`` installs a venv nothing will ever byte-compile.
+
+    ``uv sync`` does not compile by default, and since v0.50.1 every app unit
+    sets ``PYTHONDONTWRITEBYTECODE=1`` (#292) — so without
+    ``--compile-bytecode`` at install time the venv holds no ``.pyc`` and none
+    is ever written, making every service start recompile all of
+    site-packages. Measured at ~434 ms per start on a 49 MB site-packages app
+    (#298).
+
+    The two settings compose rather than conflict: ``PYTHONDONTWRITEBYTECODE``
+    blocks *writes* only, so a cache laid down at install time is still read.
+    The ``.pyc`` are owned by the install user, which is also what keeps them
+    clear of the stale-cache sweep (#303) and of the ownership hazard #292 is
+    about.
+
+    Advisory only — ``warn``, never ``fail``. It costs startup time, not
+    correctness.
+    """
+    name = "install_compile_bytecode"
+    fraises = getattr(config, "fraises", None) if config is not None else None
+    if not fraises:
+        return CheckResult(name, "skip", "no fraises in config")
+
+    missing: list[str] = []
+    checked = 0
+    for fraise_name, fraise in fraises.items():
+        if not isinstance(fraise, dict):
+            continue
+        fraise_install = fraise.get("install") or {}
+        environments = fraise.get("environments") or {}
+        if not isinstance(environments, dict):
+            continue
+        for env_name, env_config in environments.items():
+            # env-level `install:` overrides the fraise-level default, the same
+            # resolution the scaffold renderer uses when it bakes the sudoers
+            # rule and the install-helper allowlist.
+            env_install = (
+                env_config.get("install") if isinstance(env_config, dict) else None
+            )
+            install = env_install or fraise_install
+            command = install.get("command") or [] if isinstance(install, dict) else []
+            if not isinstance(command, list) or not _is_uv_sync(command):
+                continue
+            checked += 1
+            if "--compile-bytecode" not in command:
+                missing.append(f"{fraise_name}/{env_name}")
+
+    if not checked:
+        return CheckResult(name, "skip", "no `uv sync` install command configured")
+    if missing:
+        return CheckResult(
+            name,
+            "warn",
+            f"`uv sync` without --compile-bytecode: {', '.join(sorted(missing))}"
+            " — every service start recompiles site-packages",
+            fix_hint=(
+                "add --compile-bytecode to install.command "
+                "(see https://github.com/fraiseql/fraisier/issues/298)"
+            ),
+        )
+    return CheckResult(name, "pass", f"{checked} `uv sync` command(s) compile bytecode")
+
+
 # ---------------------------------------------------------------------------
 # Public runner
 # ---------------------------------------------------------------------------
