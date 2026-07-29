@@ -81,9 +81,8 @@ jobs:
       run: uv run ruff format --check .
 
   type-check:
-    name: Type Check (Advisory)
+    name: Type Check (Required for Release)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
     - uses: actions/checkout@v6
     - name: Set up Python
@@ -95,10 +94,10 @@ jobs:
       with:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
-    - name: Install ty
-      run: uv tool install ty
+    - name: Install dependencies
+      run: uv sync
     - name: Run ty
-      run: ty check fraisier/ || echo "Type check warnings (non-blocking)"
+      run: uv run ty check
 
   security:
     name: Security (Required for Release)

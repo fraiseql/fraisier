@@ -106,12 +106,15 @@ jobs:
         python-version: '3.12'
     - name: Install uv
       uses: astral-sh/setup-uv@v7
-    - name: Install ty
-      run: uv tool install ty
+    - name: Install dependencies
+      run: uv sync
+    # Whole repo, not just fraisier/ — the local pre-commit hook checks
+    # everything, and a source-only gate is why 27 diagnostics accumulated in
+    # tests/ while CI stayed green. Blocking: the floor is zero, so any
+    # diagnostic is a regression.
     - name: Run ty type check
-      run: ty check fraisier/
+      run: uv run ty check
       timeout-minutes: 5
-      continue-on-error: true
 
   security:
     name: Security
@@ -155,8 +158,9 @@ jobs:
             echo "Lint checks failed"
             exit 1
           fi
-          if [[ "${{ needs.type-check.result }}" == "failure" ]]; then
-            echo "Type check has warnings (non-blocking)"
+          if [[ "${{ needs.type-check.result }}" != "success" ]]; then
+            echo "Type check failed"
+            exit 1
           fi
           if [[ "${{ needs.security.result }}" != "success" ]]; then
             echo "Security checks failed"
