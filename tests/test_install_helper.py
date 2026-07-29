@@ -302,6 +302,12 @@ class TestMainConnectionErrorLogging:
         ]
 
         with (
+            # main() parses sys.argv for its allowed command. Without this the
+            # test reads *pytest's* command line: any argument at all happens to
+            # satisfy it, but a bare `pytest` leaves argv[1:] empty and main()
+            # exits 1 before reaching the accept loop. The sibling tests in
+            # TestMain patch argv for the same reason.
+            patch("sys.argv", ["fraisier-install-helper", "uv", "sync", "--frozen"]),
             patch.dict("os.environ", {"LISTEN_FDS": "1"}, clear=False),
             patch.object(install_helper.socket, "fromfd", return_value=fake_sock),
             patch.object(install_helper, "_handle_connection", side_effect=boom),
