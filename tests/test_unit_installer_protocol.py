@@ -103,7 +103,7 @@ def _manifest(*ops: InstallFileOp, post: tuple[object, ...] = ()) -> Manifest:
         version=1,
         deploy_id="test-deploy",
         operations=tuple(ops),
-        post_actions=tuple(post),  # type: ignore[arg-type]
+        post_actions=tuple(post),  # ty: ignore[invalid-argument-type]
     )
 
 

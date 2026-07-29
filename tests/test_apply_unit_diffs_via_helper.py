@@ -28,6 +28,7 @@ from fraisier.scheduled_install import (
     _build_helper_manifest,
     apply_unit_diffs_via_helper,
 )
+from fraisier.unit_installer_protocol import InstallFileOp
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -77,6 +78,9 @@ def test_build_manifest_emits_install_file_op_for_absent_diff(tmp_path: Path) ->
     manifest = _build_helper_manifest([diff], force=False, resolved_config_path=None)
     assert len(manifest.operations) == 1
     op = manifest.operations[0]
+    # operations is list[InstallFileOp | WriteMarkerOp]; this test is about the
+    # install op specifically, so narrow rather than assume.
+    assert isinstance(op, InstallFileOp)
     assert op.source_path == str(install.source_path)
     assert op.dest_path == str(install.dest_path)
     assert op.mode == "0644"
@@ -361,5 +365,6 @@ def test_apply_report_rejected_reason_surfaces_helper_message(tmp_path: Path) ->
         [diff],
     )
     assert isinstance(report, ApplyReport)
+    assert report.rejected_reason is not None
     assert "dest parent" in report.rejected_reason
     assert "allowlisted" in report.rejected_reason

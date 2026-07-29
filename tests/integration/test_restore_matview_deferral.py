@@ -64,7 +64,7 @@ def _discover_socket_dir() -> str | None:
 def socket_dir() -> str:
     resolved = _discover_socket_dir()
     if resolved is None:
-        pytest.skip("local PostgreSQL with createdb privilege not available")
+        pytest.skip("local PostgreSQL with createdb privilege not available")  # ty: ignore[too-many-positional-arguments]
     return resolved
 
 

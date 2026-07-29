@@ -97,4 +97,4 @@ def test_parse_rejects_non_mapping_auto_install_block() -> None:
 def test_policy_is_frozen() -> None:
     policy = AutoInstallPolicy()
     with pytest.raises(Exception):  # noqa: B017
-        policy.on_drift = "overwrite"  # type: ignore[misc]
+        policy.on_drift = "overwrite"  # ty: ignore[invalid-assignment]

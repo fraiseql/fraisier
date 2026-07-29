@@ -278,4 +278,4 @@ def test_prune_orphans_dataclass_is_frozen() -> None:
     """PrunePlan is frozen so plans can't be accidentally mutated downstream."""
     p = PrunePlan(kind="orphan", marker_path=__import__("pathlib").Path("/x"))
     with pytest.raises((AttributeError, Exception)):
-        p.kind = "stale_marker"  # type: ignore[misc]
+        p.kind = "stale_marker"  # ty: ignore[invalid-assignment]
