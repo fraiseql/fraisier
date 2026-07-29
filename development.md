@@ -392,10 +392,7 @@ Test individual components with mocks:
 ```python
 def test_api_deployer_init():
     """Test APIDeployer initialization."""
-    config = {
-        "app_path": "/var/www/api",
-        "systemd_service": "api.service"
-    }
+    config = {"app_path": "/var/www/api", "systemd_service": "api.service"}
     deployer = APIDeployer(config)
     assert deployer.app_path == "/var/www/api"
 ```
@@ -408,11 +405,7 @@ Test components together with real (test) database:
 def test_deployment_recorded_in_db(tmp_db):
     """Test that deployments are recorded."""
     db = tmp_db
-    db.record_deployment(
-        fraise="my_api",
-        environment="staging",
-        status="success"
-    )
+    db.record_deployment(fraise="my_api", environment="staging", status="success")
     history = db.get_recent_deployments()
     assert len(history) == 1
 ```
@@ -422,13 +415,11 @@ def test_deployment_recorded_in_db(tmp_db):
 ```python
 from unittest.mock import patch, MagicMock
 
+
 def test_health_check_retry():
     """Test health check retries on timeout."""
     with patch("requests.get") as mock_get:
-        mock_get.side_effect = [
-            TimeoutError(),
-            MagicMock(status_code=200)
-        ]
+        mock_get.side_effect = [TimeoutError(), MagicMock(status_code=200)]
         deployer = APIDeployer({...})
         # Retry logic should succeed on second attempt
 ```

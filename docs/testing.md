@@ -111,6 +111,7 @@ Test individual components in isolation with mocks.
 from click.testing import CliRunner
 from fraisier.cli import main
 
+
 def test_list_command():
     """Test 'fraisier list' command."""
     runner = CliRunner()
@@ -118,12 +119,11 @@ def test_list_command():
     assert result.exit_code == 0
     assert "my_api" in result.output
 
+
 def test_deploy_dry_run():
     """Test deployment dry-run."""
     runner = CliRunner()
-    result = runner.invoke(main, [
-        "deploy", "my_api", "production", "--dry-run"
-    ])
+    result = runner.invoke(main, ["deploy", "my_api", "production", "--dry-run"])
     assert result.exit_code == 0
     assert "DRY RUN" in result.output
 ```
@@ -135,6 +135,7 @@ def test_deploy_dry_run():
 ```python
 from fraisier.config import FraisierConfig
 from pathlib import Path
+
 
 def test_load_config(tmp_path):
     """Test configuration loading."""
@@ -154,6 +155,7 @@ fraises:
     assert fraise is not None
     assert "production" in fraise["environments"]
 
+
 def test_branch_mapping():
     """Test branch to fraise mapping."""
     config = FraisierConfig("tests/fixtures/fraises.yaml")
@@ -172,24 +174,23 @@ from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentStatus
 import subprocess
 
+
 def test_api_deployer_init():
     """Test APIDeployer initialization."""
     config = {
         "app_path": "/var/www/api",
         "systemd_service": "api.service",
-        "git_repo": "https://github.com/user/api.git"
+        "git_repo": "https://github.com/user/api.git",
     }
     deployer = APIDeployer(config)
     assert deployer.app_path == "/var/www/api"
     assert deployer.systemd_service == "api.service"
 
+
 @patch("subprocess.run")
 def test_get_current_version(mock_run):
     """Test getting current deployed version."""
-    mock_run.return_value = MagicMock(
-        stdout="abc123def456\n",
-        returncode=0
-    )
+    mock_run.return_value = MagicMock(stdout="abc123def456\n", returncode=0)
 
     deployer = APIDeployer({"app_path": "/var/www/api"})
     version = deployer.get_current_version()
@@ -197,19 +198,16 @@ def test_get_current_version(mock_run):
     assert version == "abc123de"  # First 8 chars
     mock_run.assert_called_once()
 
+
 @patch("subprocess.run")
 def test_execute_deployment(mock_run):
     """Test execution flow."""
     # Mock git pull success
-    mock_run.return_value = MagicMock(
-        stdout="",
-        returncode=0
-    )
+    mock_run.return_value = MagicMock(stdout="", returncode=0)
 
-    deployer = APIDeployer({
-        "app_path": "/var/www/api",
-        "systemd_service": "api.service"
-    })
+    deployer = APIDeployer(
+        {"app_path": "/var/www/api", "systemd_service": "api.service"}
+    )
 
     result = deployer.execute()
 
@@ -228,24 +226,22 @@ import hmac
 import hashlib
 import json
 
+
 def test_github_signature_verification():
     """Test GitHub webhook signature verification."""
     secret = b"test-secret"
     payload = b'{"test": "data"}'
 
     # Create correct signature
-    signature = "sha256=" + hmac.new(
-        secret,
-        payload,
-        hashlib.sha256
-    ).hexdigest()
+    signature = "sha256=" + hmac.new(secret, payload, hashlib.sha256).hexdigest()
 
     provider = GitHub({"webhook_secret": secret.decode()})
 
     # Verify signature
-    assert provider.verify_webhook_signature(payload, {
-        "X-Hub-Signature-256": signature
-    })
+    assert provider.verify_webhook_signature(
+        payload, {"X-Hub-Signature-256": signature}
+    )
+
 
 def test_github_parse_push_event():
     """Test parsing GitHub push event."""
@@ -255,7 +251,7 @@ def test_github_parse_push_event():
         "ref": "refs/heads/main",
         "repository": {"full_name": "user/repo"},
         "pusher": {"name": "user"},
-        "head_commit": {"id": "abc123"}
+        "head_commit": {"id": "abc123"},
     }
     headers = {"X-GitHub-Event": "push"}
 
@@ -281,6 +277,7 @@ from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentStatus
 from unittest.mock import patch
 
+
 @pytest.fixture
 def test_db(tmp_path):
     """Provide test database."""
@@ -288,16 +285,15 @@ def test_db(tmp_path):
 
     # Initialize schema
     from fraisier.database import _execute_script
+
     _execute_script(str(db_path), "... schema SQL ...")
 
     yield str(db_path)
 
+
 def test_full_deployment_flow(test_db):
     """Test complete deployment recorded in database."""
-    config = {
-        "app_path": "/var/www/api",
-        "systemd_service": "api.service"
-    }
+    config = {"app_path": "/var/www/api", "systemd_service": "api.service"}
 
     with patch("subprocess.run"):
         deployer = APIDeployer(config)
@@ -309,11 +305,13 @@ def test_full_deployment_flow(test_db):
 
     # Verify recorded in database
     from fraisier.database import get_db
+
     db = get_db()
     history = db.get_recent_deployments(limit=1)
 
     assert len(history) == 1
     assert history[0]["status"] == "success"
+
 
 def test_webhook_event_recording(test_db):
     """Test webhook events are recorded."""
@@ -325,7 +323,7 @@ def test_webhook_event_recording(test_db):
         branch="main",
         commit_sha="abc123",
         sender="user",
-        payload={"test": "data"}
+        payload={"test": "data"},
     )
 
     events = db.get_recent_webhooks(limit=1)
@@ -348,6 +346,7 @@ from fraisier.cli import main
 from pathlib import Path
 import tempfile
 
+
 @pytest.fixture
 def test_config(tmp_path):
     """Create test fraises.yaml."""
@@ -368,6 +367,7 @@ fraises:
 """)
     return str(config_file)
 
+
 def test_complete_cli_workflow(test_config, monkeypatch):
     """Test complete CLI workflow."""
     runner = CliRunner()
@@ -385,9 +385,7 @@ def test_complete_cli_workflow(test_config, monkeypatch):
     assert result.exit_code == 0
 
     # Try dry-run deploy
-    result = runner.invoke(main, [
-        "deploy", "test_api", "development", "--dry-run"
-    ])
+    result = runner.invoke(main, ["deploy", "test_api", "development", "--dry-run"])
     assert "DRY RUN" in result.output
 ```
 
@@ -401,6 +399,7 @@ Reusable test fixtures in `tests/conftest.py`:
 import pytest
 from pathlib import Path
 from fraisier.config import FraisierConfig
+
 
 @pytest.fixture
 def sample_config(tmp_path):
@@ -423,20 +422,21 @@ fraises:
 """)
     return FraisierConfig(str(config_file))
 
+
 @pytest.fixture
 def cli_runner():
     """Provide CLI test runner."""
     from click.testing import CliRunner
+
     return CliRunner()
+
 
 @pytest.fixture
 def mock_subprocess(monkeypatch):
     """Mock subprocess calls."""
     from unittest.mock import MagicMock
-    mock_run = MagicMock(return_value=MagicMock(
-        stdout="test output",
-        returncode=0
-    ))
+
+    mock_run = MagicMock(return_value=MagicMock(stdout="test output", returncode=0))
     monkeypatch.setattr("subprocess.run", mock_run)
     return mock_run
 ```
@@ -449,6 +449,7 @@ def mock_subprocess(monkeypatch):
 
 ```python
 from unittest.mock import patch, MagicMock
+
 
 @patch("requests.get")
 def test_health_check(mock_get):
@@ -465,10 +466,7 @@ def test_health_check(mock_get):
 @patch("subprocess.run")
 def test_git_pull(mock_run):
     """Mock git operations."""
-    mock_run.return_value = MagicMock(
-        returncode=0,
-        stdout="Already up to date.\n"
-    )
+    mock_run.return_value = MagicMock(returncode=0, stdout="Already up to date.\n")
 
     # Your test code
 ```
@@ -525,6 +523,7 @@ pytest --cov=fraisier --cov-report=term-missing
 
 ```python
 import pytest
+
 
 @pytest.mark.benchmark
 def test_deployment_speed(benchmark):
@@ -594,9 +593,10 @@ pytest -vv                  # Very verbose
 ```python
 import pdb
 
+
 def test_something():
     deployer = APIDeployer({...})
-    pdb.set_trace()         # Execution pauses here
+    pdb.set_trace()  # Execution pauses here
     result = deployer.execute()
 ```
 
@@ -605,11 +605,12 @@ def test_something():
 ```python
 def test_database(test_db):
     from fraisier.database import get_db
+
     db = get_db()
 
     # Inspect state
     result = db.get_recent_deployments()
-    print(result)           # Use pytest -s to see output
+    print(result)  # Use pytest -s to see output
 ```
 
 ---

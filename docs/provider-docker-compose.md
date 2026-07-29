@@ -393,10 +393,12 @@ Services can communicate using service names as hostnames:
 ```python
 # Python example
 import os
-db_url = os.environ.get('DATABASE_URL', 'postgresql://postgres:password@db:5432/app')
+
+db_url = os.environ.get("DATABASE_URL", "postgresql://postgres:password@db:5432/app")
 
 # Python code
 import psycopg
+
 conn = psycopg.connect(db_url)
 ```
 
