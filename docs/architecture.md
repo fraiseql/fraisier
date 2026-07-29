@@ -184,13 +184,13 @@ class GitProvider(ABC):
 ```python
 @dataclass
 class WebhookEvent:
-    provider: str                    # "github", "gitlab", etc.
-    event_type: str                  # "push", "merge_request", etc.
-    branch: str | None               # Branch name
-    commit_sha: str | None           # Commit SHA
-    sender: str | None               # Username
-    repository: str | None           # owner/repo
-    raw_payload: dict                # Original payload
+    provider: str  # "github", "gitlab", etc.
+    event_type: str  # "push", "merge_request", etc.
+    branch: str | None  # Branch name
+    commit_sha: str | None  # Commit SHA
+    sender: str | None  # Username
+    repository: str | None  # owner/repo
+    raw_payload: dict  # Original payload
 
     # Normalized flags
     is_push: bool
@@ -538,8 +538,14 @@ Custom exception hierarchy (implemented in `fraisier/errors.py`):
 
 ```python
 class FraisierError(Exception): ...
+
+
 class DeploymentError(FraisierError): ...
+
+
 class HealthCheckError(FraisierError): ...
+
+
 class ConfigurationError(FraisierError): ...
 ```
 

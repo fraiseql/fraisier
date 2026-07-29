@@ -52,10 +52,10 @@ Each entry declares:
 @dataclass
 class ManagedPath:
     path: Path
-    owner: str           # username
-    group: str           # group name
-    mode: int            # octal (e.g. 0o750)
-    read_write_units: list[str]   # systemd units that need ReadWritePaths
+    owner: str  # username
+    group: str  # group name
+    mode: int  # octal (e.g. 0o750)
+    read_write_units: list[str]  # systemd units that need ReadWritePaths
     create_if_missing: bool = True
 ```
 

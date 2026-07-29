@@ -386,13 +386,16 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-@app.route('/health')
+
+@app.route("/health")
 def health():
-    return jsonify({
-        'status': 'healthy',
-        'version': '2.0.0',
-        'timestamp': datetime.utcnow().isoformat()
-    }), 200
+    return jsonify(
+        {
+            "status": "healthy",
+            "version": "2.0.0",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    ), 200
 ```
 
 **Node.js Express Example**:

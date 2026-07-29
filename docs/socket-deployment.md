@@ -93,11 +93,11 @@ branch = payload["ref"].replace("refs/heads/", "")
 
 # Trigger deployment
 import subprocess
-result = subprocess.run([
-    "fraisier", "trigger-deploy",
-    "myapp", "production",
-    "--branch", branch
-], capture_output=True)
+
+result = subprocess.run(
+    ["fraisier", "trigger-deploy", "myapp", "production", "--branch", branch],
+    capture_output=True,
+)
 
 if result.returncode == 0:
     return {"status": "deployment_triggered"}
