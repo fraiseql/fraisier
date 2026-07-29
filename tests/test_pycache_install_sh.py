@@ -41,8 +41,8 @@ scaffold:
 """,
         )
         assert (
-            'find "/var/www/api/.venv" -name "__pycache__" -user root -type d'
-            in content
+            'find "/var/www/api/.venv" -name "__pycache__" ! -user "${DEPLOY_USER}"'
+            " -type d" in content
         )
 
     def test_cleanup_targets_deploy_user_local_lib(self, tmp_path):
@@ -68,8 +68,8 @@ scaffold:
 """,
         )
         assert (
-            'find "/home/${DEPLOY_USER}/.local/lib" -name "__pycache__" -user root -type d'
-            in content
+            'find "/home/${DEPLOY_USER}/.local/lib" -name "__pycache__"'
+            ' ! -user "${DEPLOY_USER}" -type d' in content
         )
 
     def test_no_cleanup_when_no_app_path(self, tmp_path):
@@ -96,7 +96,7 @@ scaffold:
         )
         # Should not have any app venv cleanup (no app_path)
         assert (
-            '__pycache__" -user root' in content
+            '__pycache__" ! -user "${DEPLOY_USER}"' in content
         )  # deploy user lib cleanup still present
         # But no /var/www or app-specific venv path
         assert ".venv" not in content or "/home/${DEPLOY_USER}" in content
@@ -261,3 +261,105 @@ class TestSweepsArePrivilegedAndDryRunSafe:
 
         assert "/var/www/api/.venv" in joined
         assert "/home/${DEPLOY_USER}/.local/lib" in joined
+
+
+_SPLIT_USER_YAML = """\
+name: testapp
+servers:
+  prod.example.com:
+    machine_hostnames: [prod-01]
+
+fraises:
+  api:
+    type: api
+    install:
+      user: installer
+      command: [/usr/bin/uv, sync, --frozen]
+    environments:
+      production:
+        server: prod.example.com
+        app_path: /var/www/api
+        service:
+          user: appsvc
+          exec: /var/www/api/.venv/bin/uvicorn app:app
+          port: 8000
+
+scaffold:
+  deploy_user: testapp_deploy
+"""
+
+
+def _render(tmp_path, yaml_content: str) -> str:
+    config_file = tmp_path / "fraises.yaml"
+    config_file.write_text(yaml_content)
+    renderer = ScaffoldRenderer(FraisierConfig(str(config_file)))
+    return renderer.env.get_template("core/install.sh.j2").render(**renderer.context)
+
+
+def _sweep_line(content: str, needle: str) -> str:
+    return next(
+        ln
+        for ln in content.splitlines()
+        if needle in ln and "find" in ln and not ln.strip().startswith("#")
+    )
+
+
+class TestSweepsMatchAnyForeignOwner:
+    """`-user root` misses the identity #292 is about (#303).
+
+    `c34a6b6` widened the owner filter for the new uv-tool sweep only. The app
+    venv and `.local/lib` sweeps kept `-user root`, so residue written by
+    `service.user` — an identity independent of both `deploy_user` and
+    `install.user` — survives every sweep. Nothing else clears it:
+    `_verify_manifest_ownership` stats the venv *directory*, whose owner does
+    not change when a third user writes nested `__pycache__`.
+    """
+
+    def test_app_venv_sweep_targets_the_venv_owner(self, tmp_path):
+        """The venv belongs to install.user, so anything else in it is foreign."""
+        line = _sweep_line(_render(tmp_path, _SPLIT_USER_YAML), "/var/www/api/.venv")
+
+        assert '! -user "installer"' in line
+        assert "-user root" not in line
+
+    def test_app_venv_sweep_falls_back_to_deploy_user(self, tmp_path):
+        """No install.user configured → the deploy user owns the venv."""
+        line = _sweep_line(_render(tmp_path, _UV_TOOL_YAML), "/var/www/api/.venv")
+
+        assert '! -user "${DEPLOY_USER}"' in line
+        assert "-user root" not in line
+
+    def test_local_lib_sweep_matches_any_foreign_owner(self, tmp_path):
+        """The deploy user owns ~/.local/lib; any other owner is residue."""
+        line = _sweep_line(_render(tmp_path, _SPLIT_USER_YAML), ".local/lib")
+
+        assert '! -user "${DEPLOY_USER}"' in line
+        assert "-user root" not in line
+
+    def test_no_sweep_still_filters_on_root_alone(self, tmp_path):
+        """The whole point: root is no longer the only writer we clean up after."""
+        content = _render(tmp_path, _SPLIT_USER_YAML)
+
+        sweeps = [
+            ln
+            for ln in content.splitlines()
+            if "__pycache__" in ln and "find" in ln and not ln.strip().startswith("#")
+        ]
+        assert len(sweeps) == 3
+        for line in sweeps:
+            assert "-user root" not in line, line.strip()
+
+    def test_sweeps_stay_bounded_and_privileged(self, tmp_path):
+        """Widening the owner filter must not relax the other guards."""
+        content = _render(tmp_path, _SPLIT_USER_YAML)
+
+        sweeps = [
+            ln
+            for ln in content.splitlines()
+            if "__pycache__" in ln and "find" in ln and not ln.strip().startswith("#")
+        ]
+        for line in sweeps:
+            assert '-name "__pycache__"' in line
+            assert "-type d" in line
+            assert "sudo find" in line
+            assert line.strip().startswith("_run ")
