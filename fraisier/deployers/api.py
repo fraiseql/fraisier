@@ -31,14 +31,20 @@ class RestoreOutcome:
     which status to use, and — when the database rollback failed — the incident
     text, so it does not overwrite it with the original deploy error.
 
-    Only *database* rollbacks are described here. A git-only revert is not
-    reported as a rollback: ``_restore_previous_state`` git-reverts on every
-    failed deploy that has a previous SHA, so claiming one would change the
-    reported status of nearly every deployment failure.
+    Both axes are described: the database rollback and the git revert. #293
+    deliberately reported only the first, because promoting git-only reverts
+    changes the status of nearly every failed deploy — that compatibility call
+    was taken separately and is what #296 decided.
+
+    ``git_reverted`` and ``service_restarted`` are claimed only when the step
+    actually completed: a revert that raised leaves both false, because nothing
+    was restored.
     """
 
     db_rollback_attempted: bool = False
     db_rollback_succeeded: bool = False
+    git_reverted: bool = False
+    service_restarted: bool = False
     error_message: str | None = None
 
 
@@ -569,24 +575,37 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     ) -> tuple[DeploymentStatus, str, str]:
         """Map a restore outcome onto (result status, status-file state, message).
 
-        Only a database rollback changes the reported status. A failed deploy
-        that was merely git-reverted stays ``FAILED``, as it always has —
-        promoting it would change the status of nearly every deployment
-        failure, which is a separate call from #293.
+        The database axis is checked first because it is the one that can leave
+        the schema dirty. A git-only revert is a real rollback and reports as
+        one (#296) — that changes the status of nearly every failed deploy on a
+        box with history, which is why it was decided separately from #293.
+
+        A revert that *raised* stays ``FAILED``, deliberately: it restored
+        nothing, and ``ROLLBACK_FAILED`` means "the schema may be half-migrated,
+        do not restart", which is false when no migrations ever ran.
         """
-        if not outcome.db_rollback_attempted:
-            return DeploymentStatus.FAILED, "failed", deploy_error
-        if outcome.db_rollback_succeeded:
+        if outcome.db_rollback_attempted:
+            if outcome.db_rollback_succeeded:
+                return (
+                    DeploymentStatus.ROLLED_BACK,
+                    "rolled_back",
+                    f"{deploy_error} — database rolled back to the previous state",
+                )
+            return (
+                DeploymentStatus.ROLLBACK_FAILED,
+                "rollback_failed",
+                outcome.error_message or deploy_error,
+            )
+        if outcome.git_reverted:
+            restored = "reverted to the previous commit"
+            if outcome.service_restarted:
+                restored += " and the service restarted on it"
             return (
                 DeploymentStatus.ROLLED_BACK,
                 "rolled_back",
-                f"{deploy_error} — database rolled back to the previous state",
+                f"{deploy_error} — {restored}",
             )
-        return (
-            DeploymentStatus.ROLLBACK_FAILED,
-            "rollback_failed",
-            outcome.error_message or deploy_error,
-        )
+        return DeploymentStatus.FAILED, "failed", deploy_error
 
     def _handle_timeout(
         self,
@@ -647,7 +666,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                         error_message=db_result.error_message,
                     )
             self._git_rollback(self._previous_sha)
-            if self.systemd_service:
+            restarted = bool(self.systemd_service)
+            if restarted:
                 self._restart_service()
         except Exception as rollback_exc:
             logger.critical("Rollback after failure also failed: %s", rollback_exc)
@@ -658,6 +678,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         return RestoreOutcome(
             db_rollback_attempted=attempted,
             db_rollback_succeeded=attempted,
+            git_reverted=True,
+            service_restarted=restarted,
         )
 
     def _resolve_strategy(self) -> tuple[Any, Path, Path, str | None]:

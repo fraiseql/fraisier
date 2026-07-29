@@ -109,6 +109,57 @@ class TestRestoreOutcomeIsReported:
         assert outcome.db_rollback_attempted is False
         assert outcome.error_message is None
 
+    def test_git_only_restore_records_what_it_did(self, tmp_path):
+        """A git revert is a real restore and must be reported as one (#296)."""
+        deployer = _deployer(tmp_path)
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 0
+
+        outcome = _restore(deployer, None)
+
+        assert outcome.git_reverted is True
+        assert outcome.service_restarted is True
+
+    def test_no_previous_sha_reverts_nothing(self, tmp_path):
+        """Nothing to revert to, so nothing is claimed on the git axis either."""
+        deployer = _deployer(tmp_path)
+        deployer._previous_sha = None
+
+        outcome = _restore(deployer, None)
+
+        assert outcome.git_reverted is False
+        assert outcome.service_restarted is False
+
+    def test_service_restart_not_claimed_without_a_unit(self, tmp_path):
+        """No systemd_service configured → the tree moved, the service did not."""
+        deployer = _deployer(tmp_path, systemd_service=None)
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 0
+
+        outcome = _restore(deployer, None)
+
+        assert outcome.git_reverted is True
+        assert outcome.service_restarted is False
+
+    def test_raising_git_revert_is_not_reported_as_reverted(self, tmp_path):
+        """The revert blew up, so nothing was restored — do not claim it."""
+        deployer = _deployer(tmp_path)
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 0
+
+        with (
+            patch("subprocess.run"),
+            patch.object(
+                deployer, "_git_rollback", side_effect=RuntimeError("checkout failed")
+            ),
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_write_incident"),
+        ):
+            outcome = deployer._restore_previous_state()
+
+        assert outcome.git_reverted is False
+        assert outcome.service_restarted is False
+
     def test_rollback_raising_is_reported_as_failure(self, tmp_path):
         """An exception mid-rollback must not read as a clean revert."""
         deployer = _deployer(tmp_path)
@@ -135,13 +186,26 @@ class TestRestoreOutcomeIsReported:
 class TestDeployReportsTheRollback:
     """The failure handler must map the outcome onto the deploy status."""
 
-    def _failing_deploy(self, deployer, rollback_result: StrategyResult | None):
+    def _failing_deploy(
+        self,
+        deployer,
+        rollback_result: StrategyResult | None,
+        *,
+        git_rollback_error: Exception | None = None,
+    ):
         """Drive execute() to failure at the git-pull step."""
         strategy = MagicMock()
         if rollback_result is not None:
             strategy.rollback.return_value = rollback_result
 
+        git_rollback = patch.object(deployer, "_git_rollback")
+        if git_rollback_error is not None:
+            git_rollback = patch.object(
+                deployer, "_git_rollback", side_effect=git_rollback_error
+            )
+
         with (
+            git_rollback,
             patch.object(
                 deployer, "_git_pull", side_effect=RuntimeError("pull exploded")
             ),
@@ -187,13 +251,15 @@ class TestDeployReportsTheRollback:
         assert result.success is False
         assert result.status == DeploymentStatus.ROLLBACK_FAILED
 
-    def test_git_only_failure_still_reports_failed(self, tmp_path):
-        """Blast-radius pin: no DB rollback attempted → status is unchanged.
+    def test_git_only_failure_reports_rolled_back(self, tmp_path):
+        """The blast-radius pin, inverted by an explicit decision (#296).
 
-        _restore_previous_state runs on every deploy failure that has a previous
-        SHA, git-reverting even when no migrations ran. Promoting those to
-        ROLLED_BACK would change the reported status of nearly every failed
-        deploy. Deliberately out of scope for #293 — see the phase README.
+        This test previously asserted FAILED, and existed so that changing it
+        would be a deliberate act rather than an accident. It is that act: a
+        deploy that reverted the tree and restarted the service on the old code
+        did roll back, and now says so. This changes the reported status of
+        nearly every failed deploy on a box with history — see the CHANGELOG's
+        compatibility note.
         """
         deployer = _deployer(tmp_path)
         deployer._previous_sha = "prev123"
@@ -201,10 +267,40 @@ class TestDeployReportsTheRollback:
 
         result = self._failing_deploy(deployer, None)
 
+        assert result.status == DeploymentStatus.ROLLED_BACK
+
+    def test_git_only_rollback_message_does_not_claim_a_database_rollback(
+        self, tmp_path
+    ):
+        """No migrations ran, so the message must not mention the database."""
+        deployer = _deployer(tmp_path)
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 0
+
+        result = self._failing_deploy(deployer, None)
+
+        assert "database" not in (result.error_message or "").lower()
+        assert "previous commit" in (result.error_message or "")
+
+    def test_failed_git_revert_reports_failed_not_rollback_failed(self, tmp_path):
+        """A revert that raised restored nothing — and the schema is clean.
+
+        ROLLBACK_FAILED means "the schema may be half-migrated, do not restart"
+        (``status.py``). That is false when no migrations ever ran, so a failed
+        git-only revert must not borrow it.
+        """
+        deployer = _deployer(tmp_path)
+        deployer._previous_sha = "prev123"
+        deployer._migrations_applied = 0
+
+        result = self._failing_deploy(
+            deployer, None, git_rollback_error=RuntimeError("checkout failed")
+        )
+
         assert result.status == DeploymentStatus.FAILED
 
     def test_no_previous_sha_still_reports_failed(self, tmp_path):
-        """Nothing was restored, so nothing is claimed."""
+        """Nothing was restored, so nothing is claimed. Unchanged by #296."""
         deployer = _deployer(tmp_path)
         deployer._previous_sha = None
         deployer._migrations_applied = 2
