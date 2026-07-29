@@ -366,3 +366,48 @@ class TestIntegrationPycacheAdvice:
         # Socket path never shells out to sudo, so it must not suggest sudo -H.
         assert "sudo -H" not in msg
         assert "276" not in msg
+
+
+class TestAdviceMatchesTheSweep:
+    """The remediation must fix the failure it is shown for (#303).
+
+    Both advice strings hardcoded ``-user root``. The residue that produces
+    this exact ``Permission denied`` can be owned by ``service.user`` (#292) or
+    ``install.user`` (#286) — neither is root, so the suggested command was a
+    no-op for the cases most likely to hit it.
+    """
+
+    def test_deployer_advice_does_not_assume_root(self):
+        from fraisier.deployers.mixins import _install_failure_advice
+
+        advice = _install_failure_advice(
+            "error: Permission denied ... __pycache__ ...", app_path="/var/www/api"
+        )
+
+        assert advice is not None
+        assert "-user root" not in advice
+        assert "! -user" in advice
+        assert "stat -c %U" in advice
+
+    def test_deployer_advice_still_names_the_venv(self):
+        from fraisier.deployers.mixins import _install_failure_advice
+
+        advice = _install_failure_advice(
+            "error: Permission denied ... __pycache__ ...", app_path="/var/www/api"
+        )
+
+        assert advice is not None
+        assert "/var/www/api/.venv" in advice
+
+    def test_helper_advice_does_not_assume_root(self):
+        """The socket helper's advice reaches the operator through the deployer."""
+        import inspect
+
+        from fraisier import install_helper
+
+        source = inspect.getsource(install_helper._handle_connection)
+        pycache_advice = source.split("__pycache__ directories are blocking", 1)[1]
+        pycache_advice = pycache_advice.split("issues/196", 1)[0]
+
+        assert "-user root" not in pycache_advice
+        assert "! -user" in pycache_advice
