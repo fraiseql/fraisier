@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-07-29
+
+Closes #303. Found by auditing v0.48.0's sweep widening, not from a report —
+and it corrects a claim made in v0.50.1's own release notes.
+
+### Fixed
+
+- **Stale `__pycache__` sweeps now match any foreign owner, not just root** (`core/install.sh.j2`, #303). v0.48.0 widened the owner filter for the *new* uv-tool sweep only; the app-venv and `~/.local/lib` sweeps kept `-user root`. Residue written by `service.user` — an identity independent of both `deploy_user` and `install.user`, i.e. exactly the #292 failure class — therefore survived every sweep. Nothing else cleared it: the manifest ownership preflight stats the venv *directory*, whose owner does not change when a third user writes nested `__pycache__`. The app-venv sweep now targets the identity that actually owns that venv (`install.user`, falling back to `deploy_user`).
+- **The remediation advice no longer hands you a command that cannot work** (`deployers/mixins.py`, `install_helper.py`, #303). Both `Permission denied` advice strings hardcoded `find … -user root`. The writer can be `service.user` (#292) or `install.user` (#286) — neither is root — so an operator hitting this exact error was told to run something that would match nothing. Both now resolve the venv's owner at paste time with `stat -c %U`.
+
+### Corrected
+
+- **v0.50.1's release notes claimed existing residue was already cleared by the sweep.** It was not, for the residue that entry is about. The v0.50.1 entry above now carries a correction pointing here. On v0.50.1–v0.53.0 that residue must be cleared by hand:
+  ```sh
+  sudo find <app_path>/.venv -name __pycache__ ! -user "$(stat -c %U <app_path>/.venv)" -type d -exec rm -rf {} +
+  ```
+
+### Notes for operators
+
+- **Re-run `fraisier scaffold && sudo fraisier scaffold-install --yes`** to install the corrected sweeps. They then self-heal at every subsequent `scaffold-install`.
+- **The sweep deletes more than before, by design.** Anything under a swept tree not owned by that tree's owner goes. `__pycache__` is regenerated on the next import, so the cost is one recompile.
+- The boundedness and privilege guards from v0.48.0 are unchanged: still `-name "__pycache__" -type d` only — never a bare `rm -rf` on a computed path — still under `sudo` via `_run`, so `--dry-run` and `--validate-only` still delete nothing.
+
+### Known limitations
+
+- **This clears residue; it does not stop every writer.** v0.50.1 stopped the app unit writing into its venv, and the helper units have set `PYTHONDONTWRITEBYTECODE=1` since v0.6.0. A process invoked outside systemd (a manual `sudo -u <user> …` while debugging) is still unconstrained — which remains the leading candidate for #286's residue, and is why #286 was closed without a code cause being found.
+- **The sweep runs at `scaffold-install` time only.** Residue created between installs sits until the next one.
+- **`~/.local/lib` and the uv tool dir are swept against `deploy_user`, not against their own `stat`.** Both are that user's trees by construction; if you have relocated either, the filter is still right but for a weaker reason.
+
 ## [0.50.1] - 2026-07-28
 
 Closes #292. Found while re-auditing the unit templates for #286 — not a cause
@@ -21,6 +50,7 @@ of #286, whose residue is elsewhere.
 - **This costs startup time, deliberately.** `--compile-bytecode` is used nowhere, so the venv has never been precompiled at install time; with bytecode writing off, every start recompiles site-packages *and* your app modules. On a `Restart=on-failure` unit that starts rarely this is the right trade against an un-cleanable venv, but it is a real cost on a large codebase.
 - **It is overridable.** The directive is emitted *before* the `service.environment` loop, and systemd resolves a repeated `Environment=` assignment last-wins, so `service.environment: {PYTHONDONTWRITEBYTECODE: "0"}` restores the old behaviour if you measure the cost and decide against it.
 - Re-run `fraisier scaffold` and reinstall the unit to pick this up; an already-running service keeps its current environment until restarted. Existing `__pycache__` residue is cleared by the stale-cache sweep at `scaffold-install` time, as it was in v0.48.0.
+  - **Correction (v0.54.0, #303):** that last sentence was wrong. The app-venv sweep filtered `-user root` only, so `service.user`-owned residue — exactly what this entry is about — survived it. Fixed in v0.54.0; on v0.50.1–v0.53.0 the residue must be cleared by hand.
 
 ### Known limitations
 
