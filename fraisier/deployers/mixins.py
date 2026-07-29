@@ -50,9 +50,13 @@ def _install_failure_advice(
     """
     if "__pycache__" in stderr and "Permission denied" in stderr:
         return (
-            "Root-owned __pycache__ directories are blocking uv sync."
+            "Foreign-owned __pycache__ directories are blocking uv sync."
+            # Not `-user root`: the writer can be service.user (#292) or
+            # install.user (#286). Resolve the venv's owner at paste time so
+            # the command is right whichever identity actually owns it (#303).
             f" Fix: sudo find {app_path}/.venv -name __pycache__"
-            " -user root -type d -exec rm -rf {} +"
+            f' ! -user "$(stat -c %U {app_path}/.venv)"'
+            " -type d -exec rm -rf {} +"
             " then retry the deployment."
             " The venv may be corrupted — run uv sync --frozen"
             " manually after cleanup."

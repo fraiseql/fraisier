@@ -236,10 +236,14 @@ fi
 {% endfor %}
 
 # Clean up stray __pycache__ dirs that block uv sync / uv tool install (#196, #286)
-# A process running as another user (root, or an install_user helper) can leave
-# byte-compiled files inside a directory the deploy user owns, and the deploy
-# user cannot unlink them — breaking the next `uv sync --frozen` or
-# `uv tool install --force`.
+# A process running as another user can leave byte-compiled files inside a
+# directory a different user owns, and that owner cannot unlink them — breaking
+# the next `uv sync --frozen` or `uv tool install --force`.
+#
+# Every sweep matches "not owned by the identity that owns this tree" rather
+# than `-user root` (#303). Root is not the only writer: `service.user` — an
+# identity independent of both deploy_user and install.user — writes into the
+# app venv, which is the #292 failure class and what `-user root` missed.
 #
 # These run under sudo deliberately: the whole point is removing files owned by
 # *another* user, which an unprivileged find cannot do (the failure would be
@@ -249,14 +253,16 @@ echo "  Cleaning stray __pycache__ directories"
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set app_path = env_config.get('app_path') %}
+{% set install_cfg = env_config.get('install') or fraise.get('install') or {} %}
+{% set venv_owner = install_cfg.get('user') %}
 {% if app_path %}
 if _env_active "{{ env_name }}"; then
-    _run sudo find "{{ app_path }}/.venv" -name "__pycache__" -user root -type d -exec rm -rf {} + || true
+    _run sudo find "{{ app_path }}/.venv" -name "__pycache__" ! -user "{{ venv_owner if venv_owner else '${DEPLOY_USER}' }}" -type d -exec rm -rf {} + || true
 fi
 {% endif %}
 {% endfor %}
 {% endfor %}
-_run sudo find "/home/${DEPLOY_USER}/.local/lib" -name "__pycache__" -user root -type d -exec rm -rf {} + || true
+_run sudo find "/home/${DEPLOY_USER}/.local/lib" -name "__pycache__" ! -user "${DEPLOY_USER}" -type d -exec rm -rf {} + || true
 # uv installs tools under XDG_DATA_HOME, not ~/.local/lib — the sweep above never
 # reached the tool venv. Match any foreign owner here, not just root: the residue
 # reported in #286 is install_user-owned (the helper runs as install_user but

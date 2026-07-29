@@ -158,9 +158,13 @@ def _handle_connection(conn: socket.socket, allowed_command: list[str]) -> None:
                 result.stderr.strip(),
             )
             if "__pycache__" in result.stderr and "Permission denied" in result.stderr:
+                # Not `-user root`: the writer can be service.user (#292) or
+                # install.user (#286). Resolve the venv's owner at paste time
+                # so the command is right whichever identity owns it (#303).
                 response["advice"] = (
-                    "Root-owned __pycache__ directories are blocking uv sync. "
-                    f"Fix: sudo find {cwd}/.venv -name __pycache__ -user root "
+                    "Foreign-owned __pycache__ directories are blocking uv sync. "
+                    f"Fix: sudo find {cwd}/.venv -name __pycache__ "
+                    f'! -user "$(stat -c %U {cwd}/.venv)" '
                     "-type d -exec rm -rf {{}} + then retry the deployment. "
                     "The venv may be corrupted — run uv sync --frozen manually "
                     "after cleanup. See: https://github.com/fraiseql/fraisier/issues/196"
