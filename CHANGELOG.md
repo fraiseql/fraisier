@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-07-31
+
+Adds an enforced pre-migration backup gate for production deploys, plus a
+`doctor` check for a start-time regression that is easy to miss.
+
 ### Added
 
 - **Verified pre-migration dump gate for the `migrate` strategy** (`database.pre_migrate_dump`). When enabled and migrations are pending, `MigrateStrategy` takes a `pg_dump` of the target database and verifies it (`pg_restore --list` TOC read + size-sanity against the previous dump, reusing the backup runner's truncation guards) **before** applying anything. A dump that cannot be produced or fails verification aborts the deploy with the schema untouched — *no fresh verified dump ⇒ no migration* — bounding production RPO to the moment immediately before the deploy instead of the last scheduled backup. Config: `enabled`, `output_dir` (required), `compression` (default `zstd:9`), `jobs`, `min_free_gb`, `retention_hours` (pruning runs only after a successful dump). No-op deploys (nothing pending) skip the dump. Note: the pre-existing `backup_before_deploy` key only ever affected the dry-run display; this gate is the enforced replacement.
+- **`doctor` warns when a `uv sync` install command omits `--compile-bytecode`** (#298, #307). Since v0.50.1 the app unit runs with `PYTHONDONTWRITEBYTECODE=1`, so an install that lays down no bytecode cache pays it back at every start — measured at ~434 ms on a 49 MB site-packages app. The two settings compose (the env var disables bytecode *writing*, not reading), so an install-time cache is still used at runtime, and those install-user-owned caches are excluded from the v0.51.0 `__pycache__` sweep. `doctor` now points this out instead of leaving it to be discovered as a slow start.
+
+### Internal
+
+- Type-check floor driven to zero and CI made to hold it there (#309); pre-commit aligned on ruff 0.16.0 across every hook that gates the repo (#308); install-helper crash-logging test no longer depends on how the suite is invoked (#306).
 
 ## [0.51.0] - 2026-07-29
 
