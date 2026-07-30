@@ -36,7 +36,108 @@ log = logging.getLogger(__name__)
 
 
 class MigrateStrategy(Strategy):
-    """Production: preflight → migrate up.  Rollback via migrate down."""
+    """Production: preflight → optional verified dump gate → migrate up.
+
+    When *pre_migrate_dump* is configured (``enabled: true``), a
+    ``pg_dump`` of the target database is taken and verified (TOC read +
+    size-sanity vs the previous dump, via :func:`fraisier.dbops.backup.
+    run_backup`) **before** any migration is applied.  If the dump cannot
+    be produced or fails verification, the deploy aborts with the
+    migrations untouched: *no fresh verified dump ⇒ no migration*.  This
+    bounds the recovery point to the moment immediately before the
+    deploy instead of the last scheduled backup.
+
+    The gate only fires when there are pending migrations — a no-op
+    deploy (nothing to apply) does not spend a full dump.
+
+    Config keys (``database.pre_migrate_dump`` in fraises.yaml):
+
+    - ``enabled`` (bool, default false)
+    - ``output_dir`` (str, required when enabled) — fast-local rollback path
+    - ``compression`` (str, default ``zstd:9``)
+    - ``jobs`` (int, default 1) — parallel dump workers (``-Fd -j N``)
+    - ``min_free_gb`` (int, optional) — abort if *output_dir* has less free
+    - ``retention_hours`` (int, optional) — prune older gate dumps in
+      *output_dir* after a **successful** dump (a failed dump never
+      deletes anything)
+    """
+
+    def __init__(
+        self,
+        *,
+        pre_migrate_dump: dict[str, Any] | None = None,
+        db_name: str = "",
+    ) -> None:
+        self._dump_config = pre_migrate_dump or {}
+        self._db_name = db_name
+        if self._dump_enabled:
+            if not self._dump_config.get("output_dir"):
+                msg = "pre_migrate_dump.enabled requires pre_migrate_dump.output_dir"
+                raise ValueError(msg)
+            if not db_name:
+                msg = "pre_migrate_dump.enabled requires the database name"
+                raise ValueError(msg)
+            validate_pg_identifier(db_name, "database name")
+
+    @property
+    def _dump_enabled(self) -> bool:
+        return bool(self._dump_config.get("enabled", False))
+
+    def _run_dump_gate(
+        self,
+        confiture_config: Path,
+        *,
+        migrations_dir: Path,
+        db_url: str | None,
+    ) -> str | None:
+        """Run the pre-migration dump gate.  Returns an error message to
+        abort the deploy, or None to proceed."""
+        from fraisier.dbops.backup import (
+            check_disk_space,
+            cleanup_old_backups,
+            run_backup,
+        )
+        from fraisier.dbops.confiture import has_pending
+
+        if not has_pending(
+            confiture_config, migrations_dir=migrations_dir, database_url=db_url
+        ):
+            log.info("pre_migrate_dump: no pending migrations — gate skipped")
+            return None
+
+        output_dir = self._dump_config["output_dir"]
+        min_free_gb = self._dump_config.get("min_free_gb")
+        if min_free_gb is not None and not check_disk_space(
+            output_dir, required_gb=int(min_free_gb)
+        ):
+            return (
+                f"pre-migration dump gate: less than {min_free_gb} GB free "
+                f"in {output_dir} — refusing to migrate without a fresh dump"
+            )
+
+        result = run_backup(
+            db_name=self._db_name,
+            output_dir=output_dir,
+            database_url=db_url or "",
+            compression=self._dump_config.get("compression", "zstd:9"),
+            mode="full",
+            jobs=int(self._dump_config.get("jobs", 1)),
+        )
+        if not result.success:
+            return (
+                "pre-migration dump gate failed — migrations NOT applied: "
+                f"{result.error}"
+            )
+
+        log.info("pre_migrate_dump: verified dump at %s", result.backup_path)
+        retention_hours = self._dump_config.get("retention_hours")
+        if retention_hours is not None:
+            removed = cleanup_old_backups(
+                Path(output_dir), retention_hours=int(retention_hours)
+            )
+            if removed:
+                log.info("pre_migrate_dump: pruned %d old dump(s)", len(removed))
+        return None
 
     def execute(
         self,
@@ -57,6 +158,13 @@ class MigrateStrategy(Strategy):
             allow_irreversible=allow_irreversible,
             database_url=db_url,
         )
+
+        if self._dump_enabled:
+            gate_error = self._run_dump_gate(
+                confiture_config, migrations_dir=migrations_dir, db_url=db_url
+            )
+            if gate_error:
+                return StrategyResult(success=False, errors=[gate_error])
 
         result = migrate_up(
             confiture_config,

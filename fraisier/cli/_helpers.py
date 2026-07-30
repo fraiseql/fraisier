@@ -223,6 +223,11 @@ def _print_dry_run(
         db_strategy = db.get("strategy", "none")
         if db.get("backup_before_deploy"):
             table.add_row("Backup", f"confiture preflight on {db_name}")
+        if (db.get("pre_migrate_dump") or {}).get("enabled"):
+            table.add_row(
+                "Dump gate",
+                f"verified pg_dump of {db_name} before migrate (abort on failure)",
+            )
         table.add_row(
             "Migration",
             f"confiture migrate up on {db_name} (strategy: {db_strategy})",

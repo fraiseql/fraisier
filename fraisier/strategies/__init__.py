@@ -54,7 +54,10 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             ``db_name`` (str) and ``restore_config`` (dict from YAML).
     """
     if name == "migrate":
-        return MigrateStrategy()
+        return MigrateStrategy(
+            pre_migrate_dump=kwargs.get("pre_migrate_dump"),
+            db_name=kwargs.get("db_name", ""),
+        )
     if name == "rebuild":
         roles = kwargs.get("required_roles") or []
         project_dir = kwargs.get("project_dir")

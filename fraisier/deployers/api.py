@@ -709,6 +709,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 kwargs["project_dir"] = Path(self.app_path)
             if self.database_config.get("app_version"):
                 kwargs["app_version"] = self.database_config["app_version"]
+        if resolved == "migrate" and self.database_config.get("pre_migrate_dump"):
+            kwargs["pre_migrate_dump"] = self.database_config["pre_migrate_dump"]
+            kwargs["db_name"] = self.database_config.get("name", "")
         if resolved == "restore_migrate":
             kwargs["restore_config"] = self.database_config.get("restore", {})
             kwargs["db_name"] = self.database_config.get("name", "")
