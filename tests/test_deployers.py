@@ -1211,6 +1211,35 @@ class TestAPIDeployerRebuildAppVersion:
             deployer._resolve_strategy()
 
 
+class TestAPIDeployerPreMigrateDump:
+    """APIDeployer plumbs database.pre_migrate_dump through to MigrateStrategy."""
+
+    def test_wires_dump_config_and_db_name(self):
+        deployer = APIDeployer(
+            {
+                "app_path": "/tmp/x",
+                "database": {
+                    "strategy": "migrate",
+                    "name": "proddb",
+                    "pre_migrate_dump": {"enabled": True, "output_dir": "/b"},
+                },
+            }
+        )
+        strategy, *_ = deployer._resolve_strategy()
+        assert strategy._dump_enabled
+        assert strategy._db_name == "proddb"
+
+    def test_migrate_without_dump_config_stays_gateless(self):
+        deployer = APIDeployer(
+            {
+                "app_path": "/tmp/x",
+                "database": {"strategy": "migrate", "name": "proddb"},
+            }
+        )
+        strategy, *_ = deployer._resolve_strategy()
+        assert not strategy._dump_enabled
+
+
 class TestServiceFileStaleness:
     """_check_service_file_staleness warns when live unit differs from scaffold."""
 

@@ -665,6 +665,11 @@ environments:
       database_url: !envvar DATABASE_URL
       strategy: apply
       backup_before_deploy: true
+      pre_migrate_dump:          # enforced gate: dump+verify BEFORE migrating,
+        enabled: true            # abort the deploy if the dump fails
+        output_dir: /var/backups/myapp/pre_migrate
+        min_free_gb: 20
+        retention_hours: 168
       post_migrate:
         - sql_dir: db/7_grant/
           on_error: halt

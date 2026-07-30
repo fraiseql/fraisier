@@ -1,6 +1,7 @@
 """Tests for deployment strategies (v0.3 confiture Python API)."""
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -177,6 +178,169 @@ class TestMigrateStrategy:
             database_url=None,
             hooks_config=None,
         )
+
+
+class TestMigrateStrategyPreMigrateDumpGate:
+    """Verified pre-migration dump gate: no fresh verified dump ⇒ no migration."""
+
+    DUMP_CFG: ClassVar[dict] = {"enabled": True, "output_dir": "/var/backups/gate"}
+
+    def _strategy(self, **overrides):
+        return MigrateStrategy(
+            pre_migrate_dump={**self.DUMP_CFG, **overrides}, db_name="proddb"
+        )
+
+    def test_enabled_requires_output_dir(self):
+        with pytest.raises(ValueError, match="output_dir"):
+            MigrateStrategy(pre_migrate_dump={"enabled": True}, db_name="proddb")
+
+    def test_enabled_requires_db_name(self):
+        with pytest.raises(ValueError, match="database name"):
+            MigrateStrategy(pre_migrate_dump=dict(self.DUMP_CFG))
+
+    def test_disabled_config_needs_no_db_name(self):
+        MigrateStrategy(pre_migrate_dump={"enabled": False})
+        MigrateStrategy()
+
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_default_strategy_never_dumps(self, mock_preflight, mock_up, mock_backup):
+        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+
+        result = MigrateStrategy().execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        mock_backup.assert_not_called()
+
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_pending_migrations_dump_then_migrate(
+        self, mock_preflight, mock_up, mock_backup, mock_pending
+    ):
+        from fraisier.dbops.backup import BackupResult
+
+        mock_backup.return_value = BackupResult(
+            success=True, backup_path="/var/backups/gate/proddb_full_x.dump"
+        )
+        mock_up.return_value = MigrationResult(success=True, steps_applied=2)
+
+        result = self._strategy().execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        assert result.migrations_applied == 2
+        mock_backup.assert_called_once_with(
+            db_name="proddb",
+            output_dir="/var/backups/gate",
+            database_url="",
+            compression="zstd:9",
+            mode="full",
+            jobs=1,
+        )
+
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_dump_failure_aborts_before_migrate(
+        self, mock_preflight, mock_up, mock_backup, mock_pending
+    ):
+        from fraisier.dbops.backup import BackupResult
+
+        mock_backup.return_value = BackupResult(
+            success=False, error="backup failed TOC verification: truncated"
+        )
+
+        result = self._strategy().execute(CONFIG, migrations_dir=MDIR)
+
+        assert not result.success
+        assert "migrations NOT applied" in result.errors[0]
+        assert "truncated" in result.errors[0]
+        mock_up.assert_not_called()
+
+    @patch("fraisier.dbops.confiture.has_pending", return_value=False)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_no_pending_skips_dump_and_proceeds(
+        self, mock_preflight, mock_up, mock_backup, mock_pending
+    ):
+        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
+
+        result = self._strategy().execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        mock_backup.assert_not_called()
+        mock_up.assert_called_once()
+
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.check_disk_space", return_value=False)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_insufficient_disk_aborts_without_dumping(
+        self, mock_preflight, mock_up, mock_backup, mock_disk, mock_pending
+    ):
+        result = self._strategy(min_free_gb=100).execute(CONFIG, migrations_dir=MDIR)
+
+        assert not result.success
+        assert "100 GB free" in result.errors[0]
+        mock_backup.assert_not_called()
+        mock_up.assert_not_called()
+
+    @patch("fraisier.dbops.backup.cleanup_old_backups", return_value=["old.dump"])
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_retention_pruned_only_after_successful_dump(
+        self, mock_preflight, mock_up, mock_backup, mock_pending, mock_cleanup
+    ):
+        from fraisier.dbops.backup import BackupResult
+
+        mock_backup.return_value = BackupResult(success=True, backup_path="p.dump")
+        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+
+        result = self._strategy(retention_hours=72).execute(CONFIG, migrations_dir=MDIR)
+
+        assert result.success
+        mock_cleanup.assert_called_once_with(
+            Path("/var/backups/gate"), retention_hours=72
+        )
+
+    @patch("fraisier.dbops.backup.cleanup_old_backups")
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_failed_dump_never_prunes(
+        self, mock_preflight, mock_up, mock_backup, mock_pending, mock_cleanup
+    ):
+        from fraisier.dbops.backup import BackupResult
+
+        mock_backup.return_value = BackupResult(success=False, error="boom")
+
+        result = self._strategy(retention_hours=72).execute(CONFIG, migrations_dir=MDIR)
+
+        assert not result.success
+        mock_cleanup.assert_not_called()
+
+    def test_get_strategy_wires_dump_config(self):
+        strategy = get_strategy(
+            "migrate",
+            pre_migrate_dump={"enabled": True, "output_dir": "/b"},
+            db_name="proddb",
+        )
+        assert isinstance(strategy, MigrateStrategy)
+        assert strategy._dump_enabled
+        assert strategy._db_name == "proddb"
+
+    def test_get_strategy_default_has_gate_disabled(self):
+        strategy = get_strategy("migrate")
+        assert isinstance(strategy, MigrateStrategy)
+        assert not strategy._dump_enabled
 
 
 class TestRebuildStrategyValidation:

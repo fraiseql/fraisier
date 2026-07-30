@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Verified pre-migration dump gate for the `migrate` strategy** (`database.pre_migrate_dump`). When enabled and migrations are pending, `MigrateStrategy` takes a `pg_dump` of the target database and verifies it (`pg_restore --list` TOC read + size-sanity against the previous dump, reusing the backup runner's truncation guards) **before** applying anything. A dump that cannot be produced or fails verification aborts the deploy with the schema untouched — *no fresh verified dump ⇒ no migration* — bounding production RPO to the moment immediately before the deploy instead of the last scheduled backup. Config: `enabled`, `output_dir` (required), `compression` (default `zstd:9`), `jobs`, `min_free_gb`, `retention_hours` (pruning runs only after a successful dump). No-op deploys (nothing pending) skip the dump. Note: the pre-existing `backup_before_deploy` key only ever affected the dry-run display; this gate is the enforced replacement.
+
 ## [0.51.0] - 2026-07-29
 
 Four fixes that had been carried as separate branches, released together.
