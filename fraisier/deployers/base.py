@@ -336,6 +336,8 @@ class BaseDeployer(ABC):
         self.runner.run(["cp", str(source_path), str(tmp_path)])
         self.runner.run(["mv", "-f", str(tmp_path), str(dest_path)])
 
+        self._sync_template_dir(source_path.parent, dest_path.parent)
+
         logger.info(
             "Config synced successfully",
             extra={
@@ -346,6 +348,73 @@ class BaseDeployer(ABC):
                 "environment": self.environment,
             },
         )
+
+    def _sync_template_dir(self, source_dir: Path, dest_dir: Path) -> None:
+        """Copy ``scaffold.template_dir`` next to the synced fraises.yaml (#312).
+
+        A relative ``template_dir`` resolves against the *config* directory, so
+        on the server it points at ``/opt/fraisier/<template_dir>`` — which
+        nothing ever created. The templates are committed to the repo and sit in
+        the app checkout; they simply never travelled. Jinja's ChoiceLoader then
+        falls through to the built-ins silently, so the customisation vanished
+        without a word.
+
+        Anchored to the config directory rather than re-pointing the resolution
+        at ``app_path``: ``template_dir`` is project-level while ``app_path`` is
+        per-fraise-per-environment, so a multi-fraise project has no single
+        checkout to resolve against. This keeps the existing model, where
+        fraises.yaml is synced from the deploying fraise's checkout.
+
+        Best-effort: a failure here must not abort a deploy that would otherwise
+        succeed, but it is logged loudly because the result is a server running
+        built-in templates while the repo says otherwise.
+        """
+        template_dir = None
+        cfg = getattr(self, "config_object", None)
+        if cfg is not None:
+            template_dir = getattr(getattr(cfg, "scaffold", None), "template_dir", None)
+        if not template_dir:
+            return
+
+        rel = Path(template_dir)
+        if rel.is_absolute():
+            # An absolute path is the operator naming a location on the server;
+            # syncing over it would be surprising.
+            return
+
+        source = source_dir / rel
+        dest = dest_dir / rel
+        if not source.is_dir():
+            logger.warning(
+                "scaffold.template_dir %r is configured but %s is not in the "
+                "checkout — the server will render with built-in templates",
+                template_dir,
+                source,
+            )
+            return
+
+        try:
+            self.runner.run(["mkdir", "-p", str(dest.parent)])
+            # Replace wholesale: a template deleted upstream must not survive
+            # on the server, where it would keep overriding the built-in.
+            self.runner.run(["rm", "-rf", str(dest)])
+            self.runner.run(["cp", "-a", str(source), str(dest)])
+            logger.info(
+                "Synced scaffold template_dir",
+                extra={
+                    "event": "template_dir_synced",
+                    "source": str(source),
+                    "destination": str(dest),
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to sync scaffold.template_dir %s -> %s; the server may "
+                "render with built-in templates",
+                source,
+                dest,
+                exc_info=True,
+            )
 
     def _detect_config_changes(self, config_path: Path | None = None) -> bool:
         """Detect if fraises.yaml has changed.

@@ -7,6 +7,7 @@ Templates are rendered with the full fraises.yaml context and written
 to the configured output_dir.
 """
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -25,6 +26,8 @@ from fraisier.config import (
 from fraisier.dbops._validation import validate_service_name
 from fraisier.manifest import build_manifest
 from fraisier.naming import app_service_name, deploy_socket_name
+
+logger = logging.getLogger("fraisier")
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -589,6 +592,19 @@ class ScaffoldRenderer:
             custom_path = Path(template_dir)
             if not custom_path.is_absolute():
                 custom_path = Path(config.config_path).parent / custom_path
+            if not custom_path.is_dir():
+                # ChoiceLoader falls through to the built-ins with no error, so
+                # a customised template silently does not apply — on the server
+                # a relative template_dir resolves against /opt/fraisier, where
+                # nothing puts it. Warn rather than raise: existing deploys are
+                # already running on built-ins and must not start failing (#312).
+                logger.warning(
+                    "scaffold.template_dir is set but %s does not exist — "
+                    "rendering with built-in templates only. Any customised "
+                    "template in %r is being ignored.",
+                    custom_path,
+                    template_dir,
+                )
             loaders.append(jinja2.FileSystemLoader(str(custom_path)))
         loaders.append(jinja2.FileSystemLoader(str(_TEMPLATES_DIR)))
 
