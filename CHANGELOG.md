@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-07-31
+
+Closes #310, #311 and #312 — all three found by running fraisier in anger on
+printoptim.dev, and all three of the same shape: **something silently did not
+happen, and nothing said so.**
+
+Two of them are the halves of one incident. On 2026-07-30 at 00:00 UTC the
+staging-restore timer fired **on top of an in-flight deploy**, stopped the API
+service and terminated every connection to the staging database. The deploy's
+`pg_restore` died with `FATAL: terminating connection due to administrator
+command`, the deploy reported FAILED, and staging was left half-restored. Two
+independent defects had to line up for that: the timer fired at an hour nobody
+had scheduled, and nothing stopped a restore running concurrently with a deploy.
+
+### Fixed
+
+- **`db restore` now holds the deployment lock** (`cli/db.py`, #310). `fraisier.locking` has always provided per-fraise mutual exclusion and the webhook wraps every deployment in `deployment_lock(fraise)` — but the `db restore` CLI never acquired it, so a timer-, cron- or hand-driven restore ran completely unsynchronised with deploys of the same fraise. It now takes the same lock, across the whole live restore.
+- **The staging-restore timer no longer fires twice a day** (`core/restore-staging.timer.j2`, #311). The template carried both `OnCalendar=daily` and `OnCalendar=*-*-* 02:00:00` under a comment promising 2 AM. `OnCalendar=` **accumulates** — per `systemd.timer(5)` the trigger list resets only when the *empty* string is assigned — so the unit also fired at 00:00. Confirmed live: `systemctl list-timers` showed LAST 02:00 / NEXT 00:00 on the same unit, which a single-trigger timer cannot do.
+- **`scaffold.template_dir` now reaches the server** (`deployers/base.py`, `scaffold/renderer.py`, `config_watcher.py`, #312). A project could override a built-in template, watch it render correctly with `fraisier scaffold`, and get the built-in on the deployed host with nothing said. Three causes stacked: a relative `template_dir` resolves against the *config* directory (`/opt/fraisier`) rather than the app checkout; config sync copied only `fraises.yaml`, so the template tree never left the repo; and `ConfigWatcher` hashed only `fraises.yaml`, so a template-only commit never triggered regeneration at all. Verified live, where the customised file was **`sudoers.j2`** — an operator believing a privilege rule was deployed when it was not.
+
+### Added
+
+- **`fraisier db restore --skip-if-locked`** — exit 0 with a clear line instead of failing when a deploy holds the lock. The generated `restore-staging.service` passes it: a concurrent staging deploy is itself restoring from production, so a collision means the work is already being done. Without this the new lock would convert a harmless overlap into a nightly failed unit.
+
+### Changed
+
+- **A missing `template_dir` is now a warning, not silence** (#312). `jinja2.ChoiceLoader` falls through to the built-ins when the configured directory is absent — no exception, no log line. Fraisier now warns and names the **resolved** path, since the relative resolution is the trap. Deliberately not fatal: deploys currently running on built-ins must not start failing on upgrade.
+- **Change detection covers the template tree** (#312). Paths are hashed alongside contents and sorted, so the digest is order-independent and an edit, an addition or a **rename** all count as a change.
+
+### Notes for operators
+
+- **Re-run `fraisier scaffold && sudo fraisier scaffold-install --yes`, then deploy once.** #310 and #311 live in generated units; #312's template sync happens during deploy-time config sync. Until both, hosts keep the old behaviour.
+- If you applied the `flock` drop-in from #310 as an interim mitigation, it can be removed — it is harmless if left.
+- **`--dry-run` does not take the lock.** It mutates nothing, so a running deploy will not veto a plan preview.
+- **A lock that cannot be evaluated is an error, not a skip.** If the lock directory is missing or unwritable, `db restore` fails with a message naming it — even under `--skip-if-locked`. "I cannot tell whether a deploy is running" must never be treated as "no deploy is running". `/run/fraisier` is tmpfs, created by the webhook unit's `RuntimeDirectory=`; `restore-staging.service` already depended on it for its systemctl socket, so this is not a new requirement.
+- **The template sync replaces the directory wholesale.** A template deleted in your repo will not survive on the server — the point, since a stale override would otherwise shadow the built-in indefinitely. An **absolute** `template_dir` is never synced; that names a location you manage yourself. If you have been hand-placing templates under `/opt/fraisier/`, move your source of truth into the repo.
+
+### Known limitations
+
+- **Only `db restore` was given the lock.** The other `db` subcommands (`exec`, `reset`, `migrate`, `build`) still run unsynchronised. `restore` is the one that stops the service and terminates connections, so it is the one that destroyed a deploy — but the same class of collision is reachable through `db reset`, and closing that is a separate change with its own blast radius.
+- **The lock is per-fraise and per-host.** Cross-host coordination still requires the `database` lock backend, unchanged here.
+- **Nothing recreates `/run/fraisier` for a timer firing while the webhook is stopped.** The failure is now legible rather than a traceback, but it is still a failure.
+- **Custom templates come from whichever fraise deployed last.** `template_dir` is project-level while `app_path` is per-fraise-per-environment, so in a multi-repo project the last deploy wins. That is exactly how `fraises.yaml` syncing already behaves; this inherits the wart rather than introducing it. Re-anchoring resolution at the app checkout was considered and rejected for the same reason.
+- **The template sync is best-effort.** A failure is logged loudly but does not abort an otherwise-successful deploy, so a host can still end up on built-ins; the new render-time warning is what surfaces that.
+- **Nothing validates that a custom template is still compatible.** Overriding a built-in that later gains a context variable fails at render time under `StrictUndefined` — on the server, mid-deploy.
+
 ## [0.52.0] - 2026-07-31
 
 Adds an enforced pre-migration backup gate for production deploys, plus a
