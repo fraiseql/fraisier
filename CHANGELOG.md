@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-07-31
+
+Closes #312. A customisation that renders locally and silently does not apply
+on the server is worse than one that fails — this closes the silence and the
+three causes behind it.
+
+### Fixed
+
+- **`scaffold.template_dir` now reaches the server** (`deployers/base.py`, `scaffold/renderer.py`, `config_watcher.py`, #312). A project could override a built-in template, watch it render correctly with `fraisier scaffold`, and get the built-in on the deployed host with nothing said. Three separate causes stacked: a relative `template_dir` resolves against the *config* directory (`/opt/fraisier`) rather than the app checkout; config sync copied only `fraises.yaml`, so the template tree never left the repo; and `ConfigWatcher` hashed only `fraises.yaml`, so a template-only commit never triggered regeneration at all. Verified live on printoptim.dev, where the customised file was **`sudoers.j2`** — an operator believing a privilege rule was deployed when it was not.
+
+### Changed
+
+- **A missing `template_dir` is now a warning, not silence.** `jinja2.ChoiceLoader` falls through to the built-ins when the configured directory is absent — no exception, no log line. Fraisier now warns and names the **resolved** path, since the relative resolution is the trap. Deliberately not fatal: deploys currently running on built-ins must not start failing on upgrade.
+- **Change detection covers the template tree.** Paths are hashed alongside contents and sorted, so the digest is order-independent and an edit, an addition or a **rename** all count as a change.
+
+### Notes for operators
+
+- **Re-deploy once to pick this up.** The sync happens during deploy-time config sync; until a deploy runs, the server keeps whatever it has.
+- **The sync replaces the directory wholesale.** A template deleted in your repo will not survive on the server — which is the point, since a stale override would otherwise keep shadowing the built-in indefinitely.
+- **An absolute `template_dir` is never synced.** That names a location you manage on the server yourself, and copying over it would be surprising.
+- If you have been working around this by hand-placing templates under `/opt/fraisier/`, the sync now owns that path — move your source of truth into the repo.
+
+### Known limitations
+
+- **The templates come from whichever fraise deployed last.** `template_dir` is project-level while `app_path` is per-fraise-per-environment, so in a multi-repo project the last deploy wins. That is exactly how `fraises.yaml` syncing already behaves; this inherits the wart rather than introducing it. Re-pointing resolution at the app checkout was considered and rejected for the same reason — there is no single checkout to anchor to.
+- **The sync is best-effort.** A failure is logged loudly but does not abort a deploy that would otherwise succeed, so a host can still end up on built-in templates. The new warning at render time is what surfaces that.
+- **Nothing validates that a custom template is still compatible.** Overriding a built-in that later gains a new context variable will fail at render time with `StrictUndefined`, on the server, during a deploy.
+
 ## [0.52.0] - 2026-07-31
 
 Adds an enforced pre-migration backup gate for production deploys, plus a
