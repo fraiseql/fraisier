@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-07-31
+
+Closes #310 and #311 — the two halves of one production incident. On
+printoptim.dev at 2026-07-30 00:00 UTC the staging-restore timer fired **on top
+of an in-flight deploy**, stopped the API service and terminated every
+connection to the staging database. The deploy's `pg_restore` died with
+`FATAL: terminating connection due to administrator command`, the deploy
+reported FAILED, and staging was left half-restored.
+
+Two independent defects had to line up for that: the timer fired at a moment
+nobody had scheduled it for, and nothing stopped a restore running concurrently
+with a deploy.
+
+### Fixed
+
+- **`db restore` now holds the deployment lock** (`cli/db.py`, #310). `fraisier.locking` has always provided per-fraise mutual exclusion and the webhook wraps every deployment in `deployment_lock(fraise)` — but the `db restore` CLI never acquired it, so a timer-, cron- or hand-driven restore ran completely unsynchronised with deploys of the same fraise. It now takes the same lock, over the whole live restore.
+- **The staging-restore timer no longer fires twice a day** (`core/restore-staging.timer.j2`, #311). The template carried both `OnCalendar=daily` and `OnCalendar=*-*-* 02:00:00` under a comment promising 2 AM. `OnCalendar=` **accumulates** — per `systemd.timer(5)` the trigger list is reset only when the *empty* string is assigned — so the unit also fired at 00:00. Confirmed live: `systemctl list-timers` showed LAST 02:00 / NEXT 00:00 on the same unit, which a single-trigger timer cannot do.
+
+### Added
+
+- **`fraisier db restore --skip-if-locked`** — exit 0 with a clear line instead of failing when a deploy holds the lock. The generated `restore-staging.service` passes it: a concurrent staging deploy is itself restoring from production, so a collision means the work is already being done. Without this the new lock would convert a harmless overlap into a nightly failed unit.
+
+### Notes for operators
+
+- **Re-run `fraisier scaffold && sudo fraisier scaffold-install --yes`.** Both fixes are in generated units; the installed copies keep the old behaviour until you do. If you applied the `flock` drop-in from #310 as an interim mitigation, it can be removed after this — it is harmless if left.
+- **`--dry-run` does not take the lock.** It mutates nothing, so a running deploy will not veto a plan preview.
+- **A lock that cannot be evaluated is an error, not a skip.** If the lock directory is missing or unwritable, `db restore` fails with a message naming it — even under `--skip-if-locked`. "I cannot tell whether a deploy is running" must never be treated as "no deploy is running". `/run/fraisier` is tmpfs and is created by the webhook unit's `RuntimeDirectory=`, so after a reboot it appears when the webhook starts; `restore-staging.service` already depended on that directory for its systemctl socket, so this is not a new requirement.
+
+### Known limitations
+
+- **Only `db restore` was given the lock.** The other `db` subcommands (`exec`, `reset`, `migrate`, `build`) still run unsynchronised. `restore` is the one that stops the service and terminates connections, so it is the one that destroyed a deploy — but the same class of collision is reachable through `db reset`, and closing that is a separate change with its own blast radius.
+- **The lock is per-fraise and per-host.** Two hosts serving the same fraise coordinate only under the `database` lock backend, unchanged here.
+- **Nothing recreates `/run/fraisier` for a timer that fires while the webhook is stopped.** The failure is now legible rather than a traceback, but it is still a failure.
+
 ## [0.52.0] - 2026-07-31
 
 Adds an enforced pre-migration backup gate for production deploys, plus a
