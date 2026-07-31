@@ -24,6 +24,35 @@ def _reset_rate_limiter():
 
 
 @pytest.fixture(autouse=True)
+def _isolated_lock_dir(tmp_path, monkeypatch):
+    """Keep deployment locks out of /run/fraisier.
+
+    ``file_deployment_lock`` mkdirs its lock directory, which needs root for the
+    real ``/run/fraisier`` and does not exist at all on most dev machines. Any
+    code path that takes a deployment lock — the webhook, and ``db restore``
+    since #310 — would otherwise fail in tests for purely environmental reasons.
+
+    Redirected at the single choke point rather than at each source of the path:
+    the directory arrives variously from ``DEFAULT_LOCK_DIR``, the
+    ``DeploymentConfig`` schema default, and a hardcoded literal in the config
+    loader. Only a ``/run/`` path is rewritten, so a directory a test supplies
+    itself is honoured and ``test_file_lock.py`` keeps controlling its own.
+    """
+    from fraisier import locking
+
+    real = locking.file_deployment_lock
+    safe = tmp_path / ".locks"
+
+    def _redirected(fraise_name, lock_dir=None):
+        if lock_dir is None or str(lock_dir).startswith("/run/"):
+            lock_dir = safe
+        return real(fraise_name, lock_dir=lock_dir)
+
+    monkeypatch.setattr(locking, "file_deployment_lock", _redirected)
+    monkeypatch.setattr(locking, "DEFAULT_LOCK_DIR", safe)
+
+
+@pytest.fixture(autouse=True)
 def _reset_delivery_dedupe():
     """Clear webhook delivery-ID dedupe store between tests."""
     from fraisier.git.github import _delivery_dedupe

@@ -514,6 +514,14 @@ def db_preflight(ctx: click.Context, fraise: str, env: str, fmt: str) -> None:
     default=None,
     help="Prefer backups compressed with this algorithm (overrides config)",
 )
+@click.option(
+    "--skip-if-locked",
+    is_flag=True,
+    help=(
+        "Exit 0 instead of failing when a deploy holds the lock. "
+        "For timer units, where a skipped nightly restore is a non-event."
+    ),
+)
 @click.pass_context
 def db_restore(
     ctx: click.Context,
@@ -525,11 +533,16 @@ def db_restore(
     skip_preflight: bool,
     jobs: int | None,
     preferred_compression: str | None,
+    skip_if_locked: bool,
 ) -> None:
     """Restore staging database from a production backup.
 
     Stops the service, runs pg_restore, creates a rollback template,
     applies pending migrations, and restarts the service.
+
+    Holds the same per-fraise deployment lock the webhook uses, so a restore
+    and a deploy of the same fraise can never interleave. --dry-run does not
+    take the lock, since it changes nothing.
 
     \b
     Examples:
@@ -621,88 +634,123 @@ def db_restore(
         return
 
     # --- live run ---
-    runner = LocalRunner()
-    svc_mgr = (
-        get_service_manager(runner, config._config)
-        if systemd_service and not no_service_restart
-        else None
-    )
-
-    from fraisier.config.schema import PreflightConfig
-
-    preflight_cfg = db_cfg.get("preflight") or {}
-    preflight = PreflightConfig(
-        enabled=bool(preflight_cfg.get("enabled", True)),
-        timeout_seconds=int(preflight_cfg.get("timeout_seconds", 120)),
-    )
-
-    strategy = RestoreMigrateStrategy(
-        RestoreConfig(
-            db_name=db_name,
-            backup_dir=_Path(restore_cfg.get("backup_dir", ".")),
-            backup_pattern=restore_cfg.get("backup_pattern", "*.dump"),
-            max_age_hours=float(restore_cfg.get("max_age_hours", 48.0)),
-            target_owner=restore_cfg.get("target_owner"),
-            create_template=bool(restore_cfg.get("create_template", False)),
-            template_name=restore_cfg.get("template_name"),
-            min_tables=int(restore_cfg.get("min_tables", 0)),
-            jobs=jobs if jobs is not None else int(restore_cfg.get("jobs", 1)),
-            preferred_compression=(
-                preferred_compression
-                if preferred_compression is not None
-                else restore_cfg.get("preferred_compression")
-            ),
-            backup_path=from_backup,
-            preflight=preflight,
-        ),
-        admin_url=admin_url,
-        service_manager=svc_mgr,
-        service_name=systemd_service,
-    )
+    # Hold the same per-fraise lock the webhook takes (#310). A timer-, cron- or
+    # hand-driven restore stops the service and terminates every connection to
+    # the database; without this it can do that underneath an in-flight deploy
+    # of the same fraise, killing its pg_restore and leaving the DB half-done.
+    from fraisier.errors import DeploymentLockError
+    from fraisier.locking import deployment_lock
 
     try:
-        result = strategy.execute(
-            confiture_config,
-            migrations_dir=app_path / "db" / "migrations",
-            skip_preflight=skip_preflight,
-        )
-    except DatabaseError as exc:
-        if svc_mgr and systemd_service:
-            msg = f"[yellow]Restarting {systemd_service} after error...[/yellow]"
-            console.print(msg)
-            svc_mgr.restart(systemd_service)
-        console.print(f"[red]Restore failed:[/red] {exc}")
-        raise SystemExit(1) from exc
+        with deployment_lock(fraise):
+            runner = LocalRunner()
+            svc_mgr = (
+                get_service_manager(runner, config._config)
+                if systemd_service and not no_service_restart
+                else None
+            )
 
-    if not result.success:
-        errors = ", ".join(result.errors)
-        console.print(f"[red]Restore failed:[/red] {errors}")
-        raise SystemExit(1)
+            from fraisier.config.schema import PreflightConfig
 
-    msg = f"{result.migrations_applied} migration(s) applied"
-    console.print(f"[green]Restore complete:[/green] {msg}")
-    if result.total_duration_seconds > 0:
+            preflight_cfg = db_cfg.get("preflight") or {}
+            preflight = PreflightConfig(
+                enabled=bool(preflight_cfg.get("enabled", True)),
+                timeout_seconds=int(preflight_cfg.get("timeout_seconds", 120)),
+            )
+
+            strategy = RestoreMigrateStrategy(
+                RestoreConfig(
+                    db_name=db_name,
+                    backup_dir=_Path(restore_cfg.get("backup_dir", ".")),
+                    backup_pattern=restore_cfg.get("backup_pattern", "*.dump"),
+                    max_age_hours=float(restore_cfg.get("max_age_hours", 48.0)),
+                    target_owner=restore_cfg.get("target_owner"),
+                    create_template=bool(restore_cfg.get("create_template", False)),
+                    template_name=restore_cfg.get("template_name"),
+                    min_tables=int(restore_cfg.get("min_tables", 0)),
+                    jobs=jobs if jobs is not None else int(restore_cfg.get("jobs", 1)),
+                    preferred_compression=(
+                        preferred_compression
+                        if preferred_compression is not None
+                        else restore_cfg.get("preferred_compression")
+                    ),
+                    backup_path=from_backup,
+                    preflight=preflight,
+                ),
+                admin_url=admin_url,
+                service_manager=svc_mgr,
+                service_name=systemd_service,
+            )
+
+            try:
+                result = strategy.execute(
+                    confiture_config,
+                    migrations_dir=app_path / "db" / "migrations",
+                    skip_preflight=skip_preflight,
+                )
+            except DatabaseError as exc:
+                if svc_mgr and systemd_service:
+                    msg = (
+                        f"[yellow]Restarting {systemd_service} after error...[/yellow]"
+                    )
+                    console.print(msg)
+                    svc_mgr.restart(systemd_service)
+                console.print(f"[red]Restore failed:[/red] {exc}")
+                raise SystemExit(1) from exc
+
+            if not result.success:
+                errors = ", ".join(result.errors)
+                console.print(f"[red]Restore failed:[/red] {errors}")
+                raise SystemExit(1)
+
+            msg = f"{result.migrations_applied} migration(s) applied"
+            console.print(f"[green]Restore complete:[/green] {msg}")
+            if result.total_duration_seconds > 0:
+                console.print(
+                    f"  Restore: {result.restore_duration_seconds:.1f}s"
+                    f" | Migration: {result.migration_duration_seconds:.1f}s"
+                    f" | Total: {result.total_duration_seconds:.1f}s"
+                )
+
+            # Re-apply configured grant scripts. The restore strategy restores with
+            # pg_restore --no-owner --no-acl, so without this the restored DB is
+            # grantless for every non-owner role — the deploy path already does this
+            # via _run_post_migrate, the standalone CLI path did not (issue #273).
+            from fraisier import post_migrate
+            from fraisier.errors import DeploymentError
+
+            try:
+                post_migrate.run_configured_post_migrate(
+                    db_cfg,
+                    app_path=app_path,
+                    runner=runner,
+                )
+            except DeploymentError as exc:
+                console.print(f"[red]post_migrate failed:[/red] {exc}")
+                raise SystemExit(1) from exc
+    except DeploymentLockError as exc:
+        if skip_if_locked:
+            # Timer units pass this: a skipped nightly restore is a non-event,
+            # since a concurrent staging deploy is itself restoring from prod.
+            console.print(f"[yellow]Skipping restore:[/yellow] {exc}")
+            return
+        console.print(f"[red]Error:[/red] {exc}")
         console.print(
-            f"  Restore: {result.restore_duration_seconds:.1f}s"
-            f" | Migration: {result.migration_duration_seconds:.1f}s"
-            f" | Total: {result.total_duration_seconds:.1f}s"
+            "  A deploy is in progress for this fraise. Retry once it finishes, "
+            "or pass --skip-if-locked (used by the generated timer unit)."
         )
-
-    # Re-apply configured grant scripts. The restore strategy restores with
-    # pg_restore --no-owner --no-acl, so without this the restored DB is
-    # grantless for every non-owner role — the deploy path already does this
-    # via _run_post_migrate, the standalone CLI path did not (issue #273).
-    from fraisier import post_migrate
-    from fraisier.errors import DeploymentError
-
-    try:
-        post_migrate.run_configured_post_migrate(
-            db_cfg,
-            app_path=app_path,
-            runner=runner,
+        raise SystemExit(1) from exc
+    except OSError as exc:
+        # The lock could not be evaluated at all — /run/fraisier is tmpfs and is
+        # created by the webhook unit's RuntimeDirectory=. Deliberately not
+        # covered by --skip-if-locked: "I cannot tell whether a deploy is
+        # running" must never be treated as "no deploy is running".
+        console.print(f"[red]Error:[/red] cannot acquire the deployment lock: {exc}")
+        console.print(
+            "  The lock directory (default /run/fraisier) must exist and be "
+            "writable by this user. It is created by the webhook unit and by "
+            "`fraisier setup`; after a reboot it appears when the webhook starts."
         )
-    except DeploymentError as exc:
-        console.print(f"[red]post_migrate failed:[/red] {exc}")
         raise SystemExit(1) from exc
 
 
