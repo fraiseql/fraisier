@@ -19,6 +19,29 @@ directory that contains `fraises.yaml`.
 The conventional location is `.fraisier/templates/` inside your project root,
 alongside `fraises.yaml`.
 
+## How this works on a deployed server
+
+Two things follow from "relative to the `fraises.yaml` location", and both used
+to bite silently (#312):
+
+- **The server's `fraises.yaml` is `/opt/fraisier/fraises.yaml`**, not the one
+  in your checkout. A relative `template_dir` therefore resolves against
+  `/opt/fraisier/`. Deploy-time config sync copies your template directory
+  there alongside `fraises.yaml`, so a directory committed to your repo is the
+  one the server renders from.
+- **A commit that changes only a template still triggers regeneration.** Change
+  detection hashes the template tree as well as `fraises.yaml`; a template edit,
+  addition or rename all count.
+
+If `template_dir` is set but the directory is not found at render time,
+fraisier logs a **warning** naming the path it looked in and continues with
+built-in templates. It does not fail the render — but that warning is the one
+to look for if a customisation appears not to have taken effect. Before v0.53.0
+there was no warning at all: the built-in template rendered and looked correct.
+
+An **absolute** `template_dir` is never synced — it names a location you manage
+on the server yourself.
+
 ## Template path structure
 
 Override files must mirror the built-in template path structure exactly.
