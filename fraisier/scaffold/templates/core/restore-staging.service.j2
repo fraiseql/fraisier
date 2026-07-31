@@ -14,7 +14,10 @@ Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% if env_config.get('database', {}).get('strategy') == 'restore_migrate' %}
 {% if 'staging' in env_name or 'stage' in env_name %}
-ExecStart={{ fraisier_bin }} --config {{ scaffold.config_path }} db restore {{ fraise.name }} {{ env_name }}
+# --skip-if-locked: a deploy of this fraise holds the same lock, and a deploy
+# is itself restoring staging from production — so a collision means the work
+# is already being done. Exit 0 rather than failing the unit nightly (#310).
+ExecStart={{ fraisier_bin }} --config {{ scaffold.config_path }} db restore {{ fraise.name }} {{ env_name }} --skip-if-locked
 {% endif %}
 {% endif %}
 {% endfor %}
