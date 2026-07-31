@@ -3,8 +3,10 @@ Description=Timer for nightly {{ project_name }} staging database restore from p
 After=network.target
 
 [Timer]
-# Run at 2 AM local time daily
-OnCalendar=daily
+# Run at 2 AM local time daily.
+# Exactly one OnCalendar=: systemd *accumulates* non-empty assignments and
+# resets the list only for the empty string, so adding `OnCalendar=daily`
+# here would schedule a second, undocumented 00:00 run (#311).
 OnCalendar=*-*-* 02:00:00
 Persistent=true
 
