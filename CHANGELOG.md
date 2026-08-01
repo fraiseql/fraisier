@@ -7,25 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.53.1] - 2026-08-01
+## [0.54.0] - 2026-08-01
 
-Closes #318. Follow-up to #312: the deploy path carried `scaffold.template_dir`
-to the server, `bootstrap` did not.
+Closes #317 and #318. #317 is the important one: **the v0.52.0 pre-migration
+dump gate could never succeed on a standard install**, so every deploy with
+pending migrations failed closed.
+
+Absorbs v0.53.1, which was merged but never published.
 
 ### Fixed
 
+- **The dump gate's `output_dir` is now writable from the webhook unit's sandbox** (`core/fraisier-webhook.service.j2`, #317). The generated unit runs `ProtectSystem=strict` with a `ReadWritePaths=` list covering only the fraisier state dirs and the app/git trees. `database.pre_migrate_dump.output_dir` was never propagated into it, so `pg_dump` failed with `Read-only file system` and the gate — correctly — aborted the deploy. On any strict install, which is every scaffold-generated unit, the feature was a guaranteed deploy blocker on first use. Hit in production on printoptim.io, 2026-08-01.
 - **`fraisier bootstrap` now uploads `scaffold.template_dir`** (`bootstrap.py`, #318). `_upload_config` uploaded exactly one file, so a freshly bootstrapped host had a `fraises.yaml` whose relative `template_dir` pointed at a directory nothing had created — the same single-file omission #312 fixed on the deploy path, at provisioning time instead. It now uploads the tree alongside the config, replacing it wholesale so a template deleted upstream cannot survive and keep shadowing a built-in.
+
+### Added
+
+- **`doctor` check `pre_migrate_dump_writable`** (#317). Reads the **installed** webhook unit — not the freshly rendered one — and warns when it is `ProtectSystem=strict` but does not allow writes to a configured dump directory. That catches the upgrade-without-re-scaffold case, which is the likeliest way to still be broken after this fix. Advisory: `warn`, never `fail`.
 
 ### Notes for operators
 
-- **Nothing was corrupted by this, and a bootstrap-then-deploy host was never affected.** Bootstrap renders its initial scaffold *locally*, where a relative `template_dir` resolves correctly, so the uploaded tree already carried your customisations; bootstrap never renders server-side; and the first deploy's config sync created the directory. The exposure was the window in between, where a hand-run `fraisier scaffold` on the box would silently render built-ins. Since v0.53.0 that case warns.
-- **`--dry-run` now names the template upload** in its plan, so the review surface still shows everything that will be written.
-- An **absolute** `template_dir` is still never uploaded — it names a location you manage on the server yourself.
+- **Re-run `fraisier scaffold && sudo fraisier scaffold-install --yes`.** The fix is in a generated unit; upgrading the package alone changes nothing. `fraisier doctor` will tell you if you have not.
+- **Nothing was silently wrong.** The gate did its job — migrations were not applied, the service was not restarted, the database was untouched. The failure mode was a blocked deploy, not a corrupted one.
+- **The config key is `output_dir`**, not `dir`. The issue text says `dir`; the code has always read `output_dir` (`strategies/_core.py`).
+- **`fraisier bootstrap` now uploads `scaffold.template_dir`** (#318) — see the note below, carried from the unpublished v0.53.1.
+- **`--dry-run` names the template upload** in its plan, and an absolute `template_dir` is still never uploaded.
 
 ### Known limitations
 
-- **The upload is best-effort**, matching the deploy path: a failure is logged loudly but does not abort provisioning that would otherwise succeed. A host can still end up on built-in templates, and the render-time warning added in v0.53.0 is what surfaces that.
-- **`fraisier setup` is unaffected and unchanged.** It renders and installs locally and does not populate `/opt/fraisier`, so it has no template directory to carry.
+- **Only the webhook unit's sandbox was widened.** If you run the deploy through a different unit, or carry a hand-written one, it needs the same `ReadWritePaths=` entry — the doctor check reads the generated unit's path, so a custom unit is not inspected.
+- **The doctor check does not attempt a real write.** It compares the configured directory against the unit's allowlist textually; it will not catch a directory that is allowlisted but unwritable for some other reason (ownership, full filesystem, read-only mount).
+- **The template-dir upload is best-effort** (#318): a failure is logged loudly but does not abort provisioning, so a host can still end up on built-in templates.
+- **`fraisier setup` is unaffected** by #318 — it renders and installs locally and never populates `/opt/fraisier`.
 
 ## [0.53.0] - 2026-07-31
 
