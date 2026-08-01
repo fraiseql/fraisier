@@ -39,6 +39,13 @@ built-in templates. It does not fail the render — but that warning is the one
 to look for if a customisation appears not to have taken effect. Before v0.53.0
 there was no warning at all: the built-in template rendered and looked correct.
 
+Both provisioning paths carry the directory: `fraisier bootstrap` uploads it
+alongside `fraises.yaml`, and every deploy re-syncs it from the checkout. Before
+v0.53.1 bootstrap uploaded only the config, so a freshly bootstrapped host had a
+dangling `template_dir` until its first deploy — the initial scaffold was still
+correct, because bootstrap renders it locally, but any server-side render in
+that window fell back to built-ins.
+
 An **absolute** `template_dir` is never synced — it names a location you manage
 on the server yourself.
 

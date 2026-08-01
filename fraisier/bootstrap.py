@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import shlex
 import subprocess
 import tempfile
@@ -39,6 +40,9 @@ def resolve_become_password(command: str) -> str:
         msg = "become_password_command failed (check become_password_command config)"
         raise RuntimeError(msg)
     return result.stdout.strip()
+
+
+logger = logging.getLogger("fraisier")
 
 
 @dataclass
@@ -272,21 +276,85 @@ class ServerBootstrapper:
             ],
         )
 
+    def _relative_template_dir(self) -> Path | None:
+        """The configured ``scaffold.template_dir``, if it is relative and present.
+
+        Absolute paths are skipped deliberately: they name a location the
+        operator manages on the server, and uploading over one would be
+        surprising. Mirrors ``GitDeployMixin._sync_template_dir`` (#312).
+        """
+        configured = getattr(self.config.scaffold, "template_dir", None)
+        if not configured:
+            return None
+        rel = Path(configured)
+        if rel.is_absolute():
+            return None
+        return rel
+
     def _upload_config(self) -> StepResult:
         name = "Upload fraises.yaml"
+        rel_templates = self._relative_template_dir()
+
         if self.dry_run:
             dst = self._FRAISIER_CONFIG_PATH
-            return StepResult(
-                name=name,
-                success=True,
-                command=f"scp {self.fraises_yaml_path} ...:{dst}",
-            )
+            command = f"scp {self.fraises_yaml_path} ...:{dst}"
+            if rel_templates is not None:
+                command += (
+                    f" + scp -r {rel_templates} ...:/opt/fraisier/{rel_templates}"
+                )
+            return StepResult(name=name, success=True, command=command)
+
         try:
             self.runner.run(["mkdir", "-p", "/opt/fraisier"])
             self.runner.upload(self.fraises_yaml_path, self._FRAISIER_CONFIG_PATH)
-            return StepResult(name=name, success=True)
         except subprocess.CalledProcessError as e:
             return StepResult(name=name, success=False, error=e.stderr or str(e))
+
+        self._upload_template_dir(rel_templates)
+        return StepResult(name=name, success=True)
+
+    def _upload_template_dir(self, rel_templates: Path | None) -> None:
+        """Carry ``scaffold.template_dir`` to the server config dir (#318).
+
+        A relative ``template_dir`` resolves against the *config* directory, so
+        on the server it means ``/opt/fraisier/<template_dir>``. Bootstrap
+        uploaded only fraises.yaml, leaving that path dangling until the first
+        deploy's config sync created it (#312). Bootstrap's own scaffold is
+        rendered locally, so the initial tree was correct — but any server-side
+        render in the meantime silently fell back to the built-ins.
+
+        Best-effort, matching the deploy path: provisioning that would
+        otherwise succeed must not fail over templates, but the failure is
+        logged loudly because the consequence is a host rendering built-ins
+        while the repo says otherwise.
+        """
+        if rel_templates is None:
+            return
+
+        source = Path(self.fraises_yaml_path).parent / rel_templates
+        dest = f"/opt/fraisier/{rel_templates}"
+        if not source.is_dir():
+            logger.warning(
+                "scaffold.template_dir is set but %s does not exist locally — "
+                "the server will render with built-in templates",
+                source,
+            )
+            return
+
+        try:
+            # Replace wholesale: a template deleted upstream must not survive
+            # on the server, where it would keep shadowing the built-in.
+            self.runner.run(["rm", "-rf", dest])
+            self.runner.run(["mkdir", "-p", dest])
+            self.runner.upload_tree(source, dest)
+        except Exception:
+            logger.warning(
+                "Failed to upload scaffold.template_dir %s -> %s; the server "
+                "may render with built-in templates",
+                source,
+                dest,
+                exc_info=True,
+            )
 
     def _upload_scaffold_files(self) -> tuple[StepResult, str]:
         name = "Upload scaffold files"
