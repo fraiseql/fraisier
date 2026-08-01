@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.1] - 2026-08-01
+
+Closes #318. Follow-up to #312: the deploy path carried `scaffold.template_dir`
+to the server, `bootstrap` did not.
+
+### Fixed
+
+- **`fraisier bootstrap` now uploads `scaffold.template_dir`** (`bootstrap.py`, #318). `_upload_config` uploaded exactly one file, so a freshly bootstrapped host had a `fraises.yaml` whose relative `template_dir` pointed at a directory nothing had created — the same single-file omission #312 fixed on the deploy path, at provisioning time instead. It now uploads the tree alongside the config, replacing it wholesale so a template deleted upstream cannot survive and keep shadowing a built-in.
+
+### Notes for operators
+
+- **Nothing was corrupted by this, and a bootstrap-then-deploy host was never affected.** Bootstrap renders its initial scaffold *locally*, where a relative `template_dir` resolves correctly, so the uploaded tree already carried your customisations; bootstrap never renders server-side; and the first deploy's config sync created the directory. The exposure was the window in between, where a hand-run `fraisier scaffold` on the box would silently render built-ins. Since v0.53.0 that case warns.
+- **`--dry-run` now names the template upload** in its plan, so the review surface still shows everything that will be written.
+- An **absolute** `template_dir` is still never uploaded — it names a location you manage on the server yourself.
+
+### Known limitations
+
+- **The upload is best-effort**, matching the deploy path: a failure is logged loudly but does not abort provisioning that would otherwise succeed. A host can still end up on built-in templates, and the render-time warning added in v0.53.0 is what surfaces that.
+- **`fraisier setup` is unaffected and unchanged.** It renders and installs locally and does not populate `/opt/fraisier`, so it has no template directory to carry.
+
 ## [0.53.0] - 2026-07-31
 
 Closes #310, #311 and #312 — all three found by running fraisier in anger on
