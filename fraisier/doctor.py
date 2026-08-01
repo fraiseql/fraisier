@@ -317,6 +317,91 @@ def _check_install_compile_bytecode(config: FraisierConfig | None) -> CheckResul
     return CheckResult(name, "pass", f"{checked} `uv sync` command(s) compile bytecode")
 
 
+def _installed_webhook_unit(project_name: str) -> Path:
+    """Where scaffold-install puts the webhook unit. Seam for tests."""
+    return Path("/etc/systemd/system") / f"fraisier-{project_name}-webhook.service"
+
+
+def _enabled_dump_dirs(config: FraisierConfig | None) -> list[str]:
+    """Every ``pre_migrate_dump.output_dir`` for a gate that is switched on."""
+    dirs: list[str] = []
+    fraises = getattr(config, "fraises", None) if config is not None else None
+    for fraise in (fraises or {}).values():
+        if not isinstance(fraise, dict):
+            continue
+        for env_config in (fraise.get("environments") or {}).values():
+            if not isinstance(env_config, dict):
+                continue
+            pmd = (env_config.get("database") or {}).get("pre_migrate_dump") or {}
+            out = pmd.get("output_dir")
+            if pmd.get("enabled") and out and out not in dirs:
+                dirs.append(out)
+    return dirs
+
+
+@register_check("pre_migrate_dump_writable")
+def _check_pre_migrate_dump_writable(config: FraisierConfig | None) -> CheckResult:
+    """The dump gate must be able to write from inside the unit's sandbox (#317).
+
+    The webhook unit runs ``ProtectSystem=strict``; a dump directory missing
+    from its ``ReadWritePaths=`` fails with ``Read-only file system`` and the
+    gate — correctly — aborts the deploy. Every deploy with pending migrations
+    then fails closed.
+
+    Nothing else catches it: the path is writable from a login shell, so
+    ownership and free-space checks all pass. Only a write attempted from
+    inside the sandbox reveals it, and the first signal was a failed
+    production deploy.
+
+    Reads the **installed** unit rather than the rendered one, so it also
+    catches the upgrade-without-re-scaffold case, which is the likeliest way to
+    still be broken after the template fix.
+    """
+    name = "pre_migrate_dump_writable"
+    dump_dirs = _enabled_dump_dirs(config)
+    if not dump_dirs:
+        return CheckResult(name, "skip", "no pre_migrate_dump gate enabled")
+
+    project = getattr(config, "project_name", None)
+    if not project:
+        return CheckResult(name, "skip", "no project_name in config")
+
+    unit_path = _installed_webhook_unit(project)
+    try:
+        unit = unit_path.read_text()
+    except OSError:
+        return CheckResult(name, "skip", f"{unit_path} not installed")
+
+    if "ProtectSystem=strict" not in unit:
+        return CheckResult(name, "pass", "webhook unit is not ProtectSystem=strict")
+
+    allowed = {
+        ln.split("=", 1)[1].strip()
+        for ln in unit.splitlines()
+        if ln.startswith("ReadWritePaths=")
+    }
+    missing = [
+        d
+        for d in dump_dirs
+        if not any(d == a or d.startswith(a.rstrip("/") + "/") for a in allowed)
+    ]
+    if missing:
+        return CheckResult(
+            name,
+            "warn",
+            f"{unit_path} is ProtectSystem=strict but does not allow writes to "
+            f"{', '.join(missing)} — the dump gate will fail closed and block "
+            f"every deploy with pending migrations",
+            fix_hint=(
+                "run `fraisier scaffold && sudo fraisier scaffold-install --yes` "
+                "to regenerate the unit with the dump directory allowed"
+            ),
+        )
+    return CheckResult(
+        name, "pass", f"{len(dump_dirs)} dump dir(s) writable from the sandbox"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public runner
 # ---------------------------------------------------------------------------

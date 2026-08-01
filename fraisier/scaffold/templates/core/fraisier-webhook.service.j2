@@ -70,6 +70,20 @@ RuntimeDirectoryPreserve=restart
 ReadWritePaths={{ mp.path }}
 {% endif %}
 {% endfor %}
+{# The pre-migration dump gate (#313) writes here from inside this sandbox.
+   Without the entry every deploy with pending migrations fails closed on
+   `Read-only file system`, and nothing before the deploy reveals it: the path
+   is writable from a login shell, so preflight and doctor both pass (#317). #}
+{% set _dump_dirs = [] %}
+{% for fraise in local_fraises %}
+{% for env_config in fraise.get('environments', {}).values() %}
+{% set _pmd = (env_config.get('database') or {}).get('pre_migrate_dump') or {} %}
+{% if _pmd.get('enabled') and _pmd.get('output_dir') and _pmd.get('output_dir') not in _dump_dirs %}
+{% set _ = _dump_dirs.append(_pmd.get('output_dir')) %}
+ReadWritePaths={{ _pmd.get('output_dir') }}
+{% endif %}
+{% endfor %}
+{% endfor %}
 
 [Install]
 WantedBy=multi-user.target
