@@ -25,21 +25,47 @@ _SELFHEAL_ESCALATE_WITHIN_DEPLOYS = 3
 _SELFHEAL_STATE_FILE = "fraisier_selfheal_state.json"
 
 
-def get_worktree_sha(worktree: Path) -> str | None:
-    """Read the current HEAD SHA from a worktree.
+def get_worktree_sha(worktree: Path, bare_repo: Path | None = None) -> str | None:
+    """Read the SHA currently deployed into *worktree*.
 
-    Returns None if the worktree has no git state (first deploy).
+    Pass *bare_repo* for the bare-repo + worktree layout fraisier deploys into.
+    That worktree has **no ``.git`` directory**, so a plain
+    ``git -C <worktree> rev-parse HEAD`` fails with "not a git repository" and
+    silently reports None — on every deploy, not only the first. Since
+    ``_previous_sha`` is assigned from this and nothing else, that made every
+    rollback path a no-op (#321).
+
+    Reading the bare repo's HEAD is correct rather than approximate:
+    :func:`fetch_and_checkout` runs ``git --git-dir=<bare> reset --soft
+    <new_sha>`` after each checkout, so the bare repo's HEAD *is* the deployed
+    commit.
+
+    Returns None when there is genuinely no deployed commit — an empty bare
+    repo on a true first deploy — or when neither read succeeds.
     """
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
+    attempts: list[list[str]] = []
+    if bare_repo is not None:
+        attempts.append(
+            [
+                "git",
+                f"--git-dir={bare_repo}",
+                f"--work-tree={worktree}",
+                "rev-parse",
+                "HEAD",
+            ]
         )
-        return result.stdout.strip()
-    except subprocess.CalledProcessError:
-        return None
+    # Fall back to the in-worktree read so a plain-clone layout still works.
+    attempts.append(["git", "-C", str(worktree), "rev-parse", "HEAD"])
+
+    for cmd in attempts:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except (subprocess.CalledProcessError, OSError):
+            continue
+        sha = result.stdout.strip()
+        if sha:
+            return sha
+    return None
 
 
 def get_commit_timestamp(git_dir: Path, sha: str) -> str | None:
@@ -86,7 +112,7 @@ def fetch_and_checkout(
     Returns (old_sha, new_sha). old_sha is None on first deploy.
     The old_sha can be used for rollback.
     """
-    old_sha = get_worktree_sha(worktree)
+    old_sha = get_worktree_sha(worktree, bare_repo=bare_repo)
 
     # Fetch latest from origin
     subprocess.run(

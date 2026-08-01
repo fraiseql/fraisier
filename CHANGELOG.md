@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-08-01
+
+Closes #321. **Automatic rollback has never run in fraisier's own deployment
+model.** Reported by a beta tester from journal evidence — every successful
+webhook deploy logged `(None -> sha)` — and reproduced here.
+
+### Fixed
+
+- **`get_worktree_sha` now reads the SHA that is actually deployed** (`git/operations.py`, #321). It ran `git -C <worktree> rev-parse HEAD`, but the bare-repo + worktree layout leaves the worktree with **no `.git` directory** — which is exactly why `fetch_and_checkout` passes `--git-dir/--work-tree`. The call failed with `fatal: not a git repository`, was caught, and returned `None` on **every** deploy rather than only the first, as its docstring claimed.
+
+### ⚠️ What that meant
+
+`_previous_sha` is assigned from that function and nothing else. With it permanently `None`:
+
+- **`_restore_previous_state` returned immediately** — no git revert, no service restart. A failed deploy left the worktree and venv **ahead of the database**.
+- The database rollback never received a target.
+- `rollback()` and the deploy-timeout rollback path were no-ops.
+- `get_current_version()` had the same flaw, so deploy results always reported `old_version: null`.
+
+Status reporting was *honest* throughout — with nothing restored, v0.51.0's classifier correctly reported `FAILED` rather than `ROLLED_BACK` — which is why this never surfaced as a wrong-status bug. The safety net accurately reported doing nothing.
+
+### Notes for operators
+
+- **Rollback now actually happens on a failed deploy.** If you have been relying on manual recovery, expect the deploy to revert the worktree and restart the service on the previous commit by itself.
+- **`old_version` starts being populated** in deploy results, notifications and the status file, where it was previously always null.
+- Nothing to re-scaffold: this is package code, not a generated unit.
+
+### Known limitations
+
+- **A genuinely first deploy still has no previous SHA**, so there is still nothing to roll back to — correctly reported as `FAILED`.
+- **Fixed for the bare-repo + worktree model and the plain-clone fallback**; a layout that is neither still returns `None`.
+- **This does not change what rollback *does*** — only that it now runs. The database half remains governed by the strategy, and a git-only revert still reports `ROLLED_BACK` per v0.51.0.
+
 ## [0.54.0] - 2026-08-01
 
 Closes #317 and #318. #317 is the important one: **the v0.52.0 pre-migration

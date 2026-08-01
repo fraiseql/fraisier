@@ -115,7 +115,9 @@ class GitDeployMixin:
         """Get currently deployed git commit from worktree."""
         if not self.app_path:
             return None
-        sha = get_worktree_sha(Path(self.app_path))
+        # Pass the bare repo: the worktree has no .git in fraisier's
+        # deploy model, so the in-worktree read always fails (#321).
+        sha = get_worktree_sha(Path(self.app_path), bare_repo=self.bare_repo)
         return sha[:8] if sha else None
 
     def get_latest_version(self) -> str | None:
