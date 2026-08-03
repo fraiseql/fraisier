@@ -284,14 +284,21 @@ def _diagnose_socket_connectivity(socket_path: Path) -> dict:
 def _diagnose_deployment_status(status_path: Path) -> dict:
     """Analyze recent deployment status."""
     result: dict[str, object] = {
-        "status_file_exists": status_path.exists(),
+        "status_file_exists": False,
         "status": None,
         "deployed_version": None,
         "deployed_at": None,
         "error": None,
     }
 
-    if not status_path.exists():
+    try:
+        exists = status_path.exists()
+    except OSError as e:
+        result["error"] = f"Cannot stat status file: {e}"
+        return result
+
+    result["status_file_exists"] = exists
+    if not exists:
         return result
 
     try:

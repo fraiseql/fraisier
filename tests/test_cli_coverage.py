@@ -312,6 +312,24 @@ class TestDeploymentStatusCommand:
         result = runner.invoke(main, ["--config", cfg, "deployment-status", "my_api"])
         assert result.exit_code == 0
 
+    @patch("fraisier.cli._deploy.Path")
+    def test_permission_denied_gives_hint_not_traceback(
+        self, mock_path_cls: MagicMock, runner: CliRunner, cfg: str
+    ) -> None:
+        # /run/fraisier is only readable by the deploy user; Path.exists()
+        # propagates PermissionError for everyone else (#326)
+        mock_status_path = MagicMock()
+        mock_status_path.exists.side_effect = PermissionError(13, "Permission denied")
+        mock_run_dir = MagicMock()
+        mock_run_dir.__truediv__.return_value = mock_status_path
+        mock_path_cls.return_value = mock_run_dir
+
+        result = runner.invoke(main, ["--config", cfg, "deployment-status", "my_api"])
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Permission denied" in result.output
+        assert "deploy user" in result.output
+
 
 # ── validate-setup ────────────────────────────────────────────────────────────
 # Note: systemd/socket helper functions (_check_socket_directory, _check_socket_file,
