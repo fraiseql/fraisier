@@ -10,14 +10,15 @@ import functools
 import logging
 import secrets
 import shlex
-import socket
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fraisier.config import FraisierConfig, NginxEnvConfig
-from fraisier.scaffold.renderer import ScaffoldRenderer
+from fraisier.errors import ValidationError
+from fraisier.scaffold import renderer as scaffold_renderer
+from fraisier.scaffold.renderer import ScaffoldRenderer, resolve_local_server
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,75 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from fraisier.runners import CommandRunner
+
+
+def _unknown_setup_server_message(server: str, known: list[str]) -> str:
+    """Diagnostic for a server value no environment is assigned to."""
+    if known:
+        return (
+            f"No environment declares server {server!r}, so there is nothing "
+            f"to provision for it. Known servers: {', '.join(known)}."
+        )
+    return (
+        f"Server {server!r} was selected but no environment declares a "
+        f"'server:' field, so there is nothing to filter by. Drop the filter, "
+        f"or add 'server: {server}' to the environments hosted there."
+    )
+
+
+def _unidentified_host_message(config: FraisierConfig, known: list[str]) -> str:
+    """Explain an unresolvable host and lay out every way forward.
+
+    Fail-closed replaces a warning that fired for years without being acted
+    on (#331), so the error has to carry what the warning left the operator to
+    work out: who this machine is, who the config knows, and the exact edits
+    or flags that resolve it. Everything here is copy-paste ready — an error
+    that answers its own support question is cheaper than one silent wrong
+    install.
+    """
+    # Read through the module, not a bound name: the host authority has one
+    # interception point and both resolution and this diagnostic must see the
+    # same answer, or the error would name hostnames that were never tried.
+    hostnames = scaffold_renderer.local_hostnames()
+    machines = config.servers
+    lines = [
+        f"This machine ({', '.join(repr(h) for h in hostnames)}) matches no "
+        f"host declared in fraises.yaml, so 'fraisier setup' cannot tell which "
+        f"environments belong to it.",
+        "",
+        "It will not guess. Setup creates users, chowns application trees, and "
+        "installs and enables systemd units and nginx vhosts — running all of "
+        "that for every environment is how a production host acquires "
+        "development units.",
+        "",
+        "Known hosts:",
+    ]
+    for server in known:
+        registered = ", ".join(machines.get(server, [])) or "(none registered)"
+        envs = ", ".join(config.get_environments_for_server(server))
+        lines.append(f"  {server} — machines: {registered} — environments: {envs}")
+
+    primary = hostnames[0] if hostnames else "this-machine"
+    example = known[0]
+    lines += [
+        "",
+        "Resolve it one of three ways:",
+        "",
+        "  1. Register this machine — in fraises.yaml, under the host it is:",
+        "",
+        "       servers:",
+        f"         {example}:   # <- replace with the host this machine is",
+        f"           machine_hostnames: [{primary}]",
+        "",
+        "  2. Name the host explicitly, for a one-off run:",
+        "",
+        f"       fraisier setup --server {example}",
+        "",
+        "  3. Provision every environment on this box, deliberately:",
+        "",
+        "       fraisier setup --all-environments",
+    ]
+    return "\n".join(lines)
 
 
 @dataclass
@@ -47,11 +117,13 @@ class ServerSetup:
         *,
         environment: str | None = None,
         server: str | None = None,
+        all_environments: bool = False,
     ) -> None:
         self.config = config
         self.runner = runner
         self.environment = environment
         self.server = server
+        self.all_environments = all_environments
 
     @functools.cached_property
     def _renderer(self) -> ScaffoldRenderer:
@@ -608,31 +680,53 @@ class ServerSetup:
 
         Resolution order:
         1. Explicit ``--environment`` → single environment.
-        2. Explicit ``--server`` → environments whose ``server`` field matches.
-        3. Auto-detect via hostname/FQDN → environments whose ``server`` matches.
-        4. No match → ``None`` (provision everything, backwards-compatible).
+        2. Explicit ``--all-environments`` → ``None``, deliberately unfiltered.
+        3. Explicit ``--server`` → environments whose ``server`` field matches;
+           a value no environment declares is an error, not a widening.
+        4. No environment declares a ``server:`` at all → ``None``. This is the
+           genuine single-host case, and a *branch* rather than a fallback:
+           "every environment" and "this host's environments" are the same set.
+        5. Auto-detect via :func:`resolve_local_server` — the sole host
+           authority since v0.56.0, which consults ``servers:.machine_hostnames``
+           before logical server names.
+        6. Still unresolved → :class:`ValidationError`.
+
+        Step 6 used to be ``None``, meaning *provision everything* (#331).
+        ``setup`` creates users, chowns application trees, and installs and
+        **enables** systemd units and nginx vhosts, so answering "which machine
+        am I?" with "cannot tell" and then acting on every environment is a
+        refusal to answer combined with maximum action — and a live candidate
+        for how a production-only host acquires development units, which is the
+        #325 failure shape one level up. The old warning existed, fired, and
+        was not acted on; a louder warning would have been a fourth instance.
         """
         if self.environment:
             return {self.environment}
 
+        if self.all_environments:
+            return None
+
+        known = self.config.declared_servers()
+
         if self.server:
             envs = self.config.get_environments_for_server(self.server)
-            return set(envs) if envs else None
+            if not envs:
+                raise ValidationError(_unknown_setup_server_message(self.server, known))
+            return set(envs)
 
-        # Auto-detect: try FQDN first, then short hostname.
-        hostnames = list(dict.fromkeys([socket.getfqdn(), socket.gethostname()]))
-        for hostname in hostnames:
-            envs = self.config.get_environments_for_server(hostname)
-            if envs:
-                return set(envs)
+        if not known:
+            return None
 
-        logger.warning(
-            "No server match for hostname(s) %s — provisioning all environments. "
-            "Use --server or --environment to filter, or set 'server' in your "
-            "environments config.",
-            hostnames,
-        )
-        return None
+        local = resolve_local_server(self.config)
+        if local is None:
+            raise ValidationError(_unidentified_host_message(self.config, known))
+
+        envs = self.config.get_environments_for_server(local)
+        if not envs:
+            # ``servers:`` registers this machine under a logical server that
+            # no environment is assigned to — resolvable, but to nothing.
+            raise ValidationError(_unknown_setup_server_message(local, known))
+        return set(envs)
 
     def _iter_fraise_environments(
         self,

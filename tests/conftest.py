@@ -201,6 +201,41 @@ def _reset_config_singleton():
 
 
 @pytest.fixture(autouse=True)
+def _unpoison_cli_get_config():
+    """Undo a mock leaked into ``fraisier.cli.main`` by import-under-patch.
+
+    ``fraisier/cli/main.py`` binds ``get_config`` with a ``from`` import at
+    module scope. A test that does::
+
+        with patch("fraisier.config.get_config", return_value=cfg):
+            from fraisier.cli.main import main
+
+    binds the *mock* into ``fraisier.cli.main`` if that import is the first
+    one in the session — and ``patch`` cannot undo it, because the name it
+    restores lives in ``fraisier.config``. Every later CLI test then runs
+    against whichever config that first test happened to build, ignoring even
+    an explicit ``-c``.
+
+    That made CLI results depend on collection order, invisibly: until #331
+    an unresolvable host provisioned everything, so a test reading the wrong
+    config still exited 0 and still passed.
+    """
+    yield
+
+    import sys
+
+    from fraisier.config import get_config as real_get_config
+
+    # Via sys.modules, not ``import fraisier.cli.main``: the package's
+    # ``from .main import main`` shadows the submodule with the click Group.
+    cli_main = sys.modules.get("fraisier.cli.main")
+    if cli_main is not None and getattr(cli_main, "get_config", None) is not (
+        real_get_config
+    ):
+        cli_main.get_config = real_get_config  # ty: ignore[unresolved-attribute]
+
+
+@pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
     """Ensure every test gets a fresh, isolated SQLite database.
 
