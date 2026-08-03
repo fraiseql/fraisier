@@ -169,3 +169,58 @@ class TestRefreshUvLock:
             warning = refresh_uv_lock(tmp_path)
         assert warning is not None
         assert "resolver exploded" in warning
+
+    def test_lock_is_bounded_by_a_timeout(self, tmp_path):
+        """`uv lock` runs under a timeout so a ship cannot hang on it."""
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            refresh_uv_lock(tmp_path)
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("timeout")
+
+    def test_timeout_warns_instead_of_raising(self, tmp_path):
+        """A hung `uv lock` degrades to a warning rather than aborting a ship."""
+        import subprocess as _subprocess
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch(
+                "subprocess.run",
+                side_effect=_subprocess.TimeoutExpired(["uv", "lock"], 120),
+            ),
+        ):
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "timed out" in warning
+
+    def test_exec_failure_warns_instead_of_raising(self, tmp_path):
+        """uv on PATH but unexecutable warns; the bump is already committed.
+
+        ``shutil.which`` only proves a file was found, not that it can be
+        exec'd. This runs after ``bump_version`` has written pyproject.toml,
+        so raising here would abort a ship on a half-applied bump.
+        """
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run", side_effect=OSError(8, "Exec format error")),
+        ):
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "Exec format error" in warning
