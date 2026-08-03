@@ -7,7 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-08-03
+
+Closes #323, #324, #326, #328, #331. One bug class, at the root: **two
+components that must agree about the same fact were written separately and
+drifted.** #325 (v0.56.0) was the first instance anyone chased to the bottom;
+these are the rest, plus the structure that makes a sixth instance fail at
+render time instead of on a production host.
+
+### Added
+
+- **The artifact manifest — `fraisier scaffold` now records what it wrote, and
+  who installs each piece** (#323). `render()` always knew exactly what it
+  produced and then discarded that knowledge, leaving three components to
+  reconstruct it by hand: sixteen hardcoded names in `install.sh.j2`,
+  `get_install_mapping()`, and `scheduled_install`'s directory scan. Every bug
+  in the "rendered ≠ installed" class lived in that gap.
+
+  The manifest mirrors `PathManifest` — already the single source of truth for
+  managed *paths* — and extends the idiom to artifacts. Each artifact declares
+  a **disposition**, and the manifest **routes; it does not execute**. The
+  install sequences are not uniform and the non-uniform ones are load-bearing:
+  the #279 re-bake must `cp` → `daemon-reload` → *stop the .service* →
+  `enable` + `restart` the .socket in that order, because `enable --now` is a
+  no-op on a running unit; the systemctl-helper must `daemon-reload` *before*
+  restarting or the stop phase wipes `/run/fraisier`. A generic executor would
+  discard the reasoning that makes those correct, so each keeps its
+  hand-written, commented form. Only `plain` artifacts are installed
+  generically — and that is the block where custom-named units used to fall
+  through.
+
+  **The load-bearing part is the coverage assertion**, not the generic install.
+  Every rendered file must classify; an undispositioned artifact is a hard
+  error naming the file and listing the dispositions to choose from. A new
+  artifact cannot be rendered and then installed by nobody. It fires at render
+  time and in `fraisier doctor` — `install.sh` runs on a live host mid-deploy
+  under the self-upgrade dynamic, so the deploy-time check is the *backstop*,
+  never the discovery mechanism.
+
+- **`install.sh` refuses a scaffold tree it does not describe.** Each
+  artifact's sha256 is baked into the generated installer. Without this the
+  drift merely moves up a level, with the installer faithfully installing files
+  nobody described — #323's triage found exactly that, v1.141.0-era rendered
+  units in an app repo shadowing the current render. Verification is a
+  preflight pass over the whole tree: checking inside each copy would install
+  whatever sorted first and refuse midway, leaving the host half-converted
+  between two renders, on the one tool you would use to recover.
+
+- **`install.sh` states the boundary it used to leave silent** (#323). It now
+  ends by naming the units `fraisier scheduled-install` owns — with their
+  source tree and the command that installs them — and the artifacts that are
+  rendered and installed by nothing, each with the consequence. The two
+  installers still cover disjoint sets, from genuinely different source trees;
+  what changes is that neither is silent about it. A wildcard install over the
+  scaffold dir was rejected: that directory accumulates, so a wildcard promotes
+  a leftover file into an installed unit — #325's failure mode generalised.
+
 ### Fixed
+
+- **Four artifacts were rendered and installed by nothing**, found by the
+  coverage assertion and now tracked rather than silent: `backup.timer` is
+  installed and, having no `Unit=`, activates a `backup.service` that
+  `install.sh` never copied; `deploy-checker.timer` likewise activates
+  `deploy-checker.service` while the rendered file is named
+  `poll-deploy.service` and written to the tree root; the backup-alert unit
+  referenced by `OnFailure=` reached no host; and `scheduled_install` requires
+  a unit-installer socket while telling operators to run
+  `fraisier scaffold-install --yes`, which has never installed it. They are
+  reported by `install.sh` and by `doctor` with what each one breaks.
+
+- **`get_install_mapping()` no longer disagrees with the installer.** It mapped
+  `systemd/poll-deploy.service` — a path the renderer never writes, under a
+  name nothing installs — mapped restore-staging units nothing installs, and
+  walked *every* fraise rather than this host's, so on a multi-host box
+  `scaffold-diff` compared units the box does not install and reported them
+  missing. Now derived from the manifest.
 
 - **`fraisier setup` on an unrecognised machine no longer provisions every
   environment** (#331). `_resolve_allowed_environments` matched the machine's
@@ -77,6 +151,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon on the other end.
 
   Applies on re-scaffold + re-install.
+
+### Rollout
+
+**Re-scaffold and re-install on every host** — that is what applies these
+fixes. `fraisier scaffold && sudo fraisier scaffold-install --yes`.
+
+Both halves are required and in that order. `install.sh` now bakes in the
+hashes of the artifacts it installs and refuses a tree from a different
+render, so an installer and a scaffold dir regenerated apart will stop rather
+than install a mismatched pair. That refusal is the feature; the fix for it is
+always to re-run `fraisier scaffold` so both are regenerated together.
+
+Two things will look new on the first run:
+
+- `fraisier setup` on a multi-host box that matches no declared host now
+  **errors** instead of provisioning every environment (#331). The message
+  names the machine, the hosts the config knows, and the three ways forward.
+  Single-host configs — where no environment declares a `server:` — are
+  unaffected.
+- `install.sh` ends with a coverage report: units owned by
+  `fraisier scheduled-install`, and artifacts that are rendered and installed
+  by nothing. Both sections are informational. The second lists real gaps that
+  predate this release; they are now tracked rather than silent.
 
 ## [0.56.0] - 2026-08-03
 
