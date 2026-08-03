@@ -80,6 +80,21 @@ def _extract_port(health_check_url: str) -> int | None:
         return None
 
 
+def _nginx_vhost_stem(
+    project: str, fraise_name: str, env_name: str, nginx_config: NginxEnvConfig
+) -> str:
+    """The filename stem of a per-environment nginx vhost.
+
+    One formula, in one place. It used to be computed independently by the
+    renderer, by ``install.sh.j2`` and by ``get_install_mapping`` — and the
+    installer's copy omitted the project prefix, so any vhost without an
+    explicit ``server_name`` was rendered as ``{project}_{fraise}_{env}.conf``
+    and looked for as ``{fraise}_{env}.conf``. Behind a ``[ -f ]`` guard that
+    made it a silent skip: the vhost was never installed, and nothing said so.
+    """
+    return nginx_config.server_name or f"{project}_{fraise_name}_{env_name}"
+
+
 def _resolve_fraise_port(fraise: dict[str, Any]) -> int:
     """Resolve the port for a fraise from its first environment's health_check.url.
 
@@ -1514,6 +1529,30 @@ class ScaffoldRenderer:
 
         self._write_output(out_name, content)
 
+    def nginx_vhost_envs(self) -> dict[str, str]:
+        """Map rendered vhost stem -> the environment it belongs to.
+
+        Walks **every** fraise, not just this host's: per-environment nginx
+        configs are deliberately rendered for all servers so the generated
+        tree is a complete, committable artifact (#148), and each host's
+        installer gates them with ``_env_active``. Reading only local fraises
+        here would leave the others with no environment — which reads as
+        *unconditional*, the exact inversion of what is wanted.
+        """
+        project = self.context["project_name"]
+        stems: dict[str, str] = {}
+        for fraise in self.context["fraises"]:
+            for env_name, env_config in fraise.get("environments", {}).items():
+                if not isinstance(env_config, dict):
+                    continue
+                nginx_config = NginxEnvConfig.from_env_dict(env_config)
+                if nginx_config is None:
+                    continue
+                stems[
+                    _nginx_vhost_stem(project, fraise["name"], env_name, nginx_config)
+                ] = env_name
+        return stems
+
     def _collect_per_env_nginx(self, dry_run: bool) -> list[str]:
         """Discover and render per-environment nginx configs.
 
@@ -1534,7 +1573,7 @@ class ScaffoldRenderer:
                 nginx_config = NginxEnvConfig.from_env_dict(env_config)
                 if nginx_config is None:
                     continue
-                nginx_stem = nginx_config.server_name or f"{project}_{name}_{env_name}"
+                nginx_stem = _nginx_vhost_stem(project, name, env_name, nginx_config)
                 out_name = f"nginx/{nginx_stem}.conf"
                 files.append(out_name)
                 if not dry_run:

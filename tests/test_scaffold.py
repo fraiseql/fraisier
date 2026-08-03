@@ -5414,19 +5414,59 @@ fraises:
         assert (out / "nginx" / "api.example.com.conf").exists()
         assert (out / "nginx" / "api.dev.example.com.conf").exists()
 
+    @staticmethod
+    def _installed_vhosts(out, hostname: str) -> str:
+        """The vhosts install.sh actually copies when run on *hostname*.
+
+        Asserted by running the script rather than by grepping it. The vhost
+        install is driven from the artifact manifest, which describes the whole
+        render — every per-env vhost is rendered on purpose (#148) — and each
+        host installs its own via ``_env_active``. So a remote vhost now
+        *appears* in the generated script, inside a guard that is false on this
+        machine. Grepping for its absence would fail while the behaviour is
+        right; grepping for the guard would pin the mechanism instead of the
+        outcome. Running it pins the outcome.
+        """
+        import os
+        import subprocess
+
+        bin_dir = out.parent / f"bin-{hostname}"
+        bin_dir.mkdir(exist_ok=True)
+        fake = bin_dir / "hostname"
+        fake.write_text(f"#!/bin/bash\necho {hostname}\n")
+        fake.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+
+        result = subprocess.run(
+            ["bash", str(out / "install.sh"), "--dry-run", "--scaffold-dir", str(out)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        return "\n".join(
+            line for line in result.stdout.splitlines() if "sites-available" in line
+        )
+
     def test_install_sh_only_installs_local_nginx_configs(self, tmp_path):
-        """install.sh generated for server-a does not reference prod nginx config."""
+        """Run on server-a's machine, install.sh installs only the dev vhost."""
         out = self._render(tmp_path, "server-a")
-        install_sh = (out / "install.sh").read_text()
-        assert "api.dev.example.com" in install_sh
-        assert "api.example.com" not in install_sh
+
+        installed = self._installed_vhosts(out, "server-a-backend-01")
+
+        assert "api.dev.example.com" in installed
+        assert "api.example.com.conf" not in installed
 
     def test_install_sh_server_b_does_not_reference_dev_nginx(self, tmp_path):
-        """install.sh generated for server-b does not reference dev nginx config."""
+        """Run on server-b's machine, install.sh installs only the prod vhost."""
         out = self._render(tmp_path, "server-b")
-        install_sh = (out / "install.sh").read_text()
-        assert "api.example.com" in install_sh
-        assert "api.dev.example.com" not in install_sh
+
+        installed = self._installed_vhosts(out, "server-b-backend-01")
+
+        assert "api.example.com" in installed
+        assert "api.dev.example.com" not in installed
 
     def test_server_a_only_generates_dev_deploy_socket(self, tmp_path):
         """ScaffoldRenderer with server-a generates dev deploy socket, not prod."""

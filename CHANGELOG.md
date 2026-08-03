@@ -76,6 +76,24 @@ render time instead of on a production host.
   `fraisier scaffold-install --yes`, which has never installed it. They are
   reported by `install.sh` and by `doctor` with what each one breaks.
 
+- **An nginx vhost without an explicit `server_name` was never installed.**
+  Three components computed the vhost filename independently and the
+  installer's copy omitted the project prefix: the renderer wrote
+  `{project}_{fraise}_{env}.conf` while `install.sh` looked for
+  `{fraise}_{env}.conf`. Behind a `[ -f ]` guard that made it a silent skip —
+  rendered, not installed, nothing said so. The formula now lives in one place
+  and both sides read the same manifest entry. Found by this bundle's own
+  coverage work, and pinned by a golden matrix case.
+
+- **Every installed artifact is verified, not just the generically-copied
+  ones.** The sudoers fragment, both helper socket pairs, the #279 re-bake
+  units and the nginx vhosts each guarded their own copy with `[ -f ]`, which
+  on its own is a silent skip — the shape of #325. The preflight now covers
+  every artifact the manifest says is installed, including the webhook unit
+  checked against the hash of the file selected for *this* host. Previously a
+  webhook unit that was present but **stale** passed unnoticed: v0.56.0 caught
+  a missing one, not a wrong one.
+
 - **Version bumps refresh `uv.lock`** (#328). `ship` and `version bump` rewrote
   the version in `pyproject.toml` but never re-locked, so every release commit
   of a uv-managed project shipped a lockfile whose own `[[package]]` entry was

@@ -404,15 +404,13 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
 
 
 def _nginx_env(renderer: ScaffoldRenderer, vhost: str) -> str | None:
-    for fraise in renderer.context["local_fraises"]:
-        for env_name, env_config in fraise.get("environments", {}).items():
-            nginx = env_config.get("nginx")
-            if not nginx:
-                continue
-            stem = nginx.get("server_name") or f"{fraise['name']}_{env_name}"
-            if stem == vhost:
-                return env_name
-    return None
+    """The environment a rendered vhost belongs to.
+
+    Delegates to the renderer rather than re-deriving the stem: computing that
+    name in a second place is what left vhosts without an explicit
+    ``server_name`` rendered under one name and installed under another.
+    """
+    return renderer.nginx_vhost_envs().get(vhost)
 
 
 class UndispositionedArtifacts(ValidationError):
