@@ -391,3 +391,78 @@ class TestInstallMappingDerivesFromTheManifest:
         mapping = renderer.get_install_mapping()
 
         assert not [s for s in mapping if "development" in s or "api-dev" in s]
+
+
+class TestDoctorSurfacesCoverage:
+    """The assertion must reach an operator before it reaches a live host.
+
+    ``install.sh`` runs on a live host mid-deploy, under the self-upgrade
+    dynamic. If the first place an undispositioned artifact could surface were
+    the installer, the first thing to see it would be a production webhook. So
+    the identical check runs at render time and in ``doctor``; the deploy-time
+    one is the backstop, not the discovery mechanism.
+    """
+
+    @staticmethod
+    def _run(config):
+        from fraisier import doctor
+
+        return doctor.DOCTOR_CHECKS["scaffold_artifact_coverage"].fn(config)
+
+    def test_reports_the_gaps_as_a_warning(self, tmp_path):
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+
+        result = self._run(FraisierConfig(cfg))
+
+        assert result.status == "warn"
+        assert "installed by nothing" in result.detail
+        assert "backup.service" in result.detail
+
+    def test_undispositioned_artifact_fails_the_check(self, tmp_path, monkeypatch):
+        """A new rendered artifact with no disposition is a hard finding."""
+        import fraisier.scaffold.artifacts as artifacts_mod
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+
+        real_classify = artifacts_mod._classify
+        monkeypatch.setattr(
+            artifacts_mod,
+            "_classify",
+            lambda r, s: None if s == "sudoers" else real_classify(r, s),
+        )
+
+        result = self._run(FraisierConfig(cfg))
+
+        assert result.status == "fail"
+        assert "sudoers" in result.detail
+
+    def test_the_failure_says_where_to_fix_it(self, tmp_path, monkeypatch):
+        import fraisier.scaffold.artifacts as artifacts_mod
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        real_classify = artifacts_mod._classify
+        monkeypatch.setattr(
+            artifacts_mod,
+            "_classify",
+            lambda r, s: None if s == "sudoers" else real_classify(r, s),
+        )
+
+        result = self._run(FraisierConfig(cfg))
+
+        assert "artifacts.py" in (result.fix_hint or "")
+
+    def test_writes_nothing(self, tmp_path):
+        """A dry-run render: doctor must not mutate the scaffold tree."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        before = sorted(p.name for p in tmp_path.iterdir())
+
+        self._run(FraisierConfig(cfg))
+
+        assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+    def test_no_config_skips(self):
+        assert self._run(None).status == "skip"

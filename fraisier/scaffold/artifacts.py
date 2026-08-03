@@ -415,6 +415,19 @@ def _nginx_env(renderer: ScaffoldRenderer, vhost: str) -> str | None:
     return None
 
 
+class UndispositionedArtifacts(ValidationError):
+    """Rendered files no rule claims — the coverage assertion failing.
+
+    Carries the offending sources so callers can render their own diagnostic
+    (``doctor`` wants one line, ``scaffold`` wants the full explanation)
+    without scraping the message back apart.
+    """
+
+    def __init__(self, sources: list[str]) -> None:
+        self.sources = sources
+        super().__init__(_undispositioned_message(sources))
+
+
 def _undispositioned_message(sources: list[str]) -> str:
     listed = "\n".join(f"  - {s}" for s in sources)
     return (
@@ -468,7 +481,7 @@ def build_artifact_manifest(
         artifacts.append(replace(artifact, sha256=digest))
 
     if undispositioned:
-        raise ValidationError(_undispositioned_message(sorted(undispositioned)))
+        raise UndispositionedArtifacts(sorted(undispositioned))
 
     artifacts.sort(key=lambda a: a.source)
     return ArtifactManifest(
