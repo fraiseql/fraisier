@@ -466,3 +466,83 @@ class TestDoctorSurfacesCoverage:
 
     def test_no_config_skips(self):
         assert self._run(None).status == "skip"
+
+
+class TestManifestFileOnDisk:
+    """The JSON written beside the tree is a shipped artifact in its own right.
+
+    Nothing in fraisier parses it back — ``install.sh`` has its contents baked
+    in, and ``doctor``/``scaffold-diff`` build the manifest in-process — so it
+    is the record a human reads and diffs between renders. That makes its shape
+    worth pinning even though no code depends on it.
+    """
+
+    @staticmethod
+    def _written(tmp_path):
+        import json
+
+        from fraisier.scaffold.artifacts import ARTIFACT_MANIFEST_NAME
+
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        renderer.render()
+        return json.loads((tmp_path / "out" / ARTIFACT_MANIFEST_NAME).read_text())
+
+    def test_render_writes_it(self, tmp_path):
+        payload = self._written(tmp_path)
+
+        assert payload["schema_version"] == 1
+        assert payload["batch_hash"]
+        assert payload["artifacts"]
+
+    def test_every_artifact_carries_its_routing(self, tmp_path):
+        payload = self._written(tmp_path)
+
+        for entry in payload["artifacts"]:
+            assert set(entry) == {
+                "source",
+                "disposition",
+                "destination",
+                "mode",
+                "environment",
+                "sha256",
+                "note",
+            }
+
+    def test_it_matches_the_in_memory_manifest(self, tmp_path):
+        """The file and the object install.sh was generated from agree."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        renderer.render()
+
+        import json
+
+        from fraisier.scaffold.artifacts import ARTIFACT_MANIFEST_NAME
+
+        payload = json.loads((tmp_path / "out" / ARTIFACT_MANIFEST_NAME).read_text())
+
+        assert payload["batch_hash"] == renderer.artifact_manifest.batch_hash
+        assert [a["source"] for a in payload["artifacts"]] == [
+            a.source for a in renderer.artifact_manifest.artifacts
+        ]
+
+    def test_it_is_not_itself_a_classified_artifact(self, tmp_path):
+        """Metadata about the render, not a product of it — so it is neither
+        installed nor subject to the coverage assertion."""
+        payload = self._written(tmp_path)
+
+        assert "artifact-manifest.json" not in {
+            a["source"] for a in payload["artifacts"]
+        }
+
+    def test_it_is_stable_across_identical_renders(self, tmp_path):
+        """A diff between two renders should show real changes only."""
+        first = self._written(tmp_path / "a")
+        second = self._written(tmp_path / "b")
+
+        assert first == second
