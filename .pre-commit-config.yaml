@@ -3,7 +3,7 @@ ci:
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.0
+    rev: v0.16.1
     hooks:
       # `ruff` is a legacy alias for `ruff-check` as of v0.16.0 and warns
       # on every run; use the canonical id so the next bump cannot break it.
