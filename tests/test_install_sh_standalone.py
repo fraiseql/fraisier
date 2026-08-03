@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -123,19 +124,18 @@ class TestInstallShStandaloneMode:
 
     @staticmethod
     def _scaffold_dir(rendered_install_sh, tmp_path, name: str):
-        """A scaffold dir holding this machine's webhook unit.
+        """A stand-in scaffold dir: a full copy of the rendered tree.
 
-        Since #325 the webhook copy has no ``[ -f ]`` guard: a source the
-        render did not produce for this host is a hard error rather than a
-        silent skip, in every mode. So a stand-in scaffold dir must carry the
-        unit, the way a real one does — an empty directory is not a scaffold
-        tree.
+        Since #325 the webhook copy has no ``[ -f ]`` guard, and since the
+        artifact manifest the same is true of every artifact install.sh
+        installs: a source the manifest lists but the tree does not hold means
+        the tree is not the one this installer was generated for, which is a
+        hard error rather than a silent skip. So the stand-in must be a real
+        tree — carrying the webhook unit alone is no longer enough, and an
+        empty directory never was.
         """
         scaffold_dir = tmp_path / name
-        scaffold_dir.mkdir()
-        rendered = rendered_install_sh.parent
-        for unit in rendered.glob("fraisier-*-webhook*.service"):
-            (scaffold_dir / unit.name).write_text(unit.read_text())
+        shutil.copytree(rendered_install_sh.parent, scaffold_dir)
         return scaffold_dir
 
     def test_standalone_dry_run_exits_zero(self, rendered_install_sh, tmp_path):

@@ -27,6 +27,13 @@ from fraisier.config import (
 from fraisier.dbops._validation import validate_service_name
 from fraisier.manifest import build_manifest
 from fraisier.naming import app_service_name, deploy_socket_name
+from fraisier.scaffold.artifacts import (
+    ARTIFACT_MANIFEST_NAME,
+    INSTALL_SCRIPT_NAME,
+    LazyArtifactManifest,
+    build_artifact_manifest,
+    dump_manifest,
+)
 
 logger = logging.getLogger("fraisier")
 
@@ -37,7 +44,6 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Core template filenames (rendered for every project)
 _CORE_TEMPLATES = [
     "core/sudoers.j2",
-    "core/install.sh.j2",
     "core/confiture.yaml.j2",
     "core/backup.sh.j2",
     "core/db_reset.sh.j2",
@@ -768,6 +774,11 @@ class ScaffoldRenderer:
         )
         self.env.globals["deploy_socket_name"] = deploy_socket_name  # ty: ignore[invalid-assignment]
         self.context = _build_context(config, server)
+        # Deferred, not empty: a caller that renders one template without going
+        # through render() still gets the real artifact list. Seeding an empty
+        # manifest would make install.sh render fine and install nothing.
+        self.artifact_manifest: Any = LazyArtifactManifest(self)
+        self.context["artifact_manifest"] = self.artifact_manifest
 
     def get_core_template_paths(self) -> list[str]:
         """Return output file paths for core templates."""
@@ -909,6 +920,12 @@ class ScaffoldRenderer:
         """
         self._validate_names()
 
+        # Two passes, because install.sh is generated *from* the manifest and
+        # the manifest can only be built once the full file list is known. The
+        # first pass writes nothing; it exists to learn what the second will
+        # produce. This is also where the coverage assertion fires — at render
+        # time, on the operator's terminal or in CI, rather than first on a
+        # live host mid-deploy.
         rendered_files: list[str] = []
 
         # Stage 1: Core templates
@@ -1011,6 +1028,25 @@ class ScaffoldRenderer:
                 rendered_files.append(timer_out)
                 if not dry_run:
                     self._render_template(timer_tpl, timer_out)
+
+        # install.sh is rendered LAST, and deliberately so: it bakes in the
+        # sha256 of every artifact it installs, so those artifacts must already
+        # be on disk or it would carry the hashes of the *previous* render and
+        # refuse to install the current one. It is the only artifact whose own
+        # bytes are never hashed — nothing verifies the verifier.
+        rendered_files.append(INSTALL_SCRIPT_NAME)
+        if not dry_run:
+            # Rebuilt now that the files exist, so every entry carries the
+            # sha256 of the bytes actually on disk. install.sh checks those
+            # before installing: an old manifest against a new render — the
+            # v1.141.0-era units #323's triage found shadowing current ones —
+            # would otherwise reintroduce the drift one level up.
+            self.artifact_manifest = build_artifact_manifest(self, rendered_files)
+            self.context["artifact_manifest"] = self.artifact_manifest
+            self._render_template("core/install.sh.j2", INSTALL_SCRIPT_NAME)
+            self._write_output(
+                ARTIFACT_MANIFEST_NAME, dump_manifest(self.artifact_manifest)
+            )
 
         return rendered_files
 

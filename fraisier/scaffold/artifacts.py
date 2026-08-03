@@ -44,6 +44,17 @@ if TYPE_CHECKING:
 SYSTEMD_DIR = "/etc/systemd/system"
 NGINX_AVAILABLE = "/etc/nginx/sites-available"
 
+ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
+"""Written into the scaffold tree beside the artifacts it describes.
+
+``install.sh`` does **not** parse this at runtime — the artifact list is baked
+into the generated script, so no JSON parser is needed on the target host. The
+file is what ``doctor``, ``scaffold-diff`` and a human read, and what carries
+the per-artifact hashes the installer verifies.
+"""
+
+MANIFEST_SCHEMA_VERSION = 1
+
 
 class Disposition(StrEnum):
     """How an artifact reaches the system, or why it does not."""
@@ -207,11 +218,44 @@ _UNIT_INSTALLER_RE = re.compile(
 _BACKUP_ALERT_RE = re.compile(r"^systemd/fraisier-.+-backup-alert@\.service$")
 
 
+INSTALL_SCRIPT_NAME = "install.sh"
+"""The one artifact whose own bytes are never hashed — nothing verifies the
+verifier, and it is rendered last precisely so every hash it bakes in describes
+a file already on disk."""
+
+
 def _sha256(path) -> str | None:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return None
+
+
+class LazyArtifactManifest:
+    """A manifest computed on first attribute access.
+
+    ``ScaffoldRenderer.context`` is read by callers that render a template
+    without going through :meth:`ScaffoldRenderer.render` — tests, and any
+    future caller that wants one file. Seeding the context with an *empty*
+    manifest would make ``install.sh`` render successfully and install nothing,
+    which is the silent-skip failure this whole bundle exists to remove. So the
+    default is real, just deferred: it resolves by asking the renderer what it
+    would write.
+    """
+
+    def __init__(self, renderer: ScaffoldRenderer) -> None:
+        self._renderer = renderer
+        self._resolved: ArtifactManifest | None = None
+
+    def _value(self) -> ArtifactManifest:
+        if self._resolved is None:
+            self._resolved = build_artifact_manifest(
+                self._renderer, self._renderer.render(dry_run=True)
+            )
+        return self._resolved
+
+    def __getattr__(self, name: str):
+        return getattr(self._value(), name)
 
 
 def _env_of_unit(renderer: ScaffoldRenderer, source: str) -> str | None:
@@ -413,9 +457,15 @@ def build_artifact_manifest(
         if artifact is None:
             undispositioned.append(source)
             continue
-        artifacts.append(
-            replace(artifact, sha256=_sha256(renderer.output_dir / source))
+        # install.sh is excluded: it is rendered after everything else so the
+        # hashes it bakes in are current, which means its own bytes do not
+        # exist yet when the manifest is built.
+        digest = (
+            None
+            if source == INSTALL_SCRIPT_NAME
+            else _sha256(renderer.output_dir / source)
         )
+        artifacts.append(replace(artifact, sha256=digest))
 
     if undispositioned:
         raise ValidationError(_undispositioned_message(sorted(undispositioned)))
@@ -486,3 +536,72 @@ def _collect_app_managed(renderer: ScaffoldRenderer) -> list[AppManagedUnit]:
                             )
                         )
     return units
+
+
+def dump_manifest(manifest: ArtifactManifest) -> str:
+    """Serialise for the on-disk manifest, sorted so renders diff cleanly."""
+    import json
+
+    payload = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "batch_hash": manifest.batch_hash,
+        "artifacts": [
+            {
+                "source": a.source,
+                "disposition": a.disposition.value,
+                "destination": a.destination,
+                "mode": a.mode,
+                "environment": a.environment,
+                "sha256": a.sha256,
+                "note": a.note,
+            }
+            for a in manifest.artifacts
+        ],
+        "app_managed": [
+            {
+                "unit_name": u.unit_name,
+                "source_dir": u.source_dir,
+                "installer": u.installer,
+                "environment": u.environment,
+            }
+            for u in manifest.app_managed
+        ],
+    }
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def load_manifest(text: str) -> ArtifactManifest:
+    """Parse a manifest written by :func:`dump_manifest`."""
+    import json
+
+    payload = json.loads(text)
+    version = payload.get("schema_version")
+    if version != MANIFEST_SCHEMA_VERSION:
+        raise ValidationError(
+            f"artifact manifest schema version {version!r} is not supported "
+            f"(expected {MANIFEST_SCHEMA_VERSION}). Re-run 'fraisier scaffold'."
+        )
+    return ArtifactManifest(
+        artifacts=tuple(
+            RenderedArtifact(
+                source=a["source"],
+                disposition=Disposition(a["disposition"]),
+                destination=a["destination"],
+                mode=a["mode"],
+                environment=a["environment"],
+                sha256=a["sha256"],
+                note=a["note"],
+            )
+            for a in payload["artifacts"]
+        ),
+        app_managed=tuple(
+            AppManagedUnit(
+                unit_name=u["unit_name"],
+                source_dir=u["source_dir"],
+                installer=u["installer"],
+                environment=u["environment"],
+            )
+            for u in payload.get("app_managed", ())
+        ),
+        batch_hash=payload["batch_hash"],
+    )
