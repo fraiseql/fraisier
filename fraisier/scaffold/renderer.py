@@ -30,6 +30,7 @@ from fraisier.naming import app_service_name, deploy_socket_name
 from fraisier.scaffold.artifacts import (
     ARTIFACT_MANIFEST_NAME,
     INSTALL_SCRIPT_NAME,
+    Disposition,
     LazyArtifactManifest,
     build_artifact_manifest,
     dump_manifest,
@@ -793,84 +794,32 @@ class ScaffoldRenderer:
     def get_install_mapping(self) -> dict[str, Path]:
         """Map scaffold output paths to system install paths.
 
+        Derived from the artifact manifest, so ``scaffold-diff`` compares
+        exactly the files ``install.sh`` installs — by construction rather
+        than by a parallel hand-maintained list. That list had drifted in
+        three ways by the time the manifest replaced it: it mapped
+        ``systemd/poll-deploy.service`` (rendered to the tree root, under a
+        different name, and installed by nobody), it mapped the
+        restore-staging units that no installer touches, and it walked *every*
+        fraise rather than this host's — so on a multi-host box it reported
+        another host's units as missing.
+
         Returns:
             Dict mapping relative scaffold paths to absolute system paths.
         """
+        # Off-server, no local hostname matches any machine in ``servers:``,
+        # and a diff cannot say whether the installed webhook unit is the right
+        # one. Naming an arbitrary host's unit would answer a question nobody
+        # asked, so the entry is omitted entirely — reporting nothing beats
+        # reporting a phantom (#325).
+        local_webhook = self._local_webhook_source()
+
         mapping: dict[str, Path] = {}
-
-        project_name = self.context["project_name"]
-
-        # Systemd units
-        for fraise in self.context["fraises"]:
-            for env_name, env_config in fraise.get("environments", {}).items():
-                # Deploy socket and service
-                socket_unit = deploy_socket_name(env_config, env_name, fraise["name"])
-                socket_stem = socket_unit.removesuffix(".socket")
-                service_unit = f"{socket_stem}@.service"
-
-                mapping[f"systemd/{socket_unit}"] = Path(
-                    f"/etc/systemd/system/{socket_unit}"
-                )
-                mapping[f"systemd/{service_unit}"] = Path(
-                    f"/etc/systemd/system/{service_unit}"
-                )
-
-                # Service unit (if exists)
-                if "service_base" in env_config:
-                    svc = env_config["service_base"]
-                    mapping[f"systemd/{svc}.service"] = Path(
-                        f"/etc/systemd/system/{svc}.service"
-                    )
-
-        # Webhook service unit: the source carries the host, the destination
-        # never does. Resolved through the same helper install.sh selects with,
-        # so scaffold-diff compares the file this box actually installs instead
-        # of reporting a phantom missing one (#325).
-        webhook_src = self._local_webhook_source()
-        if webhook_src is not None:
-            mapping[webhook_src] = Path(
-                f"/etc/systemd/system/{webhook_unit_name(project_name)}"
-            )
-
-        # Systemctl helper service + socket
-        if self.context["allowed_services"]:
-            helper_svc = f"fraisier-{project_name}-systemctl-helper.service"
-            helper_sock = f"fraisier-{project_name}-systemctl-helper.socket"
-            mapping[f"systemd/{helper_svc}"] = Path(f"/etc/systemd/system/{helper_svc}")
-            mapping[f"systemd/{helper_sock}"] = Path(
-                f"/etc/systemd/system/{helper_sock}"
-            )
-
-        # Install helper socket + service units
-        for entry in self.context["install_helper_sockets"]:
-            mapping[f"systemd/{entry['socket_unit']}"] = Path(
-                f"/etc/systemd/system/{entry['socket_unit']}"
-            )
-            mapping[f"systemd/{entry['service_unit']}"] = Path(
-                f"/etc/systemd/system/{entry['service_unit']}"
-            )
-
-        # Standard systemd units
-        for unit in [
-            "deploy-checker.timer",
-            "backup.timer",
-            "poll-deploy.service",
-        ]:
-            mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
-
-        # Restore-staging units (only if there are restore_migrate fraises)
-        if self._has_restore_migrate_fraise():
-            for unit in ["restore-staging.service", "restore-staging.timer"]:
-                mapping[f"systemd/{unit}"] = Path(f"/etc/systemd/system/{unit}")
-
-        # Nginx config
-        mapping["nginx/gateway.conf"] = Path(
-            f"/etc/nginx/sites-available/{project_name}"
-        )
-
-        # Sudoers
-        mapping["sudoers"] = Path(f"/etc/sudoers.d/{project_name}")
-
+        for artifact in self.artifact_manifest.installed():
+            if artifact.disposition is Disposition.WEBHOOK:
+                if artifact.source != local_webhook:
+                    continue
+            mapping[artifact.source] = Path(artifact.destination)
         return mapping
 
     def _local_webhook_source(self) -> str | None:

@@ -326,3 +326,68 @@ class TestManifestModelsTheRealInstaller:
             manifest = build_artifact_manifest(renderer, rendered)
 
             assert {a.source for a in manifest.artifacts} == set(rendered), case
+
+
+class TestInstallMappingDerivesFromTheManifest:
+    """scaffold-diff and install.sh cannot disagree about destinations.
+
+    ``get_install_mapping`` was the third hand-maintained authority, and it had
+    drifted in three ways from the installer it was supposed to mirror.
+    """
+
+    def test_mapping_matches_the_manifest(self, tmp_path):
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        renderer.render()
+
+        mapping = renderer.get_install_mapping()
+
+        for source, dest in mapping.items():
+            artifact = _by_source(renderer.artifact_manifest, source)
+            assert str(dest) == artifact.destination
+
+    def test_mapping_no_longer_claims_uninstalled_artifacts(self, tmp_path):
+        """It used to map poll-deploy.service and the restore-staging units.
+
+        None of them is installed by anything, and poll-deploy.service was
+        mapped under ``systemd/`` while the renderer writes it to the tree
+        root — so the entry could never have matched a rendered file at all.
+        """
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        renderer.render()
+
+        mapping = renderer.get_install_mapping()
+
+        assert "systemd/poll-deploy.service" not in mapping
+        assert "poll-deploy.service" not in mapping
+        assert "systemd/restore-staging.service" not in mapping
+
+    def test_only_this_hosts_webhook_unit_is_mapped(self, tmp_path):
+        """One entry, not one per logical server (#325)."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_MATRIX[1][1])  # the asymmetric two-host config
+        renderer = ScaffoldRenderer(FraisierConfig(cfg), server="prod.example.io")
+        renderer.output_dir = tmp_path / "out"
+        renderer.render()
+
+        webhooks = [s for s in renderer.get_install_mapping() if "webhook" in s]
+
+        assert webhooks == ["fraisier-proj-webhook-prod-example-io.service"]
+
+    def test_mapping_is_scoped_to_this_hosts_fraises(self, tmp_path):
+        """It used to walk every fraise, so a multi-host box diffed units it
+        does not install and reported them missing."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_MATRIX[1][1])
+        renderer = ScaffoldRenderer(FraisierConfig(cfg), server="prod.example.io")
+        renderer.output_dir = tmp_path / "out"
+        renderer.render()
+
+        mapping = renderer.get_install_mapping()
+
+        assert not [s for s in mapping if "development" in s or "api-dev" in s]
