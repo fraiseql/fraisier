@@ -19,6 +19,17 @@ Environment="GIT_SSH_COMMAND=ssh -oStrictHostKeyChecking=accept-new"
 {% if allowed_services %}
 Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock
 {% endif %}
+{# Install-helper routing, identical to the webhook unit's (#324). This unit
+   runs the deploy in process — trigger-deploy and every timer hand off to it
+   — so it runs the install step too. Without these, an install.user that
+   differs from the deploy user falls back to `sudo -u`, which NoNewPrivileges
+   below denies outright: "sudo: The 'no new privileges' flag is set". The
+   webhook path had them and succeeded; this one did not and failed in ~3s.
+   The full set is emitted, not just this unit's own pair, so the two
+   deploy-capable units carry the same routing by construction. #}
+{% for ish in install_helper_sockets %}
+Environment={{ ish.env_var }}={{ ish.socket_path }}
+{% endfor %}
 {% if scaffold.deploy_environment_file %}
 EnvironmentFile=-{{ scaffold.deploy_environment_file }}
 {% endif %}
