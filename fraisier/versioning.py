@@ -284,6 +284,45 @@ def bump_version(
     return VersionInfo(version=new_version)
 
 
+def refresh_uv_lock(project_dir: Path) -> str | None:
+    """Refresh ``uv.lock`` so its self-version matches ``pyproject.toml``.
+
+    Called after a version bump: without this, uv-managed projects ship a
+    lockfile whose own package entry is one bump behind, and any later bare
+    ``uv run`` re-locks and dirties the working tree mid-command (#328).
+
+    Returns ``None`` on success or when there is no ``uv.lock`` to refresh,
+    else a human-readable warning. Never raises — a stale lockfile is
+    exactly the pre-existing behaviour, so failure must not abort a ship.
+    """
+    import shutil
+    import subprocess
+
+    lock_path = project_dir / "uv.lock"
+    if not lock_path.exists():
+        return None
+
+    uv = shutil.which("uv")
+    if uv is None:
+        return (
+            "uv.lock present but 'uv' not on PATH — "
+            "lockfile self-version will lag pyproject.toml"
+        )
+
+    result = subprocess.run(
+        [uv, "lock"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        tail = detail[-1] if detail else "unknown error"
+        return f"'uv lock' failed after version bump: {tail}"
+    return None
+
+
 _PYPROJECT_VERSION_RE = re.compile(r'^(version\s*=\s*")([^"]+)(")', re.MULTILINE)
 
 

@@ -140,7 +140,7 @@ def version_bump(
         fraisier version bump minor --dry-run
         fraisier version bump major --no-tag
     """
-    from fraisier.versioning import bump_version, parse_semver
+    from fraisier.versioning import bump_version, parse_semver, refresh_uv_lock
 
     path = Path(pyproject)
     old_version = _read_current_version(path)
@@ -164,6 +164,9 @@ def version_bump(
 
     result = bump_version(path, part)
     console.print(f"[green]Bumped:[/green] {old_version} -> {result.version}")
+    lock_warning = refresh_uv_lock(path.parent)
+    if lock_warning:
+        console.print(f"[yellow]Warning:[/yellow] {lock_warning}")
 
 
 @main.command(name="ship")
@@ -276,7 +279,7 @@ def ship(
         )
         raise SystemExit(1)
 
-    from fraisier.versioning import bump_version
+    from fraisier.versioning import bump_version, refresh_uv_lock
 
     pyproject_path = Path(pyproject)
     current_version = _read_current_version(pyproject_path)
@@ -375,6 +378,12 @@ def ship(
     def _apply_bump() -> None:
         bump_version(pyproject_path, bump_type)
         success(f"Version bumped: {current_version} -> {new}")
+        # Keep uv.lock's self-version in step so the release commit does not
+        # ship a lockfile that every later bare `uv run` rewrites (#328). The
+        # pipeline's `git add --update` stages the refreshed lockfile.
+        lock_warning = refresh_uv_lock(pyproject_path.parent)
+        if lock_warning:
+            console.print(f"[yellow]Warning:[/yellow] {lock_warning}")
 
     _ship_commit_push_deploy(
         new,

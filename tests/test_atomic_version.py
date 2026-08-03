@@ -108,3 +108,64 @@ class TestAtomicBump:
         result = bump_version(pp, "patch")
         assert isinstance(result, VersionInfo)
         assert result.version == "3.1.5"
+
+
+class TestRefreshUvLock:
+    """refresh_uv_lock keeps uv.lock's self-version in step after a bump (#328)."""
+
+    def test_no_lockfile_is_a_noop(self, tmp_path):
+        """Without uv.lock there is nothing to refresh and no warning."""
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        with patch("subprocess.run") as mock_run:
+            assert refresh_uv_lock(tmp_path) is None
+        mock_run.assert_not_called()
+
+    def test_runs_uv_lock_in_project_dir(self, tmp_path):
+        """With uv.lock present, `uv lock` runs in the project directory."""
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            assert refresh_uv_lock(tmp_path) is None
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["/usr/bin/uv", "lock"]
+        assert kwargs["cwd"] == tmp_path
+
+    def test_missing_uv_warns_instead_of_raising(self, tmp_path):
+        """uv absent from PATH degrades to a warning, not a crash."""
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with patch("shutil.which", return_value=None):
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "not on PATH" in warning
+
+    def test_failed_lock_warns_with_stderr_tail(self, tmp_path):
+        """A failing `uv lock` returns a warning carrying the error tail."""
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=1, stderr="boom\nresolver exploded", stdout=""
+            )
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "resolver exploded" in warning
