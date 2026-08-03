@@ -48,6 +48,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Also: `--server` naming a server no environment declares is now an error
   instead of silently widening to every environment.
+||||||| parent of 0403ec0 (fix(scaffold): give deploy-daemon units the webhook's install-helper routing (#324))
+- **Deploy-daemon units now carry the install-helper socket routing** (#324).
+  The scaffolded webhook unit baked in
+  `Environment=FRAISIER_INSTALL_SOCKET_<FRAISE>_<ENV>=…`; the deploy-daemon
+  unit behind every `trigger-deploy` — and so behind every timer and CLI
+  deploy — did not. With an `install.user` different from the deploy user,
+  `deployers/mixins.py` looks for exactly that variable, does not find it,
+  and falls back to `sudo -u`, which the unit's own `NoNewPrivileges=yes`
+  denies outright:
+
+  ```
+  Install command failed (exit code 1): sudo -H -u printoptim_app …
+    stderr: sudo: The "no new privileges" flag is set, which prevents sudo
+            from running as root.
+  ```
+
+  The identical deploy through the webhook succeeded — same config, same
+  render, two units running the same code, one wired. Reported from
+  printoptim.dev.
+
+  Fixed as a symmetry property rather than a patch: a test sweeps every
+  rendered unit whose `ExecStart` performs a deploy **in process**, and
+  asserts they all carry identical routing and are all `NoNewPrivileges`-
+  hardened. A third deploy-capable unit cannot be added unwired. Units that
+  only *ask* for a deploy (`poll-deploy` runs `trigger-deploy`, which writes
+  to a socket and hands off) are correctly excluded — the install runs in the
+  daemon on the other end.
+
+  Applies on re-scaffold + re-install.
 
 ## [0.56.0] - 2026-08-03
 
