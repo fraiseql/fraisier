@@ -661,7 +661,7 @@ def _is_under_any(path: str, allowed: list[str]) -> bool:
     return any(path == a or path.startswith(a.rstrip("/") + "/") for a in allowed)
 
 
-def _local_hostnames() -> list[str]:
+def local_hostnames() -> list[str]:
     """Candidate names for this machine, longest-lived first, deduplicated."""
     names = [socket.gethostname(), socket.getfqdn()]
     names += [n.split(".", 1)[0] for n in names if n]
@@ -689,7 +689,7 @@ def resolve_local_server(config: FraisierConfig) -> str | None:
         for logical, machines in config.servers.items()
         for machine in machines
     }
-    hostnames = _local_hostnames()
+    hostnames = local_hostnames()
     for candidate in hostnames:
         if candidate in machine_to_server:
             return machine_to_server[candidate]
@@ -720,7 +720,7 @@ def local_webhook_source(config: FraisierConfig, server: str | None = None) -> s
     if resolved is None:
         raise ValidationError(
             f"Cannot tell which webhook unit this machine installs: none of "
-            f"{', '.join(_local_hostnames())} is registered under 'servers:' "
+            f"{', '.join(local_hostnames())} is registered under 'servers:' "
             f"({', '.join(sorted(webhook_machine_map(config))) or 'no machines listed'}"
             f") or named as a logical server "
             f"({', '.join(config.declared_servers())}). Add this machine under "

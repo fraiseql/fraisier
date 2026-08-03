@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fraisier setup` on an unrecognised machine no longer provisions every
+  environment** (#331). `_resolve_allowed_environments` matched the machine's
+  hostname against *logical server names* only, never against
+  `servers:.machine_hostnames` — the map that exists precisely because a
+  logical server is not a machine hostname. A config shaped like
+
+  ```yaml
+  servers:
+    printoptim-io:
+      machine_hostnames: [pio]
+  environments:
+    production: {server: printoptim-io}
+  ```
+
+  matched nothing on `pio`, and no match returned `None`, which the caller
+  reads as *provision everything*. Resolution now routes through
+  `resolve_local_server` — the sole host authority since v0.56.0 — which
+  consults `machine_hostnames` first.
+
+  **Breaking for multi-host configs:** an unresolvable host is now an error,
+  not a warning-then-widen. `setup` creates users, chowns application trees and
+  installs and **enables** systemd units and nginx vhosts; doing that for every
+  environment from a box that cannot identify itself is a refusal to answer
+  combined with maximum action, and a live candidate for how a production-only
+  host acquires development units — the #325 failure shape one level up. There
+  is no deprecation cycle because the warning already existed, already fired,
+  and #331 exists *because nobody acted on it*.
+
+  The error names this machine, lists the hosts the config knows with their
+  registered machines and environments, and prints all three exits copy-paste
+  ready: a `servers:` registration snippet, `--server <host>`, and a new
+  `--all-environments` flag for "everything, deliberately".
+
+  Unaffected: configs where **no** environment declares a `server:`. That is
+  single-host, and provisions everything as before — a separate branch, not a
+  fallback, because there "everything" and "this host's" are the same set.
+
+  Also: `--server` naming a server no environment declares is now an error
+  instead of silently widening to every environment.
+
 ## [0.56.0] - 2026-08-03
 
 Closes #325. **The webhook unit installed on a machine was not the one

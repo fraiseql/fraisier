@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 from fraisier.config import FraisierConfig
+from fraisier.errors import ValidationError
 from fraisier.setup import ServerSetup, SetupAction
 
 SERVER_AWARE_CONFIG = """\
@@ -682,13 +685,18 @@ class TestWebhookTemplate:
 
 class TestCLI:
     def test_dry_run_exits_cleanly(self, tmp_path):
+        # `-c`, not the get_config patch: fraisier/cli/main.py binds
+        # get_config with a `from` import, so patching fraisier.config leaves
+        # the CLI reading the repository's own fraises.yaml — a config this
+        # machine is not a declared host of, which #331 now refuses.
         config = _make_config(tmp_path, MINIMAL_CONFIG)
         runner = CliRunner()
 
-        with patch("fraisier.config.get_config", return_value=config):
-            from fraisier.cli.main import main
+        from fraisier.cli.main import main
 
-            result = runner.invoke(main, ["setup", "--dry-run"])
+        result = runner.invoke(
+            main, ["-c", str(config.config_path), "setup", "--dry-run"]
+        )
 
         assert result.exit_code == 0
         assert "actions would be executed" in result.output
@@ -697,10 +705,11 @@ class TestCLI:
         config = _make_config(tmp_path, MINIMAL_CONFIG)
         runner = CliRunner()
 
-        with patch("fraisier.config.get_config", return_value=config):
-            from fraisier.cli.main import main
+        from fraisier.cli.main import main
 
-            result = runner.invoke(main, ["setup"], input="n\n")
+        result = runner.invoke(
+            main, ["-c", str(config.config_path), "setup"], input="n\n"
+        )
 
         assert result.exit_code == 0
         assert "Aborted" in result.output
@@ -788,20 +797,23 @@ class TestServerFiltering:
         assert any("my-api-dev" in d for d in descriptions)
         assert any("my-api-stg" in d for d in descriptions)
 
-    def test_unknown_server_provisions_all(self, tmp_path):
+    def test_unknown_server_is_refused(self, tmp_path):
+        """#331: an unmatched --server used to widen to every environment."""
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
         setup = ServerSetup(config, FakeRunner(), server="unknown.host")
-        actions = setup._plan_app_services()
 
-        assert len(actions) == 3
+        with pytest.raises(ValidationError, match=re.escape("unknown.host")):
+            setup._plan_app_services()
 
     def test_auto_detect_hostname(self, tmp_path):
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
         setup = ServerSetup(config, FakeRunner())
 
         with (
-            patch("fraisier.setup.socket.getfqdn", return_value="prod.example.io"),
-            patch("fraisier.setup.socket.gethostname", return_value="prod"),
+            patch(
+                "fraisier.scaffold.renderer.local_hostnames",
+                return_value=["prod", "prod.example.io"],
+            ),
         ):
             actions = setup._plan_app_services()
 
@@ -818,33 +830,39 @@ class TestServerFiltering:
         setup = ServerSetup(config, FakeRunner())
 
         with (
-            patch("fraisier.setup.socket.getfqdn", return_value="prod.example.io"),
-            patch("fraisier.setup.socket.gethostname", return_value="prod"),
+            patch(
+                "fraisier.scaffold.renderer.local_hostnames",
+                return_value=["prod", "prod.example.io"],
+            ),
         ):
             actions = setup._plan_app_services()
 
         assert len(actions) == 1
         assert "my-api.service" in actions[0].description
 
-    def test_auto_detect_no_match_provisions_all(self, tmp_path):
+    def test_auto_detect_no_match_is_refused(self, tmp_path):
+        """#331: 'cannot tell which host I am' must not mean 'provision all'."""
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
         setup = ServerSetup(config, FakeRunner())
 
         with (
-            patch("fraisier.setup.socket.getfqdn", return_value="other.host"),
-            patch("fraisier.setup.socket.gethostname", return_value="other"),
+            patch(
+                "fraisier.scaffold.renderer.local_hostnames",
+                return_value=["other", "other.host"],
+            ),
+            pytest.raises(ValidationError, match="matches no host"),
         ):
-            actions = setup._plan_app_services()
-
-        assert len(actions) == 3
+            setup._plan_app_services()
 
     def test_no_global_environments_provisions_all(self, tmp_path):
         config = _make_config(tmp_path, MINIMAL_CONFIG)
         setup = ServerSetup(config, FakeRunner())
 
         with (
-            patch("fraisier.setup.socket.getfqdn", return_value="any.host"),
-            patch("fraisier.setup.socket.gethostname", return_value="any"),
+            patch(
+                "fraisier.scaffold.renderer.local_hostnames",
+                return_value=["any", "any.host"],
+            ),
         ):
             actions = setup._plan_app_services()
 
@@ -855,8 +873,10 @@ class TestServerFiltering:
         setup = ServerSetup(config, FakeRunner(), environment="staging")
 
         with (
-            patch("fraisier.setup.socket.getfqdn", return_value="prod.example.io"),
-            patch("fraisier.setup.socket.gethostname", return_value="prod"),
+            patch(
+                "fraisier.scaffold.renderer.local_hostnames",
+                return_value=["prod", "prod.example.io"],
+            ),
         ):
             actions = setup._plan_app_services()
 
@@ -868,10 +888,12 @@ class TestServerFiltering:
         all_setup = ServerSetup(config, FakeRunner(), server="dev.example.io")
         prod_setup = ServerSetup(config, FakeRunner(), server="prod.example.io")
 
-        # Patch hostname auto-detect to not interfere
+        # Pin host auto-detect so it cannot interfere with the --server filter
         with (
-            patch("fraisier.setup.socket.getfqdn", return_value="localhost"),
-            patch("fraisier.setup.socket.gethostname", return_value="localhost"),
+            patch(
+                "fraisier.scaffold.renderer.local_hostnames",
+                return_value=["localhost"],
+            ),
         ):
             dev_actions = all_setup.plan()
             prod_actions = prod_setup.plan()
@@ -902,20 +924,29 @@ fraises:
         assert len(actions) == 1
         assert "development" in actions[0].description
 
-    def test_auto_detect_no_match_logs_warning(self, tmp_path, caplog):
-        """Warning is logged when hostname auto-detect finds no match (#35)."""
+    def test_auto_detect_no_match_names_the_alternatives(self, tmp_path):
+        """The #35 warning became the #331 error, and carries the way out.
+
+        The warning this replaces fired for years and was acted on by nobody,
+        which is why #331 exists at all; a louder warning would have been a
+        fourth instance of the same non-response.
+        """
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
         setup = ServerSetup(config, FakeRunner())
 
         with (
-            patch("fraisier.setup.socket.getfqdn", return_value="other.host"),
-            patch("fraisier.setup.socket.gethostname", return_value="other"),
-            caplog.at_level("WARNING", logger="fraisier.setup"),
+            patch(
+                "fraisier.scaffold.renderer.local_hostnames",
+                return_value=["other", "other.host"],
+            ),
+            pytest.raises(ValidationError) as exc,
         ):
-            actions = setup._plan_app_services()
+            setup._plan_app_services()
 
-        assert len(actions) == 3  # All provisioned
-        assert "No server match" in caplog.text
+        message = str(exc.value)
+        assert "dev.example.io" in message
+        assert "prod.example.io" in message
+        assert "--all-environments" in message
 
 
 class TestPlanUsers:

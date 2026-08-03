@@ -5,6 +5,8 @@ from __future__ import annotations
 import click
 from rich.table import Table
 
+from fraisier.errors import ValidationError
+
 from ._helpers import console, require_config
 from .main import main
 
@@ -17,6 +19,11 @@ from .main import main
     "-s",
     help="Only setup environments assigned to this server hostname",
 )
+@click.option(
+    "--all-environments",
+    is_flag=True,
+    help="Provision every environment, even ones hosted on other machines",
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 @click.pass_context
 def setup(
@@ -24,6 +31,7 @@ def setup(
     dry_run: bool,
     environment: str | None,
     server: str | None,
+    all_environments: bool,
     yes: bool,
 ) -> None:
     """Provision server infrastructure from fraises.yaml.
@@ -31,30 +39,61 @@ def setup(
     Creates directories, symlinks bare repos, installs systemd services,
     generates webhook env files, installs nginx vhosts, and validates.
 
-    When neither --environment nor --server is given, auto-detects the
-    current hostname and provisions only the matching environments.
-    If the hostname doesn't match any ``environments.*.server`` entry,
-    all environments are provisioned (backwards-compatible).
+    When neither --environment nor --server is given, auto-detects which host
+    this machine is — via ``servers:.machine_hostnames`` first, then logical
+    server names — and provisions only that host's environments. A machine
+    that matches no declared host is an error naming the alternatives (#331);
+    pass --all-environments to provision everything deliberately. Configs
+    where no environment declares a ``server:`` are single-host and provision
+    everything, as before.
 
     \b
     Examples:
-        fraisier setup                    # auto-detect server from hostname
+        fraisier setup                    # auto-detect host, provision its envs
         fraisier setup --dry-run          # preview only
         fraisier setup --environment dev  # single environment
         fraisier setup --server host.io   # all envs on that server
+        fraisier setup --all-environments # every env, regardless of host
         fraisier setup --yes              # skip confirmation
     """
-    if environment and server:
-        raise click.UsageError("--environment and --server are mutually exclusive.")
+    exclusive = [
+        name
+        for name, given in (
+            ("--environment", bool(environment)),
+            ("--server", bool(server)),
+            ("--all-environments", all_environments),
+        )
+        if given
+    ]
+    if len(exclusive) > 1:
+        raise click.UsageError(f"{' and '.join(exclusive)} are mutually exclusive.")
 
     from fraisier.runners import LocalRunner
     from fraisier.setup import ServerSetup
 
     config = require_config(ctx)
     runner = LocalRunner()
-    server_setup = ServerSetup(config, runner, environment=environment, server=server)
+    server_setup = ServerSetup(
+        config,
+        runner,
+        environment=environment,
+        server=server,
+        all_environments=all_environments,
+    )
 
-    actions = server_setup.plan()
+    # The host-identity refusal (#331) is a message written for the operator
+    # reading it on the box; a traceback would bury it and lose the exits it
+    # spells out.
+    try:
+        actions = server_setup.plan()
+    except ValidationError as exc:
+        # markup=False on the body: it carries a YAML snippet whose
+        # `machine_hostnames: [thishost]` would otherwise be parsed as a Rich
+        # style tag and rendered as nothing, silently gutting the fix the
+        # message exists to hand over.
+        console.print("[red]Cannot determine what to provision[/red]\n")
+        console.print(str(exc), markup=False, highlight=False)
+        raise SystemExit(1) from None
 
     if not actions:
         console.print("[yellow]Nothing to do.[/yellow]")

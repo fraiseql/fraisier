@@ -543,19 +543,43 @@ fraisier setup [OPTIONS]
 | `--dry-run` | Show what would be provisioned without making changes |
 | `--environment ENV` | Provision only this environment |
 | `--server HOSTNAME` | Provision only environments assigned to this server |
+| `--all-environments` | Provision every environment, including ones hosted elsewhere |
 | `--yes`, `-y` | Skip confirmation prompt |
+
+`--environment`, `--server` and `--all-environments` are mutually exclusive.
+
+**Which environments get provisioned**
+
+With no selector, `setup` works out which host this machine is and provisions
+only that host's environments. It matches the machine's hostnames against
+`servers:.machine_hostnames` first, then against logical server names.
+
+- **No environment declares a `server:`** — single-host config. Every
+  environment is provisioned, because "everything" and "this host's" are the
+  same set.
+- **The machine resolves to a declared host** — only that host's environments.
+- **The machine resolves to nothing** — `setup` stops with an error naming this
+  machine and the hosts the config knows (v0.57.0, #331). It does not fall back
+  to provisioning everything: setup creates users, chowns trees and *enables*
+  systemd units and nginx vhosts, so acting on every environment from a box
+  that cannot identify itself is how a production host acquires development
+  units. Register the machine under `servers:`, name the host with `--server`,
+  or pass `--all-environments` to say "everything, deliberately".
 
 **Examples:**
 
 ```bash
-# Provision everything defined in fraises.yaml
+# Provision this host's environments (auto-detected)
 sudo fraisier setup
 
 # Provision only production
 sudo fraisier setup --environment production
 
-# Provision only environments on this host
+# Provision only environments on a named host
 sudo fraisier setup --server prod.myserver.com
+
+# Provision every environment regardless of host
+sudo fraisier setup --all-environments
 
 # Preview without changes
 fraisier setup --dry-run
