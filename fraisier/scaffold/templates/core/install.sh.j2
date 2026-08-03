@@ -145,6 +145,57 @@ _run_strict() {
   fi
 }
 
+# Verify one manifest artifact against the tree, before anything is installed.
+#
+# The expected sha256 is the hash of the bytes `fraisier scaffold` wrote. A
+# mismatch means the tree and this script came from different renders — an old
+# install.sh against a fresh scaffold dir, or the reverse — and the drift the
+# manifest exists to remove would simply move up one level: the installer would
+# faithfully install a file nobody described. #323's triage found v1.141.0-era
+# rendered units sitting in an app repo shadowing current ones, which is
+# exactly this shape. So it is a refusal, not a warning.
+#
+# A missing source is likewise fatal rather than skipped. The `[ -f ]` guard
+# this replaces is what turned #325 into a silent no-op: the manifest says this
+# artifact was rendered, so its absence means the tree is not the tree this
+# script was generated for.
+#
+# Runs in every mode, --dry-run included: a dry run that reported a clean plan
+# for a tree the real run would refuse would be worse than no dry run at all.
+_verify_artifact() {
+  local rel="$1"
+  local want="$2"
+  local src="${SCAFFOLD_DIR}/${rel}"
+
+  if [[ ! -f "$src" ]]; then
+    echo "Error: '${rel}' is in this installer's manifest but missing from ${SCAFFOLD_DIR}." >&2
+    echo "  The scaffold tree does not match the render this install.sh came from." >&2
+    echo "  Re-run 'fraisier scaffold' against the full fraises.yaml." >&2
+    exit 1
+  fi
+
+  if [[ -n "$want" ]] && command -v sha256sum >/dev/null 2>&1; then
+    local got
+    got="$(sha256sum "$src" | cut -d' ' -f1)"
+    if [[ "$got" != "$want" ]]; then
+      echo "Error: '${rel}' does not match the manifest this install.sh was generated from." >&2
+      echo "  expected sha256 ${want}" >&2
+      echo "  found    sha256 ${got}" >&2
+      echo "  The scaffold tree and this installer came from different renders." >&2
+      echo "  Re-run 'fraisier scaffold' so both are regenerated together." >&2
+      exit 1
+    fi
+  fi
+
+  _MANIFEST_CHECKED=$((_MANIFEST_CHECKED + 1))
+}
+
+# Copy one `plain` artifact. Verification already happened in the preflight
+# pass, so this is only the copy.
+_install_artifact() {
+  _run sudo cp "${SCAFFOLD_DIR}/$1" "$2"
+}
+
 # Helper function to check if file/directory exists
 _check_exists() {
   local path="$1"
@@ -325,6 +376,27 @@ _run sudo apt-get install -y -qq --no-install-recommends \
     certbot \
     python3-certbot-nginx
 
+# ---------------------------------------------------------------------------
+# Manifest preflight — verify the whole tree BEFORE installing any of it.
+#
+# Deliberately a separate pass rather than a check inside each copy. Verifying
+# as we go would install the artifacts that happen to come first and refuse
+# somewhere in the middle, leaving the host half-converted between two renders
+# — the worst state to debug, on the one tool you would use to recover.
+# Everything is checked while nothing has been touched.
+echo "==> Verifying scaffold tree against this installer's manifest"
+_MANIFEST_CHECKED=0
+{% for artifact in artifact_manifest.with_disposition('plain') %}
+{% if artifact.environment %}
+if _env_active "{{ artifact.environment }}"; then
+    _verify_artifact "{{ artifact.source }}" "{{ artifact.sha256 or '' }}"
+fi
+{% else %}
+_verify_artifact "{{ artifact.source }}" "{{ artifact.sha256 or '' }}"
+{% endif %}
+{% endfor %}
+echo "  ${_MANIFEST_CHECKED} artifact(s) match the manifest"
+
 # Install webhook service unit for THIS machine (#325).
 #
 # The source filename carries the host, the destination never does — so there
@@ -436,17 +508,28 @@ if [ -f "${SUDOERS_SRC}" ]; then
 fi
 
 # Install systemd units
+#
+# Driven from the artifact manifest rather than from hardcoded names. This is
+# the block where custom-named units used to fall through: the loop asked for
+# names it re-derived by hand, so anything the renderer wrote under a name this
+# script did not predict was rendered and then installed by nobody, silently
+# (#323). Every entry below came from `render()`'s own account of what it
+# wrote, and an artifact with no disposition never reaches this file — it fails
+# at scaffold time.
+#
+# Only `plain` artifacts are handled generically. The webhook unit, the two
+# helpers, the install-helper re-bake, sudoers and the nginx vhosts keep their
+# own hand-written sequences elsewhere in this script, because their ordering
+# is load-bearing and a generic executor would discard the reasoning for it.
 echo "  Installing systemd units"
-{% for fraise in local_fraises %}
-{% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set svc = env_config.service_base %}
-if _env_active "{{ env_name }}"; then
-    if [ -f "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" ]; then
-        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ svc }}.service" \
-           /etc/systemd/system/{{ svc }}.service
-    fi
+{% for artifact in artifact_manifest.with_disposition('plain') %}
+{% if artifact.environment %}
+if _env_active "{{ artifact.environment }}"; then
+    _install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
 fi
-{% endfor %}
+{% else %}
+_install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
+{% endif %}
 {% endfor %}
 
 # Clean up stale WatchdogSec directives in existing service files
@@ -487,34 +570,9 @@ fi
 {% endfor %}
 {% endfor %}
 
-# Install socket-activated deploy units
-echo "  Installing socket-activated deploy units"
-{% for fraise in local_fraises %}
-{% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
-{% set socket_stem = socket_unit[:-7] %}
-{% set socket_name = socket_unit %}
-{% set service_name = socket_stem ~ '@.service' %}
-if _env_active "{{ env_name }}"; then
-    if [ -f "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" ]; then
-        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ socket_name }}" \
-           /etc/systemd/system/{{ socket_name }}
-    fi
-    if [ -f "${SCAFFOLD_DIR}/systemd/{{ service_name }}" ]; then
-        _run sudo cp "${SCAFFOLD_DIR}/systemd/{{ service_name }}" \
-           /etc/systemd/system/{{ service_name }}
-    fi
-fi
-{% endfor %}
-{% endfor %}
-
-# Install timers
-for timer in deploy-checker backup; do
-    if [ -f "${SCAFFOLD_DIR}/systemd/${timer}.timer" ]; then
-        _run sudo cp "${SCAFFOLD_DIR}/systemd/${timer}.timer" \
-           "/etc/systemd/system/${timer}.timer"
-    fi
-done
+# Deploy sockets, deploy services and timers are `plain` artifacts and were
+# installed by the manifest-driven block above, together with every other
+# generically-copied unit.
 
 _run sudo systemctl daemon-reload
 
