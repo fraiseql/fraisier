@@ -1,0 +1,349 @@
+"""Golden equivalence pin for the generated installer's action plan.
+
+This exists to make a refactor of the install path safe. ``install.sh`` is the
+mechanism you would otherwise use to fix a bad release, so changing how it
+decides what to install needs a pin that is stronger than "the tests still
+pass": for a matrix of configs, the *ordered list of commands the installer
+plans* must not move.
+
+It is captured by running the real rendered ``install.sh --dry-run`` against
+the real rendered tree, not by parsing the template. That distinction matters
+— the plan includes the hand-written ordering that several fixes turned on
+(the #279 re-bake's cp → daemon-reload → stop → enable → restart, the
+systemctl-helper's daemon-reload before restart), and a template parser would
+pin the copies while silently losing the sequences.
+
+**When this test fails**, the refactor changed behaviour. That is not always
+wrong — but it must be deliberate. Read the diff, convince yourself of every
+line, then regenerate with::
+
+    FRAISIER_UPDATE_INSTALL_GOLDEN=1 uv run pytest tests/test_install_plan_golden.py
+
+and commit the golden file as part of the same change, so the behavioural
+delta is reviewable in the diff rather than buried in a rerun.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from fraisier.config import FraisierConfig
+from fraisier.scaffold.renderer import ScaffoldRenderer
+
+_GOLDEN = Path(__file__).parent / "golden" / "install_plan.json"
+
+# One machine, every environment on it. The baseline: no host asymmetry to get
+# wrong, so anything that differs here is unconditional drift.
+_SINGLE_HOST = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      development:
+        server: only.example.io
+        app_path: /var/www/api-dev
+        systemd_service: api-dev.service
+        git_repo: /var/git/api-dev.git
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+"""
+
+# The #325 shape, and the one the old matrix never covered: one host carries
+# two environments, the other carries one. Exercised from BOTH hosts, because
+# the failure mode was a host installing the *other* host's artifacts.
+_ASYMMETRIC = """\
+name: proj
+servers:
+  dev.example.io:
+    machine_hostnames: [devbox]
+  prod.example.io:
+    machine_hostnames: [pio]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      development:
+        server: dev.example.io
+        app_path: /var/www/api-dev
+        systemd_service: api-dev.service
+        git_repo: /var/git/api-dev.git
+      staging:
+        server: dev.example.io
+        app_path: /var/www/api-stg
+        systemd_service: api-stg.service
+        git_repo: /var/git/api-stg.git
+      production:
+        server: prod.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+"""
+
+# `server:` declared only under fraises.*, never in the global environments:
+# section — the shape that looked server-less to the renderer before v0.56.0.
+_PER_FRAISE_SERVERS = """\
+name: proj
+servers:
+  a.example.io:
+    machine_hostnames: [abox]
+  b.example.io:
+    machine_hostnames: [bbox]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: a.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+  worker:
+    type: api
+    environments:
+      production:
+        server: b.example.io
+        app_path: /var/www/worker
+        systemd_service: worker.service
+        git_repo: /var/git/worker.git
+"""
+
+# A separate install user, so the #279 install-helper re-bake sequence is in
+# the plan and pinned in order.
+_INSTALL_HELPER = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    install:
+      user: app_user
+      command: [bash, scripts/deploy-install.sh]
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+"""
+
+# nginx vhosts (gateway + per-environment), so the copy+symlink pair is pinned.
+_NGINX = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+        nginx:
+          server_name: api.example.com
+"""
+
+# A scheduled fraise, which brings timer units into the tree.
+_SCHEDULED = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/nightly
+        systemd_service: nightly.service
+        systemd_timer: nightly.timer
+        script_path: /usr/local/bin/nightly.sh
+"""
+
+# (case name, config, hostname). Two entries for the asymmetric config: the
+# whole point is that the two hosts must plan *different* installs.
+MATRIX = [
+    ("single_host", _SINGLE_HOST, "solo"),
+    ("asymmetric_dev_staging_host", _ASYMMETRIC, "devbox"),
+    ("asymmetric_prod_only_host", _ASYMMETRIC, "pio"),
+    ("per_fraise_servers_a", _PER_FRAISE_SERVERS, "abox"),
+    ("per_fraise_servers_b", _PER_FRAISE_SERVERS, "bbox"),
+    ("install_helper_rebake", _INSTALL_HELPER, "solo"),
+    ("nginx_vhosts", _NGINX, "solo"),
+    ("scheduled_fraise", _SCHEDULED, "solo"),
+]
+
+
+def _render(tmp_path: Path, yaml_text: str) -> Path:
+    """Render the scaffold and return the output directory."""
+    out = tmp_path / "generated"
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text(yaml_text)
+    renderer = ScaffoldRenderer(FraisierConfig(cfg))
+    renderer.output_dir = out
+    renderer.render()
+    return out
+
+
+def _install_plan(tmp_path: Path, yaml_text: str, hostname: str) -> list[str]:
+    """The ordered commands the rendered installer plans, for *hostname*.
+
+    Runs the real script so the plan reflects every runtime conditional —
+    ``_env_active`` gating, per-host webhook selection, ``[ -f ]`` guards
+    against the actually-rendered tree.
+    """
+    out = _render(tmp_path, yaml_text)
+    install_sh = out / "install.sh"
+    install_sh.chmod(0o755)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "hostname"
+    fake.write_text(f"#!/bin/bash\necho {hostname}\n")
+    fake.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(install_sh),
+            "--dry-run",
+            "--scaffold-dir",
+            str(out),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            f"installer exited {result.returncode} for {hostname}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+    markers = ("[would run] ", "[would validate] ")
+    plan = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        marker = next((m for m in markers if stripped.startswith(m)), None)
+        if marker is not None:
+            # Absolute tmp paths differ per run; the scaffold dir is the only
+            # one that appears, so collapse it to a stable token.
+            plan.append(stripped[len(marker) :].replace(str(out), "$SCAFFOLD"))
+    return plan
+
+
+def _current_plans(tmp_path_factory) -> dict[str, list[str]]:
+    plans = {}
+    for case, yaml_text, hostname in MATRIX:
+        tmp = tmp_path_factory.mktemp(case)
+        plans[case] = _install_plan(tmp, yaml_text, hostname)
+    return plans
+
+
+@pytest.fixture(scope="module")
+def plans(tmp_path_factory) -> dict[str, list[str]]:
+    return _current_plans(tmp_path_factory)
+
+
+def test_install_plan_matches_golden(plans):
+    """The refactor must not move a single planned command."""
+    if os.environ.get("FRAISIER_UPDATE_INSTALL_GOLDEN"):
+        _GOLDEN.parent.mkdir(parents=True, exist_ok=True)
+        _GOLDEN.write_text(json.dumps(plans, indent=2) + "\n")
+        pytest.skip("golden regenerated — review the diff before committing")
+
+    assert _GOLDEN.exists(), (
+        "golden file missing; regenerate with FRAISIER_UPDATE_INSTALL_GOLDEN=1"
+    )
+    expected = json.loads(_GOLDEN.read_text())
+
+    assert set(expected) == set(plans), "matrix cases changed"
+    for case in expected:
+        assert plans[case] == expected[case], f"install plan drifted for {case!r}"
+
+
+class TestTheMatrixIsMeaningful:
+    """Guards on the pin itself — a golden of nothing pins nothing."""
+
+    def test_every_case_plans_something(self, plans):
+        for case, plan in plans.items():
+            assert plan, f"{case} planned no commands; the pin would be vacuous"
+
+    def test_asymmetric_hosts_plan_different_installs(self, plans):
+        """The #325 shape: two hosts, same tree, deliberately different plans."""
+        dev = plans["asymmetric_dev_staging_host"]
+        prod = plans["asymmetric_prod_only_host"]
+
+        assert dev != prod
+        assert any("api-dev.service" in c for c in dev)
+        assert not any("api-dev.service" in c for c in prod), (
+            "the production-only host planned an install of a development unit"
+        )
+
+    def test_each_host_installs_its_own_webhook_unit(self, plans):
+        """The unit whose name carries the host is the one copied (#325)."""
+        dev = " ".join(plans["asymmetric_dev_staging_host"])
+        prod = " ".join(plans["asymmetric_prod_only_host"])
+
+        assert "webhook-dev-example-io.service" in dev
+        assert "webhook-prod-example-io.service" in prod
+
+    def test_install_helper_rebake_order_is_captured(self, plans):
+        """#279's sequence must be *in* the pin, or the pin cannot protect it.
+
+        Scoped to the per-(fraise, env) helper: the scaffold-install-helper is
+        a different unit with a deliberately different sequence (it must not
+        restart itself), and merging the two would compare unrelated verbs.
+        """
+        unit = "fraisier-proj-api-production-install-helper"
+        helper_ops = [c for c in plans["install_helper_rebake"] if unit in c]
+        verbs = [c.split()[2] if "systemctl" in c else "cp" for c in helper_ops]
+
+        assert verbs.count("cp") == 2, f"expected socket+service copies: {helper_ops}"
+        assert verbs.index("cp") < verbs.index("stop") < verbs.index("restart"), (
+            f"re-bake order not captured in the golden plan: {helper_ops}"
+        )
+        assert verbs.index("stop") < verbs.index("enable"), (
+            "enable --now is a no-op on a running unit; the stop must precede it"
+        )
