@@ -172,3 +172,94 @@ class TestStaleInstallerAgainstFreshTree:
 
         assert result.returncode != 0
         assert "different renders" in result.stderr
+
+
+_SCHEDULED_YAML = """\
+name: testapp
+servers:
+  example.com:
+    machine_hostnames: [default-testrunner]
+scaffold:
+  deploy_user: testapp_deploy
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: example.com
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        server: example.com
+        app_path: /var/www/nightly
+        jobs:
+          reindex:
+            systemd_service: testapp-reindex.service
+            systemd_timer: testapp-reindex.timer
+"""
+
+
+@pytest.fixture
+def scheduled_tree(tmp_path):
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text(_SCHEDULED_YAML)
+    renderer = ScaffoldRenderer(FraisierConfig(cfg))
+    renderer.output_dir = tmp_path / "generated"
+    renderer.render()
+    (tmp_path / "generated" / "install.sh").chmod(0o755)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "hostname"
+    fake.write_text("#!/bin/bash\necho default-testrunner\n")
+    fake.chmod(0o755)
+    return tmp_path
+
+
+class TestCoverageReport:
+    """#323: the two installers stop covering disjoint sets *silently*.
+
+    The complaint was never that scaffold-install and scheduled-install own
+    different units — they do, from genuinely different source trees. It is
+    that neither said so: scaffold-install exited 0 having never touched units
+    the operator assumed it owned, and scheduled-install pointed at
+    scaffold-install to bootstrap a socket scaffold-install never installed.
+    """
+
+    def test_app_managed_units_are_named_with_their_source_and_installer(
+        self, scheduled_tree
+    ):
+        out = _run(scheduled_tree).stdout
+
+        assert "testapp-reindex.service" in out
+        assert "testapp-reindex.timer" in out
+        assert "/var/www/nightly/scripts/systemd" in out
+        assert "fraisier scheduled-install" in out
+
+    def test_app_managed_units_are_not_installed_by_this_script(self, scheduled_tree):
+        """Named, deliberately not copied — the sets stay disjoint on purpose.
+
+        A wildcard install over the scaffold dir was rejected as the fix: that
+        directory accumulates, so a wildcard promotes a leftover file into an
+        installed unit — #325's failure mode generalised.
+        """
+        out = _run(scheduled_tree).stdout
+
+        assert "cp" in out, "sanity: the run installed something"
+        for line in out.splitlines():
+            if "cp" in line:
+                assert "testapp-reindex" not in line
+
+    def test_known_gaps_are_reported_with_their_consequence(self, tree):
+        out = _run(tree).stdout
+
+        assert "installed by nothing" in out
+        assert "backup.service" in out
+        assert "backup.timer" in out  # the note explains what breaks
+
+    def test_a_config_without_scheduled_fraises_reports_no_app_managed(self, tree):
+        assert "scheduled-install" not in _run(tree).stdout
