@@ -595,6 +595,28 @@ Generate infrastructure files from `fraises.yaml`. Outputs systemd units, nginx 
 fraisier scaffold [--dry-run]
 ```
 
+**The artifact manifest** (v0.57.0)
+
+Every render also writes `artifact-manifest.json` beside the files it
+describes: for each artifact, where it came from, where it installs, under
+which environment gate, and its sha256.
+
+- **Every rendered file must have a disposition.** A file the classifier does
+  not recognise is a hard error naming it — so a new artifact cannot be
+  rendered and then installed by nobody, which is the "rendered ≠ installed"
+  bug class (#323, #325). If you add one, give it a disposition in
+  `fraisier/scaffold/artifacts.py`.
+- `install.sh` is generated **from** the manifest and bakes in those hashes. It
+  verifies the whole tree before installing anything and refuses a tree that
+  does not match — an old installer against a fresh scaffold dir, or the
+  reverse, would otherwise install files nobody described.
+- `fraisier doctor` runs the same check, so a problem surfaces on your terminal
+  or in CI rather than first on a live host mid-deploy.
+
+`install.sh` also reports what it did *not* install: units owned by
+`fraisier scheduled-install` (with their source tree), and artifacts that are
+rendered but installed by nothing.
+
 **Options:**
 
 | Option | Description |
