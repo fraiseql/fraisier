@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from fraisier.errors import ValidationError
+
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
 
@@ -679,3 +681,68 @@ def summarize(results: list[CheckResult]) -> dict[str, int]:
     for r in results:
         summary[r.status] += 1
     return summary
+
+
+@register_check("scaffold_artifact_coverage")
+def _check_scaffold_artifact_coverage(config: FraisierConfig | None) -> CheckResult:
+    """Every artifact ``fraisier scaffold`` renders must have a disposition.
+
+    The identical assertion runs inside ``render()``. It is repeated here on
+    purpose: ``install.sh`` executes on a live host mid-deploy, under the
+    self-upgrade dynamic, so if the *first* place an undispositioned artifact
+    could surface were the installer, the first person to see it would be a
+    production webhook. Running it at render time and here means it is caught
+    in CI or on the operator's terminal; the deploy-time check is the backstop,
+    not the discovery mechanism.
+
+    Uses a dry-run render, which writes nothing.
+    """
+    name = "scaffold_artifact_coverage"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.scaffold.artifacts import (
+        UndispositionedArtifacts,
+        build_artifact_manifest,
+    )
+    from fraisier.scaffold.renderer import ScaffoldRenderer, resolve_local_server
+
+    try:
+        renderer = ScaffoldRenderer(config, server=resolve_local_server(config))
+        manifest = build_artifact_manifest(renderer, renderer.render(dry_run=True))
+    except UndispositionedArtifacts as exc:
+        return CheckResult(
+            name,
+            "fail",
+            f"{len(exc.sources)} rendered artifact(s) have no disposition, so "
+            f"nothing states whether they get installed: "
+            f"{', '.join(exc.sources)}",
+            fix_hint=(
+                "give each one a disposition in "
+                "fraisier/scaffold/artifacts.py::_classify"
+            ),
+        )
+    except ValidationError as exc:
+        return CheckResult(name, "skip", f"could not classify scaffold: {exc}")
+    except (OSError, ValueError) as exc:
+        return CheckResult(name, "skip", f"could not render scaffold: {exc}")
+
+    gaps = manifest.gaps()
+    if gaps:
+        listed = ", ".join(a.source for a in gaps)
+        return CheckResult(
+            name,
+            "warn",
+            f"{len(manifest.artifacts)} artifact(s) classified; "
+            f"{len(gaps)} rendered but installed by nothing: {listed}",
+            fix_hint=(
+                "these are tracked gaps, not silent ones — see the notes in "
+                "the artifact manifest for what each one breaks"
+            ),
+        )
+    return CheckResult(
+        name,
+        "pass",
+        f"{len(manifest.artifacts)} artifact(s) classified, "
+        f"{len(manifest.installed())} installed by scaffold-install",
+    )
