@@ -121,10 +121,26 @@ class TestInstallShStandaloneMode:
         )
         return result
 
+    @staticmethod
+    def _scaffold_dir(rendered_install_sh, tmp_path, name: str):
+        """A scaffold dir holding this machine's webhook unit.
+
+        Since #325 the webhook copy has no ``[ -f ]`` guard: a source the
+        render did not produce for this host is a hard error rather than a
+        silent skip, in every mode. So a stand-in scaffold dir must carry the
+        unit, the way a real one does — an empty directory is not a scaffold
+        tree.
+        """
+        scaffold_dir = tmp_path / name
+        scaffold_dir.mkdir()
+        rendered = rendered_install_sh.parent
+        for unit in rendered.glob("fraisier-*-webhook*.service"):
+            (scaffold_dir / unit.name).write_text(unit.read_text())
+        return scaffold_dir
+
     def test_standalone_dry_run_exits_zero(self, rendered_install_sh, tmp_path):
         """--standalone --dry-run must succeed even when /opt/testapp doesn't exist."""
-        scaffold_dir = tmp_path / "scaffold"
-        scaffold_dir.mkdir()
+        scaffold_dir = self._scaffold_dir(rendered_install_sh, tmp_path, "scaffold")
         result = self._run_with_hostname(
             rendered_install_sh,
             "default-testrunner",
@@ -147,8 +163,7 @@ class TestInstallShStandaloneMode:
 
     def test_scaffold_dir_implies_standalone(self, rendered_install_sh, tmp_path):
         """--scaffold-dir alone (without --standalone) must also work."""
-        scaffold_dir = tmp_path / "sc"
-        scaffold_dir.mkdir()
+        scaffold_dir = self._scaffold_dir(rendered_install_sh, tmp_path, "sc")
         result = self._run_with_hostname(
             rendered_install_sh,
             "default-testrunner",

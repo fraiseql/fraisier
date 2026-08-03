@@ -21,6 +21,7 @@ Security
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -53,16 +54,24 @@ CheckFn = Callable[["FraisierConfig | None"], CheckResult]
 class _CheckEntry:
     fn: CheckFn
     network: bool
+    privileged: bool = False
 
 
 DOCTOR_CHECKS: dict[str, _CheckEntry] = {}
 
 
-def register_check(name: str, *, network: bool = False) -> Callable[[CheckFn], CheckFn]:
-    """Decorator: register a doctor check by name."""
+def register_check(
+    name: str, *, network: bool = False, privileged: bool = False
+) -> Callable[[CheckFn], CheckFn]:
+    """Decorator: register a doctor check by name.
+
+    ``privileged`` marks a check that needs root and mutates nothing but
+    still costs real work (spawning a transient systemd unit). Those are
+    opt-in: a default ``fraisier doctor`` reports them as ``skip``.
+    """
 
     def deco(fn: CheckFn) -> CheckFn:
-        DOCTOR_CHECKS[name] = _CheckEntry(fn=fn, network=network)
+        DOCTOR_CHECKS[name] = _CheckEntry(fn=fn, network=network, privileged=privileged)
         return fn
 
     return deco
@@ -339,6 +348,230 @@ def _enabled_dump_dirs(config: FraisierConfig | None) -> list[str]:
     return dirs
 
 
+def _resolve_local_server(config: FraisierConfig) -> str | None:
+    """Which logical server this machine is. Seam for tests."""
+    from fraisier.scaffold.renderer import resolve_local_server
+
+    return resolve_local_server(config)
+
+
+def _strict_readwritepaths(unit_path: Path) -> list[str] | None:
+    """``ReadWritePaths=`` of an installed ``ProtectSystem=strict`` unit.
+
+    Returns None when the unit is not installed (a dev machine has none, and
+    that is not a finding) and an empty list when it is installed but not
+    strict — in which case the allowlist does not gate writes at all.
+    """
+    try:
+        unit = unit_path.read_text()
+    except OSError:
+        return None
+    if "ProtectSystem=strict" not in unit:
+        return []
+    return [
+        ln.split("=", 1)[1].strip()
+        for ln in unit.splitlines()
+        if ln.startswith("ReadWritePaths=")
+    ]
+
+
+def _not_covered(paths: list[str], allowed: list[str]) -> list[str]:
+    """Those of *paths* that no entry in *allowed* contains.
+
+    Prefix containment on whole components: ``ReadWritePaths=/var/www`` does
+    grant ``/var/www/api``, and ``/var/wwwroot`` is not a match for
+    ``/var/www``.
+    """
+    return [
+        p
+        for p in paths
+        if not any(p == a or p.startswith(a.rstrip("/") + "/") for a in allowed)
+    ]
+
+
+def _hosted_trees(config: FraisierConfig, server: str) -> list[str]:
+    """Every ``git_repo``/``app_path`` of an environment *server* hosts."""
+    hosted = set(config.get_environments_for_server(server))
+    trees: list[str] = []
+    for fraise in (getattr(config, "fraises", None) or {}).values():
+        if not isinstance(fraise, dict):
+            continue
+        for env_name, env_config in (fraise.get("environments") or {}).items():
+            if env_name not in hosted or not isinstance(env_config, dict):
+                continue
+            for key in ("git_repo", "app_path"):
+                value = env_config.get(key)
+                if value and str(value) not in trees:
+                    trees.append(str(value))
+    return trees
+
+
+@register_check("webhook_hosted_trees_writable")
+def _check_webhook_hosted_trees_writable(config: FraisierConfig | None) -> CheckResult:
+    """This host's webhook unit must allow writes to the trees it hosts (#325).
+
+    Same shape and same reasoning as the #317 dump-dir check, widened from
+    dump directories to the ``git_repo``/``app_path`` of every environment
+    this machine hosts. Reads the **installed** unit rather than the rendered
+    one, so it also catches the upgrade-without-re-scaffold case — the
+    likeliest way to still be broken after the template fix — and a
+    hand-written unit no template fix can reach.
+
+    Only the *missing* direction is a finding here. An extra path is the #62
+    least-privilege leak, which the render-time invariant owns; flagging it
+    here would report every host that legitimately shares a tree.
+
+    Warn rather than fail, matching #317: a hard failure would break hosts
+    limping along on a hand-edited unit that works.
+    """
+    name = "webhook_hosted_trees_writable"
+    project = getattr(config, "project_name", None) if config is not None else None
+    if config is None or not project:
+        return CheckResult(name, "skip", "no project_name in config")
+
+    server = _resolve_local_server(config)
+    if server is None:
+        return CheckResult(
+            name, "skip", "cannot tell which logical server this machine is"
+        )
+
+    trees = _hosted_trees(config, server)
+    if not trees:
+        return CheckResult(name, "skip", f"no git_repo/app_path hosted on {server}")
+
+    unit_path = _installed_webhook_unit(project)
+    allowed = _strict_readwritepaths(unit_path)
+    if allowed is None:
+        return CheckResult(name, "skip", f"{unit_path} not installed")
+    if not allowed:
+        return CheckResult(name, "pass", "webhook unit is not ProtectSystem=strict")
+
+    missing = _not_covered(trees, allowed)
+    if missing:
+        return CheckResult(
+            name,
+            "warn",
+            f"{unit_path} is ProtectSystem=strict but does not allow writes to "
+            f"{', '.join(missing)} — this machine hosts those environments, so "
+            f"their deploys fail read-only (git fetch exits 255). The installed "
+            f"unit is most likely the one rendered for another host",
+            fix_hint=(
+                "run `fraisier scaffold && sudo fraisier scaffold-install --yes` "
+                "on this machine to install the unit rendered for it"
+            ),
+        )
+    return CheckResult(
+        name, "pass", f"{len(trees)} hosted tree(s) writable from the sandbox"
+    )
+
+
+def _sandbox_probe_command(paths: list[str]) -> list[str]:
+    """Build the transient-unit command that writes into *paths* under strict.
+
+    ``systemd-run`` with the same two directives the webhook unit carries, so
+    the probe fails exactly where a deploy would. Property names are joined to
+    their values (``-pKey=value``) because the shell-less argv form takes one
+    token per property.
+    """
+    script = "; ".join(
+        f'p={path!r}; : > "$p/.fraisier-probe" || {{ echo "$p: not writable" >&2; '
+        f'exit 1; }}; rm -f "$p/.fraisier-probe"'
+        for path in paths
+    )
+    return [
+        "systemd-run",
+        "--pipe",
+        "--wait",
+        "--quiet",
+        "--collect",
+        "-pProtectSystem=strict",
+        f"-pReadWritePaths={' '.join(paths)}",
+        "/bin/sh",
+        "-c",
+        script,
+    ]
+
+
+def _run_sandbox_probe(paths: list[str]) -> tuple[int, str]:
+    """Execute the probe. Seam for tests — the real call needs root + systemd."""
+    result = subprocess.run(
+        _sandbox_probe_command(paths),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    return result.returncode, (result.stderr or result.stdout or "").strip()
+
+
+def _rendered_webhook_readwritepaths(config: FraisierConfig, server: str) -> list[str]:
+    """``ReadWritePaths=`` of the unit *this render* produces for *server*."""
+    import tempfile
+
+    from fraisier.scaffold.renderer import ScaffoldRenderer, webhook_source_for_server
+
+    with tempfile.TemporaryDirectory() as tmp:
+        renderer = ScaffoldRenderer(config, server=server)
+        renderer.output_dir = Path(tmp)
+        renderer.render()
+        unit = Path(tmp) / webhook_source_for_server(config, server)
+        return [
+            ln.split("=", 1)[1].strip()
+            for ln in unit.read_text().splitlines()
+            if ln.startswith("ReadWritePaths=")
+        ]
+
+
+@register_check("sandbox_write_probe", privileged=True)
+def _check_sandbox_write_probe(config: FraisierConfig | None) -> CheckResult:
+    """Actually write into the rendered unit's sandbox (#325), opt-in.
+
+    Every other check reads a path list and reasons about it. This one runs a
+    real write under a real ``ProtectSystem=strict`` transient unit built from
+    the **rendered** allowlist, so an operator can find the gap before
+    ``scaffold-install`` rather than on the next deploy.
+
+    Opt-in via ``fraisier doctor --probe-sandbox`` and skipped without root:
+    ``systemd-run`` needs privileges, and a check that fails for lack of them
+    is noise rather than signal.
+    """
+    name = "sandbox_write_probe"
+    if config is None:
+        return CheckResult(name, "skip", "no fraises.yaml")
+    if os.geteuid() != 0:
+        return CheckResult(name, "skip", "needs root to spawn a transient unit")
+
+    server = _resolve_local_server(config)
+    if server is None:
+        return CheckResult(
+            name, "skip", "cannot tell which logical server this machine is"
+        )
+
+    try:
+        paths = _rendered_webhook_readwritepaths(config, server)
+    except Exception as exc:
+        return CheckResult(name, "fail", f"could not render the unit: {exc}")
+    if not paths:
+        return CheckResult(name, "skip", "rendered unit lists no ReadWritePaths")
+
+    if shutil.which("systemd-run") is None:
+        return CheckResult(name, "skip", "systemd-run not available")
+
+    code, output = _run_sandbox_probe(paths)
+    if code != 0:
+        return CheckResult(
+            name,
+            "fail",
+            f"a write inside the rendered sandbox failed: {output or f'exit {code}'}",
+            fix_hint=(
+                "the path exists and is writable from a login shell but not from "
+                "inside ProtectSystem=strict — check the ReadWritePaths= list and "
+                "the mount it sits on"
+            ),
+        )
+    return CheckResult(name, "pass", f"wrote into {len(paths)} sandboxed path(s)")
+
+
 @register_check("pre_migrate_dump_writable")
 def _check_pre_migrate_dump_writable(config: FraisierConfig | None) -> CheckResult:
     """The dump gate must be able to write from inside the unit's sandbox (#317).
@@ -367,24 +600,13 @@ def _check_pre_migrate_dump_writable(config: FraisierConfig | None) -> CheckResu
         return CheckResult(name, "skip", "no project_name in config")
 
     unit_path = _installed_webhook_unit(project)
-    try:
-        unit = unit_path.read_text()
-    except OSError:
+    allowed = _strict_readwritepaths(unit_path)
+    if allowed is None:
         return CheckResult(name, "skip", f"{unit_path} not installed")
-
-    if "ProtectSystem=strict" not in unit:
+    if not allowed:
         return CheckResult(name, "pass", "webhook unit is not ProtectSystem=strict")
 
-    allowed = {
-        ln.split("=", 1)[1].strip()
-        for ln in unit.splitlines()
-        if ln.startswith("ReadWritePaths=")
-    }
-    missing = [
-        d
-        for d in dump_dirs
-        if not any(d == a or d.startswith(a.rstrip("/") + "/") for a in allowed)
-    ]
+    missing = _not_covered(dump_dirs, allowed)
     if missing:
         return CheckResult(
             name,
@@ -412,6 +634,7 @@ def run_all(
     *,
     only: list[str] | None = None,
     skip_network: bool = False,
+    probe_sandbox: bool = False,
 ) -> list[CheckResult]:
     """Execute every registered check (or a filtered subset) and return results.
 
@@ -420,6 +643,9 @@ def run_all(
         only: When non-empty, run only these check names.
         skip_network: When True, mark network-flagged checks as ``skip``
             instead of running them.
+        probe_sandbox: When True, also run privileged checks — today the
+            active sandbox write probe, which spawns a transient systemd unit
+            and therefore stays out of a default pass.
 
     Returns:
         Results in registration order. Each check is independent — one
@@ -431,6 +657,9 @@ def run_all(
             continue
         if skip_network and entry.network:
             results.append(CheckResult(name, "skip", "skipped (--skip-network)"))
+            continue
+        if entry.privileged and not probe_sandbox:
+            results.append(CheckResult(name, "skip", "skipped (needs --probe-sandbox)"))
             continue
         try:
             results.append(entry.fn(config))

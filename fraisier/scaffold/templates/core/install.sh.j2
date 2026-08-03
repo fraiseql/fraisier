@@ -82,6 +82,23 @@ if [[ -z "$_FRAISIER_CURRENT_ENVS" ]]; then
 fi
 
 _env_active() { [[ " $_FRAISIER_CURRENT_ENVS " == *" $1 "* ]]; }
+
+# Webhook unit selection (#325). The unit is addressed by host: the scaffold
+# tree carries one fraisier-{project}-webhook-{slug}.service per logical
+# server, and this machine installs its own. There is deliberately no fallback
+# to a host-agnostic name — a leftover from a differently-filtered render is
+# exactly what shipped another host's ReadWritePaths= into production.
+declare -A _FRAISIER_MACHINE_WEBHOOK
+{% for machine, unit in machine_webhook_map.items() %}
+_FRAISIER_MACHINE_WEBHOOK["{{ machine }}"]="{{ unit }}"
+{% endfor %}
+_FRAISIER_WEBHOOK_UNIT="${_FRAISIER_MACHINE_WEBHOOK["$_FRAISIER_CURRENT_HOST"]:-}"
+if [[ -z "$_FRAISIER_WEBHOOK_UNIT" ]]; then
+    echo "Error: no webhook unit was rendered for this machine ('$_FRAISIER_CURRENT_HOST')." >&2
+    echo "  Machines with a unit: {{ machine_webhook_map.keys() | list | join(', ') }}" >&2
+    echo "  Add this machine under 'servers:' and re-run 'fraisier scaffold'." >&2
+    exit 1
+fi
 {% else %}
 # servers: section is required
 echo "Error: 'servers:' section is required in fraises.yaml." >&2
@@ -308,29 +325,42 @@ _run sudo apt-get install -y -qq --no-install-recommends \
     certbot \
     python3-certbot-nginx
 
-# Install webhook service unit
-# The bootstrap renderer is always called with --server, so the webhook file has
-# the generic name (no server slug) but content filtered for this server.
+# Install webhook service unit for THIS machine (#325).
+#
+# The source filename carries the host, the destination never does — so there
+# is no unit rename, no [Install] change and no enable/disable dance.
+#
+# No `[ -f ]` guard, on purpose. That guard is what turned a missing source
+# into a silent skip: the deploy path regenerates the tree without --server,
+# which emits only slugged units, so the host-agnostic name this block used to
+# ask for was never written and whatever stale file survived got installed
+# instead. A missing source now means the render did not produce this
+# machine's unit, and there is nothing safe to install in its place.
 {% set webhook_service = 'fraisier-' ~ project_name ~ '-webhook.service' %}
-WEBHOOK_SRC="${SCAFFOLD_DIR}/{{ webhook_service }}"
+WEBHOOK_SRC="${SCAFFOLD_DIR}/${_FRAISIER_WEBHOOK_UNIT}"
 WEBHOOK_DST="/etc/systemd/system/{{ webhook_service }}"
-if [ -f "${WEBHOOK_SRC}" ]; then
-    echo "  Installing webhook service"
-    _run sudo cp "${WEBHOOK_SRC}" "${WEBHOOK_DST}"
-    _run sudo systemctl daemon-reload
-    _run sudo systemctl restart {{ webhook_service }} || true
-    # Restart deploy sockets so their socket files are recreated under /run/fraisier/.
-    # The webhook service owns RuntimeDirectory=fraisier; even with
-    # RuntimeDirectoryPreserve=restart, a first-time install wipes the dir.
+if [ ! -f "${WEBHOOK_SRC}" ]; then
+    echo "Error: webhook unit '${_FRAISIER_WEBHOOK_UNIT}' is missing from ${SCAFFOLD_DIR}." >&2
+    echo "  This machine has no unit to install, and installing another host's" >&2
+    echo "  would grant it the wrong ReadWritePaths=." >&2
+    echo "  Re-run 'fraisier scaffold' against the full fraises.yaml." >&2
+    exit 1
+fi
+echo "  Installing webhook service"
+_run sudo cp "${WEBHOOK_SRC}" "${WEBHOOK_DST}"
+_run sudo systemctl daemon-reload
+_run sudo systemctl restart {{ webhook_service }} || true
+# Restart deploy sockets so their socket files are recreated under /run/fraisier/.
+# The webhook service owns RuntimeDirectory=fraisier; even with
+# RuntimeDirectoryPreserve=restart, a first-time install wipes the dir.
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
-    if _env_active "{{ env_name }}"; then
-        _run sudo systemctl restart {{ socket_unit }} || true
-    fi
-{% endfor %}
-{% endfor %}
+if _env_active "{{ env_name }}"; then
+    _run sudo systemctl restart {{ socket_unit }} || true
 fi
+{% endfor %}
+{% endfor %}
 
 # Install systemctl helper service and socket (replaces old systemctl wrapper)
 HELPER_SERVICE_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.service"

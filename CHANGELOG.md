@@ -7,6 +7,167 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-08-03
+
+Closes #325. **The webhook unit installed on a machine was not the one
+rendered for it.** Reported from production (printoptim.io, 2026-08-03): a
+prod-only host running the unit built for the dev host, so
+`ProtectSystem=strict` denied every write to the production bare repo and
+`git fetch` aborted with exit 255.
+
+### What broke
+
+The per-server filter was never wrong. `_build_context(config, server)`
+produced exactly the right path set. What was broken is that nothing
+guaranteed the file carrying that set was the file that got installed.
+
+The deploy path regenerates the tree with `fraisier scaffold --output-dir
+<state_dir>` and **no `--server`**, which takes the auto-per-server branch and
+writes only slugged `fraisier-{project}-webhook-{slug}.service` files. All
+three installers — the generated `install.sh`, `ServerSetup._plan_webhook_service`
+and `ScaffoldRenderer.get_install_mapping` — asked for the *unslugged*
+`fraisier-{project}-webhook.service`, a name that render never produced.
+`install.sh` guarded its copy with `if [ -f ]`, so the step was **silently
+skipped**, or silently copied whatever unslugged file survived in the state
+dir from an earlier, differently-filtered render — content frozen from
+whichever server context last wrote it.
+
+Two more routes reached the same failure, both fixed here:
+
+- `_collect_unique_servers` read only the global `environments:` section while
+  the installer's host gating read the per-fraise configs too. A config
+  declaring `server:` only under `fraises.*` looked server-less to the
+  renderer — one unit carrying **every** host's trees, the #62
+  least-privilege leak by a second route.
+- An environment declaring no `server:` in a multi-server config matched no
+  logical server, so its `git_repo`/`app_path` were rendered into **no** unit
+  at all.
+
+### Why nothing caught it
+
+Every operator-side check passes: the paths exist, are owned correctly and are
+writable from a login shell. Only a write attempted from *inside* the unit's
+sandbox reveals it, and nothing ever attempted one. `fraisier doctor`'s #317
+check compared `ReadWritePaths=` against dump directories only.
+
+### The new contract
+
+> When any environment declares a `server:`, the scaffold tree contains
+> **only** slugged `fraisier-{project}-webhook-{slug}.service` files, and the
+> installer resolves the slug from the machine hostname. When no environment
+> declares a `server:`, the tree contains the single unslugged file. There is
+> no fallback from the first mode to the second.
+
+The **destination** unit name is unchanged — only the source filename inside
+the scaffold tree carries the host. No unit rename, no `systemctl
+disable`/`enable` dance, no `[Install]` change. `install.sh` and the units
+ship from the same render by the same version, so there is no version skew.
+
+### Fixed
+
+- **The webhook unit is addressed by host and selected at install time**
+  (`scaffold/renderer.py`, `templates/core/install.sh.j2`, #325). `install.sh`
+  bakes `_FRAISIER_MACHINE_WEBHOOK` alongside the `machine_env_map` it already
+  had, and copies the unit matching `hostname -s`. The `if [ -f ]` guard is
+  gone along with the comment asserting that "the bootstrap renderer is always
+  called with `--server`" — the false premise the whole bug rested on.
+- **One resolver for "which environments are local"** (`config/loader.py`).
+  `FraisierConfig.iter_environment_servers()` is the single walk over both
+  declaration sites; `declared_servers()`, `get_environments_for_server()` and
+  therefore `get_machine_environment_map()` all derive from it.
+- **`ServerSetup` no longer drops its server** (`setup.py`). It built
+  `ScaffoldRenderer(config)` with no filter while `_resolve_allowed_environments`
+  auto-detected the host for the plan, so the plan and the tree could disagree.
+- **`get_install_mapping` and `_plan_webhook_service` resolve the same source
+  as `install.sh`** via one shared `local_webhook_source`, so `scaffold-diff`
+  stops reporting a phantom missing file.
+- **Stale webhook units are swept from the tree** on an unfiltered render —
+  both a slugged unit for a server dropped from the config and the legacy
+  unslugged file. A `--server` render deliberately sweeps nothing: it holds
+  one host's share of the truth.
+- **A failed regeneration reports stderr** (`deployers/base.py`). It reported
+  stdout only, which after this change would show the operator the successful
+  part of a refused render and no reason.
+
+### A render now refuses rather than narrowing
+
+Three conditions abort the render instead of emitting a smaller unit. A
+non-zero scaffold exit already becomes a `DeploymentError`, so a deploy that
+cannot render a correct unit stops *before* the install step.
+
+- `--server` naming a server no environment declares. This previously rendered
+  a unit with the fraisier state directories and no application paths —
+  installable, and then broken on every deploy.
+- An environment that declares no `server:` while others do. Rejected rather
+  than treated as hosted everywhere: "everywhere" re-creates the #62 leak by
+  default and makes the permissive reading of a half-migrated config the
+  safe-looking one. The error names the environment and the servers available.
+- A rendered `ProtectSystem=strict` unit missing a `git_repo`/`app_path` of an
+  environment its host runs. Checked against the rendered text, so it holds
+  however the filtering was reached.
+
+### Added
+
+- **Deploy-start sandbox probe** (`deployers/api.py`). The deploy already runs
+  inside the sandbox, so it creates and unlinks a file in each of this
+  environment's `git_repo` and `app_path` before the first git operation — a
+  real write, not `os.access`, which answers a different question. The
+  reported failure surfaced as `git fetch` exit 255; it now surfaces as a
+  diagnosis naming the path, the unit and the remedy.
+- **`doctor` check `webhook_hosted_trees_writable`** — the #317 check's shape
+  widened from dump directories to every hosted environment's trees. Reads the
+  **installed** unit, so it catches the upgrade-without-re-scaffold case and
+  hand-written units. A `warn`, matching #317: a hard failure would break hosts
+  limping along on a hand-edited unit that works.
+- **`fraisier doctor --probe-sandbox`** — opt-in active probe that spawns a
+  transient `ProtectSystem=strict` unit over the *rendered* `ReadWritePaths=`
+  and writes into each path, for checking a host before installing. Needs
+  root; skipped cleanly without it.
+
+### Conditional design decision
+
+`_regenerate_scaffold` still renders **unfiltered**, deliberately: the tree is
+host-independent and selection happens at install, so one tree stays valid for
+every machine, which is what the state dir is for.
+
+That is safe **only** under two invariants, and not otherwise. **(M)** mode is
+a function of the config alone — `--server` narrows which slugs a render
+emits, never the mode — so an unfiltered regen of a multi-server config emits
+every slug and no host-agnostic unit. **(N)** the installer never falls back
+to an unslugged leftover. Together, the all-paths unit that would re-create
+the #62 leak is never written *and* never installed. **If (M) or (N) is ever
+relaxed, `_regenerate_scaffold` must start passing `--server` in the same
+commit.** `TestModeIsAFunctionOfTheConfigAlone` is the tripwire.
+
+### Two deliberate test-contract changes
+
+Both in `TestWebhookServerFiltering`, both carrying the rationale in their
+docstrings so a later reader does not take the diff for a regression:
+
+- `test_webhook_includes_only_local_server_paths` now reads the **slugged**
+  file. It used to assert that a `--server` render writes the host-agnostic
+  name with host-filtered content — that pairing is the bug. The filter it
+  pins is unchanged and still correct; only the filename moved.
+- `test_webhook_server_with_no_matching_environments` is replaced by
+  `..._is_an_error`. The old assertion — that an unknown `--server` renders a
+  pathless unit silently, with exit 0 — *was* the behaviour it pinned.
+
+### Notes for operators
+
+- **Re-scaffold and re-install on every machine**: `fraisier scaffold && sudo
+  fraisier scaffold-install --yes`. Until you do, the installed unit is
+  whatever is there now.
+- **Add `server:` to every environment** if any environment has one. A render
+  refuses otherwise, naming what to add.
+- **A `prod-paths.conf` drop-in added as a workaround can be removed** after
+  upgrading and re-scaffolding. Leaving it is harmless — a drop-in's
+  `ReadWritePaths=` adds to the unit's list rather than replacing it.
+- **`fraisier setup` on a machine registered under no logical server** skips
+  the webhook install with a warning instead of copying a file that no render
+  wrote. Pass `--server` there.
+- Nothing changes for a genuinely single-server config: the tree still holds
+  one unslugged unit.
+
 ## [0.55.0] - 2026-08-01
 
 Closes #321. **Automatic rollback has never run in fraisier's own deployment

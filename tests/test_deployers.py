@@ -780,6 +780,40 @@ class TestAPIDeployer:
             state_dir,
         ]
 
+    def test_regenerate_scaffold_failure_reports_stderr(self, tmp_path):
+        """A render that refuses must say *why* in the journal (#325).
+
+        Since #325 a render aborts rather than silently narrowing: an unknown
+        ``--server``, an environment that resolves to no host, or a unit
+        missing a hosted environment's trees all raise. Those diagnostics land
+        on stderr, and this is the range where an operator meets them — the
+        webhook journal, one line under "deploy failed". Reporting stdout
+        alone left them with the *successful* part of the render and no
+        reason.
+        """
+        from fraisier.errors import DeploymentError
+
+        opt_config, _ = self._write_state_dir_config(tmp_path)
+
+        runner = MagicMock()
+        runner.run.return_value = MagicMock(
+            returncode=1,
+            stdout="Generated 3 files\n",
+            stderr="ValueError: Environment(s) production declare no 'server:'\n",
+        )
+        deployer = APIDeployer(
+            {"fraise_name": "api", "app_path": str(tmp_path / "var/www/api")},
+            runner=runner,
+        )
+
+        with (
+            patch.object(deployer, "_get_fraisier_executable", return_value="fraisier"),
+            pytest.raises(DeploymentError) as exc,
+        ):
+            deployer._regenerate_scaffold(config_path=opt_config)
+
+        assert "declare no 'server:'" in str(exc.value)
+
     def test_install_scaffold_fallback_reads_from_state_dir(self, tmp_path):
         """The subprocess-fallback install reads from the state tree (#283).
 

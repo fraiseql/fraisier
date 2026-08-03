@@ -89,9 +89,22 @@ def render_json(results: list[CheckResult]) -> dict[str, Any]:
     is_flag=True,
     help="Skip checks that hit the network or external binaries",
 )
+@click.option(
+    "--probe-sandbox",
+    is_flag=True,
+    help=(
+        "Also run the active sandbox write probe: spawns a transient "
+        "ProtectSystem=strict unit over the rendered ReadWritePaths= and "
+        "writes into each one. Needs root; skipped cleanly without it."
+    ),
+)
 @click.pass_context
 def doctor_cmd(
-    ctx: click.Context, fmt: str, only: tuple[str, ...], skip_network: bool
+    ctx: click.Context,
+    fmt: str,
+    only: tuple[str, ...],
+    skip_network: bool,
+    probe_sandbox: bool,
 ) -> None:
     """Run host-wide health checks and report fraisier install state.
 
@@ -101,6 +114,7 @@ def doctor_cmd(
         fraisier doctor --format json | jq '.summary'
         fraisier doctor --check python_version --check fraisier_version
         fraisier doctor --skip-network --format json
+        sudo fraisier doctor --probe-sandbox   # before scaffold-install
     """
     config = ctx.obj.get("config") if ctx.obj else None
 
@@ -108,6 +122,7 @@ def doctor_cmd(
         config,
         only=list(only) if only else None,
         skip_network=skip_network,
+        probe_sandbox=probe_sandbox,
     )
 
     if fmt == "json":

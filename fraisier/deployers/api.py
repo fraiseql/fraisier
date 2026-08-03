@@ -81,6 +81,75 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self._version_json_existed = False
         self._version_json_snapshot: bytes | None = None
 
+    def _validate_sandbox_writes(self) -> None:
+        """Prove this deploy can write to the trees it is about to change (#325).
+
+        The deploy already runs *inside* the systemd sandbox, so this needs no
+        ``systemd-run``: creating and unlinking one file in each of this
+        environment's ``git_repo`` and ``app_path`` answers exactly the
+        question ``ProtectSystem=strict`` decides.
+
+        A real write, deliberately, not ``os.access``. ``access(2)`` consults
+        the file mode and the caller's ids; whether the mount namespace this
+        process is in made the path read-only is a different question, and
+        ``access`` answers the wrong one confidently.
+
+        This is the only check that catches the class generically. The webhook
+        unit installed on a host used to be one rendered for a *different*
+        host, so ``ReadWritePaths=`` listed the other machine's trees and
+        ``git fetch`` failed with exit 255 several steps later, with nothing
+        to connect the exit code to the sandbox. It also covers what no
+        template fix can reach: a hand-written or hand-edited unit.
+
+        Paths that do not exist are skipped — a missing tree is a different
+        diagnosis, made by the checks that own it.
+
+        Raises:
+            DeploymentError: naming the path, the unit and the remedy.
+        """
+        candidates = [
+            (label, value)
+            for label, value in (
+                ("git_repo", self.git_repo),
+                ("app_path", self.app_path),
+            )
+            if value
+        ]
+
+        blocked: list[str] = []
+        for label, value in candidates:
+            path = Path(value)
+            if not path.is_dir():
+                continue
+            probe = path / f".fraisier-write-probe-{os.getpid()}"
+            try:
+                probe.touch()
+            except OSError as exc:
+                blocked.append(f"{label}={path} ({exc.strerror or exc})")
+            else:
+                probe.unlink(missing_ok=True)
+
+        if not blocked:
+            return
+
+        project = getattr(self.config_object, "project_name", None)
+        unit = f"fraisier-{project}-webhook.service" if project else "the webhook unit"
+        raise DeploymentError(
+            f"Cannot write to {', '.join(blocked)} from inside this deploy's "
+            f"systemd sandbox. The unit running this deploy ({unit}, or the "
+            f"deploy socket's unit) is ProtectSystem=strict and does not list "
+            f"these paths in ReadWritePaths=, so every write below them fails "
+            f"read-only — git fetch would abort with exit 255 a few steps from "
+            f"here. Re-run `fraisier scaffold` and "
+            f"`sudo fraisier scaffold-install --yes` on this machine to install "
+            f"the unit rendered for it.",
+            context={
+                "fraise": self.fraise_name,
+                "environment": self.environment,
+                "paths": [p for _, p in candidates],
+            },
+        )
+
     def _validate_wrapper_scripts(self) -> None:
         """Validate that required wrapper scripts exist and are executable.
 
@@ -438,6 +507,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
         # Validate wrapper scripts before deployment starts
         self._validate_wrapper_scripts()
+
+        # Prove the sandbox can write where this deploy is about to (#325),
+        # before the first step that would fail on it with a bare exit code.
+        self._validate_sandbox_writes()
 
         try:
             with deployment_timeout(timeout):
