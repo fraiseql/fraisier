@@ -47,10 +47,15 @@ NGINX_AVAILABLE = "/etc/nginx/sites-available"
 ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
 """Written into the scaffold tree beside the artifacts it describes.
 
-``install.sh`` does **not** parse this at runtime — the artifact list is baked
-into the generated script, so no JSON parser is needed on the target host. The
-file is what ``doctor``, ``scaffold-diff`` and a human read, and what carries
-the per-artifact hashes the installer verifies.
+Nothing in fraisier parses it back. ``install.sh`` has the artifact list and
+the hashes *baked in* at render time, so the target host needs no JSON parser;
+``doctor`` and ``scaffold-diff`` build the manifest in-process from a render
+rather than reading a file that may be older than the code reading it.
+
+So this is the record for a human, for review, and for a diff between two
+renders — the one place to look to answer "what does this tree contain and who
+installs each piece". ``schema_version`` is carried for whoever writes the
+first reader; there deliberately is not one yet.
 """
 
 MANIFEST_SCHEMA_VERSION = 1
@@ -579,40 +584,3 @@ def dump_manifest(manifest: ArtifactManifest) -> str:
         ],
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
-
-
-def load_manifest(text: str) -> ArtifactManifest:
-    """Parse a manifest written by :func:`dump_manifest`."""
-    import json
-
-    payload = json.loads(text)
-    version = payload.get("schema_version")
-    if version != MANIFEST_SCHEMA_VERSION:
-        raise ValidationError(
-            f"artifact manifest schema version {version!r} is not supported "
-            f"(expected {MANIFEST_SCHEMA_VERSION}). Re-run 'fraisier scaffold'."
-        )
-    return ArtifactManifest(
-        artifacts=tuple(
-            RenderedArtifact(
-                source=a["source"],
-                disposition=Disposition(a["disposition"]),
-                destination=a["destination"],
-                mode=a["mode"],
-                environment=a["environment"],
-                sha256=a["sha256"],
-                note=a["note"],
-            )
-            for a in payload["artifacts"]
-        ),
-        app_managed=tuple(
-            AppManagedUnit(
-                unit_name=u["unit_name"],
-                source_dir=u["source_dir"],
-                installer=u["installer"],
-                environment=u["environment"],
-            )
-            for u in payload.get("app_managed", ())
-        ),
-        batch_hash=payload["batch_hash"],
-    )
