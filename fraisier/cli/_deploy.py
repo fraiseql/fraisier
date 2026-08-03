@@ -354,13 +354,14 @@ def deployment_status(
 
     # Try to read status for each environment
     status_found = False
+    permission_denied = False
     for env in environments:
         status_path = Path("/run/fraisier") / f"{project_name}-{env}.last_deployment"
 
-        if not status_path.exists():
-            continue
-
         try:
+            if not status_path.exists():
+                continue
+
             data = json.loads(status_path.read_text())
             status_found = True
 
@@ -374,9 +375,23 @@ def deployment_status(
                 # Human-readable output
                 _display_deployment_status(data, env)
 
+        except PermissionError:
+            permission_denied = True
+            continue
         except (json.JSONDecodeError, OSError) as e:
             console.print(f"[red]Error reading status for {env}:[/red] {e}")
             continue
+
+    if not status_found and permission_denied:
+        console.print("[yellow]Permission denied reading deployment status[/yellow]")
+        console.print(
+            f"[dim]/run/fraisier/{project_name}-*.last_deployment is readable "
+            "only by the deploy user.[/dim]"
+        )
+        console.print(
+            "[dim]Re-run as the deploy user (or with sudo) to see the status.[/dim]"
+        )
+        raise SystemExit(1)
 
     if not status_found:
         console.print("[yellow]No deployment status found[/yellow]")
