@@ -169,6 +169,30 @@ fraises:
           server_name: api.example.com
 """
 
+# An nginx vhost with NO explicit server_name, so the filename falls back to
+# the derived stem. The renderer writes `{project}_{fraise}_{env}.conf` while
+# install.sh used to look for `{fraise}_{env}.conf` — behind a `[ -f ]` guard,
+# which made it a silent skip: the vhost was rendered and never installed.
+_NGINX_DERIVED_NAME = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+        nginx:
+          proxy_pass: http://localhost:8000
+"""
+
 # A scheduled fraise, which brings timer units into the tree.
 _SCHEDULED = """\
 name: proj
@@ -207,6 +231,7 @@ MATRIX = [
     ("per_fraise_servers_b", _PER_FRAISE_SERVERS, "bbox"),
     ("install_helper_rebake", _INSTALL_HELPER, "solo"),
     ("nginx_vhosts", _NGINX, "solo"),
+    ("nginx_derived_vhost_name", _NGINX_DERIVED_NAME, "solo"),
     ("scheduled_fraise", _SCHEDULED, "solo"),
 ]
 
@@ -348,4 +373,31 @@ class TestTheMatrixIsMeaningful:
         )
         assert verbs.index("stop") < verbs.index("enable"), (
             "enable --now is a no-op on a running unit; the stop must precede it"
+        )
+
+
+class TestDerivedVhostNameIsInstalled:
+    """A vhost with no explicit ``server_name`` reaches the host.
+
+    Three components computed that filename independently, and the
+    installer's copy omitted the project prefix — so the renderer wrote
+    ``{project}_{fraise}_{env}.conf`` and ``install.sh`` looked for
+    ``{fraise}_{env}.conf``. The old ``[ -f ]`` guard turned the miss into a
+    silent skip, so the vhost was rendered, never installed, and nothing said
+    so. Both sides now read the same manifest entry.
+    """
+
+    def test_the_rendered_vhost_is_the_one_installed(self, plans):
+        plan = plans["nginx_derived_vhost_name"]
+        copies = [c for c in plan if "sites-available" in c and c.startswith("sudo cp")]
+
+        assert any("proj_api_production.conf" in c for c in copies), (
+            f"the derived-name vhost was not installed: {copies}"
+        )
+
+    def test_it_is_symlinked_into_sites_enabled(self, plans):
+        plan = plans["nginx_derived_vhost_name"]
+
+        assert any(
+            "sites-enabled/proj_api_production" in c for c in plan if "ln -sf" in c
         )

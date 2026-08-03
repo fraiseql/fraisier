@@ -384,9 +384,23 @@ _run sudo apt-get install -y -qq --no-install-recommends \
 # somewhere in the middle, leaving the host half-converted between two renders
 # — the worst state to debug, on the one tool you would use to recover.
 # Everything is checked while nothing has been touched.
+#
+# Covers EVERY installed artifact, not just the generically-copied ones. The
+# blocks below still guard their own copies with `[ -f ]`, which on its own is
+# a silent skip — the exact shape of #325. The manifest says these files were
+# rendered, so a missing one means the tree is not this installer's; those
+# guards are now unreachable for that case rather than load-bearing.
+#
+# The webhook unit is excluded here and verified in its own block: which file
+# this host installs is a runtime lookup, so it is checked against the hash for
+# the unit actually selected.
 echo "==> Verifying scaffold tree against this installer's manifest"
 _MANIFEST_CHECKED=0
-{% for artifact in artifact_manifest.with_disposition('plain') %}
+declare -A _FRAISIER_WEBHOOK_SHA
+{% for artifact in artifact_manifest.with_disposition('webhook') %}
+_FRAISIER_WEBHOOK_SHA["{{ artifact.source }}"]="{{ artifact.sha256 or '' }}"
+{% endfor %}
+{% for artifact in artifact_manifest.installed() if artifact.disposition != 'webhook' %}
 {% if artifact.environment %}
 if _env_active "{{ artifact.environment }}"; then
     _verify_artifact "{{ artifact.source }}" "{{ artifact.sha256 or '' }}"
@@ -395,6 +409,12 @@ fi
 _verify_artifact "{{ artifact.source }}" "{{ artifact.sha256 or '' }}"
 {% endif %}
 {% endfor %}
+# The webhook unit, verified against the hash of the file selected for THIS
+# host. Done here rather than in the loop above because the selection is a
+# runtime lookup, and done before the install block so a mismatch refuses
+# alongside everything else rather than after the tree is half-installed.
+_verify_artifact "${_FRAISIER_WEBHOOK_UNIT}" \
+    "${_FRAISIER_WEBHOOK_SHA["$_FRAISIER_WEBHOOK_UNIT"]:-}"
 echo "  ${_MANIFEST_CHECKED} artifact(s) match the manifest"
 
 # Install webhook service unit for THIS machine (#325).
@@ -612,30 +632,30 @@ if _env_active "{{ ish.env_name }}"; then
 fi
 {% endfor %}
 
-# Install nginx config
-if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ]; then
-    echo "  Installing nginx gateway config"
-    _run sudo cp "${SCAFFOLD_DIR}/nginx/gateway.conf" \
-       /etc/nginx/sites-available/{{ project_name }}
-    _run sudo ln -sf /etc/nginx/sites-available/{{ project_name }} \
-           /etc/nginx/sites-enabled/{{ project_name }}
+# Install nginx configs — sources and destinations from the manifest.
+#
+# The vhost filename used to be re-derived here, and the formula had drifted:
+# this block asked for `{fraise}_{env}.conf` while the renderer writes
+# `{project}_{fraise}_{env}.conf`. Any vhost without an explicit `server_name`
+# was therefore rendered and then, behind the old `[ -f ]` guard, silently not
+# installed. Both sides now read the same manifest entry.
+#
+# Kept as its own disposition rather than folded into `plain`: a vhost is a
+# copy *plus* a sites-enabled symlink, and the gateway additionally owns the
+# legacy rate_limit.conf cleanup below.
+{% for vhost in artifact_manifest.with_disposition('nginx_vhost') %}
+{% set link = vhost.destination.split('/')[-1] %}
+{% if vhost.environment %}
+if _env_active "{{ vhost.environment }}"; then
+    echo "  Installing nginx config for {{ link }}"
+    _run sudo cp "${SCAFFOLD_DIR}/{{ vhost.source }}" "{{ vhost.destination }}"
+    _run sudo ln -sf "{{ vhost.destination }}" /etc/nginx/sites-enabled/{{ link }}
 fi
-
-{% for fraise in local_fraises %}
-{% for env_name, env_config in fraise.get('environments', {}).items() %}
-{% set nginx_stem = env_config.get('nginx', {}).get('server_name') or (fraise.get('name', '') + '_' + env_name) if env_config.get('nginx') else None %}
-{% if nginx_stem %}
-if _env_active "{{ env_name }}"; then
-    if [ -f "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" ]; then
-        echo "  Installing nginx config for {{ nginx_stem }}"
-        _run sudo cp "${SCAFFOLD_DIR}/nginx/{{ nginx_stem }}.conf" \
-           /etc/nginx/sites-available/{{ nginx_stem }}
-        _run sudo ln -sf /etc/nginx/sites-available/{{ nginx_stem }} \
-               /etc/nginx/sites-enabled/{{ nginx_stem }}
-    fi
-fi
+{% else %}
+echo "  Installing nginx gateway config"
+_run sudo cp "${SCAFFOLD_DIR}/{{ vhost.source }}" "{{ vhost.destination }}"
+_run sudo ln -sf "{{ vhost.destination }}" /etc/nginx/sites-enabled/{{ link }}
 {% endif %}
-{% endfor %}
 {% endfor %}
 
 # Remove legacy /etc/nginx/conf.d/rate_limit.conf if gateway.conf now contains

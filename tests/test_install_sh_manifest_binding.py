@@ -263,3 +263,88 @@ class TestCoverageReport:
 
     def test_a_config_without_scheduled_fraises_reports_no_app_managed(self, tree):
         assert "scheduled-install" not in _run(tree).stdout
+
+
+class TestEveryInstalledArtifactIsVerified:
+    """Not just the generically-copied ones.
+
+    Each of these blocks still guards its own copy with ``[ -f ]``, which on
+    its own is a silent skip — the exact shape of #325. The manifest says the
+    file was rendered, so a missing one means the tree is not this installer's,
+    and the preflight refuses before those guards are ever reached.
+    """
+
+    @pytest.mark.parametrize(
+        ("relative", "why"),
+        [
+            ("sudoers", "sudoers fragment"),
+            ("nginx/gateway.conf", "nginx gateway vhost"),
+            (
+                "systemd/fraisier-testapp-systemctl-helper.socket",
+                "systemctl helper socket",
+            ),
+            (
+                "systemd/fraisier-testapp-scaffold-install-helper.service",
+                "scaffold-install helper",
+            ),
+        ],
+    )
+    def test_missing_artifact_refuses(self, tree, relative, why):
+        (tree / "generated" / relative).unlink()
+
+        result = _run(tree)
+
+        assert result.returncode != 0, f"{why} was silently skipped"
+        assert relative in result.stderr
+
+    def test_tampered_sudoers_refuses(self, tree):
+        """A sudoers fragment is installed 0440 and validated by visudo — but
+        neither proves it is the fragment this installer was generated for."""
+        (tree / "generated" / "sudoers").write_text("ALL ALL=(ALL) NOPASSWD: ALL\n")
+
+        result = _run(tree)
+
+        assert result.returncode != 0
+        assert "does not match the manifest" in result.stderr
+
+    def test_tampered_webhook_unit_refuses(self, tree):
+        """Verified against the hash of the unit selected for THIS host."""
+        unit = next((tree / "generated").glob("fraisier-*-webhook*.service"))
+        unit.write_text(unit.read_text() + "\n# edited\n")
+
+        result = _run(tree)
+
+        assert result.returncode != 0
+        assert "does not match the manifest" in result.stderr
+
+    def test_install_helper_units_are_verified(self, tmp_path):
+        """The #279 re-bake copies are _run_strict, but a missing source was
+        still a silent skip before the preflight covered them."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(
+            _YAML.replace(
+                "  api:\n    type: api\n",
+                "  api:\n    type: api\n"
+                "    install:\n      user: app_user\n"
+                "      command: [bash, scripts/i.sh]\n",
+            )
+        )
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "generated"
+        renderer.render()
+        (tmp_path / "generated" / "install.sh").chmod(0o755)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "hostname"
+        fake.write_text("#!/bin/bash\necho default-testrunner\n")
+        fake.chmod(0o755)
+
+        helper = next(
+            (tmp_path / "generated" / "systemd").glob("*install-helper.service")
+        )
+        helper.unlink()
+
+        result = _run(tmp_path)
+
+        assert result.returncode != 0
+        assert "install-helper.service" in result.stderr
