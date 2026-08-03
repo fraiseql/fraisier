@@ -76,6 +76,25 @@ render time instead of on a production host.
   `fraisier scaffold-install --yes`, which has never installed it. They are
   reported by `install.sh` and by `doctor` with what each one breaks.
 
+- **Version bumps refresh `uv.lock`** (#328). `ship` and `version bump` rewrote
+  the version in `pyproject.toml` but never re-locked, so every release commit
+  of a uv-managed project shipped a lockfile whose own `[[package]]` entry was
+  one bump behind. Any later bare `uv run` then re-locked mid-command and
+  dirtied the tree, which `fraisier sync` aborts on — hit twice on
+  printoptim_backend on 2026-08-03 alone. `refresh_uv_lock()` runs `uv lock`
+  when a sibling lockfile exists, and warns rather than fails when uv is
+  absent, unexecutable, or slow: it runs *after* `bump_version` has committed
+  pyproject.toml, so raising there would abort a ship on a half-applied bump —
+  precisely the dirty tree this fixes. Bounded by a 120s timeout.
+
+- **`fraisier deployment-status` no longer tracebacks on an unreadable
+  `/run/fraisier`** (#326). `Path.exists()` propagates `EACCES`, and the
+  directory is readable only by the deploy user — so the traceback hit exactly
+  the operators most likely to run the command, following the hint
+  `trigger-deploy` prints on timeout. Now a message naming the cause and the
+  fix, exit 1. The same unguarded `exists()` in `_diagnose_deployment_status`
+  is fixed with it.
+
 - **`get_install_mapping()` no longer disagrees with the installer.** It mapped
   `systemd/poll-deploy.service` — a path the renderer never writes, under a
   name nothing installs — mapped restore-staging units nothing installs, and
