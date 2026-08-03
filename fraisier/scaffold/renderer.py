@@ -10,6 +10,7 @@ to the configured output_dir.
 import logging
 import re
 import shutil
+import socket
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -474,6 +475,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
 
     # Build machine_env_map: filter to only that server's machines when --server given
     full_machine_env_map = config.get_machine_environment_map()
+    full_machine_webhook_map = webhook_machine_map(config)
     if server is not None:
         # Get machines for the specified server
         machines_for_server = config.servers.get(server, [])
@@ -482,8 +484,14 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
             for m in machines_for_server
             if m in full_machine_env_map
         }
+        machine_webhook_map = {
+            m: full_machine_webhook_map[m]
+            for m in machines_for_server
+            if m in full_machine_webhook_map
+        }
     else:
         machine_env_map = full_machine_env_map
+        machine_webhook_map = full_machine_webhook_map
 
     deploy_user = config.scaffold.deploy_user
     install_helper_sockets = _collect_install_helper_sockets(
@@ -522,6 +530,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "deploy_users": _collect_deploy_users(config, fraises_list),
         "sudoers_rules": _collect_deduplicated_sudoers_rules(config, fraises_list),
         "machine_env_map": machine_env_map,
+        "machine_webhook_map": machine_webhook_map,
         "install_helper_sockets": install_helper_sockets,
         "gateway_fraise": gateway_fraise,
         "has_per_env_nginx": has_per_env_nginx,
@@ -559,14 +568,15 @@ def _infer_project_name(config: FraisierConfig) -> str:
 
 
 def _collect_unique_servers(config: FraisierConfig) -> list[str]:
-    """Return unique server values from environments config, preserving order."""
-    seen: dict[str, None] = {}
-    for env_config in config.environments.values():
-        if isinstance(env_config, dict):
-            server = env_config.get("server")
-            if server:
-                seen[server] = None
-    return list(seen)
+    """Return the logical servers any environment declares, in declaration order.
+
+    Delegates to :meth:`FraisierConfig.declared_servers` rather than walking
+    the config itself: this function used to read only the global
+    ``environments:`` section while the installer's host gating read the
+    per-fraise configs too, so the two disagreed for any config that declared
+    ``server:`` only under ``fraises.*`` (#325, claim 4).
+    """
+    return config.declared_servers()
 
 
 def _server_slug(server: str) -> str:
@@ -576,6 +586,147 @@ def _server_slug(server: str) -> str:
     """
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", server).lower().strip("-")
     return slug
+
+
+def webhook_unit_name(project_name: str, server_slug: str | None = None) -> str:
+    """The one place a webhook unit filename is built.
+
+    With a slug this is a *source* filename inside the scaffold tree, one per
+    logical server. Without one it is either the single-host source or — on
+    every host, in every mode — the **destination** under
+    ``/etc/systemd/system/``. The destination name never carries the host:
+    only the source does, so the fix needs no unit rename, no
+    ``systemctl disable``/``enable`` dance and no ``[Install]`` change.
+
+    Nothing else may build this string. Three call sites each built their own
+    copy of the unslugged name and all three asked for a file the deploy-path
+    render never wrote (#325).
+    """
+    if server_slug:
+        return f"fraisier-{project_name}-webhook-{server_slug}.service"
+    return f"fraisier-{project_name}-webhook.service"
+
+
+def _unknown_server_message(server: str, known: list[str]) -> str:
+    """Diagnostic for a ``--server`` value no environment declares."""
+    if known:
+        return (
+            f"No environment declares server {server!r}. Known servers: "
+            f"{', '.join(known)}. Rendering it anyway would emit a webhook "
+            f"unit with no application paths, which installs cleanly and then "
+            f"fails every deploy on a read-only filesystem."
+        )
+    return (
+        f"--server {server!r} was given but no environment declares a "
+        f"'server:' field, so there is nothing to filter by. Remove --server, "
+        f"or add 'server: {server}' to the environments hosted there."
+    )
+
+
+def webhook_machine_map(config: FraisierConfig) -> dict[str, str]:
+    """Map each machine hostname to the webhook unit filename it installs.
+
+    The inversion of ``servers:``. Empty in single-host mode — no environment
+    declares a ``server:``, so no slugged unit exists and there is nothing to
+    select between.
+
+    ``validate_servers`` already rejects a machine listed under two logical
+    servers, so the inversion is unambiguous; this does not re-validate it.
+    """
+    if not config.declared_servers():
+        return {}
+    project = config.project_name
+    return {
+        machine: webhook_unit_name(project, _server_slug(logical))
+        for logical, machines in config.servers.items()
+        for machine in machines
+    }
+
+
+def webhook_source_for_server(config: FraisierConfig, server: str) -> str:
+    """Return the webhook unit filename rendered for logical *server*."""
+    known = config.declared_servers()
+    if server not in known:
+        raise ValidationError(_unknown_server_message(server, known))
+    return webhook_unit_name(config.project_name, _server_slug(server))
+
+
+def _is_under_any(path: str, allowed: list[str]) -> bool:
+    """Return True when *path* is one of *allowed* or nested inside one.
+
+    Prefix containment on path components, matching the comparison the #317
+    doctor check uses — ``ReadWritePaths=/var/www`` does grant
+    ``/var/www/api``, and ``/var/wwwroot`` is not a match for ``/var/www``.
+    """
+    return any(path == a or path.startswith(a.rstrip("/") + "/") for a in allowed)
+
+
+def _local_hostnames() -> list[str]:
+    """Candidate names for this machine, longest-lived first, deduplicated."""
+    names = [socket.gethostname(), socket.getfqdn()]
+    names += [n.split(".", 1)[0] for n in names if n]
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def resolve_local_server(config: FraisierConfig) -> str | None:
+    """Return the logical server this machine belongs to, or None.
+
+    Resolution order mirrors the generated ``install.sh``: the machine
+    hostname is looked up in the inversion of ``servers:`` first, then — for
+    configs that name their logical servers after the machines they run on and
+    carry no ``servers:`` section — against the declared server names
+    directly, the way ``ServerSetup`` has always read them.
+
+    None means "cannot tell", never "everywhere": callers decide whether that
+    is fatal (installing) or merely unfiltered (rendering).
+    """
+    known = config.declared_servers()
+    if not known:
+        return None
+
+    machine_to_server = {
+        machine: logical
+        for logical, machines in config.servers.items()
+        for machine in machines
+    }
+    hostnames = _local_hostnames()
+    for candidate in hostnames:
+        if candidate in machine_to_server:
+            return machine_to_server[candidate]
+    for candidate in hostnames:
+        if candidate in known:
+            return candidate
+    return None
+
+
+def local_webhook_source(config: FraisierConfig, server: str | None = None) -> str:
+    """Return the webhook unit filename *this machine* must install.
+
+    One resolver for every installer. The generated ``install.sh`` selects
+    from the same map keyed on ``hostname -s``; ``get_install_mapping`` and
+    ``ServerSetup._plan_webhook_service`` call this. They therefore cannot
+    pick different files for the same box, which is what let ``scaffold-diff``
+    report a phantom missing unit while the shell installer silently skipped
+    the copy (#325).
+
+    Raises rather than guessing. In multi-host mode there is no safe default:
+    installing another host's unit is precisely the failure being closed, and
+    reaching for the unslugged name is invariant (N)'s forbidden fallback.
+    """
+    if not config.declared_servers():
+        return webhook_unit_name(config.project_name)
+
+    resolved = server if server is not None else resolve_local_server(config)
+    if resolved is None:
+        raise ValidationError(
+            f"Cannot tell which webhook unit this machine installs: none of "
+            f"{', '.join(_local_hostnames())} is registered under 'servers:' "
+            f"({', '.join(sorted(webhook_machine_map(config))) or 'no machines listed'}"
+            f") or named as a logical server "
+            f"({', '.join(config.declared_servers())}). Add this machine under "
+            f"'servers:', or pass --server explicitly."
+        )
+    return webhook_source_for_server(config, resolved)
 
 
 class ScaffoldRenderer:
@@ -660,9 +811,15 @@ class ScaffoldRenderer:
                         f"/etc/systemd/system/{svc}.service"
                     )
 
-        # Webhook service unit (installed as generic name regardless of server slug)
-        webhook_svc = f"fraisier-{project_name}-webhook.service"
-        mapping[webhook_svc] = Path(f"/etc/systemd/system/{webhook_svc}")
+        # Webhook service unit: the source carries the host, the destination
+        # never does. Resolved through the same helper install.sh selects with,
+        # so scaffold-diff compares the file this box actually installs instead
+        # of reporting a phantom missing one (#325).
+        webhook_src = self._local_webhook_source()
+        if webhook_src is not None:
+            mapping[webhook_src] = Path(
+                f"/etc/systemd/system/{webhook_unit_name(project_name)}"
+            )
 
         # Systemctl helper service + socket
         if self.context["allowed_services"]:
@@ -704,6 +861,20 @@ class ScaffoldRenderer:
         mapping["sudoers"] = Path(f"/etc/sudoers.d/{project_name}")
 
         return mapping
+
+    def _local_webhook_source(self) -> str | None:
+        """The webhook unit this box installs, or None when it cannot be told.
+
+        ``scaffold-diff`` is a diagnostic that also runs off-server, where no
+        local hostname matches any machine in ``servers:``. Omitting the entry
+        there is deliberate: a diff cannot say whether the installed unit is
+        the right one, and naming an arbitrary host's unit would answer a
+        question nobody asked. Reporting nothing beats reporting a phantom.
+        """
+        try:
+            return local_webhook_source(self.config, self.server)
+        except ValidationError:
+            return None
 
     def _validate_names(self) -> None:
         """Validate fraise and environment names before rendering.
@@ -787,6 +958,7 @@ class ScaffoldRenderer:
         # Remove stale deploy socket/service files left by previous scaffold runs
         if not dry_run:
             self._remove_stale_deploy_units(rendered_files)
+            self._remove_stale_webhook_units(rendered_files)
 
         # Per-fraise service templates (systemd or rc.d based on service_manager)
         service_manager = self.config._config.get("service_manager", "systemd")
@@ -853,17 +1025,6 @@ class ScaffoldRenderer:
                 if db_cfg.get("strategy") == "restore_migrate":
                     return True
         return False
-
-    def _webhook_service_name(self, server_slug: str | None = None) -> str:
-        """Return the output filename for a webhook service unit.
-
-        With no slug: ``fraisier-{project}-webhook.service`` (single-server).
-        With a slug: ``fraisier-{project}-webhook-{slug}.service`` (per-server).
-        """
-        project = self.context["project_name"]
-        if server_slug:
-            return f"fraisier-{project}-webhook-{server_slug}.service"
-        return f"fraisier-{project}-webhook.service"
 
     def _render_install_helper_units(self, dry_run: bool) -> list[str]:
         """Render install-helper .socket and .service units for each fraise+env."""
@@ -966,28 +1127,60 @@ class ScaffoldRenderer:
         return [service_out, socket_out]
 
     def _render_webhook_services(self, dry_run: bool) -> list[str]:
-        """Render webhook service unit(s) with project-specific naming.
+        """Render the webhook service unit(s), addressed by host.
 
-        Behaviour:
-        - ``--server`` given → one file, context already filtered by server
-        - No ``--server``, no ``environments.server`` config → one file, all paths
-        - No ``--server``, ``environments.server`` configured → one file per server,
-          each with only that server's paths
+        The rule, stated once:
+
+            When any environment declares a ``server:``, the tree contains
+            **only** slugged ``fraisier-{project}-webhook-{slug}.service``
+            files and the installer resolves the slug from the machine
+            hostname. When no environment declares a ``server:``, the tree
+            contains the single unslugged file. There is no fallback from the
+            first mode to the second.
+
+        Mode is a function of the config alone (invariant **M**). ``--server``
+        narrows *which* slugged units this render emits; it never flips the
+        mode, so a multi-host config can never produce the host-agnostic
+        filename whose content depends on whoever rendered it last — the
+        property that produced #325.
+
+        Raises:
+            ValidationError: ``--server`` names a server no environment
+                declares. Rendering it anyway yields a valid-looking unit with
+                no application paths (the old behaviour), which installs
+                cleanly and then fails every deploy.
+            ValueError: an environment resolves to no host, or a rendered unit
+                omits a tree of an environment its host runs (invariant **C**).
         """
         servers = _collect_unique_servers(self.config)
 
-        if self.server is not None or not servers:
-            # Single file: either explicit server filter or no server config
-            out_name = self._webhook_service_name()
+        if not servers:
+            if self.server is not None:
+                raise ValidationError(_unknown_server_message(self.server, servers))
+            # Single-host mode: "every environment" and "this host's
+            # environments" are the same set, so there is nothing to leak.
+            out_name = webhook_unit_name(self.context["project_name"])
             if not dry_run:
                 self._render_template("core/fraisier-webhook.service.j2", out_name)
+                self._assert_hosted_trees_are_writable(
+                    None, (self.output_dir / out_name).read_text()
+                )
             return [out_name]
 
-        # Auto per-server: one file per unique server
+        self._assert_every_environment_has_a_host(servers)
+
+        if self.server is not None:
+            if self.server not in servers:
+                raise ValidationError(_unknown_server_message(self.server, servers))
+            targets = [self.server]
+        else:
+            targets = servers
+
         rendered: list[str] = []
-        for server in servers:
-            slug = _server_slug(server)
-            out_name = self._webhook_service_name(slug)
+        for server in targets:
+            out_name = webhook_unit_name(
+                self.context["project_name"], _server_slug(server)
+            )
             if not dry_run:
                 server_context = _build_context(self.config, server)
                 try:
@@ -996,8 +1189,79 @@ class ScaffoldRenderer:
                 except jinja2.TemplateNotFound:
                     content = "# Placeholder: fraisier-webhook.service.j2\n"
                 self._write_output(out_name, content)
+                self._assert_hosted_trees_are_writable(server, content)
             rendered.append(out_name)
         return rendered
+
+    def _assert_every_environment_has_a_host(self, servers: list[str]) -> None:
+        """Invariant (C), first half: no environment may resolve to zero hosts.
+
+        ``get_environments_for_server`` matches on exact equality, so in a
+        multi-host config an environment that declares no ``server:`` belongs
+        to no logical server and its ``git_repo``/``app_path`` are rendered
+        into **no** webhook unit at all — the #325 failure reached from a
+        config that reads like a partial migration rather than a mistake.
+
+        Rejected rather than treated as hosted everywhere: "everywhere"
+        re-creates the #62 least-privilege leak by default and makes the
+        permissive reading of a half-migrated config the safe-looking one.
+        """
+        orphans = self.config.environments_without_a_server()
+        if not orphans:
+            return
+        raise ValueError(
+            f"Environment(s) {', '.join(orphans)} declare no 'server:' while "
+            f"{', '.join(servers)} do. In a multi-server config an environment "
+            f"with no server belongs to no machine, so its git_repo and "
+            f"app_path reach no webhook unit's ReadWritePaths= and every "
+            f"deploy of it fails on a read-only filesystem. Add "
+            f"'server: <one of {', '.join(servers)}>' to each."
+        )
+
+    def _assert_hosted_trees_are_writable(
+        self, server: str | None, content: str
+    ) -> None:
+        """Invariant (C), second half: a host's unit carries all its own trees.
+
+        Checked against the *rendered text*, at the point of rendering, so it
+        holds independently of how the filtering was reached — a template
+        regression, a context bug or a new filtering route all trip it. The
+        mirror of #62 (too many paths) is this one's opposite direction (too
+        few); one check catches both failures of the same invariant.
+        """
+        if "ProtectSystem=strict" not in content:
+            return
+
+        allowed = [
+            ln.split("=", 1)[1].strip()
+            for ln in content.splitlines()
+            if ln.startswith("ReadWritePaths=")
+        ]
+        hosted = (
+            set(self.config.get_environments_for_server(server))
+            if server is not None
+            else None
+        )
+
+        missing: list[str] = []
+        for fraise in self.context["fraises"]:
+            for env_name, env_config in fraise.get("environments", {}).items():
+                if hosted is not None and env_name not in hosted:
+                    continue
+                for key in ("git_repo", "app_path"):
+                    path = env_config.get(key)
+                    if path and not _is_under_any(str(path), allowed):
+                        missing.append(f"{fraise['name']}/{env_name} {key}={path}")
+
+        if missing:
+            where = f"server {server!r}" if server else "this host"
+            raise ValueError(
+                f"The webhook unit rendered for {where} is ProtectSystem=strict "
+                f"but does not allow writes to: {', '.join(missing)}. Those "
+                f"environments are hosted there, so every deploy of them would "
+                f"fail on a read-only filesystem. Rendered ReadWritePaths: "
+                f"{', '.join(allowed) or '(none)'}."
+            )
 
     def _render_deploy_socket_services(self, dry_run: bool) -> list[str]:
         """Render socket-activated deploy units for each fraise-environment combo."""
@@ -1354,6 +1618,36 @@ class ScaffoldRenderer:
             if (name.startswith("fraisier-") and name.endswith(".socket")) or (
                 name.startswith("fraisier-") and name.endswith("@.service")
             ):
+                path.unlink()
+
+    def _remove_stale_webhook_units(self, rendered_files: list[str]) -> None:
+        """Delete webhook units in the tree that no host can install (#325).
+
+        A file that nothing writes and nothing deletes is the substrate of the
+        bug: the installer used to reach for exactly such a leftover, whose
+        content was frozen from whatever server context last wrote it. Both
+        directions are swept here — a slugged unit for a server dropped from
+        the config, and the legacy unslugged unit that multi-host mode no
+        longer produces.
+
+        Only on an unfiltered render. A ``--server`` render holds one host's
+        share of the truth; letting it delete the units it was not asked to
+        produce would leave the shared state tree valid for one machine and
+        broken for the rest, which is the failure mode this whole change
+        exists to remove.
+        """
+        if self.server is not None or not self.output_dir.exists():
+            return
+
+        prefix = f"fraisier-{self.context['project_name']}-webhook"
+        rendered_set = set(rendered_files)
+        for path in self.output_dir.iterdir():
+            if not path.is_file():
+                continue
+            name = path.name
+            if not name.startswith(prefix) or not name.endswith(".service"):
+                continue
+            if name not in rendered_set:
                 path.unlink()
 
     def _write_output(self, rel_path: str, content: str) -> None:

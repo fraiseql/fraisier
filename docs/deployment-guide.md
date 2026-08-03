@@ -709,24 +709,85 @@ environments:
     server: prod.myserver.com
 ```
 
-Then on each server, run scaffold and setup filtered to that server:
+Then on each server, run scaffold and setup:
 
 ```bash
 # On staging.myserver.com
-fraisier scaffold --server staging.myserver.com
+fraisier scaffold
 sudo fraisier scaffold-install --yes
-sudo fraisier setup --server staging.myserver.com
+sudo fraisier setup
 
 # On prod.myserver.com
-fraisier scaffold --server prod.myserver.com
+fraisier scaffold
 sudo fraisier scaffold-install --yes
-sudo fraisier setup --server prod.myserver.com
+sudo fraisier setup
 ```
 
-The `--server` filter ensures that:
+`--server` is optional and narrows the render to one logical server. It is
+not needed for correctness: the generated tree is valid for every machine,
+because the webhook unit is addressed by host in its filename and the
+installer picks this machine's.
+
+Naming an unknown server is an error, not a narrower render. A typo'd
+`--server` used to produce a unit with the fraisier state directories and no
+application paths — installable, and then broken on every deploy.
+
+### How the webhook unit reaches the right host
+
+The webhook service runs `ProtectSystem=strict`: the entire filesystem is
+read-only inside its sandbox except the paths listed in `ReadWritePaths=`.
+Every bare repo and application directory a host deploys must appear there,
+or `git fetch` fails with `Read-only file system` (exit 255) even though the
+same path is writable from a login shell.
+
+The rule, in one line:
+
+> When any environment declares a `server:`, the scaffold tree contains
+> **only** `fraisier-{project}-webhook-{slug}.service` files — one per logical
+> server — and `install.sh` copies the one matching `hostname -s` to
+> `/etc/systemd/system/fraisier-{project}-webhook.service`. When no
+> environment declares a `server:`, the tree contains the single unslugged
+> file.
+
+Consequences worth knowing:
+
+- **The installed unit's name never changes.** Only the source filename in
+  the scaffold tree carries the host. Nothing is renamed, enabled or disabled
+  on the machine.
+- **There is no fallback.** A leftover `fraisier-{project}-webhook.service`
+  in a multi-server tree is never installed, and a machine whose slugged unit
+  is missing is a hard error rather than a skipped step.
+- **Every environment must declare a `server:`** once any of them does. An
+  environment with no server belongs to no machine, so its trees reach no
+  unit's allowlist; the render refuses rather than dropping it silently.
+
+To check a host before installing:
+
+```bash
+fraisier doctor --check webhook_hosted_trees_writable   # reads the installed unit
+sudo fraisier doctor --probe-sandbox                    # actually writes, under strict
+```
+
+The `--server` filter (when you do use it) ensures that:
 - Systemd units are only generated for environments assigned to that server
-- The webhook service's `ReadWritePaths` only includes paths that exist locally
+- The webhook service's `ReadWritePaths` only includes that server's paths
 - Sudoers entries only reference local service names
+
+### Carrying a custom webhook unit
+
+If you maintain your own `fraisier-{project}-webhook.service` — a drop-in
+under `/etc/systemd/system/fraisier-{project}-webhook.service.d/`, or a
+hand-edited unit — you own the `ReadWritePaths=` list, and no template fix
+reaches it. Keep every `git_repo` and `app_path` of every environment that
+host deploys in the list, plus any `database.pre_migrate_dump.output_dir`.
+`fraisier doctor` reads the *installed* unit precisely so it can still tell
+you when one is missing.
+
+Operators who added a `prod-paths.conf` drop-in as a workaround for a webhook
+unit carrying the wrong host's paths can remove it after upgrading and
+re-running `fraisier scaffold && sudo fraisier scaffold-install --yes`.
+Leaving it in place is harmless — a drop-in's `ReadWritePaths=` adds to the
+unit's list rather than replacing it.
 
 ### Branch mapping for multiple environments
 

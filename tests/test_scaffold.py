@@ -1,6 +1,9 @@
 """Infrastructure scaffold tests."""
 
+import pytest
+
 from fraisier.config import FraisierConfig
+from fraisier.errors import ValidationError
 
 
 class TestScaffoldConfigParsing:
@@ -3376,7 +3379,19 @@ class TestWebhookServerFiltering:
     """Webhook service filters ReadWritePaths by server (#62)."""
 
     def test_webhook_includes_only_local_server_paths(self, tmp_path):
-        """Webhook service only includes ReadWritePaths for environments on the host."""
+        """Webhook service only includes ReadWritePaths for environments on the host.
+
+        Deliberate contract change (#325): this used to read the *unslugged*
+        ``fraisier-myproj-webhook.service``, because a ``--server`` render
+        wrote the host-agnostic name with host-filtered content. That pairing
+        is the whole bug — the file's content depended on who rendered it
+        last, so the deploy path's unfiltered regeneration replaced it (or
+        failed to, leaving a stale one) and the installer copied whatever
+        survived. The filter it pins is unchanged and still correct; only the
+        filename moved, and it now reads the slugged file the host installs.
+        Invariant (M) — mode is a function of the config, never of
+        ``--server`` — is what makes the unslugged name unreachable here.
+        """
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -3405,9 +3420,12 @@ fraises:
         renderer = ScaffoldRenderer(config, server="server-1")
         renderer.render()
 
-        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
+        content = (
+            tmp_path / "output" / "fraisier-myproj-webhook-server-1.service"
+        ).read_text()
         assert "ReadWritePaths=/var/www/dev" in content
         assert "ReadWritePaths=/var/www/prod" not in content
+        assert not (tmp_path / "output" / "fraisier-myproj-webhook.service").exists()
 
     def test_webhook_without_server_generates_per_server_files(self, tmp_path):
         """Without --server and environments.server set, one file per server is made."""
@@ -3512,8 +3530,23 @@ fraises:
         assert "fraisier-myproj-webhook-server-2.service" in files
         assert "fraisier-myproj-webhook.service" not in files
 
-    def test_webhook_server_with_no_matching_environments(self, tmp_path):
-        """Webhook for a server with no environments only has default paths."""
+    def test_webhook_server_with_no_matching_environments_is_an_error(self, tmp_path):
+        """An unknown --server is rejected, naming it and the servers that exist.
+
+        Deliberate contract change (#325). The old assertion — that
+        ``--server server-3`` renders a unit with the fraisier state dirs and
+        no application paths, silently and with exit 0 — *was* the bug it
+        pinned. A typo'd or stale ``--server`` produced a valid-looking,
+        installable unit that then failed every deploy on
+        ``Read-only file system``, because ``ProtectSystem=strict`` denies
+        every path the render quietly dropped.
+
+        A regeneration must never silently narrow: a render that cannot
+        produce a correct unit has to abort before the install step rather
+        than emit a narrower one. ``_regenerate_scaffold`` already turns a
+        non-zero scaffold exit into a DeploymentError, so this aborts the
+        deploy at the right range.
+        """
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         p = tmp_path / "fraises.yaml"
@@ -3540,15 +3573,13 @@ fraises:
         )
         config = FraisierConfig(p)
         renderer = ScaffoldRenderer(config, server="server-3")  # Non-existent server
-        renderer.render()
 
-        content = (tmp_path / "output" / "fraisier-myproj-webhook.service").read_text()
-        # Should have the default paths but no app paths
-        assert "ReadWritePaths=/var/lib/fraisier" in content
-        assert "ReadWritePaths=/run/fraisier" in content
-        # No app paths for any environment
-        assert "ReadWritePaths=/var/www/dev" not in content
-        assert "ReadWritePaths=/var/www/prod" not in content
+        with pytest.raises(ValidationError) as exc:
+            renderer.render()
+
+        message = str(exc.value)
+        assert "server-3" in message
+        assert "server-1" in message and "server-2" in message
 
 
 class TestWebhookNaming:

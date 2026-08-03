@@ -6,6 +6,7 @@ generates webhook env files, installs nginx vhosts, and validates.
 
 from __future__ import annotations
 
+import functools
 import logging
 import secrets
 import shlex
@@ -51,7 +52,28 @@ class ServerSetup:
         self.runner = runner
         self.environment = environment
         self.server = server
-        self._renderer = ScaffoldRenderer(config)
+
+    @functools.cached_property
+    def _renderer(self) -> ScaffoldRenderer:
+        """The renderer, filtered for the server this run provisions (#325).
+
+        Built lazily and once. Eager construction would run hostname
+        resolution at ``__init__`` time, before a caller can patch it, and
+        before ``--server`` has been weighed.
+
+        The filter used to be dropped here: ``_resolve_allowed_environments``
+        auto-detects the host for the *plan*, while the *tree* was rendered
+        unfiltered — so the plan and the tree could disagree about which
+        environments are local. ``resolve_local_server`` returning None (this
+        box is in no server) still renders unfiltered, which is safe under
+        invariant (M): a multi-host config emits one slugged unit per server
+        and no host-agnostic file, so there is nothing to leak and nothing to
+        go stale.
+        """
+        from fraisier.scaffold.renderer import resolve_local_server
+
+        server = self.server or resolve_local_server(self.config)
+        return ScaffoldRenderer(self.config, server=server)
 
     def plan(self) -> list[SetupAction]:
         """Build the full ordered list of actions without side effects."""
@@ -408,15 +430,41 @@ class ServerSetup:
         return actions
 
     def _plan_webhook_service(self) -> list[SetupAction]:
+        """Install the webhook unit rendered for *this* machine (#325).
+
+        Source and destination differ by design: the source filename carries
+        the host so a render cannot leave a host-agnostic file behind to go
+        stale, the destination never does so no unit is renamed on the box.
+        Resolved through ``local_webhook_source``, the same helper the
+        generated ``install.sh`` selects with, so the two installers cannot
+        disagree about which file this machine gets.
+        """
+        from fraisier.errors import ValidationError
+        from fraisier.scaffold.renderer import local_webhook_source, webhook_unit_name
+
         output_dir = self.config.scaffold.output_dir
         project = self.config.project_name
-        svc_name = f"fraisier-{project}-webhook.service"
-        src = f"{output_dir}/{svc_name}"
-        dst = f"/etc/systemd/system/{svc_name}"
+        dst_name = webhook_unit_name(project)
+        try:
+            src_name = local_webhook_source(self.config, self.server)
+        except ValidationError as exc:
+            # Nothing safe to plan: in a multi-server config every candidate
+            # unit carries a different host's ReadWritePaths=, and copying the
+            # wrong one is the failure this resolver exists to prevent. Warn
+            # and skip, matching _resolve_allowed_environments' contract for
+            # the same "this box is in no server" condition, rather than
+            # planning a copy of a file no render wrote (#325).
+            logger.warning("Skipping webhook unit install: %s", exc)
+            return []
         return [
             SetupAction(
-                description=f"Install {svc_name}",
-                command=["sudo", "cp", src, dst],
+                description=f"Install {dst_name}",
+                command=[
+                    "sudo",
+                    "cp",
+                    f"{output_dir}/{src_name}",
+                    f"/etc/systemd/system/{dst_name}",
+                ],
                 category="systemd",
             )
         ]

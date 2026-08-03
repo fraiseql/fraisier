@@ -720,6 +720,11 @@ class TestCLI:
         assert "actions would be executed" in result.output
 
     def test_server_flag(self, tmp_path):
+        # `-c` rather than the get_config patch: the CLI group builds
+        # ctx.obj["config"] from its own load, so without it this ran against
+        # the repository's own fraises.yaml and --server named a server that
+        # config never declares. Harmless while an unknown --server rendered a
+        # silently-empty unit; a hard error since #325.
         config = _make_config(tmp_path, SERVER_AWARE_CONFIG)
         runner = CliRunner()
 
@@ -727,7 +732,15 @@ class TestCLI:
             from fraisier.cli.main import main
 
             result = runner.invoke(
-                main, ["setup", "--dry-run", "--server", "prod.example.io"]
+                main,
+                [
+                    "-c",
+                    str(config.config_path),
+                    "setup",
+                    "--dry-run",
+                    "--server",
+                    "prod.example.io",
+                ],
             )
 
         assert result.exit_code == 0

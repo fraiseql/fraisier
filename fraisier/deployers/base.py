@@ -498,6 +498,26 @@ class BaseDeployer(ABC):
         Runs 'fraisier scaffold' on the server to generate updated
         systemd units, nginx configs, sudoers rules, etc.
 
+        Deliberately **unfiltered** — no ``--server``. The webhook unit is
+        addressed by host in its filename and selected at install time
+        (#325), so one tree is valid for every machine, which is what the
+        state dir is for.
+
+        That is safe only under two invariants, and not otherwise:
+
+        * **(M)** mode is a function of the config alone, so an unfiltered
+          regen of a multi-host config emits every slug and no host-agnostic
+          unit — the all-paths file that would re-create the #62
+          least-privilege leak is never written;
+        * **(N)** the installer never falls back to an unslugged leftover, so
+          such a file is never installed either.
+
+        In the genuine single-host case an unfiltered render's "every
+        environment" *is* that host's environments, so there is nothing to
+        leak. **If (M) or (N) is ever relaxed, this call must start passing
+        ``--server`` in the same commit.**
+        ``TestModeIsAFunctionOfTheConfigAlone`` is the tripwire.
+
         Args:
             config_path: Path to fraises.yaml to use for generation
 
@@ -529,8 +549,19 @@ class BaseDeployer(ABC):
         )
 
         if result.returncode != 0:
+            # stderr carries the reason. A render now refuses rather than
+            # silently narrowing (#325) — unknown --server, an environment
+            # that resolves to no host, a unit missing a hosted environment's
+            # trees — and those diagnostics go to stderr while stdout holds
+            # only the part of the render that succeeded. Reporting stdout
+            # alone left the operator with the good news and no cause.
+            detail = "\n".join(
+                part.strip()
+                for part in (getattr(result, "stderr", "") or "", result.stdout or "")
+                if part and part.strip()
+            )
             raise DeploymentError(
-                f"Failed to regenerate scaffold files: {result.stdout}"
+                f"Failed to regenerate scaffold files: {detail or '(no output)'}"
             )
 
         logger.info("✓ Scaffold files regenerated")

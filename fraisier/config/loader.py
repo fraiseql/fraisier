@@ -28,7 +28,7 @@ import os
 import re
 import subprocess
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -651,6 +651,69 @@ class FraisierConfig:
             return []
         return list(fraise.get("environments", {}).keys())
 
+    def iter_environment_servers(self) -> Iterator[tuple[str, str | None]]:
+        """Yield ``(env_name, declared_server)`` over every declaration site.
+
+        ``server:`` may be written in the global ``environments:`` section or
+        under ``fraises.<name>.environments.<env>``, and a config may use
+        either or both. This is the single walk over both sites; every
+        consumer that needs to know where an environment lives — the
+        renderer's server set, :meth:`get_environments_for_server`, and
+        through it :meth:`get_machine_environment_map`, which bakes
+        install.sh's host gating — derives from it.
+
+        Keeping them on one walk is the point: while the renderer read only
+        the global section and the installer read both, a config declaring
+        ``server:`` only per-fraise looked server-less to the renderer (one
+        webhook unit carrying every host's trees) and correctly filtered to
+        the installer — the #62 least-privilege leak reached by a second
+        route, and one of the three routes into #325.
+
+        The same environment name may be yielded more than once, with a
+        different (or absent) server each time; callers decide how to fold.
+        """
+        for env_name, env_config in self.environments.items():
+            if isinstance(env_config, dict):
+                yield env_name, env_config.get("server")
+
+        for fraise in self.fraises.values():
+            for env_name, env_config in (fraise.get("environments") or {}).items():
+                if isinstance(env_config, dict):
+                    yield env_name, env_config.get("server")
+
+    def declared_servers(self) -> list[str]:
+        """Unique logical servers named by any environment, in declaration order.
+
+        Empty when no environment declares a ``server:`` — which is exactly
+        the condition for single-host mode in the scaffold renderer. Note this
+        is a property of the *config*, never of a ``--server`` filter.
+        """
+        seen: dict[str, None] = {}
+        for _, server in self.iter_environment_servers():
+            if server:
+                seen[str(server)] = None
+        return list(seen)
+
+    def environments_without_a_server(self) -> list[str]:
+        """Environment names used by a fraise that name no logical server.
+
+        Only meaningful alongside :meth:`declared_servers`: in a multi-host
+        config such an environment resolves to *no* host, so its ``git_repo``
+        and ``app_path`` reach no webhook unit's ``ReadWritePaths=`` and every
+        deploy of it fails on a read-only filesystem. Ordered by first
+        appearance so the resulting diagnostic is stable.
+        """
+        hosted: set[str] = set()
+        candidates: dict[str, None] = {}
+        for env_name, server in self.iter_environment_servers():
+            if server:
+                hosted.add(env_name)
+        for fraise in self.fraises.values():
+            for env_name in fraise.get("environments") or {}:
+                if env_name not in hosted:
+                    candidates[env_name] = None
+        return list(candidates)
+
     def get_environments_for_server(self, server: str) -> list[str]:
         """Return environment names whose ``server`` field matches *server*.
 
@@ -659,18 +722,9 @@ class FraisierConfig:
         Returns an empty list when no environment declares that server.
         """
         matched: dict[str, None] = {}
-
-        # Check global environments section
-        for env_name, env_config in self.environments.items():
-            if env_config.get("server") == server:
+        for env_name, declared in self.iter_environment_servers():
+            if declared == server:
                 matched[env_name] = None
-
-        # Check per-fraise environment configs
-        for fraise in self.fraises.values():
-            for env_name, env_config in fraise.get("environments", {}).items():
-                if env_config.get("server") == server:
-                    matched[env_name] = None
-
         return list(matched)
 
     def get_machine_environment_map(self) -> dict[str, list[str]]:
