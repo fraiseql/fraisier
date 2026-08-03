@@ -256,10 +256,11 @@ def _install_plan(tmp_path: Path, yaml_text: str, hostname: str) -> list[str]:
         env=env,
     )
     if result.returncode != 0:
-        pytest.fail(
+        detail = (
             f"installer exited {result.returncode} for {hostname}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+        pytest.fail(detail)  # ty: ignore[invalid-argument-type]
 
     markers = ("[would run] ", "[would validate] ")
     plan = []
@@ -291,7 +292,8 @@ def test_install_plan_matches_golden(plans):
     if os.environ.get("FRAISIER_UPDATE_INSTALL_GOLDEN"):
         _GOLDEN.parent.mkdir(parents=True, exist_ok=True)
         _GOLDEN.write_text(json.dumps(plans, indent=2) + "\n")
-        pytest.skip("golden regenerated — review the diff before committing")
+        regenerated = "golden regenerated — review the diff before committing"
+        pytest.skip(regenerated)  # ty: ignore[too-many-positional-arguments]
 
     assert _GOLDEN.exists(), (
         "golden file missing; regenerate with FRAISIER_UPDATE_INSTALL_GOLDEN=1"

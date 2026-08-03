@@ -1,0 +1,328 @@
+"""The artifact manifest: what render() produced, and who installs it (#323).
+
+``fraisier scaffold`` already knows precisely what it wrote — ``render()``
+returns the list. That knowledge was thrown away, and three other components
+reconstructed it by hand: sixteen hardcoded names in ``install.sh.j2``,
+``get_install_mapping()``, and ``scheduled_install``'s directory scan. Every
+bug in the "rendered ≠ installed" class lives in that gap.
+
+The manifest closes it by construction. Its load-bearing property is not the
+generic install — it is that **every rendered file must be classified**. An
+artifact nobody dispositioned is a hard error naming the file, so a new
+rendered artifact cannot be added without someone stating, in reviewable code,
+whether it gets installed.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from fraisier.config import FraisierConfig
+from fraisier.errors import ValidationError
+from fraisier.scaffold.artifacts import (
+    Disposition,
+    build_artifact_manifest,
+)
+from fraisier.scaffold.renderer import ScaffoldRenderer
+from tests.test_install_plan_golden import _GOLDEN
+from tests.test_install_plan_golden import MATRIX as _MATRIX
+
+_CONFIG = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    install:
+      user: app_user
+      command: [bash, scripts/deploy-install.sh]
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+        nginx:
+          server_name: api.example.com
+"""
+
+
+@pytest.fixture
+def manifest(tmp_path):
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text(_CONFIG)
+    renderer = ScaffoldRenderer(FraisierConfig(cfg))
+    renderer.output_dir = tmp_path / "out"
+    rendered = renderer.render()
+    return build_artifact_manifest(renderer, rendered)
+
+
+def _by_source(manifest, source):
+    for artifact in manifest.artifacts:
+        if artifact.source == source:
+            return artifact
+    raise AssertionError(
+        f"{source!r} not in manifest: {[a.source for a in manifest.artifacts]}"
+    )
+
+
+class TestCoverage:
+    """The point of the whole exercise."""
+
+    def test_every_rendered_file_is_classified(self, tmp_path):
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+
+        manifest = build_artifact_manifest(renderer, rendered)
+
+        assert {a.source for a in manifest.artifacts} == set(rendered)
+
+    def test_unclassified_artifact_is_a_hard_error_naming_the_file(self, tmp_path):
+        """A new rendered artifact cannot slip in undispositioned."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+
+        with pytest.raises(ValidationError) as exc:
+            build_artifact_manifest(renderer, [*rendered, "systemd/brand-new.service"])
+
+        assert "brand-new.service" in str(exc.value)
+
+    def test_the_error_says_what_to_do(self, tmp_path):
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+
+        with pytest.raises(ValidationError) as exc:
+            build_artifact_manifest(renderer, [*rendered, "systemd/brand-new.service"])
+
+        assert "disposition" in str(exc.value).lower()
+
+
+class TestDispositions:
+    """Each artifact routes to the handling its install actually needs."""
+
+    def test_deploy_units_are_plain(self, manifest):
+        artifact = _by_source(manifest, "systemd/fraisier-api-production.socket")
+
+        assert artifact.disposition is Disposition.PLAIN
+        assert artifact.destination == (
+            "/etc/systemd/system/fraisier-api-production.socket"
+        )
+        assert artifact.environment == "production"
+
+    def test_webhook_unit_keeps_its_own_sequence(self, manifest):
+        artifact = _by_source(manifest, "fraisier-proj-webhook-only-example-io.service")
+
+        assert artifact.disposition is Disposition.WEBHOOK
+        # Source carries the host; destination never does (#325).
+        assert (
+            artifact.destination == "/etc/systemd/system/fraisier-proj-webhook.service"
+        )
+
+    def test_install_helper_units_are_rebake(self, manifest):
+        """#279's sequence is not expressible as a generic copy."""
+        artifact = _by_source(
+            manifest, "systemd/fraisier-proj-api-production-install-helper.socket"
+        )
+
+        assert artifact.disposition is Disposition.HELPER_REBAKE
+
+    def test_sudoers_carries_its_mode(self, manifest):
+        artifact = _by_source(manifest, "sudoers")
+
+        assert artifact.disposition is Disposition.SUDOERS
+        assert artifact.mode == 0o440
+        assert artifact.destination == "/etc/sudoers.d/proj"
+
+    def test_nginx_vhost_is_its_own_disposition(self, manifest):
+        """copy + sites-enabled symlink, not a plain copy."""
+        artifact = _by_source(manifest, "nginx/gateway.conf")
+
+        assert artifact.disposition is Disposition.NGINX_VHOST
+        assert artifact.destination == "/etc/nginx/sites-available/proj"
+
+    def test_scripts_run_from_the_scaffold_tree_are_not_installed(self, manifest):
+        """install.sh, backup.sh and friends are consumed in place."""
+        for source in ("install.sh", "backup.sh", "confiture.yaml", "deploy.yml"):
+            assert _by_source(manifest, source).disposition is (
+                Disposition.SCAFFOLD_LOCAL
+            ), source
+
+    def test_env_gated_artifacts_carry_their_environment(self, manifest):
+        """So install.sh can gate on _env_active without re-deriving it."""
+        artifact = _by_source(manifest, "systemd/api.service")
+
+        assert artifact.environment == "production"
+
+    def test_unconditional_artifacts_have_no_environment(self, manifest):
+        assert _by_source(manifest, "sudoers").environment is None
+
+
+class TestKnownGapsAreNamedNotHidden:
+    """Artifacts that are rendered and should be installed, but are not.
+
+    Classifying these as ``MANUAL`` would launder four live bugs into
+    "intentional". They get their own disposition and a reason, so the gap is
+    visible in the manifest and in ``doctor`` instead of being implied by the
+    absence of an install line.
+    """
+
+    def test_backup_service_is_recorded_as_a_gap(self, manifest):
+        artifact = _by_source(manifest, "systemd/backup.service")
+
+        assert artifact.disposition is Disposition.UNINSTALLED_GAP
+        assert artifact.note
+
+    def test_gap_note_explains_the_consequence(self, manifest):
+        """backup.timer is installed and activates backup.service by default."""
+        artifact = _by_source(manifest, "systemd/backup.service")
+
+        assert "timer" in artifact.note.lower()
+
+    def test_timers_installed_without_their_service_are_visible(self, manifest):
+        gaps = {
+            a.source
+            for a in manifest.artifacts
+            if a.disposition is Disposition.UNINSTALLED_GAP
+        }
+
+        assert "systemd/backup.service" in gaps
+        assert "poll-deploy.service" in gaps
+
+
+class TestBatchHashBindsManifestToTree:
+    """An old manifest against new renders reintroduces the gap one level up."""
+
+    def test_manifest_records_a_batch_hash(self, manifest):
+        assert manifest.batch_hash
+
+    def test_each_artifact_records_its_content_hash(self, manifest):
+        artifact = _by_source(manifest, "sudoers")
+
+        assert artifact.sha256 and len(artifact.sha256) == 64
+
+    def test_batch_hash_moves_when_an_artifact_changes(self, tmp_path):
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+        before = build_artifact_manifest(renderer, rendered).batch_hash
+
+        (tmp_path / "out" / "sudoers").write_text("tampered\n")
+        after = build_artifact_manifest(renderer, rendered).batch_hash
+
+        assert before != after
+
+    def test_batch_hash_covers_routing_not_just_content(self, tmp_path):
+        """Two manifests over identical bytes but different destinations differ.
+
+        Otherwise a stale manifest listing matching filenames would satisfy the
+        check while sending them somewhere else.
+        """
+        from dataclasses import replace
+
+        from fraisier.scaffold.artifacts import _batch_hash
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        artifacts = list(build_artifact_manifest(renderer, renderer.render()).artifacts)
+
+        moved = [
+            replace(artifacts[0], destination="/etc/somewhere/else"),
+            *artifacts[1:],
+        ]
+
+        assert _batch_hash(artifacts) != _batch_hash(moved)
+
+    def test_batch_hash_is_stable_across_identical_renders(self, tmp_path):
+        hashes = set()
+        for i in range(2):
+            cfg = tmp_path / f"fraises{i}.yaml"
+            cfg.write_text(_CONFIG)
+            renderer = ScaffoldRenderer(FraisierConfig(cfg))
+            renderer.output_dir = tmp_path / f"out{i}"
+            rendered = renderer.render()
+            hashes.add(build_artifact_manifest(renderer, rendered).batch_hash)
+
+        assert len(hashes) == 1
+
+
+class TestManifestModelsTheRealInstaller:
+    """The bridge that makes the refactor safe.
+
+    The manifest is only useful if it describes what ``install.sh`` actually
+    does. This asserts that for every config in the golden matrix — both sides
+    of the multi-host asymmetry included — the artifacts the manifest says get
+    installed on a host are exactly the ones the real installer copies there.
+
+    Run before install.sh consumes the manifest, so the model is proven
+    faithful *first*; kept afterwards, so the two cannot drift apart later —
+    which is the very failure this whole bundle is about.
+    """
+
+    @staticmethod
+    def _installed_on_host(renderer, manifest, hostname: str) -> set[str]:
+        """Manifest entries this host installs, applying the same two filters
+        install.sh applies at runtime: ``_env_active`` and per-host webhook
+        selection."""
+        envs = set(renderer.context["machine_env_map"].get(hostname, []))
+        webhook = renderer.context["machine_webhook_map"].get(hostname)
+        return {
+            a.source
+            for a in manifest.installed()
+            if (a.environment is None or a.environment in envs)
+            and (a.disposition is not Disposition.WEBHOOK or a.source == webhook)
+        }
+
+    @pytest.mark.parametrize(
+        ("case", "yaml_text", "hostname"),
+        [pytest.param(*row, id=row[0]) for row in _MATRIX],
+    )
+    def test_manifest_install_set_equals_the_golden_plan(
+        self, tmp_path, case, yaml_text, hostname
+    ):
+        import json
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(yaml_text)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        manifest = build_artifact_manifest(renderer, renderer.render())
+
+        golden = json.loads(_GOLDEN.read_text())[case]
+        planned = {
+            token.removeprefix("$SCAFFOLD/")
+            for command in golden
+            for token in command.split()
+            if token.startswith("$SCAFFOLD/")
+        }
+
+        assert self._installed_on_host(renderer, manifest, hostname) == planned
+
+    def test_every_matrix_config_classifies_completely(self, tmp_path):
+        """The coverage assertion holds for every shape, not just the fixture."""
+        for i, (case, yaml_text, _) in enumerate(_MATRIX):
+            cfg = tmp_path / f"fraises{i}.yaml"
+            cfg.write_text(yaml_text)
+            renderer = ScaffoldRenderer(FraisierConfig(cfg))
+            renderer.output_dir = tmp_path / f"out{i}"
+            rendered = renderer.render()
+
+            manifest = build_artifact_manifest(renderer, rendered)
+
+            assert {a.source for a in manifest.artifacts} == set(rendered), case
