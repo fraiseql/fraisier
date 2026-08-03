@@ -662,4 +662,48 @@ echo "       /etc/postgresql/*/conf.d/fraisier.conf"
 echo "    sudo systemctl reload postgresql"
 {% endif %}
 
+# ---------------------------------------------------------------------------
+# Coverage report — what this installer did NOT install, and who does.
+#
+# #323's complaint was not that scaffold-install and scheduled-install cover
+# disjoint sets of units. It is that they did so *silently*: scaffold-install
+# exited 0 having never touched units the operator assumed it owned, and
+# scheduled-install pointed at scaffold-install to bootstrap a socket
+# scaffold-install has never installed. Neither side said anything.
+#
+# A wildcard install over the scaffold dir was rejected as the fix: that
+# directory accumulates — v0.56.0 needed a stale-unit sweep for exactly that
+# reason — so a wildcard promotes a leftover file into an installed unit,
+# which is #325's failure mode generalised to every unit type.
+#
+# So the sets stay disjoint, and the boundary is stated out loud.
+{% set app_managed = artifact_manifest.app_managed %}
+{% if app_managed %}
+echo ""
+echo "==> Not installed here — owned by 'fraisier scheduled-install'"
+echo "    These are the app's own hand-authored units, from a different source"
+echo "    tree, so this installer deliberately does not touch them:"
+{% for unit in app_managed %}
+{% if unit.environment %}
+if _env_active "{{ unit.environment }}"; then
+    echo "      {{ unit.unit_name }}  <- {{ unit.source_dir }}"
+fi
+{% else %}
+echo "      {{ unit.unit_name }}  <- {{ unit.source_dir }}"
+{% endif %}
+{% endfor %}
+echo "    Run: fraisier scheduled-install"
+{% endif %}
+{% set gaps = artifact_manifest.gaps() %}
+{% if gaps %}
+echo ""
+echo "==> Rendered but installed by nothing (known gaps)"
+{% for gap in gaps %}
+echo "      {{ gap.source }}"
+echo "        {{ gap.note }}"
+{% endfor %}
+echo "    These are tracked in the artifact manifest, not silently absent."
+{% endif %}
+
+echo ""
 echo "==> Setup complete for {{ project_name }}"
