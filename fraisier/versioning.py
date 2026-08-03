@@ -284,6 +284,64 @@ def bump_version(
     return VersionInfo(version=new_version)
 
 
+# Generous ceiling: a self-version re-lock is near-instant on a warm cache,
+# but a cold one may hit the network. Bounded so a ship cannot hang here.
+_UV_LOCK_TIMEOUT_SECONDS = 120
+
+
+def refresh_uv_lock(project_dir: Path) -> str | None:
+    """Refresh ``uv.lock`` so its self-version matches ``pyproject.toml``.
+
+    Called after a version bump: without this, uv-managed projects ship a
+    lockfile whose own package entry is one bump behind, and any later bare
+    ``uv run`` re-locks and dirties the working tree mid-command (#328).
+
+    Returns ``None`` on success or when there is no ``uv.lock`` to refresh,
+    else a human-readable warning. Never raises — a stale lockfile is
+    exactly the pre-existing behaviour, so failure must not abort a ship.
+    Callers run this *after* ``bump_version`` has committed pyproject.toml,
+    so every failure mode here has to degrade to a warning: raising would
+    abort the ship on an already-applied bump, leaving a dirty tree.
+    """
+    import shutil
+    import subprocess
+
+    lock_path = project_dir / "uv.lock"
+    if not lock_path.exists():
+        return None
+
+    uv = shutil.which("uv")
+    if uv is None:
+        return (
+            "uv.lock present but 'uv' not on PATH — "
+            "lockfile self-version will lag pyproject.toml"
+        )
+
+    try:
+        result = subprocess.run(
+            [uv, "lock"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UV_LOCK_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"'uv lock' timed out after {_UV_LOCK_TIMEOUT_SECONDS}s — "
+            "lockfile self-version will lag pyproject.toml"
+        )
+    except OSError as exc:
+        # ``which`` found a file; it does not prove the file can be exec'd.
+        return f"'uv lock' could not be run after version bump: {exc.strerror or exc}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        tail = detail[-1] if detail else "unknown error"
+        return f"'uv lock' failed after version bump: {tail}"
+    return None
+
+
 _PYPROJECT_VERSION_RE = re.compile(r'^(version\s*=\s*")([^"]+)(")', re.MULTILINE)
 
 

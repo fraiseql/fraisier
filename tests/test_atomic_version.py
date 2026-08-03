@@ -108,3 +108,119 @@ class TestAtomicBump:
         result = bump_version(pp, "patch")
         assert isinstance(result, VersionInfo)
         assert result.version == "3.1.5"
+
+
+class TestRefreshUvLock:
+    """refresh_uv_lock keeps uv.lock's self-version in step after a bump (#328)."""
+
+    def test_no_lockfile_is_a_noop(self, tmp_path):
+        """Without uv.lock there is nothing to refresh and no warning."""
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        with patch("subprocess.run") as mock_run:
+            assert refresh_uv_lock(tmp_path) is None
+        mock_run.assert_not_called()
+
+    def test_runs_uv_lock_in_project_dir(self, tmp_path):
+        """With uv.lock present, `uv lock` runs in the project directory."""
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            assert refresh_uv_lock(tmp_path) is None
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["/usr/bin/uv", "lock"]
+        assert kwargs["cwd"] == tmp_path
+
+    def test_missing_uv_warns_instead_of_raising(self, tmp_path):
+        """uv absent from PATH degrades to a warning, not a crash."""
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with patch("shutil.which", return_value=None):
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "not on PATH" in warning
+
+    def test_failed_lock_warns_with_stderr_tail(self, tmp_path):
+        """A failing `uv lock` returns a warning carrying the error tail."""
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=1, stderr="boom\nresolver exploded", stdout=""
+            )
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "resolver exploded" in warning
+
+    def test_lock_is_bounded_by_a_timeout(self, tmp_path):
+        """`uv lock` runs under a timeout so a ship cannot hang on it."""
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            refresh_uv_lock(tmp_path)
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("timeout")
+
+    def test_timeout_warns_instead_of_raising(self, tmp_path):
+        """A hung `uv lock` degrades to a warning rather than aborting a ship."""
+        import subprocess as _subprocess
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch(
+                "subprocess.run",
+                side_effect=_subprocess.TimeoutExpired(["uv", "lock"], 120),
+            ),
+        ):
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "timed out" in warning
+
+    def test_exec_failure_warns_instead_of_raising(self, tmp_path):
+        """uv on PATH but unexecutable warns; the bump is already committed.
+
+        ``shutil.which`` only proves a file was found, not that it can be
+        exec'd. This runs after ``bump_version`` has written pyproject.toml,
+        so raising here would abort a ship on a half-applied bump.
+        """
+        from unittest.mock import patch
+
+        from fraisier.versioning import refresh_uv_lock
+
+        (tmp_path / "uv.lock").write_text("")
+        with (
+            patch("shutil.which", return_value="/usr/bin/uv"),
+            patch("subprocess.run", side_effect=OSError(8, "Exec format error")),
+        ):
+            warning = refresh_uv_lock(tmp_path)
+        assert warning is not None
+        assert "Exec format error" in warning
