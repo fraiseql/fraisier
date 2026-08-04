@@ -379,7 +379,7 @@ class TestTheMatrixIsMeaningful:
             assert "mkdir -p /opt/fraisier" in plan, case
 
     def test_host_scoping_is_by_environment_name_not_by_fraise(self, plans):
-        """A known limitation, pinned so it is named rather than discovered.
+        """A known limitation (#336), pinned so it is named rather than discovered.
 
         ``machine_env_map`` — the authority ``_env_active`` reads — is built
         from :meth:`get_environments_for_server`, which returns environment

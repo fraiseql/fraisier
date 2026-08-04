@@ -149,6 +149,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             )
             return
 
+        # Must match the socket unit's ListenStream=, which is written from a
+        # template rather than read from here (#337).
         socket_path = Path(
             f"/run/fraisier/{self.environment}/unit-installer-{project_name}.sock"
         )
