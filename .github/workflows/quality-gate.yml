@@ -86,10 +86,18 @@ jobs:
         python-version: '3.12'
     - name: Install uv
       uses: astral-sh/setup-uv@v7
+    # Ruff is pinned in exactly one place — the ruff-pre-commit rev in
+    # .pre-commit-config.yaml, which pre-commit.ci autoupdates. Deriving the
+    # version here instead of installing latest is what keeps a green local
+    # pre-commit from failing in CI on a formatter change nobody chose.
     - name: Install dependencies
       run: |
         uv venv
-        uv pip install ruff
+        RUFF_VERSION="$(grep -A1 'astral-sh/ruff-pre-commit' .pre-commit-config.yaml \
+          | sed -n 's/.*rev: v//p')"
+        test -n "${RUFF_VERSION}" || { echo "::error::could not read ruff rev from .pre-commit-config.yaml"; exit 1; }
+        echo "Using ruff ${RUFF_VERSION} (pinned by .pre-commit-config.yaml)"
+        uv pip install "ruff==${RUFF_VERSION}"
     - name: Run ruff check
       run: uv run ruff check .
     - name: Run ruff format check
