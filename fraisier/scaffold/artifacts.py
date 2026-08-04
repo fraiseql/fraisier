@@ -273,8 +273,14 @@ _PLAIN_UNITS = frozenset(
     }
 )
 
-# Rendered, needed, installed by nothing. Kept as data so the four instances
-# are enumerated in one reviewable place rather than inferred from silence.
+# Rendered, needed, installed by nothing. Kept as data so every instance is
+# enumerated in one reviewable place rather than inferred from silence.
+#
+# What remains here is the self-consistent case: restore-staging's .service and
+# .timer are BOTH uninstalled, so nothing fires into a missing unit. The gaps
+# where an installed timer activated an uninstalled service, or where one
+# component told operators to run an installer that never installed the thing,
+# were closed rather than described.
 _KNOWN_GAPS: dict[str, str] = {
     "systemd/restore-staging.service": (
         "restore-staging.timer is rendered alongside it and neither is installed "
