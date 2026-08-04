@@ -26,7 +26,11 @@ from fraisier.config import (
 )
 from fraisier.dbops._validation import validate_service_name
 from fraisier.manifest import build_manifest
-from fraisier.naming import app_service_name, deploy_socket_name
+from fraisier.naming import (
+    app_service_name,
+    deploy_socket_name,
+    unit_installer_unit_names,
+)
 from fraisier.scaffold.artifacts import (
     ARTIFACT_MANIFEST_NAME,
     INSTALL_SCRIPT_NAME,
@@ -1083,10 +1087,9 @@ class ScaffoldRenderer:
         rendered: list[str] = []
         project = self.context["project_name"]
         for env_name, allow_pairs in envs.items():
-            service_out = (
-                f"systemd/fraisier-{project}-{env_name}-unit-installer.service"
-            )
-            socket_out = f"systemd/fraisier-{project}-{env_name}-unit-installer.socket"
+            socket_unit, service_unit = unit_installer_unit_names(project, env_name)
+            service_out = f"systemd/{service_unit}"
+            socket_out = f"systemd/{socket_unit}"
             rendered.extend([service_out, socket_out])
             if not dry_run:
                 self.context["env_name"] = env_name

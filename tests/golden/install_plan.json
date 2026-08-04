@@ -563,6 +563,12 @@
     "sudo cp $SCAFFOLD/systemd/fraisier-proj-backup-alert@.service /etc/systemd/system/fraisier-proj-backup-alert@.service",
     "sudo cp $SCAFFOLD/systemd/nightly.service /etc/systemd/system/nightly.service",
     "sudo systemctl daemon-reload",
+    "sudo cp $SCAFFOLD/systemd/fraisier-proj-production-unit-installer.socket /etc/systemd/system/fraisier-proj-production-unit-installer.socket",
+    "sudo cp $SCAFFOLD/systemd/fraisier-proj-production-unit-installer.service /etc/systemd/system/fraisier-proj-production-unit-installer.service",
+    "sudo systemctl daemon-reload",
+    "sudo systemctl stop fraisier-proj-production-unit-installer.service",
+    "sudo systemctl enable fraisier-proj-production-unit-installer.socket",
+    "sudo systemctl restart fraisier-proj-production-unit-installer.socket",
     "sudo cp $SCAFFOLD/nginx/gateway.conf /etc/nginx/sites-available/proj",
     "sudo ln -sf /etc/nginx/sites-available/proj /etc/nginx/sites-enabled/proj",
     "sudo nginx -t && sudo systemctl reload nginx"

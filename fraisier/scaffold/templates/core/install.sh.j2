@@ -632,6 +632,37 @@ if _env_active "{{ ish.env_name }}"; then
 fi
 {% endfor %}
 
+{% for pair in artifact_manifest.unit_installer_pairs() %}
+# Unit-installer helper for {{ pair.environment }} (#240, runs as root)
+#
+# `fraisier scheduled-install` requires this socket and, when it is missing,
+# tells the operator to run `fraisier scaffold-install --yes` to bootstrap it —
+# which never installed it. Both sides pointed at each other and neither acted.
+#
+# The sequence is #279's re-bake, for #279's reason: the .service bakes its
+# `--allow` allowlist into ExecStart as argv, so a running instance keeps the
+# OLD allowlist and `enable --now` is a no-op on it. daemon-reload the new
+# unit, STOP the stale-argv .service, then enable + restart the .socket so the
+# next connection re-execs with the new argv.
+#
+# _run_strict throughout, also #279's reason: a half-applied re-bake leaves the
+# helper accepting connections with a stale allowlist, which surfaces as a
+# "not allowed" deep inside a later deploy rather than here.
+if _env_active "{{ pair.environment }}"; then
+    echo "  Installing unit-installer helper for {{ pair.environment }}"
+    _run_strict sudo cp "${SCAFFOLD_DIR}/{{ pair.socket.source }}" \
+       {{ pair.socket.destination }}
+    _run_strict sudo cp "${SCAFFOLD_DIR}/{{ pair.service.source }}" \
+       {{ pair.service.destination }}
+    _run_strict sudo systemctl daemon-reload
+    # The .service may not be running yet on a first install; stopping an
+    # inactive unit is a no-op, so this stays strict rather than `|| true`.
+    _run_strict sudo systemctl stop {{ pair.service_unit }}
+    _run_strict sudo systemctl enable {{ pair.socket_unit }}
+    _run_strict sudo systemctl restart {{ pair.socket_unit }}
+fi
+{% endfor %}
+
 # Install nginx configs — sources and destinations from the manifest.
 #
 # The vhost filename used to be re-derived here, and the formula had drifted:

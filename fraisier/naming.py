@@ -63,6 +63,22 @@ def deploy_socket_name(
     return f"fraisier-{env_key}.socket"
 
 
+def unit_installer_unit_names(project_name: str, env_name: str) -> tuple[str, str]:
+    """Return ``(socket_unit, service_unit)`` for the unit-installer helper.
+
+    One helper per (project, environment) (#240). The renderer names the files
+    it writes and the artifact manifest names the files it installs; deriving
+    that name in both places independently is the drift this module exists to
+    prevent, so both call here.
+
+    Returns:
+        The ``.socket`` and ``.service`` unit names, in the order they are
+        installed.
+    """
+    base = f"fraisier-{project_name}-{env_name}-unit-installer"
+    return f"{base}.socket", f"{base}.service"
+
+
 def app_service_name(
     project_name: str,
     fraise_name: str,
