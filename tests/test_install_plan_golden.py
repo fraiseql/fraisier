@@ -376,6 +376,42 @@ class TestTheMatrixIsMeaningful:
         )
 
 
+class TestUnitInstallerRebakeOrderIsCaptured:
+    """#240's helper bakes its allowlist into argv, so it re-bakes like #279.
+
+    Same hazard, same sequence: a running .service holds the OLD ``--allow``
+    argv and ``enable --now`` is a no-op on it, so the stop must land between
+    the copy and the socket restart or the stale allowlist survives a green
+    install.
+    """
+
+    def test_the_sequence_is_in_the_pin(self, plans):
+        unit = "fraisier-proj-production-unit-installer"
+        ops = [c for c in plans["scheduled_fraise"] if unit in c]
+        verbs = [c.split()[2] if "systemctl" in c else "cp" for c in ops]
+
+        assert verbs.count("cp") == 2, f"expected socket+service copies: {ops}"
+        assert verbs.index("cp") < verbs.index("stop") < verbs.index("restart"), (
+            f"re-bake order not captured in the golden plan: {ops}"
+        )
+        assert verbs.index("stop") < verbs.index("enable"), (
+            "enable --now is a no-op on a running unit; the stop must precede it"
+        )
+
+    def test_the_socket_is_copied_before_the_service(self, plans):
+        """The .service `Requires=` the socket; copying it first would load a
+        unit whose dependency is not on disk yet."""
+        unit = "fraisier-proj-production-unit-installer"
+        copies = [c for c in plans["scheduled_fraise"] if unit in c and "cp" in c]
+
+        assert copies[0].endswith(".socket")
+        assert copies[1].endswith(".service")
+
+    def test_a_config_without_scheduled_fraises_installs_no_helper(self, plans):
+        """One helper per environment that has one — not one per host."""
+        assert not [c for c in plans["single_host"] if "unit-installer" in c]
+
+
 class TestDerivedVhostNameIsInstalled:
     """A vhost with no explicit ``server_name`` reaches the host.
 

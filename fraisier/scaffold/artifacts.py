@@ -37,6 +37,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from fraisier.errors import ValidationError
+from fraisier.naming import unit_installer_unit_names
 
 if TYPE_CHECKING:
     from fraisier.scaffold.renderer import ScaffoldRenderer
@@ -83,6 +84,17 @@ class Disposition(StrEnum):
 
     HELPER_REBAKE = "helper_rebake"
     """#279's allowlist re-bake, ``_run_strict`` throughout."""
+
+    UNIT_INSTALLER = "unit_installer"
+    """#240's per-environment unit-installer helper.
+
+    Shares #279's re-bake *shape* — its ExecStart carries the ``--allow``
+    allowlist as argv, so a running .service holds the stale one and
+    ``enable --now`` is a no-op on it — but not #279's driver: these units come
+    one per environment, not one per (fraise, environment). Kept a separate
+    disposition so ``with_disposition('helper_rebake')`` cannot silently start
+    matching units that block does not install.
+    """
 
     NGINX_VHOST = "nginx_vhost"
     """Copy to sites-available plus a sites-enabled symlink."""
@@ -155,6 +167,24 @@ class AppManagedUnit:
 
 
 @dataclass(frozen=True)
+class UnitInstallerPair:
+    """One environment's unit-installer helper, both units together."""
+
+    socket: RenderedArtifact
+    service: RenderedArtifact
+    environment: str
+
+    @property
+    def socket_unit(self) -> str:
+        """The name ``systemctl`` is given, as opposed to the path copied."""
+        return self.socket.source.removeprefix("systemd/")
+
+    @property
+    def service_unit(self) -> str:
+        return self.service.source.removeprefix("systemd/")
+
+
+@dataclass(frozen=True)
 class ArtifactManifest:
     """Every artifact of one render, plus what binds it to that render."""
 
@@ -170,6 +200,43 @@ class ArtifactManifest:
 
     def gaps(self) -> tuple[RenderedArtifact, ...]:
         return self.with_disposition(Disposition.UNINSTALLED_GAP)
+
+    def unit_installer_pairs(self) -> tuple[UnitInstallerPair, ...]:
+        """The unit-installer helpers, socket and service paired per environment.
+
+        The re-bake sequence acts on both units together — stop the .service,
+        restart the .socket — so it needs the pair, not two loose entries. The
+        pairing is done here rather than by re-deriving one name from the other
+        in the template, which is the drift this manifest exists to remove.
+
+        Raises:
+            ValidationError: An environment rendered one unit without the
+                other. The sequence cannot be run on half a pair, and a
+                silently skipped helper is exactly #323's shape.
+        """
+        by_env: dict[str, dict[str, RenderedArtifact]] = {}
+        for artifact in self.with_disposition(Disposition.UNIT_INSTALLER):
+            # environment is always set for this disposition; the walrus keeps
+            # the type checker honest without inventing a fallback bucket.
+            env = artifact.environment or ""
+            suffix = "socket" if artifact.source.endswith(".socket") else "service"
+            by_env.setdefault(env, {})[suffix] = artifact
+
+        pairs: list[UnitInstallerPair] = []
+        for env in sorted(by_env):
+            units = by_env[env]
+            if set(units) != {"socket", "service"}:
+                raise ValidationError(
+                    f"unit-installer helper for environment {env!r} is "
+                    f"incomplete: rendered {sorted(units)}, needs both the "
+                    ".socket and the .service"
+                )
+            pairs.append(
+                UnitInstallerPair(
+                    socket=units["socket"], service=units["service"], environment=env
+                )
+            )
+        return tuple(pairs)
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +285,6 @@ _KNOWN_GAPS: dict[str, str] = {
     ),
 }
 
-_UNIT_INSTALLER_RE = re.compile(
-    r"^systemd/fraisier-.+-unit-installer\.(socket|service)$"
-)
 _BACKUP_ALERT_RE = re.compile(r"^systemd/fraisier-.+-backup-alert@\.service$")
 
 
@@ -289,6 +353,8 @@ def _env_of_unit(renderer: ScaffoldRenderer, source: str) -> str | None:
 
 def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | None:
     """Route one rendered file, or None when nothing claims it."""
+    from fraisier.scaffold.renderer import _collect_unit_installer_envs
+
     project = renderer.context["project_name"]
     stem = source.removeprefix("systemd/")
 
@@ -366,16 +432,18 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
                 environment=entry["env_name"],
             )
 
-    if _UNIT_INSTALLER_RE.match(source):
-        return RenderedArtifact(
-            source,
-            Disposition.UNINSTALLED_GAP,
-            note=(
-                "scheduled-install requires this socket and tells operators to "
-                "run 'fraisier scaffold-install --yes' to bootstrap it, but "
-                "install.sh has never installed it"
-            ),
-        )
+    # #240's unit-installer helper, one per environment with scheduled fraises.
+    # Matched against the environments the renderer actually wrote units for,
+    # and against names from the same helper it used, so a rename cannot leave
+    # this branch matching nothing and silently reclassifying the units.
+    for env_name in _collect_unit_installer_envs(renderer.context["local_fraises"]):
+        if stem in unit_installer_unit_names(project, env_name):
+            return RenderedArtifact(
+                source,
+                Disposition.UNIT_INSTALLER,
+                destination=f"{SYSTEMD_DIR}/{stem}",
+                environment=env_name,
+            )
 
     # backup.service's OnFailure= target. Installed unconditionally, like the
     # backup units it serves: a missing OnFailure= target does not fail

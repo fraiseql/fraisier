@@ -76,6 +76,28 @@ fraises:
 """
 
 
+# A scheduled fraise, which is what brings the unit-installer helper into the
+# tree — one per environment that has one.
+_SCHEDULED_CONFIG = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/nightly
+        systemd_service: nightly.service
+        systemd_timer: nightly.timer
+        script_path: /usr/local/bin/nightly.sh
+"""
+
+
 @pytest.fixture
 def manifest(tmp_path):
     cfg = tmp_path / "fraises.yaml"
@@ -365,6 +387,90 @@ class TestBackupAlertUnitIsInstalled:
         template = on_failure.split("@", 1)[0] + "@.service"
 
         assert alert.destination == f"/etc/systemd/system/{template}"
+
+
+class TestUnitInstallerHelperIsInstalled:
+    """The socket ``scheduled-install`` requires, and told operators to get by
+    running the installer that never installed it.
+
+    Both sides pointed at each other: ``scheduled_install`` raises "run
+    'fraisier scaffold-install --yes' to bootstrap" and ``scaffold-install``
+    had no line for these units at all.
+    """
+
+    @pytest.fixture
+    def scheduled_manifest(self, tmp_path):
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_SCHEDULED_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+        return build_artifact_manifest(renderer, rendered)
+
+    def test_both_units_are_installed(self, scheduled_manifest):
+        for suffix in ("socket", "service"):
+            artifact = _by_source(
+                scheduled_manifest,
+                f"systemd/fraisier-proj-production-unit-installer.{suffix}",
+            )
+
+            assert artifact.disposition is Disposition.UNIT_INSTALLER
+            assert artifact.destination == (
+                f"/etc/systemd/system/fraisier-proj-production-unit-installer.{suffix}"
+            )
+
+    def test_they_are_gated_on_their_environment(self, scheduled_manifest):
+        """One helper per environment: a prod-only host must not install dev's."""
+        artifact = _by_source(
+            scheduled_manifest,
+            "systemd/fraisier-proj-production-unit-installer.socket",
+        )
+
+        assert artifact.environment == "production"
+
+    def test_they_are_no_longer_a_gap(self, scheduled_manifest):
+        assert not [
+            a for a in scheduled_manifest.gaps() if "unit-installer" in a.source
+        ]
+
+    def test_the_pair_is_returned_together(self, scheduled_manifest):
+        """The re-bake acts on both units at once, so it needs them paired."""
+        pairs = scheduled_manifest.unit_installer_pairs()
+
+        assert len(pairs) == 1
+        assert pairs[0].environment == "production"
+        assert pairs[0].socket_unit == "fraisier-proj-production-unit-installer.socket"
+        assert (
+            pairs[0].service_unit == "fraisier-proj-production-unit-installer.service"
+        )
+
+    def test_a_half_rendered_pair_is_an_error_not_a_skip(self, tmp_path):
+        """The sequence cannot run on half a pair, and a silent skip is #323."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_SCHEDULED_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+        without_socket = [
+            s for s in rendered if not s.endswith("unit-installer.socket")
+        ]
+
+        manifest = build_artifact_manifest(renderer, without_socket)
+
+        with pytest.raises(ValidationError) as exc:
+            manifest.unit_installer_pairs()
+
+        assert "production" in str(exc.value)
+
+    def test_the_units_are_named_by_the_shared_helper(self, scheduled_manifest):
+        """Renderer and manifest must not derive this name independently."""
+        from fraisier.naming import unit_installer_unit_names
+
+        socket_unit, service_unit = unit_installer_unit_names("proj", "production")
+        sources = {a.source for a in scheduled_manifest.artifacts}
+
+        assert f"systemd/{socket_unit}" in sources
+        assert f"systemd/{service_unit}" in sources
 
 
 class TestBatchHashBindsManifestToTree:
