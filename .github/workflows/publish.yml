@@ -71,10 +71,17 @@ jobs:
       with:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
+    # Same single pin as quality-gate.yml: the ruff-pre-commit rev in
+    # .pre-commit-config.yaml. An unpinned ruff on a release gate can fail a
+    # release on a formatter change that landed upstream that morning.
     - name: Install dependencies
       run: |
         uv venv
-        uv pip install ruff
+        RUFF_VERSION="$(grep -A1 'astral-sh/ruff-pre-commit' .pre-commit-config.yaml \
+          | sed -n 's/.*rev: v//p')"
+        test -n "${RUFF_VERSION}" || { echo "::error::could not read ruff rev from .pre-commit-config.yaml"; exit 1; }
+        echo "Using ruff ${RUFF_VERSION} (pinned by .pre-commit-config.yaml)"
+        uv pip install "ruff==${RUFF_VERSION}"
     - name: Run ruff check
       run: uv run ruff check .
     - name: Run ruff format check
