@@ -348,6 +348,59 @@ class TestTheMatrixIsMeaningful:
             "the production-only host planned an install of a development unit"
         )
 
+    def test_hosts_do_not_provision_each_others_directories(self, plans):
+        """#325's shape, one layer down: the directory block was ungated.
+
+        Units were host-filtered while the paths those units live in were not,
+        so a production-only host created — and chowned — the dev host's
+        git_repo and app_path. Empty and wrongly-present, they read as a
+        half-provisioned environment on a box that should have no trace of it.
+        """
+        prod = plans["asymmetric_prod_only_host"]
+        touched = [c for c in prod if any(v in c for v in ("mkdir", "chown", "chmod"))]
+
+        assert not [c for c in touched if "api-dev" in c or "api-stg" in c], (
+            "the production-only host provisioned another host's directories"
+        )
+
+    def test_a_host_still_provisions_its_own_directories(self, plans):
+        """The gate has to let this host's own paths through."""
+        prod = " ".join(plans["asymmetric_prod_only_host"])
+
+        assert "mkdir -p /var/www/api" in prod
+        assert "mkdir -p /var/git/api.git" in prod
+
+    def test_shared_directories_survive_the_gate(self, plans):
+        """Paths no environment owns are unconditional and must stay so."""
+        for case in ("single_host", "asymmetric_prod_only_host"):
+            plan = " ".join(plans[case])
+
+            assert "mkdir -p /var/lib/fraisier" in plan, case
+            assert "mkdir -p /opt/fraisier" in plan, case
+
+    def test_host_scoping_is_by_environment_name_not_by_fraise(self, plans):
+        """A known limitation, pinned so it is named rather than discovered.
+
+        ``machine_env_map`` — the authority ``_env_active`` reads — is built
+        from :meth:`get_environments_for_server`, which returns environment
+        *names* and discards which fraise declared them. So when two fraises
+        put the same environment name on different servers, both hosts see
+        that name as active and each installs the other's units and creates
+        the other's directories.
+
+        This predates the directory gate and affects units identically, so
+        gating directories did not introduce it and could not fix it: the fix
+        is to scope by (fraise, environment), which changes which units live
+        hosts install and belongs in its own change.
+        """
+        abox = " ".join(plans["per_fraise_servers_a"])
+
+        assert "worker.service /etc/systemd/system/worker.service" in abox, (
+            "if this now fails, host scoping became fraise-aware — good; "
+            "delete this test and the directory gate follows for free"
+        )
+        assert "mkdir -p /var/www/worker" in abox
+
     def test_each_host_installs_its_own_webhook_unit(self, plans):
         """The unit whose name carries the host is the one copied (#325)."""
         dev = " ".join(plans["asymmetric_dev_staging_host"])
