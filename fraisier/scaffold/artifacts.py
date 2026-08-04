@@ -191,17 +191,23 @@ _SCAFFOLD_LOCAL_SOURCES = frozenset(
     }
 )
 
-# Timers install.sh copies unconditionally.
-_PLAIN_TIMERS = frozenset({"systemd/deploy-checker.timer", "systemd/backup.timer"})
+# Units install.sh copies unconditionally — no environment owns them, so
+# `_env_of_unit` cannot route them and they are listed by name.
+#
+# A timer belongs here with the service it activates, never on its own: a timer
+# whose target is not installed is a firing that hits a missing unit, which is
+# how backup.timer/backup.service drifted apart.
+_PLAIN_UNITS = frozenset(
+    {
+        "systemd/deploy-checker.timer",
+        "systemd/backup.timer",
+        "systemd/backup.service",
+    }
+)
 
 # Rendered, needed, installed by nothing. Kept as data so the four instances
 # are enumerated in one reviewable place rather than inferred from silence.
 _KNOWN_GAPS: dict[str, str] = {
-    "systemd/backup.service": (
-        "backup.timer is installed and, having no Unit=, activates "
-        "backup.service — which install.sh never copies, so the timer fires "
-        "into a missing unit"
-    ),
     "poll-deploy.service": (
         "deploy-checker.timer is installed and activates deploy-checker.service "
         "by default, but the rendered file is named poll-deploy.service and is "
@@ -385,7 +391,7 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
             source, Disposition.PLAIN, destination=f"{SYSTEMD_DIR}/{stem}"
         )
 
-    if source in _PLAIN_TIMERS:
+    if source in _PLAIN_UNITS:
         return RenderedArtifact(
             source, Disposition.PLAIN, destination=f"{SYSTEMD_DIR}/{stem}"
         )

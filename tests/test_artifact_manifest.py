@@ -179,17 +179,12 @@ class TestKnownGapsAreNamedNotHidden:
     absence of an install line.
     """
 
-    def test_backup_service_is_recorded_as_a_gap(self, manifest):
-        artifact = _by_source(manifest, "systemd/backup.service")
-
-        assert artifact.disposition is Disposition.UNINSTALLED_GAP
-        assert artifact.note
-
-    def test_gap_note_explains_the_consequence(self, manifest):
-        """backup.timer is installed and activates backup.service by default."""
-        artifact = _by_source(manifest, "systemd/backup.service")
-
-        assert "timer" in artifact.note.lower()
+    def test_every_gap_explains_its_consequence(self, manifest):
+        """A gap without a stated consequence is indistinguishable from a
+        deliberate omission, which is what the disposition exists to prevent."""
+        for artifact in manifest.artifacts:
+            if artifact.disposition is Disposition.UNINSTALLED_GAP:
+                assert artifact.note, f"{artifact.source} is a gap with no note"
 
     def test_timers_installed_without_their_service_are_visible(self, manifest):
         gaps = {
@@ -198,8 +193,49 @@ class TestKnownGapsAreNamedNotHidden:
             if a.disposition is Disposition.UNINSTALLED_GAP
         }
 
-        assert "systemd/backup.service" in gaps
         assert "poll-deploy.service" in gaps
+
+
+class TestBackupServiceIsInstalled:
+    """``backup.timer`` fires into ``backup.service``, which had to exist.
+
+    The timer carries no ``Unit=``, so systemd activates the unit with its own
+    stem. The timer was installed and the service was not, so every firing hit
+    a missing unit.
+    """
+
+    def test_the_backup_service_is_installed(self, manifest):
+        artifact = _by_source(manifest, "systemd/backup.service")
+
+        assert artifact.disposition is Disposition.PLAIN
+        assert artifact.destination == "/etc/systemd/system/backup.service"
+
+    def test_it_installs_wherever_its_timer_does(self, manifest):
+        """Both unconditional: an env gate on one and not the other is the
+        asymmetry that produced this bug in the first place."""
+        service = _by_source(manifest, "systemd/backup.service")
+        timer = _by_source(manifest, "systemd/backup.timer")
+
+        assert service.environment == timer.environment is None
+
+    def test_the_installed_name_is_the_one_the_timer_activates(
+        self, manifest, tmp_path
+    ):
+        """With no ``Unit=``, the activated unit is the timer's own stem."""
+        timer_unit = (tmp_path / "out" / "systemd" / "backup.timer").read_text()
+        assert not any(ln.startswith("Unit=") for ln in timer_unit.splitlines()), (
+            "the timer now names its target explicitly; this pin must follow it"
+        )
+
+        timer = _by_source(manifest, "systemd/backup.timer")
+        service = _by_source(manifest, "systemd/backup.service")
+        assert timer.destination is not None
+        assert service.destination is not None
+
+        activated = timer.destination.removesuffix(".timer")
+        installed = service.destination.removesuffix(".service")
+
+        assert activated == installed
 
 
 class TestBackupAlertUnitIsInstalled:
@@ -464,7 +500,7 @@ class TestDoctorSurfacesCoverage:
 
         assert result.status == "warn"
         assert "installed by nothing" in result.detail
-        assert "backup.service" in result.detail
+        assert "poll-deploy.service" in result.detail
 
     def test_undispositioned_artifact_fails_the_check(self, tmp_path, monkeypatch):
         """A new rendered artifact with no disposition is a hard finding."""
