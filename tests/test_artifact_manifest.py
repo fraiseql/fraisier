@@ -51,6 +51,31 @@ fraises:
 """
 
 
+# restore-staging's units render only under this strategy, and both of them
+# are uninstalled — the one gap class this release deliberately leaves open,
+# because unlike the others it is self-consistent: no installed timer fires
+# into a missing unit.
+_RESTORE_MIGRATE_CONFIG = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      staging:
+        server: only.example.io
+        app_path: /var/www/api-stg
+        systemd_service: api-stg.service
+        git_repo: /var/git/api-stg.git
+        database:
+          strategy: restore_migrate
+"""
+
+
 @pytest.fixture
 def manifest(tmp_path):
     cfg = tmp_path / "fraises.yaml"
@@ -186,14 +211,71 @@ class TestKnownGapsAreNamedNotHidden:
             if artifact.disposition is Disposition.UNINSTALLED_GAP:
                 assert artifact.note, f"{artifact.source} is a gap with no note"
 
-    def test_timers_installed_without_their_service_are_visible(self, manifest):
-        gaps = {
-            a.source
-            for a in manifest.artifacts
-            if a.disposition is Disposition.UNINSTALLED_GAP
-        }
+    def test_gaps_are_reported_where_they_are_rendered(self, tmp_path):
+        """restore-staging renders only under a ``restore_migrate`` strategy.
 
-        assert "poll-deploy.service" in gaps
+        Unlike the four gaps this release closed, its .service and .timer are
+        *both* uninstalled — self-consistent, so nothing fires into a missing
+        unit. It stays a named gap rather than a silent one.
+        """
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_RESTORE_MIGRATE_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+
+        manifest = build_artifact_manifest(renderer, rendered)
+        gaps = {a.source for a in manifest.gaps()}
+
+        assert "systemd/restore-staging.service" in gaps
+        assert "systemd/restore-staging.timer" in gaps
+
+
+class TestDeployCheckerServiceIsInstalled:
+    """``deploy-checker.timer`` fires into ``deploy-checker.service``.
+
+    The unit was rendered as ``poll-deploy.service``, at the tree root rather
+    than under ``systemd/``, so the timer activated a name that existed
+    nowhere. Renaming the rendered unit — rather than pointing the timer at
+    the old name with ``Unit=`` — is what makes the fix land on hosts that are
+    already running the timer: the timer file they have keeps working the
+    moment the correctly-named service appears beside it.
+    """
+
+    def test_the_unit_is_rendered_under_the_name_its_timer_activates(self, manifest):
+        artifact = _by_source(manifest, "systemd/deploy-checker.service")
+
+        assert artifact.disposition is Disposition.PLAIN
+        assert artifact.destination == "/etc/systemd/system/deploy-checker.service"
+
+    def test_the_old_name_is_gone_entirely(self, manifest):
+        """Not renamed *and* kept: two names for one unit is the bug."""
+        sources = {a.source for a in manifest.artifacts}
+
+        assert "poll-deploy.service" not in sources
+        assert "systemd/poll-deploy.service" not in sources
+
+    def test_it_is_no_longer_a_gap(self, manifest):
+        assert "poll-deploy.service" not in {a.source for a in manifest.gaps()}
+
+    def test_the_installed_name_is_the_one_the_timer_activates(
+        self, manifest, tmp_path
+    ):
+        """With no ``Unit=``, the activated unit is the timer's own stem."""
+        timer_unit = (tmp_path / "out" / "systemd" / "deploy-checker.timer").read_text()
+        assert not any(ln.startswith("Unit=") for ln in timer_unit.splitlines()), (
+            "the timer now names its target explicitly; this pin must follow it"
+        )
+
+        timer = _by_source(manifest, "systemd/deploy-checker.timer")
+        service = _by_source(manifest, "systemd/deploy-checker.service")
+        assert timer.destination is not None
+        assert service.destination is not None
+
+        activated = timer.destination.removesuffix(".timer")
+        installed = service.destination.removesuffix(".service")
+
+        assert activated == installed
 
 
 class TestBackupServiceIsInstalled:
@@ -494,13 +576,22 @@ class TestDoctorSurfacesCoverage:
 
     def test_reports_the_gaps_as_a_warning(self, tmp_path):
         cfg = tmp_path / "fraises.yaml"
-        cfg.write_text(_CONFIG)
+        cfg.write_text(_RESTORE_MIGRATE_CONFIG)
 
         result = self._run(FraisierConfig(cfg))
 
         assert result.status == "warn"
         assert "installed by nothing" in result.detail
-        assert "poll-deploy.service" in result.detail
+        assert "restore-staging" in result.detail
+
+    def test_a_tree_with_no_gaps_reports_ok(self, tmp_path):
+        """The warning has to be able to clear, or it is wallpaper."""
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_CONFIG)
+
+        result = self._run(FraisierConfig(cfg))
+
+        assert result.status == "pass"
 
     def test_undispositioned_artifact_fails_the_check(self, tmp_path, monkeypatch):
         """A new rendered artifact with no disposition is a hard finding."""

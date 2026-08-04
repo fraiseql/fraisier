@@ -220,6 +220,49 @@ def scheduled_tree(tmp_path):
     return tmp_path
 
 
+_RESTORE_MIGRATE_YAML = """\
+name: testapp
+servers:
+  example.com:
+    machine_hostnames: [default-testrunner]
+scaffold:
+  deploy_user: testapp_deploy
+fraises:
+  api:
+    type: api
+    environments:
+      staging:
+        server: example.com
+        app_path: /var/www/api-stg
+        systemd_service: api-stg.service
+        git_repo: /var/git/api-stg.git
+        database:
+          strategy: restore_migrate
+"""
+
+
+@pytest.fixture
+def restore_tree(tmp_path):
+    """A tree that still contains a gap — restore-staging's two units.
+
+    Both are uninstalled, so unlike the gaps this release closed nothing fires
+    into a missing unit; it stays reported rather than becoming silent.
+    """
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text(_RESTORE_MIGRATE_YAML)
+    renderer = ScaffoldRenderer(FraisierConfig(cfg))
+    renderer.output_dir = tmp_path / "generated"
+    renderer.render()
+    (tmp_path / "generated" / "install.sh").chmod(0o755)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "hostname"
+    fake.write_text("#!/bin/bash\necho default-testrunner\n")
+    fake.chmod(0o755)
+    return tmp_path
+
+
 class TestCoverageReport:
     """#323: the two installers stop covering disjoint sets *silently*.
 
@@ -254,12 +297,16 @@ class TestCoverageReport:
             if "cp" in line:
                 assert "testapp-reindex" not in line
 
-    def test_known_gaps_are_reported_with_their_consequence(self, tree):
-        out = _run(tree).stdout
+    def test_known_gaps_are_reported_with_their_consequence(self, restore_tree):
+        out = _run(restore_tree).stdout
 
         assert "installed by nothing" in out
-        assert "backup.service" in out
-        assert "backup.timer" in out  # the note explains what breaks
+        assert "restore-staging.service" in out
+        assert "restore-staging.timer" in out  # the note explains what breaks
+
+    def test_a_tree_with_no_gaps_prints_no_gap_section(self, tree):
+        """The report has to be able to go quiet, or operators learn to skip it."""
+        assert "installed by nothing" not in _run(tree).stdout
 
     def test_a_config_without_scheduled_fraises_reports_no_app_managed(self, tree):
         assert "scheduled-install" not in _run(tree).stdout
