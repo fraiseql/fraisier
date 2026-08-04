@@ -220,10 +220,10 @@ class TestDispositions:
 class TestKnownGapsAreNamedNotHidden:
     """Artifacts that are rendered and should be installed, but are not.
 
-    Classifying these as ``MANUAL`` would launder four live bugs into
-    "intentional". They get their own disposition and a reason, so the gap is
-    visible in the manifest and in ``doctor`` instead of being implied by the
-    absence of an install line.
+    Classifying these as ``MANUAL`` would launder live bugs into "intentional".
+    They get their own disposition and a reason, so the gap is visible in the
+    manifest and in ``doctor`` instead of being implied by the absence of an
+    install line — which is what made naming them the step before closing them.
     """
 
     def test_every_gap_explains_its_consequence(self, manifest):
@@ -236,7 +236,7 @@ class TestKnownGapsAreNamedNotHidden:
     def test_gaps_are_reported_where_they_are_rendered(self, tmp_path):
         """restore-staging renders only under a ``restore_migrate`` strategy.
 
-        Unlike the four gaps this release closed, its .service and .timer are
+        Unlike the gaps this release closed, its .service and .timer are
         *both* uninstalled — self-consistent, so nothing fires into a missing
         unit. It stays a named gap rather than a silent one.
         """
