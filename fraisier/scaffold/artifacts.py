@@ -376,11 +376,13 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
             ),
         )
 
+    # backup.service's OnFailure= target. Installed unconditionally, like the
+    # backup units it serves: a missing OnFailure= target does not fail
+    # loudly — systemd logs that it could not enqueue the job — so the backup
+    # failure this unit exists to announce would go out silently.
     if _BACKUP_ALERT_RE.match(source):
         return RenderedArtifact(
-            source,
-            Disposition.UNINSTALLED_GAP,
-            note="referenced by backup.service's OnFailure=, installed by nothing",
+            source, Disposition.PLAIN, destination=f"{SYSTEMD_DIR}/{stem}"
         )
 
     if source in _PLAIN_TIMERS:

@@ -202,6 +202,53 @@ class TestKnownGapsAreNamedNotHidden:
         assert "poll-deploy.service" in gaps
 
 
+class TestBackupAlertUnitIsInstalled:
+    """``backup.service``'s ``OnFailure=`` target has to exist to fire.
+
+    A missing ``OnFailure=`` target does not fail loudly — systemd logs that it
+    could not enqueue the job and the backup failure itself goes unannounced,
+    which is precisely the case the alert unit exists to cover.
+    """
+
+    def test_the_alert_unit_is_installed(self, manifest):
+        artifact = _by_source(manifest, "systemd/fraisier-proj-backup-alert@.service")
+
+        assert artifact.disposition is Disposition.PLAIN
+        assert (
+            artifact.destination
+            == "/etc/systemd/system/fraisier-proj-backup-alert@.service"
+        )
+
+    def test_it_installs_on_every_host(self, manifest):
+        """Rendered unconditionally, so it cannot be gated on an environment."""
+        artifact = _by_source(manifest, "systemd/fraisier-proj-backup-alert@.service")
+
+        assert artifact.environment is None
+
+    def test_the_name_backup_service_references_is_the_name_installed(
+        self, manifest, tmp_path
+    ):
+        """The referenced unit and the installed unit must be the same name.
+
+        ``OnFailure=`` names a unit; the manifest installs a file. Two places
+        deriving one name is the shape this whole bundle exists to remove, so
+        the reference is checked against the destination rather than assumed.
+        """
+        alert = _by_source(manifest, "systemd/fraisier-proj-backup-alert@.service")
+        backup_unit = (tmp_path / "out" / "systemd" / "backup.service").read_text()
+
+        on_failure = next(
+            line.split("=", 1)[1].strip()
+            for line in backup_unit.splitlines()
+            if line.startswith("OnFailure=")
+        )
+        # OnFailure passes the failed unit as the instance (`@%n.service`);
+        # the installed file is the template it instantiates.
+        template = on_failure.split("@", 1)[0] + "@.service"
+
+        assert alert.destination == f"/etc/systemd/system/{template}"
+
+
 class TestBatchHashBindsManifestToTree:
     """An old manifest against new renders reintroduces the gap one level up."""
 
