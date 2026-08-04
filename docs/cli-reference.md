@@ -652,6 +652,20 @@ fraisier scaffold-install [OPTIONS]
 - Must have sudo access (or be running as root)
 - Generated files must be in `PROJECT_DIR` (usually `/opt/<project_name>`)
 
+**Host scoping** (v0.58.0)
+
+On a multi-host config, both the units *and* the managed directories are
+scoped to this machine: a production-only host no longer creates the dev host's
+`git_repo` and `app_path`. Paths that belong to no environment —
+`/opt/fraisier`, `/var/lib/fraisier`, the config directory — are still created
+everywhere.
+
+Scoping is by environment *name*, so two fraises using one environment name on
+different servers each install the other's units and create the other's
+directories ([#336](https://github.com/fraiseql/fraisier/issues/336)).
+Directories created before v0.58.0 on a host that should not have them are not
+removed by re-running this command.
+
 **Options:**
 
 | Option | Description |

@@ -7,6 +7,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-08-04
+
+v0.57.0's coverage assertion found four artifacts that were rendered and
+installed by nothing, and reported them rather than fixing them. This release
+fixes all four. It also closes the directory half of #325's host gating — the
+units were filtered by host, the directories they live in were not — and gives
+ruff's version one place to be pinned instead of three.
+
+Nothing here is a new capability. Each entry is a unit that has always been
+rendered and has never reached a host.
+
+### Fixed
+
+- **`backup.service` was never installed, and `backup.timer` has always
+  activated it.** The timer carries no `Unit=`, so systemd activates the unit
+  with its own stem. `install.sh` copied the timer and not the service, so
+  every firing hit a unit that was not there. The set it was missing from was
+  named `_PLAIN_TIMERS` — named for what happened to be in it, which is how a
+  timer came to be listed without the service it activates. It is now
+  `_PLAIN_UNITS` and its comment states the pairing rule.
+
+- **The alert unit `backup.service` fails into was never installed.**
+  `backup.service` declares `OnFailure=fraisier-{project}-backup-alert@%n.service`
+  and the renderer writes that template unit; no installer ever copied it. A
+  missing `OnFailure=` target does not fail loudly — systemd logs that it could
+  not enqueue the job — so the one failure the alert exists to announce was the
+  one that went out silently. Installed unconditionally, matching how it is
+  rendered: it is referenced by a unit that is itself unconditional. The pin
+  reads `OnFailure=` out of the rendered `backup.service` and asserts the
+  manifest installs *that* name, rather than checking a filename twice.
+
+- **The deploy checker was rendered under a name its timer never activates.**
+  `deploy-checker.timer` carries no `Unit=` either, so systemd looks for
+  `deploy-checker.service`. The renderer wrote it as `poll-deploy.service`, at
+  the scaffold-tree root rather than under `systemd/` — a name the timer never
+  looks for, in a directory the installer never copies from. Two independent
+  ways to miss.
+
+  The unit is **renamed**, not retargeted with `Unit=`. For a host already
+  running the timer the two are not equivalent: renaming leaves the installed
+  timer correct and lands the fix by the presence of one file, while
+  retargeting requires the timer to be replaced *and* daemon-reloaded *and*
+  restarted, so a half-applied install leaves it pointing at a unit that is not
+  there — the state being fixed, now harder to see because the tree looks
+  current. Nothing is orphaned: no installer ever placed `poll-deploy.service`
+  on a host.
+
+- **`scaffold-install` now installs the unit-installer socket that
+  `scheduled-install` requires.** `scheduled_install` refuses to apply unit
+  diffs when the helper socket is absent and tells the operator to run
+  `fraisier scaffold-install --yes` to bootstrap it. `scaffold-install` had no
+  line for these units at all. Each side pointed at the other; neither
+  installed anything. Webhook-driven auto-install of new units for
+  `type: scheduled` fraises therefore returned early on every host, logging a
+  warning that named a socket and a bootstrap command that had never installed
+  it.
+
+  The install sequence is #279's re-bake, for #279's reason rather than by
+  analogy: the `.service` bakes its `--allow` allowlist into `ExecStart` as
+  argv, so a running instance keeps the *old* allowlist and `enable --now` is a
+  no-op on it. Copy, daemon-reload, **stop** the stale-argv `.service`, then
+  enable and restart the `.socket` so the next connection re-execs with the new
+  argv — `_run_strict` throughout, because a half-applied re-bake otherwise
+  surfaces as a "not allowed" deep inside a later deploy. It is kept as its own
+  disposition rather than folded into `helper_rebake`: same shape, different
+  driver — one helper per environment versus one per (fraise, environment) —
+  and sharing the disposition would let a manifest query start matching units
+  that block does not install.
+
+  `naming.unit_installer_unit_names()` joins `deploy_socket_name` as the sole
+  authority for these unit names; the renderer that writes the files and the
+  manifest that installs them were two independent derivations of one name.
+
+- **`install.sh` no longer provisions other hosts' directories.** It iterated
+  every managed path in `fraises.yaml` and `mkdir`/`chown`ed each one
+  unconditionally, so a production-only host created the dev host's `git_repo`
+  and `app_path`. The units were host-filtered; the directories those units
+  live in were not — #325's shape, one layer down. Empty and wrongly present,
+  they read as a half-provisioned environment on a box that should carry no
+  trace of it, and they are chowned to the deploy user, so they also granted
+  the write access the gating was meant to withhold.
+
+  `ManagedPath` gains `environments` and the directory block gates on
+  `_env_active` — the same authority the artifact installs already use. No
+  third resolver: the environment names come from the config walk that produced
+  the path. `environments` is a tuple rather than a single name because paths
+  deduplicate by location, so an environment claiming a path an earlier one
+  already claimed is folded in rather than dropped; gating on whichever was
+  seen first would leave a shared directory uncreated on a host running only
+  the other. Paths no environment owns — `/opt/fraisier`, `/var/lib/fraisier`,
+  the config dir — carry an empty tuple and stay unconditional.
+
+- **CI lints with the ruff the repo pins.** Both lint jobs ran
+  `uv pip install ruff` with no constraint, so CI linted with whatever ruff had
+  been released that morning while pre-commit used its own pinned rev and
+  `uv.lock` a third version — 0.16.1, 0.16.1 and 0.16.0 at the time. The same
+  disagreement the artifact manifest exists to prevent, one layer out. The
+  `ruff-pre-commit` rev is now the sole authority and both workflows read it,
+  erroring if it cannot be read rather than silently falling back;
+  pre-commit.ci autoupdate keeps it current without a second edit. `publish.yml`
+  is the one that mattered: an unpinned ruff on a release gate can fail a
+  release on an upstream formatter change nobody chose.
+
+### Known limitations, now tracked rather than latent
+
+- **Host scoping is by environment *name*** (#336). `get_environments_for_server`
+  returns environment names and discards which fraise declared them, so two
+  fraises using one environment name on different servers each look active on
+  both hosts, and each host installs the other's units and creates the other's
+  directories. This predates this release and affects units and directories
+  identically — gating directories neither introduced it nor could fix it,
+  since the fix is to scope by (fraise, environment) and that changes which
+  units live hosts install.
+  `test_host_scoping_is_by_environment_name_not_by_fraise` states it and fails
+  the day it stops being true.
+
+- **The unit-installer socket *path* is still derived in three places** (#337) —
+  `cli/scheduled_install.py`, `deployers/scheduled.py`, and the socket unit's
+  `ListenStream=`. Same drift class as the unit *names* fixed here; the path
+  has no authority yet.
+
+- **`restore-staging.service` / `.timer` remain declared gaps, on purpose.**
+  Both halves are uninstalled, so nothing fires into a missing unit — unlike
+  the four closed here, this case is self-consistent. What it *should* do is a
+  decision, not an oversight, and `_KNOWN_GAPS` names it so `install.sh` and
+  `doctor` keep reporting it.
+
+### Rollout
+
+**Re-scaffold and re-install on every host** — that is what applies these
+fixes. `fraisier scaffold && sudo fraisier scaffold-install --yes`. Both halves
+and in that order: `install.sh` bakes in the hashes of the artifacts it
+installs and refuses a tree from a different render.
+
+**The two timer fixes take effect only where an operator enabled the timer.**
+`install.sh` copies `backup.timer` and `deploy-checker.timer` and has never
+enabled either. On a host where neither is enabled, nothing here starts
+anything that was not already running — the units simply become correct for
+whenever they are enabled. On a host where an operator *did* enable one, every
+firing has been hitting a unit that was not there, and from this release hits
+the service.
+
+**Directories already created on the wrong host stay.** `install.sh` never
+removes anything; the gate only stops new ones being created. They are empty
+and owned by the deploy user, so they can be removed by hand after confirming
+they are empty — check before removing, since the gate does not distinguish a
+directory it wrongly created from one that acquired contents since.
+
+**The unit-installer fix is what makes the documented bootstrap true.**
+Operators told to run `fraisier scaffold-install --yes` to get webhook
+auto-install working on a `type: scheduled` fraise can now do exactly that; the
+socket has never been installed by that command before.
+
 ## [0.57.0] - 2026-08-03
 
 Closes #323, #324, #326, #328, #331. One bug class, at the root: **two
