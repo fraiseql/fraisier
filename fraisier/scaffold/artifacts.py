@@ -200,6 +200,7 @@ _SCAFFOLD_LOCAL_SOURCES = frozenset(
 _PLAIN_UNITS = frozenset(
     {
         "systemd/deploy-checker.timer",
+        "systemd/deploy-checker.service",
         "systemd/backup.timer",
         "systemd/backup.service",
     }
@@ -208,12 +209,6 @@ _PLAIN_UNITS = frozenset(
 # Rendered, needed, installed by nothing. Kept as data so the four instances
 # are enumerated in one reviewable place rather than inferred from silence.
 _KNOWN_GAPS: dict[str, str] = {
-    "poll-deploy.service": (
-        "deploy-checker.timer is installed and activates deploy-checker.service "
-        "by default, but the rendered file is named poll-deploy.service and is "
-        "written to the tree root rather than systemd/ — so the timer fires "
-        "into a unit that exists under no name it looks for"
-    ),
     "systemd/restore-staging.service": (
         "restore-staging.timer is rendered alongside it and neither is installed "
         "by install.sh"

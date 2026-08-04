@@ -42,14 +42,19 @@ _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-# Core template filenames (rendered for every project)
+# Core template filenames (rendered for every project).
+#
+# Tree-root artifacts only — the output path is the template name with the
+# directory and suffix stripped, so anything belonging under systemd/ cannot be
+# expressed here. deploy-checker.service used to be in this list and was
+# therefore written to the tree root as `poll-deploy.service`, under a name its
+# timer never looked for; it is rendered with the other units instead.
 _CORE_TEMPLATES = [
     "core/sudoers.j2",
     "core/confiture.yaml.j2",
     "core/backup.sh.j2",
     "core/db_reset.sh.j2",
     "core/db_deploy.sh.j2",
-    "core/poll-deploy.service.j2",
 ]
 
 # Provider-specific templates
@@ -970,8 +975,12 @@ class ScaffoldRenderer:
 
         # Systemd timer and backup service templates
         project_name = self.context.get("project_name", "fraisier")
+        # Each timer is rendered next to the unit it activates. Neither carries
+        # a `Unit=`, so systemd resolves the target by stem: a timer listed here
+        # without its service is a firing into a unit that does not exist.
         for timer_tpl, timer_out in [
             ("core/deploy-checker.timer.j2", "systemd/deploy-checker.timer"),
+            ("core/deploy-checker.service.j2", "systemd/deploy-checker.service"),
             ("core/backup.timer.j2", "systemd/backup.timer"),
             ("core/backup.service.j2", "systemd/backup.service"),
             (

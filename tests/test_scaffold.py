@@ -632,7 +632,7 @@ scaffold:
         assert "[Timer]" in content
 
 
-_POLL_DEPLOY_SECURITY_DIRECTIVES = [
+_DEPLOY_CHECKER_SECURITY_DIRECTIVES = [
     "NoNewPrivileges=true",
     "ProtectSystem=strict",
     "ProtectHome=true",
@@ -653,8 +653,8 @@ class TestSystemdServiceHardening:
         p.write_text(yaml_content)
         return FraisierConfig(p)
 
-    def test_poll_deploy_service_has_security_directives(self, tmp_path):
-        """poll-deploy.service has all security hardening directives."""
+    def test_deploy_checker_service_has_security_directives(self, tmp_path):
+        """deploy-checker.service has all security hardening directives."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         config = self._make_config(
@@ -674,11 +674,11 @@ scaffold:
         renderer = ScaffoldRenderer(config)
         renderer.render()
 
-        svc_path = tmp_path / "output" / "poll-deploy.service"
+        svc_path = tmp_path / "output" / "systemd" / "deploy-checker.service"
         assert svc_path.exists()
         content = svc_path.read_text()
 
-        for directive in _POLL_DEPLOY_SECURITY_DIRECTIVES:
+        for directive in _DEPLOY_CHECKER_SECURITY_DIRECTIVES:
             assert directive in content, f"Missing directive: {directive}"
         assert "ReadWritePaths=" in content
 
@@ -707,7 +707,7 @@ scaffold:
         assert svc_path.exists()
         content = svc_path.read_text()
 
-        for directive in _POLL_DEPLOY_SECURITY_DIRECTIVES:
+        for directive in _DEPLOY_CHECKER_SECURITY_DIRECTIVES:
             assert directive in content, f"Missing directive: {directive}"
         assert "ReadWritePaths=/var/backups/" in content
 
@@ -5583,20 +5583,20 @@ fraises:
         assert "FRAISIER_SYSTEMCTL_SOCKET" in content
         assert "FRAISIER_SYSTEMCTL_WRAPPER" not in content
 
-    def test_poll_deploy_readwrite_uses_configured_app_path(self, tmp_path):
-        """poll-deploy ReadWritePaths uses actual app_path, not hardcoded /opt."""
+    def test_deploy_checker_readwrite_uses_configured_app_path(self, tmp_path):
+        """deploy-checker ReadWritePaths uses actual app_path, not hardcoded /opt."""
         out = self._render(tmp_path, "server-a")
-        content = (out / "poll-deploy.service").read_text()
+        content = (out / "systemd" / "deploy-checker.service").read_text()
         assert "ReadWritePaths=/var/www/staging" in content
         rw_lines = [
             line for line in content.splitlines() if line.startswith("ReadWritePaths=")
         ]
         assert not any("/opt/" in line for line in rw_lines)
 
-    def test_poll_deploy_uses_socket_not_wrapper(self, tmp_path):
-        """poll-deploy uses FRAISIER_SYSTEMCTL_SOCKET, not WRAPPER."""
+    def test_deploy_checker_uses_socket_not_wrapper(self, tmp_path):
+        """deploy-checker uses FRAISIER_SYSTEMCTL_SOCKET, not WRAPPER."""
         out = self._render(tmp_path, "server-a")
-        content = (out / "poll-deploy.service").read_text()
+        content = (out / "systemd" / "deploy-checker.service").read_text()
         assert "FRAISIER_SYSTEMCTL_SOCKET" in content
         assert "FRAISIER_SYSTEMCTL_WRAPPER" not in content
 
@@ -5646,10 +5646,10 @@ fraises:
         renderer.render()
         return tmp_path / "output"
 
-    def test_poll_deploy_no_duplicate_readwrite_paths(self, tmp_path):
-        """poll-deploy emits each app_path only once even with multiple fraises."""
+    def test_deploy_checker_no_duplicate_readwrite_paths(self, tmp_path):
+        """deploy-checker emits each app_path only once even with multiple fraises."""
         out = self._render(tmp_path)
-        content = (out / "poll-deploy.service").read_text()
+        content = (out / "systemd" / "deploy-checker.service").read_text()
         rw_lines = [
             line for line in content.splitlines() if line.startswith("ReadWritePaths=")
         ]
