@@ -521,4 +521,7 @@ def _resolve_socket_path(
 ) -> Path:
     if override:
         return Path(override)
+    # Third copy of this formula (#337): the socket unit's ListenStream= decides
+    # where the socket is, and deployers/scheduled.py looks for it too. Both
+    # consumers degrade quietly on absence, so a drift here does not crash.
     return Path(f"/run/fraisier/{env}/unit-installer-{config.project_name}.sock")
