@@ -339,6 +339,92 @@ class TestBuildManifest:
         assert len(duplicates) == 0
 
 
+class TestManagedPathsCarryTheirEnvironment:
+    """So a host can create its own directories and not another host's.
+
+    The units were host-filtered while the directories those units live in
+    were not, so a production-only host created — and chowned — the dev host's
+    ``git_repo`` and ``app_path``.
+    """
+
+    @staticmethod
+    def _config(tmp_path, yaml_text):
+        from fraisier.config import FraisierConfig
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(yaml_text)
+        return FraisierConfig(cfg)
+
+    _TWO_ENVS = """\
+name: proj
+servers:
+  dev.example.io:
+    machine_hostnames: [devbox]
+  prod.example.io:
+    machine_hostnames: [pio]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      development:
+        server: dev.example.io
+        app_path: /var/www/api-dev
+        git_repo: /var/git/api-dev.git
+      production:
+        server: prod.example.io
+        app_path: /var/www/api
+        git_repo: /var/git/api.git
+"""
+
+    def test_env_derived_paths_name_their_environment(self, tmp_path):
+        manifest = build_manifest(self._config(tmp_path, self._TWO_ENVS))
+        by_path = {str(p.path): p for p in manifest.env_paths}
+
+        assert by_path["/var/www/api-dev"].environments == ("development",)
+        assert by_path["/var/git/api.git"].environments == ("production",)
+
+    def test_shared_paths_stay_unconditional(self, tmp_path):
+        """A path no environment owns must not acquire a gate."""
+        manifest = build_manifest(self._config(tmp_path, self._TWO_ENVS))
+
+        for path in manifest.global_paths:
+            assert path.environments == (), path.path
+
+    def test_a_path_two_environments_share_belongs_to_both(self, tmp_path):
+        """Paths dedupe by location, so the second claim must not be dropped.
+
+        Gating a shared path on whichever environment happened to be seen
+        first would leave it uncreated on a host running only the other.
+        """
+        shared = """\
+name: proj
+servers:
+  dev.example.io:
+    machine_hostnames: [devbox]
+  prod.example.io:
+    machine_hostnames: [pio]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      development:
+        server: dev.example.io
+        app_path: /srv/shared
+      production:
+        server: prod.example.io
+        app_path: /srv/shared
+"""
+        manifest = build_manifest(self._config(tmp_path, shared))
+        entries = [p for p in manifest.env_paths if str(p.path) == "/srv/shared"]
+
+        assert len(entries) == 1, "the path should still be deduplicated"
+        assert set(entries[0].environments) == {"development", "production"}
+
+
 class TestPathManifestSorting:
     """PathManifest.sorted_by_depth: sort paths by depth for install order."""
 

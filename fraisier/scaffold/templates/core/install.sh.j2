@@ -348,9 +348,23 @@ fi
 
 # Create managed directories in depth order (parents before children)
 # All paths are derived from PathManifest for consistency across provisioning
+#
+# Gated on `_env_active`, exactly as the artifact installs are. This block used
+# to run unconditionally over every environment in fraises.yaml, so a
+# production-only host created and chowned the dev host's git_repo and
+# app_path: #325's shape one layer down — the units were host-filtered, the
+# directories they live in were not. A path no environment owns (the shared
+# /var/lib/fraisier, /opt/fraisier, the config dir) carries no environments and
+# stays unconditional.
 {% for mp in manifest.sorted_by_depth() %}
 {% if mp.create_if_missing %}
+{% if mp.environments %}
+if {% for env_name in mp.environments %}{% if not loop.first %} || {% endif %}_env_active "{{ env_name }}"{% endfor %}; then
+    _ensure_dir "{{ mp.path }}" "{{ mp.owner }}" "{{ mp.group }}" "{{ '%o' | format(mp.mode) }}"
+fi
+{% else %}
 _ensure_dir "{{ mp.path }}" "{{ mp.owner }}" "{{ mp.group }}" "{{ '%o' | format(mp.mode) }}"
+{% endif %}
 {% endif %}
 {% endfor %}
 

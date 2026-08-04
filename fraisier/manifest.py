@@ -1,7 +1,7 @@
 """PathManifest: single source of truth for filesystem paths managed by fraisier."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from fraisier.config import FraisierConfig
@@ -47,6 +47,18 @@ class ManagedPath:
             which today is the venv alone. Every other managed path — app_path,
             git_repo, config_dir, the relocated caches — holds state no deploy
             step recreates, so a mismatch there is raised, not deleted.
+        environments: Environments this path belongs to. Empty means
+            unconditional — a path no single environment owns, like
+            ``/var/lib/fraisier``. A path derived from an environment's config
+            carries that environment so consumers can gate on it: the units
+            were host-filtered while the directories they live in were not, so
+            a production-only host created and chowned the dev host's
+            ``git_repo`` and ``app_path`` (#325's shape, one layer down).
+
+            A tuple rather than a single name because paths are deduplicated by
+            location: if two environments name the same directory, it belongs
+            to both, and gating it on whichever was seen first would leave it
+            uncreated on a host running only the other.
     """
 
     path: Path
@@ -56,6 +68,7 @@ class ManagedPath:
     read_write_units: tuple[str, ...]
     create_if_missing: bool = True
     reconcile_ownership: bool = False
+    environments: tuple[str, ...] = ()
 
     def __str__(self) -> str:
         """Readable representation for logging."""
@@ -175,7 +188,25 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
 
     # Per-environment paths
     env_paths: list[ManagedPath] = []
-    seen_paths: set[str] = set()
+    seen_paths: dict[str, int] = {}
+
+    def _record(managed: ManagedPath) -> None:
+        """Append *managed*, or fold its environments into an existing entry.
+
+        Paths are deduplicated by location. A second environment naming a path
+        an earlier one already claimed does not get a second entry — it is
+        added to the owners of the first, so a host running only the later
+        environment still creates it.
+        """
+        key = str(managed.path)
+        position = seen_paths.get(key)
+        if position is None:
+            seen_paths[key] = len(env_paths)
+            env_paths.append(managed)
+            return
+        prior = env_paths[position]
+        owners = dict.fromkeys((*prior.environments, *managed.environments))
+        env_paths[position] = replace(prior, environments=tuple(owners))
 
     # deploy_socket_stems already collected above
 
@@ -190,36 +221,32 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
             # Get git_repo path - needed by deploy service and webhook
             git_repo = env_config.get("git_repo")
             if git_repo:
-                path_str = str(git_repo)
-                if path_str not in seen_paths:
-                    seen_paths.add(path_str)
-                    env_paths.append(
-                        ManagedPath(
-                            path=Path(git_repo),
-                            owner=deploy_user,
-                            group=deploy_user,
-                            mode=0o755,
-                            read_write_units=(socket_stem, "fraisier-webhook"),
-                            create_if_missing=True,
-                        )
+                _record(
+                    ManagedPath(
+                        path=Path(git_repo),
+                        owner=deploy_user,
+                        group=deploy_user,
+                        mode=0o755,
+                        read_write_units=(socket_stem, "fraisier-webhook"),
+                        create_if_missing=True,
+                        environments=(env_name,),
                     )
+                )
 
             # Get app_path - needed by deploy service and webhook
             app_path = env_config.get("app_path")
             if app_path:
-                path_str = str(app_path)
-                if path_str not in seen_paths:
-                    seen_paths.add(path_str)
-                    env_paths.append(
-                        ManagedPath(
-                            path=Path(app_path),
-                            owner=deploy_user,
-                            group=deploy_user,
-                            mode=0o755,
-                            read_write_units=(socket_stem, "fraisier-webhook"),
-                            create_if_missing=True,
-                        )
+                _record(
+                    ManagedPath(
+                        path=Path(app_path),
+                        owner=deploy_user,
+                        group=deploy_user,
+                        mode=0o755,
+                        read_write_units=(socket_stem, "fraisier-webhook"),
+                        create_if_missing=True,
+                        environments=(env_name,),
                     )
+                )
 
                 # Check for install.user override
                 install_config = env_config.get("install") or fraise_config.get(
@@ -228,34 +255,26 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                 if install_config and isinstance(install_config, dict):
                     install_user = install_config.get("user")
                     if install_user and install_user != deploy_user:
-                        venv_path = Path(app_path) / ".venv"
-                        venv_path_str = str(venv_path)
-                        if venv_path_str not in seen_paths:
-                            seen_paths.add(venv_path_str)
-                            env_paths.append(
-                                ManagedPath(
-                                    path=venv_path,
-                                    owner=install_user,
-                                    group=install_user,
-                                    mode=0o755,
-                                    read_write_units=(),
-                                    create_if_missing=True,
-                                    # The venv is fully derived from the lockfile
-                                    # by the install command that runs moments
-                                    # later, so it is the one path a deploy can
-                                    # safely delete and rebuild.
-                                    reconcile_ownership=True,
-                                )
+                        _record(
+                            ManagedPath(
+                                path=Path(app_path) / ".venv",
+                                owner=install_user,
+                                group=install_user,
+                                mode=0o755,
+                                read_write_units=(),
+                                create_if_missing=True,
+                                # The venv is fully derived from the lockfile
+                                # by the install command that runs moments
+                                # later, so it is the one path a deploy can
+                                # safely delete and rebuild.
+                                reconcile_ownership=True,
+                                environments=(env_name,),
                             )
+                        )
                         for relative in _RELOCATED_INSTALL_DIRS:
-                            cache_path = Path(app_path) / relative
-                            cache_path_str = str(cache_path)
-                            if cache_path_str in seen_paths:
-                                continue
-                            seen_paths.add(cache_path_str)
-                            env_paths.append(
+                            _record(
                                 ManagedPath(
-                                    path=cache_path,
+                                    path=Path(app_path) / relative,
                                     owner=install_user,
                                     group=install_user,
                                     mode=0o755,
@@ -264,6 +283,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                                     # covers everything beneath it.
                                     read_write_units=(),
                                     create_if_missing=True,
+                                    environments=(env_name,),
                                 )
                             )
 
