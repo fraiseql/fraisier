@@ -5833,8 +5833,13 @@ fraises:
         # Migration should reference the legacy name
         assert "fraisier-production.socket" in content
 
-    def test_install_sh_migration_guarded_by_env_active(self, tmp_path):
-        """install.sh migration is guarded by _env_active."""
+    def test_install_sh_migration_guarded_by_scope_active(self, tmp_path):
+        """install.sh migration is guarded by _scope_active.
+
+        The legacy unit it removes belongs to one fraise, so the gate is
+        the fraise-keyed one: another fraise's host must not disable a
+        socket named after an environment it happens to share (#336).
+        """
         content = self._render(
             tmp_path,
             """
@@ -5859,4 +5864,4 @@ fraises:
         # Check that _env_active appears nearby (within 5 lines)
         idx = migration_lines[0]
         context_block = "\n".join(lines[max(0, idx - 5) : idx + 5])
-        assert "_env_active" in context_block
+        assert "_scope_active" in context_block
