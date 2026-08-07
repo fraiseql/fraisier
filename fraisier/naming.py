@@ -12,6 +12,8 @@ names like ``.removesuffix(".service")``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fraisier.config._lazy_env import LazyEnv, to_str
 
 
@@ -77,6 +79,19 @@ def unit_installer_unit_names(project_name: str, env_name: str) -> tuple[str, st
     """
     base = f"fraisier-{project_name}-{env_name}-unit-installer"
     return f"{base}.socket", f"{base}.service"
+
+
+def unit_installer_socket_path(project_name: str, env_name: str) -> Path:
+    """Return the filesystem path the unit-installer helper listens on.
+
+    The socket unit's ``ListenStream=`` decides where the socket *is*;
+    ``cli/scheduled_install`` and ``deployers/scheduled`` decide where to
+    look for it. All three read this (#337). Both consumers degrade
+    rather than fail when the socket is absent, so drift between them
+    surfaces as auto-install quietly not happening — never as a crash,
+    which is exactly why it needs an authority rather than vigilance.
+    """
+    return Path(f"/run/fraisier/{env_name}/unit-installer-{project_name}.sock")
 
 
 def app_service_name(
