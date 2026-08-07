@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import click
 
+from fraisier import naming
 from fraisier.runners import LocalRunner
 from fraisier.scheduled_install import (
     PrunePlan,
@@ -187,7 +188,7 @@ def _print_verbose_diff(diff: UnitDiff) -> None:
     default=None,
     help=(
         "Override the helper socket path. Defaults to "
-        "/run/fraisier/<env>/unit-installer-<project>.sock."
+        f"{naming.unit_installer_socket_path('<project>', '<env>')}."
     ),
 )
 @click.option(
@@ -521,7 +522,4 @@ def _resolve_socket_path(
 ) -> Path:
     if override:
         return Path(override)
-    # Third copy of this formula (#337): the socket unit's ListenStream= decides
-    # where the socket is, and deployers/scheduled.py looks for it too. Both
-    # consumers degrade quietly on absence, so a drift here does not crash.
-    return Path(f"/run/fraisier/{env}/unit-installer-{config.project_name}.sock")
+    return naming.unit_installer_socket_path(config.project_name, env)

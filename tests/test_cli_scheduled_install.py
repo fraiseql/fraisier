@@ -10,15 +10,12 @@ tests we monkeypatch ``apply_unit_diffs``'s ``runner`` argument by patching
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from fraisier.cli.main import main
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.fixture
@@ -686,3 +683,92 @@ def test_prune_via_socket_rejected_as_v030_followup(tmp_path, fake_local_runner)
     )
     assert result.exit_code == 2
     assert "v0.30" in result.output or "not supported" in result.output
+
+
+_UNIT_INSTALLER_CONFIG = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/nightly
+        systemd_service: nightly.service
+        systemd_timer: nightly.timer
+        script_path: /usr/local/bin/nightly.sh
+"""
+
+
+class TestUnitInstallerSocketPathIsOneFact:
+    """#337: the socket unit writes the path, two consumers look for it."""
+
+    def test_all_three_sites_move_together(self, tmp_path, monkeypatch, caplog):
+        """Move the authority; all three readers move with it.
+
+        One test with three assertions because it is one fact. Both
+        consumers degrade quietly when the socket is absent, so a drift
+        between them never crashes — it just stops auto-installing, and
+        only a pin like this one notices.
+        """
+        import logging
+
+        from fraisier.config import FraisierConfig
+        from fraisier.deployers.scheduled import ScheduledDeployer
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        moved = Path("/run/fraisier/moved/unit-installer-elsewhere.sock")
+        monkeypatch.setattr(
+            "fraisier.naming.unit_installer_socket_path",
+            lambda _project, _env: moved,
+        )
+
+        cfg_path = tmp_path / "fraises.yaml"
+        cfg_path.write_text(_UNIT_INSTALLER_CONFIG)
+        config = FraisierConfig(cfg_path)
+
+        renderer = ScaffoldRenderer(config)
+        renderer.output_dir = tmp_path / "out"
+        renderer.render(dry_run=False)
+        socket_unit = (
+            renderer.output_dir
+            / "systemd"
+            / "fraisier-proj-production-unit-installer.socket"
+        )
+
+        assert f"ListenStream={moved}" in socket_unit.read_text()
+
+        from fraisier.cli.scheduled_install import _resolve_socket_path
+
+        assert _resolve_socket_path(config, "production", override=None) == moved
+
+        deployer = ScheduledDeployer(
+            {"environment": "production", "fraise_name": "nightly"},
+            config_object=config,
+        )
+        deployer.environment = "production"
+        deployer.fraise_name = "nightly"
+        with caplog.at_level(logging.WARNING, logger="fraisier"):
+            deployer._auto_install_scheduled_units_if_applicable()
+
+        assert str(moved) in caplog.text
+
+    def test_explicit_socket_path_override_still_wins(self, tmp_path):
+        """``--socket-path`` is an operator argument, not a derivation."""
+        from fraisier.cli.scheduled_install import _resolve_socket_path
+        from fraisier.config import FraisierConfig
+
+        cfg_path = tmp_path / "fraises.yaml"
+        cfg_path.write_text(_UNIT_INSTALLER_CONFIG)
+        config = FraisierConfig(cfg_path)
+
+        resolved = _resolve_socket_path(
+            config, "production", override="/tmp/operator-chosen.sock"
+        )
+
+        assert resolved == Path("/tmp/operator-chosen.sock")

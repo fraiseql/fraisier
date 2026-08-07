@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
     from fraisier.runners import CommandRunner
+
+from fraisier import naming
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
 from .mixins import GitDeployMixin
@@ -149,11 +150,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             )
             return
 
-        # Must match the socket unit's ListenStream=, which is written from a
-        # template rather than read from here (#337).
-        socket_path = Path(
-            f"/run/fraisier/{self.environment}/unit-installer-{project_name}.sock"
-        )
+        socket_path = naming.unit_installer_socket_path(project_name, self.environment)
         is_socket_present = socket_path.is_socket()
         if not is_socket_present:
             logger.warning(

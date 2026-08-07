@@ -2,9 +2,10 @@
 Description=Fraisier unit-installer socket for {{ project_name }} ({{ env_name }})
 
 [Socket]
-{# This path decides where the socket is; cli/scheduled_install.py and
-   deployers/scheduled.py each build it again to look for it (#337). #}
-ListenStream=/run/fraisier/{{ env_name }}/unit-installer-{{ project_name }}.sock
+{# naming.unit_installer_socket_path decides where the socket is;
+   cli/scheduled_install.py and deployers/scheduled.py read the same
+   authority to look for it (#337). #}
+ListenStream={{ unit_installer_socket_path }}
 SocketUser=root
 SocketGroup={{ scaffold.deploy_user }}
 SocketMode=0660

@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import jinja2
 
+from fraisier import naming
 from fraisier.config import (
     SECURITY_DIRECTIVE_MAP,
     FraisierConfig,
@@ -1094,12 +1095,19 @@ class ScaffoldRenderer:
             if not dry_run:
                 self.context["env_name"] = env_name
                 self.context["unit_installer_allow_pairs"] = allow_pairs
+                # The socket unit's ListenStream= is the same fact the two
+                # consumers probe for, so it comes from their authority (#337)
+                # rather than being spelled out again in the template.
+                self.context["unit_installer_socket_path"] = str(
+                    naming.unit_installer_socket_path(project, env_name)
+                )
                 try:
                     self._render_template("core/unit-installer.service.j2", service_out)
                     self._render_template("core/unit-installer.socket.j2", socket_out)
                 finally:
                     del self.context["env_name"]
                     del self.context["unit_installer_allow_pairs"]
+                    del self.context["unit_installer_socket_path"]
         return rendered
 
     def _render_systemctl_helper(self, dry_run: bool) -> list[str]:
