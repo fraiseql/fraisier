@@ -197,6 +197,40 @@ def check_disk_space(path: str, *, required_gb: int) -> bool:
     return free_gb >= required_gb
 
 
+@dataclass(frozen=True)
+class CleanupOutcome:
+    """What one prune did, and why anything survived it.
+
+    The three tuples partition the corpus — every candidate lands in
+    exactly one. ``kept`` is within retention and would have survived
+    with no floor at all; ``exempted_by_minimum`` is past the cutoff and
+    survived *only* because the floor held it back. A dump inside the
+    exemption slice that is still within retention is ``kept``, not
+    exempted: the floor did not save it. Keeping those apart is the
+    point — it is what makes :attr:`floor_was_load_bearing` knowable,
+    and a caller wanting every survivor concatenates the two.
+
+    An entry the containment guard refused — a symlink resolving outside
+    ``backup_dir`` — appears in none of the three. It is not this
+    directory's to hold, so counting it as kept would report a live
+    corpus where there is none.
+    """
+
+    removed: tuple[str, ...]
+    kept: tuple[str, ...]
+    exempted_by_minimum: tuple[str, ...]
+
+    @property
+    def floor_was_load_bearing(self) -> bool:
+        """Every survivor is older than the cutoff — the producer has stalled.
+
+        Nothing was fresh enough to survive on its own, so the floor is
+        the only reason the corpus is not empty. This is the state that
+        preceded the #339 outage and it is only knowable at prune time.
+        """
+        return bool(self.exempted_by_minimum) and not self.kept
+
+
 def _candidates(backup_dir: Path, match: str) -> list[tuple[Path, float]]:
     """Return *match*-ing dumps in *backup_dir* as (path, mtime), newest first."""
     entries = [(p, p.stat().st_mtime) for p in backup_dir.glob(match)]
@@ -210,7 +244,7 @@ def cleanup_old_backups(
     retention_hours: int,
     match: str = "*.dump",
     keep_minimum: int = 0,
-) -> list[str]:
+) -> CleanupOutcome:
     """Remove backup files and directory dumps older than *retention_hours*.
 
     Handles both ``-Fc`` file dumps (one ``.dump`` file) and ``-Fd``
@@ -230,14 +264,21 @@ def cleanup_old_backups(
     older than the cutoff, and the whole corpus would otherwise age out
     together.
 
-    Returns the list of removed paths (as strings).
+    Returns a :class:`CleanupOutcome` describing all three groups.
     """
     cutoff = time.time() - retention_hours * 3600
     resolved_root = backup_dir.resolve()
+    candidates = _candidates(backup_dir, match)
     removed: list[str] = []
+    kept: list[str] = []
+    exempted: list[str] = []
 
-    for f, mtime in _candidates(backup_dir, match)[keep_minimum:]:
+    for index, (f, mtime) in enumerate(candidates):
         if mtime >= cutoff:
+            kept.append(str(f))
+            continue
+        if index < keep_minimum:
+            exempted.append(str(f))
             continue
         resolved = f.resolve()
         if not resolved.is_relative_to(resolved_root):
@@ -248,7 +289,11 @@ def cleanup_old_backups(
             f.unlink()
         removed.append(str(f))
 
-    return removed
+    return CleanupOutcome(
+        removed=tuple(removed),
+        kept=tuple(kept),
+        exempted_by_minimum=tuple(exempted),
+    )
 
 
 def should_run_now(

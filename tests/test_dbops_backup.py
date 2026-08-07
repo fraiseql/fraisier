@@ -514,7 +514,7 @@ class TestCleanupOldBackups:
         non_dump = tmp_path / "notes.txt"
         non_dump.write_text("keep me")
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+        removed = cleanup_old_backups(tmp_path, retention_hours=24).removed
 
         assert str(old_file) in removed
         assert not old_file.exists()
@@ -535,7 +535,7 @@ class TestCleanupOldBackups:
         recent_dir.mkdir()
         (recent_dir / "toc.dat").write_text("toc")
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+        removed = cleanup_old_backups(tmp_path, retention_hours=24).removed
 
         assert str(old_dir) in removed
         assert not old_dir.exists()
@@ -558,7 +558,7 @@ class TestCleanupOldBackups:
         new_file = tmp_path / "proddb_full_20250320_1200.dump"
         new_file.write_text("new file")
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+        removed = cleanup_old_backups(tmp_path, retention_hours=24).removed
 
         assert sorted(removed) == sorted([str(old_file), str(old_dir)])
         assert not old_file.exists()
@@ -593,7 +593,9 @@ class TestCleanupKeepMinimum:
         for index in range(5):
             _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=3)
+        removed = cleanup_old_backups(
+            tmp_path, retention_hours=24, keep_minimum=3
+        ).removed
 
         assert sorted(p.name for p in tmp_path.iterdir()) == [
             "db_full_0.dump",
@@ -607,7 +609,7 @@ class TestCleanupKeepMinimum:
         for index in range(3):
             _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+        removed = cleanup_old_backups(tmp_path, retention_hours=24).removed
 
         assert len(removed) == 3
         assert list(tmp_path.iterdir()) == []
@@ -616,9 +618,11 @@ class TestCleanupKeepMinimum:
         for index in range(2):
             _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=10)
+        removed = cleanup_old_backups(
+            tmp_path, retention_hours=24, keep_minimum=10
+        ).removed
 
-        assert removed == []
+        assert removed == ()
         assert len(list(tmp_path.iterdir())) == 2
 
     def test_exemption_is_by_mtime_not_by_filename(self, tmp_path: Path):
@@ -644,7 +648,9 @@ class TestCleanupKeepMinimum:
             (tree / "toc.dat").write_text("toc")
             _aged(tree, hours=48 + index)
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=2)
+        removed = cleanup_old_backups(
+            tmp_path, retention_hours=24, keep_minimum=2
+        ).removed
 
         assert len(removed) == 1
         assert (tmp_path / "db_full_0.dump").is_dir()
@@ -662,9 +668,9 @@ class TestCleanupMatch:
 
         removed = cleanup_old_backups(
             tmp_path, retention_hours=24, match="*_full_*.dump"
-        )
+        ).removed
 
-        assert removed == [str(full)]
+        assert removed == (str(full),)
         assert not full.exists()
         assert slim.exists()
 
@@ -673,7 +679,7 @@ class TestCleanupMatch:
         slim = _dump(tmp_path, "db_slim_20260101.dump", hours=48)
         other = _dump(tmp_path, "notes.txt", hours=48)
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+        removed = cleanup_old_backups(tmp_path, retention_hours=24).removed
 
         assert sorted(removed) == sorted([str(full), str(slim)])
         assert other.exists()
@@ -695,8 +701,63 @@ class TestCleanupMatch:
         link.symlink_to(target)
         _aged(link, hours=48)
 
-        removed = cleanup_old_backups(corpus, retention_hours=24, match="*_full_*.dump")
+        removed = cleanup_old_backups(
+            corpus, retention_hours=24, match="*_full_*.dump"
+        ).removed
 
-        assert removed == []
+        assert removed == ()
         assert target.exists()
         assert link.is_symlink()
+
+
+class TestCleanupOutcome:
+    """The prune reports what it did, including why anything survived."""
+
+    def test_outcome_reports_removed_kept_and_exempted(self, tmp_path: Path):
+        """The three tuples partition the matched corpus."""
+        fresh = _dump(tmp_path, "db_full_fresh.dump", hours=1)
+        exempt = _dump(tmp_path, "db_full_exempt.dump", hours=48)
+        doomed = _dump(tmp_path, "db_full_doomed.dump", hours=72)
+
+        outcome = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=2)
+
+        assert outcome.removed == (str(doomed),)
+        assert outcome.kept == (str(fresh),)
+        assert outcome.exempted_by_minimum == (str(exempt),)
+
+    def test_floor_was_load_bearing_when_every_survivor_is_past_the_cutoff(
+        self, tmp_path: Path
+    ):
+        """The stalled-producer signal, knowable only here.
+
+        Nothing survived on its own merits — the floor is the only
+        reason the corpus is not empty. That is the state that preceded
+        the outage, and it cannot be reconstructed from a list of
+        deletions.
+        """
+        for index in range(4):
+            _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
+
+        outcome = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=2)
+
+        assert outcome.floor_was_load_bearing is True
+
+    def test_floor_not_load_bearing_when_a_survivor_is_within_retention(
+        self, tmp_path: Path
+    ):
+        """A fresh dump means the producer is alive, floor or no floor."""
+        _dump(tmp_path, "db_full_fresh.dump", hours=1)
+        for index in range(3):
+            _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
+
+        outcome = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=2)
+
+        assert outcome.exempted_by_minimum
+        assert outcome.floor_was_load_bearing is False
+
+    def test_floor_not_load_bearing_when_nothing_was_exempted(self, tmp_path: Path):
+        """An empty corpus has no signal to report."""
+        outcome = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=3)
+
+        assert outcome.removed == ()
+        assert outcome.floor_was_load_bearing is False

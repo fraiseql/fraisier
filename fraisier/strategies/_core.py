@@ -132,11 +132,18 @@ class MigrateStrategy(Strategy):
         log.info("pre_migrate_dump: verified dump at %s", result.backup_path)
         retention_hours = self._dump_config.get("retention_hours")
         if retention_hours is not None:
-            removed = cleanup_old_backups(
-                Path(output_dir), retention_hours=int(retention_hours)
+            # keep_minimum=1: this gate's dump is the rollback point for the
+            # migration about to run. Expiring the newest one leaves that
+            # migration with nothing to fall back to.
+            outcome = cleanup_old_backups(
+                Path(output_dir),
+                retention_hours=int(retention_hours),
+                keep_minimum=1,
             )
-            if removed:
-                log.info("pre_migrate_dump: pruned %d old dump(s)", len(removed))
+            if outcome.removed:
+                log.info(
+                    "pre_migrate_dump: pruned %d old dump(s)", len(outcome.removed)
+                )
         return None
 
     def execute(
