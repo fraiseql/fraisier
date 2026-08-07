@@ -501,6 +501,108 @@ environments:
         assert result == []
 
 
+class TestTheWalkKeepsTheOwner:
+    """#336: which fraise declared an environment is not throwaway.
+
+    ``iter_environment_servers`` walks two declaration sites. The global
+    ``environments:`` section has no owning fraise and correctly binds
+    every fraise using that name; the per-fraise section has one and used
+    to discard it. Only the second branch was wrong, which is what bounds
+    this fix's blast radius — so both branches are asserted, not assumed.
+    """
+
+    def _make_config(self, tmp_path, yaml_content: str) -> FraisierConfig:
+        p = tmp_path / "fraises.yaml"
+        p.write_text(yaml_content)
+        return FraisierConfig(str(p))
+
+    # #336's own example: two fraises, the same environment name, different
+    # servers. Each host must install its own fraise's units and nothing else.
+    ISSUE_EXAMPLE = """\
+name: proj
+servers:
+  box-a.example.io:
+    machine_hostnames: [box-a]
+  box-b.example.io:
+    machine_hostnames: [box-b]
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: box-a.example.io
+        app_path: /var/www/api
+  worker:
+    type: api
+    environments:
+      production:
+        server: box-b.example.io
+        app_path: /var/www/worker
+"""
+
+    GLOBAL_DECLARATION = """\
+name: proj
+servers:
+  shared.example.io:
+    machine_hostnames: [shared]
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+  worker:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/worker
+environments:
+  production:
+    server: shared.example.io
+"""
+
+    def test_iter_environment_servers_yields_the_declaring_fraise(self, tmp_path):
+        config = self._make_config(tmp_path, self.ISSUE_EXAMPLE)
+
+        assert sorted(config.iter_environment_servers()) == [
+            ("api", "production", "box-a.example.io"),
+            ("worker", "production", "box-b.example.io"),
+        ]
+
+    def test_globally_declared_environments_have_no_owner(self, tmp_path):
+        """``None`` means "every fraise using this name", not "no fraise".
+
+        A config declaring ``server:`` globally behaves exactly as it did
+        before the fix — this is the claim that halves the blast radius.
+        """
+        config = self._make_config(tmp_path, self.GLOBAL_DECLARATION)
+
+        assert (None, "production", "shared.example.io") in list(
+            config.iter_environment_servers()
+        )
+
+    def test_machine_scope_map_keeps_pairs(self, tmp_path):
+        config = self._make_config(tmp_path, self.ISSUE_EXAMPLE)
+
+        assert config.get_machine_scope_map() == {
+            "box-a": [("api", "production")],
+            "box-b": [("worker", "production")],
+        }
+
+    def test_a_global_declaration_maps_to_an_unowned_pair(self, tmp_path):
+        config = self._make_config(tmp_path, self.GLOBAL_DECLARATION)
+
+        assert config.get_machine_scope_map() == {
+            "shared": [(None, "production")],
+        }
+
+    def test_environment_names_still_read_the_same_walk(self, tmp_path):
+        """``get_environments_for_server`` keeps its answer, minus the owner."""
+        config = self._make_config(tmp_path, self.ISSUE_EXAMPLE)
+
+        assert config.get_environments_for_server("box-a.example.io") == ["production"]
+
+
 class TestGetMachineEnvironmentMap:
     """Tests for machine hostname → environment reverse mapping."""
 

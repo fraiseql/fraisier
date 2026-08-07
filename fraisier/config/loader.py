@@ -651,16 +651,16 @@ class FraisierConfig:
             return []
         return list(fraise.get("environments", {}).keys())
 
-    def iter_environment_servers(self) -> Iterator[tuple[str, str | None]]:
-        """Yield ``(env_name, declared_server)`` over every declaration site.
+    def iter_environment_servers(self) -> Iterator[tuple[str | None, str, str | None]]:
+        """Yield ``(owning_fraise, env_name, declared_server)`` per declaration site.
 
         ``server:`` may be written in the global ``environments:`` section or
         under ``fraises.<name>.environments.<env>``, and a config may use
         either or both. This is the single walk over both sites; every
         consumer that needs to know where an environment lives — the
         renderer's server set, :meth:`get_environments_for_server`, and
-        through it :meth:`get_machine_environment_map`, which bakes
-        install.sh's host gating — derives from it.
+        :meth:`get_machine_scope_map`, which bakes install.sh's host gating —
+        derives from it.
 
         Keeping them on one walk is the point: while the renderer read only
         the global section and the installer read both, a config declaring
@@ -669,17 +669,26 @@ class FraisierConfig:
         the installer — the #62 least-privilege leak reached by a second
         route, and one of the three routes into #325.
 
+        The owner is what the global branch cannot have and the per-fraise
+        branch used to throw away (#336). ``None`` means *every fraise using
+        this name*, which is the correct reading of a global declaration and
+        the reason a config written that way is unaffected by the fix. A
+        fraise name binds the declaration to that fraise alone, so two
+        fraises putting the same environment name on different servers no
+        longer make each host see the other's units as local.
+
         The same environment name may be yielded more than once, with a
-        different (or absent) server each time; callers decide how to fold.
+        different owner and a different (or absent) server each time; callers
+        decide how to fold.
         """
         for env_name, env_config in self.environments.items():
             if isinstance(env_config, dict):
-                yield env_name, env_config.get("server")
+                yield None, env_name, env_config.get("server")
 
-        for fraise in self.fraises.values():
+        for fraise_name, fraise in self.fraises.items():
             for env_name, env_config in (fraise.get("environments") or {}).items():
                 if isinstance(env_config, dict):
-                    yield env_name, env_config.get("server")
+                    yield fraise_name, env_name, env_config.get("server")
 
     def declared_servers(self) -> list[str]:
         """Unique logical servers named by any environment, in declaration order.
@@ -689,7 +698,7 @@ class FraisierConfig:
         is a property of the *config*, never of a ``--server`` filter.
         """
         seen: dict[str, None] = {}
-        for _, server in self.iter_environment_servers():
+        for _, _env, server in self.iter_environment_servers():
             if server:
                 seen[str(server)] = None
         return list(seen)
@@ -705,7 +714,7 @@ class FraisierConfig:
         """
         hosted: set[str] = set()
         candidates: dict[str, None] = {}
-        for env_name, server in self.iter_environment_servers():
+        for _fraise, env_name, server in self.iter_environment_servers():
             if server:
                 hosted.add(env_name)
         for fraise in self.fraises.values():
@@ -714,32 +723,73 @@ class FraisierConfig:
                     candidates[env_name] = None
         return list(candidates)
 
+    def get_scopes_for_server(self, server: str) -> list[tuple[str | None, str]]:
+        """Return ``(owning_fraise, env_name)`` pairs declared on *server*.
+
+        The fraise-aware form of :meth:`get_environments_for_server`, and the
+        one the host gate is built from (#336). A ``None`` owner is a global
+        ``environments:`` declaration and means *every fraise using this
+        name*; a name binds the pair to that fraise alone.
+
+        Returns an empty list when no declaration names that server.
+        """
+        matched: dict[tuple[str | None, str], None] = {}
+        for fraise_name, env_name, declared in self.iter_environment_servers():
+            if declared == server:
+                matched[(fraise_name, env_name)] = None
+        return list(matched)
+
     def get_environments_for_server(self, server: str) -> list[str]:
         """Return environment names whose ``server`` field matches *server*.
 
         Checks both the global ``environments`` section and per-fraise
         environment configs, deduplicating the result.
         Returns an empty list when no environment declares that server.
+
+        The owner-discarding view of :meth:`get_scopes_for_server`, kept for
+        the consumers that genuinely ask an environment-name question —
+        ``doctor``'s and ``setup``'s host summaries, ``--server`` filtering in
+        ``cli/_info``. The host gate does *not* read this: discarding the
+        owner there is #336.
         """
         matched: dict[str, None] = {}
-        for env_name, declared in self.iter_environment_servers():
-            if declared == server:
-                matched[env_name] = None
+        for _fraise, env_name in self.get_scopes_for_server(server):
+            matched[env_name] = None
         return list(matched)
+
+    def get_machine_scope_map(self) -> dict[str, list[tuple[str | None, str]]]:
+        """Build reverse map: machine_hostname → [(owning_fraise, env), ...].
+
+        For each machine in the servers: section, collect every
+        ``(fraise, environment)`` pair assigned to its logical server. This is
+        what ``install.sh``'s host gate is baked from, so the pair — not the
+        environment name alone — is what decides whether a machine installs an
+        artifact.
+
+        Returns empty dict if servers: section is not configured.
+        """
+        result: dict[str, list[tuple[str | None, str]]] = {}
+        for logical_server, machines in self.servers.items():
+            scopes = self.get_scopes_for_server(logical_server)
+            for machine in machines:
+                result.setdefault(machine, []).extend(scopes)
+        return result
 
     def get_machine_environment_map(self) -> dict[str, list[str]]:
         """Build reverse map: machine_hostname → [env_name, ...].
 
-        For each machine in the servers: section, collect all environments
-        assigned to its logical server.
+        The owner-discarding view of :meth:`get_machine_scope_map`, for
+        callers that report which environments a machine carries rather than
+        deciding what it installs.
 
         Returns empty dict if servers: section is not configured.
         """
         result: dict[str, list[str]] = {}
-        for logical_server, machines in self.servers.items():
-            envs = self.get_environments_for_server(logical_server)
-            for machine in machines:
-                result.setdefault(machine, []).extend(envs)
+        for machine, scopes in self.get_machine_scope_map().items():
+            envs: dict[str, None] = {}
+            for _fraise, env_name in scopes:
+                envs[env_name] = None
+            result[machine] = list(envs)
         return result
 
     def list_fraises_detailed(self) -> list[dict[str, Any]]:
