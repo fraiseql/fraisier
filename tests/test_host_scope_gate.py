@@ -240,3 +240,71 @@ class TestPairKeysReachingBashAreValidated:
 
         with pytest.raises(ValueError, match="a-zA-Z0-9_-"):
             ScaffoldRenderer(config)
+
+
+class _NullRunner:
+    """ServerSetup requires a runner; these tests never reach one."""
+
+    def run(self, cmd, **kwargs):  # pragma: no cover - never called
+        raise AssertionError(f"unexpected command: {cmd}")
+
+
+class TestTheOtherHostFilters:
+    """Everything else that decides what a host acts on, keyed the same way.
+
+    ``install.sh`` is not the only consumer that answers "is this mine?".
+    ``setup`` creates users, chowns trees and enables units; ``doctor``
+    decides which trees this host's webhook must be able to write. Both
+    filtered on the environment name, so both inherited #336 — and after
+    the installer was fixed, doctor's copy would have called a correctly
+    scoped webhook unit broken for not granting a neighbour's trees.
+    """
+
+    @staticmethod
+    def _config(tmp_path):
+        from fraisier.config import FraisierConfig
+
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(SAME_NAME_DIFFERENT_SERVER)
+        return FraisierConfig(cfg)
+
+    def test_doctor_hosted_trees_are_this_hosts_only(self, tmp_path):
+        from fraisier.doctor import _hosted_trees
+
+        trees = _hosted_trees(self._config(tmp_path), "a.example.io")
+
+        assert "/var/www/api" in trees
+        assert "/var/www/worker" not in trees
+        assert "/var/www/nightly" not in trees
+
+    def test_setup_iterates_only_this_hosts_environments(self, tmp_path):
+        from fraisier.setup import ServerSetup
+
+        setup = ServerSetup(
+            self._config(tmp_path), _NullRunner(), server="a.example.io"
+        )
+        pairs = {(f, e) for f, e, _ in setup._iter_fraise_environments()}
+
+        assert pairs == {("api", "production")}
+
+    def test_setup_still_honours_an_explicit_environment(self, tmp_path):
+        """``--environment`` is an operator's answer, not a host derivation."""
+        from fraisier.setup import ServerSetup
+
+        setup = ServerSetup(
+            self._config(tmp_path), _NullRunner(), environment="staging"
+        )
+        pairs = {(f, e) for f, e, _ in setup._iter_fraise_environments()}
+
+        assert pairs == {("edge", "staging")}
+
+    def test_setup_still_refuses_a_server_hosting_nothing(self, tmp_path):
+        from fraisier.errors import ValidationError
+        from fraisier.setup import ServerSetup
+
+        setup = ServerSetup(
+            self._config(tmp_path), _NullRunner(), server="nowhere.example.io"
+        )
+
+        with pytest.raises(ValidationError):
+            list(setup._iter_fraise_environments())

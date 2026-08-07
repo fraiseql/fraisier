@@ -275,8 +275,13 @@ def _show_global_status(
 
     # Filter by server when requested
     if server_filter is not None:
-        allowed_envs = set(config.get_environments_for_server(server_filter))
-        deployments = [d for d in deployments if d["environment"] in allowed_envs]
+        from fraisier.scaffold.renderer import _scope_predicate
+
+        # By (fraise, environment): with two fraises sharing an environment
+        # name on different servers, a name filter lists the other host's
+        # deployments as this one's (#336).
+        allowed = _scope_predicate(config.get_scopes_for_server(server_filter))
+        deployments = [d for d in deployments if allowed(d["fraise"], d["environment"])]
 
     if not deployments:
         console.print("[yellow]No fraises configured[/yellow]")

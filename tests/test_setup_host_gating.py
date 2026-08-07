@@ -1,6 +1,6 @@
 """``fraisier setup`` provisions this host's environments, or refuses (#331).
 
-``_resolve_allowed_environments`` used to answer "which environments am I?"
+``_resolve_allowed_scopes`` used to answer "which environments am I?"
 by matching the machine's hostname against *logical server names* only. A
 config that registers its machines under ``servers:.machine_hostnames`` — the
 map that exists precisely because a logical server is not a machine hostname —
@@ -97,6 +97,24 @@ class _NullRunner:
         raise AssertionError("planning must not execute commands")
 
 
+def _selected(setup, config) -> set[str] | None:
+    """The environment names *setup* would provision, via its pair predicate.
+
+    Since #336 the resolver answers by ``(fraise, environment)``; these
+    tests ask the question they have always asked — which environments is
+    this host — which for a single-fraise config is the same answer.
+    """
+    allowed = setup._resolve_allowed_scopes()
+    if allowed is None:
+        return None
+    return {
+        env_name
+        for fraise_name, fraise in config.fraises.items()
+        for env_name in (fraise.get("environments") or {})
+        if allowed(fraise_name, env_name)
+    }
+
+
 def _hostnames(*names: str):
     """Patch the machine's identity as ``resolve_local_server`` reads it."""
     return patch("fraisier.scaffold.renderer.local_hostnames", return_value=list(names))
@@ -111,7 +129,7 @@ class TestMachineHostnameResolution:
         setup = ServerSetup(config, _NullRunner())
 
         with _hostnames("pio"):
-            assert setup._resolve_allowed_environments() == {"production"}
+            assert _selected(setup, config) == {"production"}
 
     def test_asymmetric_host_gets_both_its_environments(self, tmp_path):
         """The other side of the asymmetry: devbox carries two environments."""
@@ -119,7 +137,7 @@ class TestMachineHostnameResolution:
         setup = ServerSetup(config, _NullRunner())
 
         with _hostnames("devbox"):
-            assert setup._resolve_allowed_environments() == {"development", "staging"}
+            assert _selected(setup, config) == {"development", "staging"}
 
     def test_logical_server_name_still_resolves(self, tmp_path):
         """Configs naming servers after their machines keep working."""
@@ -127,7 +145,7 @@ class TestMachineHostnameResolution:
         setup = ServerSetup(config, _NullRunner())
 
         with _hostnames("prod.example.io"):
-            assert setup._resolve_allowed_environments() == {"production"}
+            assert _selected(setup, config) == {"production"}
 
 
 class TestFailsClosed:
@@ -138,7 +156,7 @@ class TestFailsClosed:
         setup = ServerSetup(config, _NullRunner())
 
         with _hostnames("stranger"), pytest.raises(ValidationError):
-            setup._resolve_allowed_environments()
+            setup._resolve_allowed_scopes()
 
     def test_error_answers_its_own_support_question(self, tmp_path):
         """Names this machine, the known hosts, and both ways forward.
@@ -151,7 +169,7 @@ class TestFailsClosed:
         setup = ServerSetup(config, _NullRunner())
 
         with _hostnames("stranger"), pytest.raises(ValidationError) as exc:
-            setup._resolve_allowed_environments()
+            setup._resolve_allowed_scopes()
 
         message = str(exc.value)
         assert "stranger" in message
@@ -166,7 +184,7 @@ class TestFailsClosed:
         setup = ServerSetup(config, _NullRunner(), server="bogus")
 
         with pytest.raises(ValidationError) as exc:
-            setup._resolve_allowed_environments()
+            setup._resolve_allowed_scopes()
 
         assert "bogus" in str(exc.value)
         assert "prod.example.io" in str(exc.value)
@@ -181,7 +199,7 @@ class TestLegitimateWideningStillWorks:
         setup = ServerSetup(config, _NullRunner())
 
         with _hostnames("anything-at-all"):
-            assert setup._resolve_allowed_environments() is None
+            assert _selected(setup, config) is None
 
     def test_all_environments_flag_is_the_escape_hatch(self, tmp_path):
         """Explicit intent to provision everything is honoured without a match."""
@@ -189,7 +207,7 @@ class TestLegitimateWideningStillWorks:
         setup = ServerSetup(config, _NullRunner(), all_environments=True)
 
         with _hostnames("stranger"):
-            assert setup._resolve_allowed_environments() is None
+            assert _selected(setup, config) is None
 
     def test_explicit_environment_bypasses_host_resolution(self, tmp_path):
         """--environment answers the question directly; identity is moot."""
@@ -197,13 +215,13 @@ class TestLegitimateWideningStillWorks:
         setup = ServerSetup(config, _NullRunner(), environment="staging")
 
         with _hostnames("stranger"):
-            assert setup._resolve_allowed_environments() == {"staging"}
+            assert _selected(setup, config) == {"staging"}
 
     def test_explicit_server_selects_its_environments(self, tmp_path):
         config = _make_config(tmp_path, MACHINE_REGISTERED_CONFIG)
         setup = ServerSetup(config, _NullRunner(), server="dev.example.io")
 
-        assert setup._resolve_allowed_environments() == {"development", "staging"}
+        assert _selected(setup, config) == {"development", "staging"}
 
 
 class TestCliSurfacesTheRefusal:
