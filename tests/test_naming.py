@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from fraisier.naming import app_service_name, deploy_socket_name
+from fraisier.naming import (
+    app_service_name,
+    deploy_socket_name,
+    unit_installer_socket_path,
+    unit_installer_unit_names,
+)
 
 
 class TestDeploySocketName:
@@ -77,3 +84,27 @@ class TestAppServiceName:
     def test_systemd_service_takes_precedence_over_service_name(self):
         env = {"systemd_service": "top.service", "service": {"service_name": "nested"}}
         assert app_service_name("proj", "api", "production", env) == "top.service"
+
+
+class TestUnitInstallerSocketPath:
+    """The path the helper socket listens on has one authority (#337)."""
+
+    def test_unit_installer_socket_path_is_derived_from_project_and_env(self):
+        assert unit_installer_socket_path("myapp", "production") == Path(
+            "/run/fraisier/production/unit-installer-myapp.sock"
+        )
+
+    def test_socket_path_sits_beside_the_unit_names(self):
+        """The path and the unit names agree on project and env.
+
+        Both describe the same helper — one per (project, environment)
+        (#240) — so a change to either that does not move the other is
+        the drift this module exists to prevent.
+        """
+        socket_unit, _service_unit = unit_installer_unit_names("myapp", "production")
+        path = unit_installer_socket_path("myapp", "production")
+
+        assert "myapp" in socket_unit
+        assert "production" in socket_unit
+        assert path.parent.name == "production"
+        assert path.name == "unit-installer-myapp.sock"
