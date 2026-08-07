@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-08-08
+
+One theme: a fact has one authority. A host's answer to "which artifacts are
+mine?" was keyed on the environment *name*, discarding which fraise declared
+it, so two fraises putting the same name on different servers made each host
+install the other's units. The path the unit-installer socket listens on was
+derived independently in three places. Both now have exactly one writer.
+
+**One behaviour change on live hosts:** a host stops installing a neighbour's
+units. The ones already installed are reported, never removed — see
+`--prune-foreign` below.
+
+### Fixed
+
+- **Host scoping is by `(fraise, environment)`, not by environment name
+  (#336).** `iter_environment_servers` walked past the declaring fraise and
+  threw it away, so `machine_env_map` — the map `install.sh`'s gate reads —
+  could only answer "does any fraise anywhere declare this name?". A config
+  with `api` on box-a and `worker` on box-b, both under `production`, made
+  each box install the other's app service, deploy socket and template
+  service, and create and chown the other's `git_repo` and `app_path`.
+
+  `install.sh` now carries two predicates. `_scope_active <fraise> <env>`
+  gates what one fraise owns: app services, deploy sockets, install-helper
+  pairs, nginx vhosts, and the managed directories those live in.
+  `_env_active <env>` gates what no single fraise owns: the unit-installer
+  helper is one per `(project, environment)` by design (#240), and the
+  postgresql logging conf is per environment. Two rather than one because
+  forcing the second kind through a fraise-keyed gate would mean inventing an
+  owner for it — which is how a second host authority gets born.
+
+  **A config declaring `server:` in the global `environments:` section is
+  unaffected.** That declaration has no owning fraise and correctly binds
+  every fraise using the name; only per-fraise `server:` declarations become
+  fraise-scoped. Seven of the ten cases in the golden install-plan matrix are
+  byte-identical across this change.
+
+  Three other consumers were keyed the same way and moved with it: `doctor`'s
+  hosted-trees check (which would otherwise have reported a correctly scoped
+  webhook unit as broken for not granting a neighbour's trees), `setup`'s
+  environment filter — which creates users, chowns trees and *enables* units —
+  and `fraisier status --server`.
+
+- **The unit-installer socket path is written once (#337).** The socket unit's
+  `ListenStream=`, the path `scheduled-install` probes, and the path the
+  webhook's auto-install probes were three independent copies of the same
+  formula. All three read `naming.unit_installer_socket_path`, as does the
+  `--socket-path` help text that stated the default a fourth time. Both
+  consumers degrade quietly when the socket is absent, so drift here never
+  crashed — it just stopped auto-installing. No rendered output changes.
+
+### Added
+
+- **`scaffold-diff` and `doctor` report foreign units.** A host mis-scoped
+  before #336 still has its neighbour's units on disk, enabled, possibly
+  serving traffic. Both surfaces now name each one with its owner —
+  *"installed here, owned by fraise X which does not run on this host"* — and
+  neither touches it.
+
+- **`fraisier scaffold-install --prune-foreign`** disables and deletes them,
+  for an operator who has read the report. Never a default: `install.sh` does
+  remove stale pre-0.7.1 socket units, but those carry a name fraisier itself
+  assigned under a superseded scheme, while a neighbouring fraise's unit is
+  another application's service. Stopping it as a side effect of a routine
+  `scaffold-install` would be an outage on exactly the configs #336 describes.
+  The prune re-derives ownership rather than trusting its caller's list and
+  refuses any unit whose owner resolves to this host.
+
+- **`cleanup_old_backups` takes `keep_minimum` and `match`** (#339, request 1).
+  The prune was purely time-based, so a stalled producer aged an entire corpus
+  out at once. `keep_minimum` exempts the newest N by mtime *before* the age
+  test, which is what makes "the newest 3 survive" true in the only case that
+  matters — when all of them are already past the cutoff. `match` scopes the
+  glob, so full and slim dumps sharing a directory can expire on different
+  clocks.
+
+### Changed
+
+- **`cleanup_old_backups` returns `CleanupOutcome`, not `list[str]`.** The
+  three tuples partition the corpus: `kept` is within retention and would have
+  survived with no floor at all, `exempted_by_minimum` is past the cutoff and
+  survived only because the floor held it back. `floor_was_load_bearing` reads
+  "nothing survived on its own merits" — the stalled-producer signal, which is
+  only knowable at prune time and cannot be reconstructed from a list of
+  deletions. No compatibility shim; the one in-repo caller moved.
+
+- **The `pre_migrate_dump` gate keeps the newest dump.** It now prunes with
+  `keep_minimum=1`: that dump is the rollback point for the migration the gate
+  is about to allow, and expiring it in the same breath leaves that migration
+  with nothing to fall back to. Deletes strictly less than before.
+
 ## [0.58.0] - 2026-08-04
 
 v0.57.0's coverage assertion found four artifacts that were rendered and

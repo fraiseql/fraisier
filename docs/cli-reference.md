@@ -652,7 +652,7 @@ fraisier scaffold-install [OPTIONS]
 - Must have sudo access (or be running as root)
 - Generated files must be in `PROJECT_DIR` (usually `/opt/<project_name>`)
 
-**Host scoping** (v0.58.0)
+**Host scoping** (v0.59.0)
 
 On a multi-host config, both the units *and* the managed directories are
 scoped to this machine: a production-only host no longer creates the dev host's
@@ -660,11 +660,22 @@ scoped to this machine: a production-only host no longer creates the dev host's
 `/opt/fraisier`, `/var/lib/fraisier`, the config directory — are still created
 everywhere.
 
-Scoping is by environment *name*, so two fraises using one environment name on
-different servers each install the other's units and create the other's
-directories ([#336](https://github.com/fraiseql/fraisier/issues/336)).
-Directories created before v0.58.0 on a host that should not have them are not
-removed by re-running this command.
+Scoping is by `(fraise, environment)`
+([#336](https://github.com/fraiseql/fraisier/issues/336)). Two fraises using
+one environment name on different servers each install their own units only.
+An environment declared in the global `environments:` section has no owning
+fraise and binds every fraise using that name, so a config written that way
+scopes exactly as it did before.
+
+A few artifacts are scoped by environment alone, because no single fraise owns
+them: the unit-installer helper is one per `(project, environment)`, and the
+postgresql logging conf is per environment. Every host declaring that
+environment installs them.
+
+Units installed on a host before v0.59.0 that belong to a fraise running
+elsewhere are **not** removed by re-running this command — they may be another
+application's running services. `fraisier scaffold-diff` and `fraisier doctor`
+list them with their owner; `--prune-foreign` disables and deletes them.
 
 **Options:**
 
@@ -674,6 +685,7 @@ removed by re-running this command.
 | `--validate-only` | Check prerequisites only (no installation) |
 | `--yes`, `-y` | Skip confirmation prompt (useful for automation) |
 | `--verbose`, `-v` | Enable verbose output |
+| `--prune-foreign` | Disable and delete units owned by a fraise that does not run on this host. Never happens by default; run `scaffold-diff` first to see what would go. |
 
 **Examples:**
 
