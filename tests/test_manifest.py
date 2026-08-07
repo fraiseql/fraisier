@@ -382,8 +382,12 @@ fraises:
         manifest = build_manifest(self._config(tmp_path, self._TWO_ENVS))
         by_path = {str(p.path): p for p in manifest.env_paths}
 
-        assert by_path["/var/www/api-dev"].environments == ("development",)
-        assert by_path["/var/git/api.git"].environments == ("production",)
+        assert [e for _f, e in by_path["/var/www/api-dev"].environments] == [
+            "development"
+        ]
+        assert [e for _f, e in by_path["/var/git/api.git"].environments] == [
+            "production"
+        ]
 
     def test_shared_paths_stay_unconditional(self, tmp_path):
         """A path no environment owns must not acquire a gate."""
@@ -422,7 +426,57 @@ fraises:
         entries = [p for p in manifest.env_paths if str(p.path) == "/srv/shared"]
 
         assert len(entries) == 1, "the path should still be deduplicated"
-        assert set(entries[0].environments) == {"development", "production"}
+        assert set(entries[0].environments) == {
+            ("api", "development"),
+            ("api", "production"),
+        }
+
+    def test_managed_path_owners_are_pairs(self, tmp_path):
+        """A directory belongs to a (fraise, environment), not to a name (#336).
+
+        Two fraises can put the same environment name on different servers,
+        so gating a directory on the name alone provisions the neighbour's
+        tree — the units-level bug one layer down, again.
+        """
+        manifest = build_manifest(self._config(tmp_path, self._TWO_ENVS))
+        by_path = {str(p.path): p for p in manifest.env_paths}
+
+        assert by_path["/var/www/api-dev"].environments == (("api", "development"),)
+        assert by_path["/var/git/api.git"].environments == (("api", "production"),)
+
+    def test_a_path_shared_by_two_fraises_lists_both_owners(self, tmp_path):
+        """The dedupe rule extended to pairs, not weakened by them."""
+        shared = """\
+name: proj
+servers:
+  a.example.io:
+    machine_hostnames: [abox]
+  b.example.io:
+    machine_hostnames: [bbox]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: a.example.io
+        app_path: /srv/shared
+  worker:
+    type: api
+    environments:
+      production:
+        server: b.example.io
+        app_path: /srv/shared
+"""
+        manifest = build_manifest(self._config(tmp_path, shared))
+        entries = [p for p in manifest.env_paths if str(p.path) == "/srv/shared"]
+
+        assert len(entries) == 1
+        assert set(entries[0].environments) == {
+            ("api", "production"),
+            ("worker", "production"),
+        }
 
 
 class TestPathManifestSorting:

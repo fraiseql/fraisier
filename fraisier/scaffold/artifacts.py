@@ -143,7 +143,24 @@ class RenderedArtifact:
     """Explicit permission bits, when the copy is not a plain ``cp``."""
 
     environment: str | None = None
-    """Gate on ``_env_active``. None means unconditional."""
+    """The environment this artifact belongs to. None means unconditional."""
+
+    fraise: str | None = None
+    """The fraise that owns it, deciding which gate install.sh routes it to.
+
+    A name routes to ``_scope_active <fraise> <env>``: the artifact belongs to
+    one fraise, and a host running a *different* fraise under the same
+    environment name must not install it (#336).
+
+    ``None`` alongside an ``environment`` routes to ``_env_active <env>``, which
+    after #336 means "a fraise on this host declares this environment". Some
+    artifacts genuinely have no owning fraise — the unit-installer helper is one
+    per (project, environment) by design (#240), and the postgresql logging conf
+    is per environment. Naming an arbitrary fraise for those would invent an
+    owner, which is how a second host authority gets born.
+
+    ``None`` alongside no ``environment`` is unconditional, as before.
+    """
 
     note: str | None = None
     """Why, for dispositions where the absence of an install needs explaining."""
@@ -164,6 +181,7 @@ class AppManagedUnit:
     source_dir: str
     installer: str
     environment: str | None = None
+    fraise: str | None = None
 
 
 @dataclass(frozen=True)
@@ -334,11 +352,13 @@ class LazyArtifactManifest:
         return getattr(self._value(), name)
 
 
-def _env_of_unit(renderer: ScaffoldRenderer, source: str) -> str | None:
-    """The environment an env-gated unit belongs to, or None.
+def _owner_of_unit(renderer: ScaffoldRenderer, source: str) -> tuple[str, str] | None:
+    """The ``(fraise, environment)`` an env-gated unit belongs to, or None.
 
     Derived from the same context install.sh gates with, so the manifest and
-    the ``_env_active`` guard cannot disagree about which env owns a unit.
+    the ``_scope_active`` guard cannot disagree about which pair owns a unit.
+    The loop already walked past the fraise to find the environment; it simply
+    stopped discarding it (#336).
     """
     from fraisier.naming import deploy_socket_name
 
@@ -353,7 +373,7 @@ def _env_of_unit(renderer: ScaffoldRenderer, source: str) -> str | None:
                 f"{env_config.get('service_base', '')}.service",
             }
             if stem in candidates:
-                return env_name
+                return fraise["name"], env_name
     return None
 
 
@@ -396,11 +416,13 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
 
     if source.startswith("nginx/"):
         vhost = source.removeprefix("nginx/").removesuffix(".conf")
+        owner = _nginx_owner(renderer, vhost)
         return RenderedArtifact(
             source,
             Disposition.NGINX_VHOST,
             destination=f"{NGINX_AVAILABLE}/{vhost}",
-            environment=_nginx_env(renderer, vhost),
+            fraise=owner[0] if owner else None,
+            environment=owner[1] if owner else None,
         )
 
     # The webhook unit's source carries the host, its destination never does.
@@ -435,6 +457,7 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
                 source,
                 Disposition.HELPER_REBAKE,
                 destination=f"{SYSTEMD_DIR}/{stem}",
+                fraise=entry["fraise_name"],
                 environment=entry["env_name"],
             )
 
@@ -442,6 +465,9 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
     # Matched against the environments the renderer actually wrote units for,
     # and against names from the same helper it used, so a rename cannot leave
     # this branch matching nothing and silently reclassifying the units.
+    #
+    # No `fraise`: one helper serves every scheduled fraise in the environment,
+    # so it is env-owned and gates on `_env_active` (#336 decision 4).
     for env_name in _collect_unit_installer_envs(renderer.context["local_fraises"]):
         if stem in unit_installer_unit_names(project, env_name):
             return RenderedArtifact(
@@ -466,13 +492,14 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
         )
 
     if source.startswith("systemd/"):
-        env = _env_of_unit(renderer, source)
-        if env is not None:
+        owner = _owner_of_unit(renderer, source)
+        if owner is not None:
             return RenderedArtifact(
                 source,
                 Disposition.PLAIN,
                 destination=f"{SYSTEMD_DIR}/{stem}",
-                environment=env,
+                fraise=owner[0],
+                environment=owner[1],
             )
 
     if source.startswith("rc.d/"):
@@ -485,14 +512,14 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
     return None
 
 
-def _nginx_env(renderer: ScaffoldRenderer, vhost: str) -> str | None:
-    """The environment a rendered vhost belongs to.
+def _nginx_owner(renderer: ScaffoldRenderer, vhost: str) -> tuple[str, str] | None:
+    """The ``(fraise, environment)`` a rendered vhost belongs to.
 
     Delegates to the renderer rather than re-deriving the stem: computing that
     name in a second place is what left vhosts without an explicit
     ``server_name`` rendered under one name and installed under another.
     """
-    return renderer.nginx_vhost_envs().get(vhost)
+    return renderer.nginx_vhost_scopes().get(vhost)
 
 
 class UndispositionedArtifacts(ValidationError):
@@ -587,6 +614,7 @@ def _batch_hash(artifacts: list[RenderedArtifact]) -> str:
                     artifact.disposition.value,
                     artifact.destination or "",
                     str(artifact.mode or ""),
+                    artifact.fraise or "",
                     artifact.environment or "",
                     artifact.sha256 or "",
                 ]
@@ -626,6 +654,7 @@ def _collect_app_managed(renderer: ScaffoldRenderer) -> list[AppManagedUnit]:
                                 source_dir=f"{app_path}/{APP_PATH_UNITS_SUBDIR}",
                                 installer="fraisier scheduled-install",
                                 environment=env_name,
+                                fraise=fraise["name"],
                             )
                         )
     return units
@@ -644,6 +673,7 @@ def dump_manifest(manifest: ArtifactManifest) -> str:
                 "disposition": a.disposition.value,
                 "destination": a.destination,
                 "mode": a.mode,
+                "fraise": a.fraise,
                 "environment": a.environment,
                 "sha256": a.sha256,
                 "note": a.note,
@@ -655,6 +685,7 @@ def dump_manifest(manifest: ArtifactManifest) -> str:
                 "unit_name": u.unit_name,
                 "source_dir": u.source_dir,
                 "installer": u.installer,
+                "fraise": u.fraise,
                 "environment": u.environment,
             }
             for u in manifest.app_managed

@@ -359,7 +359,7 @@ fi
 {% for mp in manifest.sorted_by_depth() %}
 {% if mp.create_if_missing %}
 {% if mp.environments %}
-if {% for env_name in mp.environments %}{% if not loop.first %} || {% endif %}_env_active "{{ env_name }}"{% endfor %}; then
+if {% for _fraise, env_name in mp.environments %}{% if not loop.first %} || {% endif %}_env_active "{{ env_name }}"{% endfor %}; then
     _ensure_dir "{{ mp.path }}" "{{ mp.owner }}" "{{ mp.group }}" "{{ '%o' | format(mp.mode) }}"
 fi
 {% else %}
