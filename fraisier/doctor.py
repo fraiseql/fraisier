@@ -392,14 +392,22 @@ def _not_covered(paths: list[str], allowed: list[str]) -> list[str]:
 
 
 def _hosted_trees(config: FraisierConfig, server: str) -> list[str]:
-    """Every ``git_repo``/``app_path`` of an environment *server* hosts."""
-    hosted = set(config.get_environments_for_server(server))
+    """Every ``git_repo``/``app_path`` of a ``(fraise, environment)`` *server* hosts.
+
+    Keyed by the pair, matching what the webhook unit is rendered from: a
+    host carrying ``api/production`` does not thereby carry
+    ``worker/production``, and demanding writes to the latter's trees would
+    report a correctly scoped unit as broken (#336).
+    """
+    from fraisier.scaffold.renderer import _scope_predicate
+
+    hosted = _scope_predicate(config.get_scopes_for_server(server))
     trees: list[str] = []
-    for fraise in (getattr(config, "fraises", None) or {}).values():
+    for fraise_name, fraise in (getattr(config, "fraises", None) or {}).items():
         if not isinstance(fraise, dict):
             continue
         for env_name, env_config in (fraise.get("environments") or {}).items():
-            if env_name not in hosted or not isinstance(env_config, dict):
+            if not hosted(fraise_name, env_name) or not isinstance(env_config, dict):
                 continue
             for key in ("git_repo", "app_path"):
                 value = env_config.get(key)

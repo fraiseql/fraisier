@@ -23,7 +23,7 @@ from fraisier.scaffold.renderer import ScaffoldRenderer, resolve_local_server
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from fraisier.runners import CommandRunner
 
@@ -523,7 +523,7 @@ class ServerSetup:
             # Nothing safe to plan: in a multi-server config every candidate
             # unit carries a different host's ReadWritePaths=, and copying the
             # wrong one is the failure this resolver exists to prevent. Warn
-            # and skip, matching _resolve_allowed_environments' contract for
+            # and skip, matching _resolve_allowed_scopes' contract for
             # the same "this box is in no server" condition, rather than
             # planning a copy of a file no render wrote (#325).
             logger.warning("Skipping webhook unit install: %s", exc)
@@ -675,8 +675,14 @@ class ServerSetup:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _resolve_allowed_environments(self) -> set[str] | None:
-        """Determine which environments to provision.
+    def _resolve_allowed_scopes(self) -> Callable[[str, str], bool] | None:
+        """Determine which ``(fraise, environment)`` pairs to provision.
+
+        Returns a predicate, or ``None`` for deliberately unfiltered. Keyed
+        by the pair rather than the environment name because two fraises may
+        put the same name on different servers, and ``setup`` creates users,
+        chowns trees and *enables* units — acting on a neighbour's
+        environment is #336 with side effects (#325's shape one level up).
 
         Resolution order:
         1. Explicit ``--environment`` → single environment.
@@ -700,8 +706,13 @@ class ServerSetup:
         #325 failure shape one level up. The old warning existed, fired, and
         was not acted on; a louder warning would have been a fourth instance.
         """
+        from fraisier.scaffold.renderer import _scope_predicate
+
         if self.environment:
-            return {self.environment}
+            # An operator naming an environment is answering the question, not
+            # deriving it from the host, so it stays keyed on the name.
+            wanted = self.environment
+            return lambda _fraise, env_name: env_name == wanted
 
         if self.all_environments:
             return None
@@ -709,10 +720,10 @@ class ServerSetup:
         known = self.config.declared_servers()
 
         if self.server:
-            envs = self.config.get_environments_for_server(self.server)
-            if not envs:
+            scopes = self.config.get_scopes_for_server(self.server)
+            if not scopes:
                 raise ValidationError(_unknown_setup_server_message(self.server, known))
-            return set(envs)
+            return _scope_predicate(scopes)
 
         if not known:
             return None
@@ -721,24 +732,24 @@ class ServerSetup:
         if local is None:
             raise ValidationError(_unidentified_host_message(self.config, known))
 
-        envs = self.config.get_environments_for_server(local)
-        if not envs:
+        scopes = self.config.get_scopes_for_server(local)
+        if not scopes:
             # ``servers:`` registers this machine under a logical server that
             # no environment is assigned to — resolvable, but to nothing.
             raise ValidationError(_unknown_setup_server_message(local, known))
-        return set(envs)
+        return _scope_predicate(scopes)
 
     def _iter_fraise_environments(
         self,
     ) -> Iterator[tuple[str, str, dict[str, Any]]]:
         """Yield (fraise_name, env_name, env_config), filtered by server/environment."""
-        allowed = self._resolve_allowed_environments()
+        allowed = self._resolve_allowed_scopes()
         for fraise_name in self.config.list_fraises():
             fraise = self.config.get_fraise(fraise_name)
             if not fraise:
                 continue
             for env_name in fraise.get("environments", {}):
-                if allowed is not None and env_name not in allowed:
+                if allowed is not None and not allowed(fraise_name, env_name):
                     continue
                 env_config = self.config.get_fraise_environment(fraise_name, env_name)
                 if env_config:

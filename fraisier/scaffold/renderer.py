@@ -1282,7 +1282,7 @@ class ScaffoldRenderer:
     def _assert_every_environment_has_a_host(self, servers: list[str]) -> None:
         """Invariant (C), first half: no environment may resolve to zero hosts.
 
-        ``get_environments_for_server`` matches on exact equality, so in a
+        ``get_scopes_for_server`` matches on exact equality, so in a
         multi-host config an environment that declares no ``server:`` belongs
         to no logical server and its ``git_repo``/``app_path`` are rendered
         into **no** webhook unit at all — the #325 failure reached from a

@@ -236,10 +236,19 @@ def _make_config_mock(
     deployments: list[dict],
     server_env_map: dict[str, list[str]],
 ) -> MagicMock:
-    """Build a config mock with deployments and server→env mapping."""
+    """Build a config mock with deployments and server→env mapping.
+
+    The filter reads ``get_scopes_for_server`` since #336. These fixtures
+    describe environments only, so every pair is yielded unowned — a global
+    ``environments:`` declaration, which binds every fraise using the name
+    and is precisely what this map models.
+    """
     config = MagicMock()
     config.list_all_deployments.return_value = deployments
     config.get_environments_for_server.side_effect = lambda s: server_env_map.get(s, [])
+    config.get_scopes_for_server.side_effect = lambda s: [
+        (None, env) for env in server_env_map.get(s, [])
+    ]
     # None return triggers "error" row — keeps tests simple and fast
     config.get_fraise_environment.return_value = None
     return config
