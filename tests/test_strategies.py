@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from fraisier.dbops.backup import CleanupOutcome
 from fraisier.dbops.confiture import (
     IrreversibleMigrationError,
     MigrationError,
@@ -25,6 +26,9 @@ from fraisier.strategies._base import StrategyResult
 
 CONFIG = Path("confiture.yaml")
 MDIR = Path("db/migrations")
+_PRUNED_ONE = CleanupOutcome(
+    removed=("old.dump",), kept=(), exempted_by_minimum=("new.dump",)
+)
 _ADMIN_URL = "postgresql://postgres:pass@localhost:5432/postgres"
 
 
@@ -290,7 +294,7 @@ class TestMigrateStrategyPreMigrateDumpGate:
         mock_backup.assert_not_called()
         mock_up.assert_not_called()
 
-    @patch("fraisier.dbops.backup.cleanup_old_backups", return_value=["old.dump"])
+    @patch("fraisier.dbops.backup.cleanup_old_backups", return_value=_PRUNED_ONE)
     @patch("fraisier.dbops.confiture.has_pending", return_value=True)
     @patch("fraisier.dbops.backup.run_backup")
     @patch("fraisier.strategies._core.migrate_up")
@@ -306,9 +310,31 @@ class TestMigrateStrategyPreMigrateDumpGate:
         result = self._strategy(retention_hours=72).execute(CONFIG, migrations_dir=MDIR)
 
         assert result.success
-        mock_cleanup.assert_called_once_with(
-            Path("/var/backups/gate"), retention_hours=72
-        )
+        assert mock_cleanup.call_args.args == (Path("/var/backups/gate"),)
+        assert mock_cleanup.call_args.kwargs["retention_hours"] == 72
+
+    @patch("fraisier.dbops.backup.cleanup_old_backups", return_value=_PRUNED_ONE)
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_pre_migrate_dump_gate_keeps_the_newest_dump(
+        self, mock_preflight, mock_up, mock_backup, mock_pending, mock_cleanup
+    ):
+        """The gate's own dump is the rollback point for the migration it gates.
+
+        Expiring it in the same breath would leave the migration about
+        to run with nothing to fall back to, so the gate prunes with a
+        floor of one however short `retention_hours` is set.
+        """
+        from fraisier.dbops.backup import BackupResult
+
+        mock_backup.return_value = BackupResult(success=True, backup_path="p.dump")
+        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+
+        self._strategy(retention_hours=0).execute(CONFIG, migrations_dir=MDIR)
+
+        assert mock_cleanup.call_args.kwargs["keep_minimum"] == 1
 
     @patch("fraisier.dbops.backup.cleanup_old_backups")
     @patch("fraisier.dbops.confiture.has_pending", return_value=True)

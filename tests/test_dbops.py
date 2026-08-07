@@ -770,7 +770,7 @@ class TestRetentionCleanup:
         new_file = tmp_path / "mydb_20260322_0000.dump"
         new_file.write_text("new")
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+        removed = cleanup_old_backups(tmp_path, retention_hours=24).removed
 
         assert len(removed) == 1
         assert old_file.name in removed[0]
@@ -782,7 +782,7 @@ class TestRetentionCleanup:
         f = tmp_path / "mydb_recent.dump"
         f.write_text("recent")
 
-        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+        removed = cleanup_old_backups(tmp_path, retention_hours=24).removed
         assert len(removed) == 0
         assert f.exists()
 
