@@ -548,15 +548,32 @@ class TestManifestModelsTheRealInstaller:
 
     @staticmethod
     def _installed_on_host(renderer, manifest, hostname: str) -> set[str]:
-        """Manifest entries this host installs, applying the same two filters
-        install.sh applies at runtime: ``_env_active`` and per-host webhook
-        selection."""
+        """Manifest entries this host installs, applying the same filters
+        install.sh applies at runtime: the two host gates and per-host webhook
+        selection.
+
+        The gate mirrors ``host_gate`` in the template — an artifact naming a
+        fraise goes through ``_scope_active``, one naming only an environment
+        through ``_env_active``, and one naming neither is unconditional.
+        """
+        scopes = set(renderer.context["machine_scope_map"].get(hostname, []))
         envs = set(renderer.context["machine_env_map"].get(hostname, []))
         webhook = renderer.context["machine_webhook_map"].get(hostname)
+
+        def active(artifact) -> bool:
+            if artifact.environment is None:
+                return True
+            if artifact.fraise is None:
+                return artifact.environment in envs
+            return (
+                f"{artifact.fraise}:{artifact.environment}" in scopes
+                or f"*:{artifact.environment}" in scopes
+            )
+
         return {
             a.source
             for a in manifest.installed()
-            if (a.environment is None or a.environment in envs)
+            if active(a)
             and (a.disposition is not Disposition.WEBHOOK or a.source == webhook)
         }
 
