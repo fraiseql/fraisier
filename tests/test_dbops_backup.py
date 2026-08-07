@@ -650,3 +650,53 @@ class TestCleanupKeepMinimum:
         assert (tmp_path / "db_full_0.dump").is_dir()
         assert (tmp_path / "db_full_1.dump").is_dir()
         assert not (tmp_path / "db_full_2.dump").exists()
+
+
+class TestCleanupMatch:
+    """The glob: one directory can hold more than one artifact class."""
+
+    def test_match_restricts_the_glob_to_one_artifact_class(self, tmp_path: Path):
+        """Full and slim dumps share a directory and expire on different clocks."""
+        full = _dump(tmp_path, "db_full_20260101.dump", hours=48)
+        slim = _dump(tmp_path, "db_slim_20260101.dump", hours=48)
+
+        removed = cleanup_old_backups(
+            tmp_path, retention_hours=24, match="*_full_*.dump"
+        )
+
+        assert removed == [str(full)]
+        assert not full.exists()
+        assert slim.exists()
+
+    def test_match_defaults_to_star_dump(self, tmp_path: Path):
+        full = _dump(tmp_path, "db_full_20260101.dump", hours=48)
+        slim = _dump(tmp_path, "db_slim_20260101.dump", hours=48)
+        other = _dump(tmp_path, "notes.txt", hours=48)
+
+        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+
+        assert sorted(removed) == sorted([str(full), str(slim)])
+        assert other.exists()
+
+    def test_containment_guard_applies_under_match(self, tmp_path: Path):
+        """A symlink matching the glob but resolving outside is skipped.
+
+        Re-pins the existing guard against the new code path: the guard
+        lives past the exemption slice now, and its absence there is what
+        a refactor would silently drop.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = _dump(outside, "victim_full.dump", hours=48)
+
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        link = corpus / "db_full_20260101.dump"
+        link.symlink_to(target)
+        _aged(link, hours=48)
+
+        removed = cleanup_old_backups(corpus, retention_hours=24, match="*_full_*.dump")
+
+        assert removed == []
+        assert target.exists()
+        assert link.is_symlink()

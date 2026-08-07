@@ -197,9 +197,9 @@ def check_disk_space(path: str, *, required_gb: int) -> bool:
     return free_gb >= required_gb
 
 
-def _candidates(backup_dir: Path) -> list[tuple[Path, float]]:
-    """Return dumps in *backup_dir* as (path, mtime), newest first."""
-    entries = [(p, p.stat().st_mtime) for p in backup_dir.glob("*.dump")]
+def _candidates(backup_dir: Path, match: str) -> list[tuple[Path, float]]:
+    """Return *match*-ing dumps in *backup_dir* as (path, mtime), newest first."""
+    entries = [(p, p.stat().st_mtime) for p in backup_dir.glob(match)]
     entries.sort(key=lambda entry: entry[1], reverse=True)
     return entries
 
@@ -208,6 +208,7 @@ def cleanup_old_backups(
     backup_dir: Path,
     *,
     retention_hours: int,
+    match: str = "*.dump",
     keep_minimum: int = 0,
 ) -> list[str]:
     """Remove backup files and directory dumps older than *retention_hours*.
@@ -217,6 +218,10 @@ def cleanup_old_backups(
     ``rmtree`` is guarded by a resolved-path containment check against
     ``backup_dir`` to ensure a glob result can't escape via a symlinked
     entry.
+
+    *match* scopes the glob to one artifact class — full and slim dumps
+    share a directory and expire on different clocks. Both the floor and
+    the age rule apply within the matched set only.
 
     *keep_minimum* newest dumps — by mtime, not by filename — are exempt
     from the age rule entirely. The exemption is applied *before* the
@@ -231,7 +236,7 @@ def cleanup_old_backups(
     resolved_root = backup_dir.resolve()
     removed: list[str] = []
 
-    for f, mtime in _candidates(backup_dir)[keep_minimum:]:
+    for f, mtime in _candidates(backup_dir, match)[keep_minimum:]:
         if mtime >= cutoff:
             continue
         resolved = f.resolve()
