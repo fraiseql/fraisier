@@ -378,28 +378,20 @@ class TestTheMatrixIsMeaningful:
             assert "mkdir -p /var/lib/fraisier" in plan, case
             assert "mkdir -p /opt/fraisier" in plan, case
 
-    def test_host_scoping_is_by_environment_name_not_by_fraise(self, plans):
-        """A known limitation (#336), pinned so it is named rather than discovered.
+    def test_host_scoping_is_by_fraise_and_environment(self, plans):
+        """#336, from the other side: each host plans only its own fraise.
 
-        ``machine_env_map`` — the authority ``_env_active`` reads — is built
-        from :meth:`get_environments_for_server`, which returns environment
-        *names* and discards which fraise declared them. So when two fraises
-        put the same environment name on different servers, both hosts see
-        that name as active and each installs the other's units and creates
-        the other's directories.
-
-        This predates the directory gate and affects units identically, so
-        gating directories did not introduce it and could not fix it: the fix
-        is to scope by (fraise, environment), which changes which units live
-        hosts install and belongs in its own change.
+        The pin this replaces asserted the cross-install as a known
+        limitation and said to delete it when scoping became fraise-aware.
+        It has; ``tests/test_host_scope_gate.py`` carries the full case,
+        and this keeps the golden matrix honest about what changed in it.
         """
         abox = " ".join(plans["per_fraise_servers_a"])
 
-        assert "worker.service /etc/systemd/system/worker.service" in abox, (
-            "if this now fails, host scoping became fraise-aware — good; "
-            "delete this test and the directory gate follows for free"
-        )
-        assert "mkdir -p /var/www/worker" in abox
+        assert "api.service /etc/systemd/system/api.service" in abox
+        assert "worker.service" not in abox
+        assert "mkdir -p /var/www/api" in abox
+        assert "mkdir -p /var/www/worker" not in abox
 
     def test_each_host_installs_its_own_webhook_unit(self, plans):
         """The unit whose name carries the host is the one copied (#325)."""

@@ -201,6 +201,58 @@ def _resolve_command_path(cmd: str) -> str:
     return f"{absolute} {parts[1]}"
 
 
+# The separator between the two halves of a scope key in the bash map. Neither
+# a fraise nor an environment name can contain it: both are validated against
+# `_SAFE_NAME_RE` before they are joined, so a key never carries a second
+# separator to be split on.
+_SCOPE_SEP = ":"
+
+# The owner of a globally-declared environment, which by definition has none.
+# `*` cannot collide with a fraise name for the same reason: `_SAFE_NAME_RE`.
+# It is only ever compared as a quoted literal inside `[[ == ]]`, never
+# expanded, so it is not a glob anywhere it appears.
+_ANY_FRAISE = "*"
+
+
+def _validate_scope_name(name: str, kind: str) -> None:
+    """Refuse a name that would make the bash scope key ambiguous."""
+    if not _SAFE_NAME_RE.match(name):
+        msg = f"Invalid {kind} name: {name!r} — must match [a-zA-Z0-9_-]+"
+        raise ValueError(msg)
+
+
+def _format_scope_keys(scopes: list[tuple[str | None, str]]) -> list[str]:
+    """Render ``(fraise, env)`` owners as the ``fraise:env`` keys bash matches.
+
+    A ``None`` owner — a global ``environments:`` declaration — becomes
+    ``*:env``, which ``_scope_active`` reads as *every fraise using this name*.
+    """
+    keys: dict[str, None] = {}
+    for fraise_name, env_name in scopes:
+        _validate_scope_name(env_name, "environment")
+        if fraise_name is None:
+            keys[f"{_ANY_FRAISE}{_SCOPE_SEP}{env_name}"] = None
+            continue
+        _validate_scope_name(fraise_name, "fraise")
+        keys[f"{fraise_name}{_SCOPE_SEP}{env_name}"] = None
+    return list(keys)
+
+
+def _scope_predicate(scopes: list[tuple[str | None, str]]):
+    """Return ``(fraise, env) -> bool`` over a server's declared owners.
+
+    The Python half of ``_scope_active``: an unowned declaration matches every
+    fraise using the name, an owned one matches that fraise alone.
+    """
+    owned = {(f, e) for f, e in scopes if f is not None}
+    unowned = {e for f, e in scopes if f is None}
+
+    def allowed(fraise_name: str, env_name: str) -> bool:
+        return env_name in unowned or (fraise_name, env_name) in owned
+
+    return allowed
+
+
 def _collect_install_helper_sockets(
     project_name: str,
     local_fraises: list[dict[str, Any]],
@@ -475,16 +527,19 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
                 entry["environments"] = enriched
             fraises_list.append(entry)
 
-    # Build local_fraises: filtered to only environments on the given server
+    # Build local_fraises: filtered to only environments on the given server.
+    # Keyed by (fraise, environment), not by environment name: with two fraises
+    # sharing an environment name on different servers, a name-keyed filter puts
+    # both in every host's tree (#336).
     if server is not None:
-        allowed_envs = set(config.get_environments_for_server(server))
+        allowed = _scope_predicate(config.get_scopes_for_server(server))
         local_fraises = [
             {
                 **f,
                 "environments": {
                     k: v
                     for k, v in f.get("environments", {}).items()
-                    if k in allowed_envs
+                    if allowed(f["name"], k)
                 },
             }
             for f in fraises_list
@@ -505,12 +560,21 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
     else:
         local_fraises = fraises_list
 
-    # Build machine_env_map: filter to only that server's machines when --server given
+    # Build the host maps: filter to only that server's machines when --server given
+    full_machine_scope_map = {
+        machine: _format_scope_keys(scopes)
+        for machine, scopes in config.get_machine_scope_map().items()
+    }
     full_machine_env_map = config.get_machine_environment_map()
     full_machine_webhook_map = webhook_machine_map(config)
     if server is not None:
         # Get machines for the specified server
         machines_for_server = config.servers.get(server, [])
+        machine_scope_map = {
+            m: full_machine_scope_map[m]
+            for m in machines_for_server
+            if m in full_machine_scope_map
+        }
         machine_env_map = {
             m: full_machine_env_map[m]
             for m in machines_for_server
@@ -522,6 +586,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
             if m in full_machine_webhook_map
         }
     else:
+        machine_scope_map = full_machine_scope_map
         machine_env_map = full_machine_env_map
         machine_webhook_map = full_machine_webhook_map
 
@@ -561,6 +626,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "allowed_services": _collect_allowed_services(project_name, local_fraises),
         "deploy_users": _collect_deploy_users(config, fraises_list),
         "sudoers_rules": _collect_deduplicated_sudoers_rules(config, fraises_list),
+        "machine_scope_map": machine_scope_map,
         "machine_env_map": machine_env_map,
         "machine_webhook_map": machine_webhook_map,
         "install_helper_sockets": install_helper_sockets,
@@ -1257,8 +1323,11 @@ class ScaffoldRenderer:
             for ln in content.splitlines()
             if ln.startswith("ReadWritePaths=")
         ]
+        # Keyed by (fraise, environment): a host carrying `api/production` does
+        # not thereby host `worker/production`, and demanding writes to the
+        # latter's trees would reject a correctly-scoped unit (#336).
         hosted = (
-            set(self.config.get_environments_for_server(server))
+            _scope_predicate(self.config.get_scopes_for_server(server))
             if server is not None
             else None
         )
@@ -1266,7 +1335,7 @@ class ScaffoldRenderer:
         missing: list[str] = []
         for fraise in self.context["fraises"]:
             for env_name, env_config in fraise.get("environments", {}).items():
-                if hosted is not None and env_name not in hosted:
+                if hosted is not None and not hosted(fraise["name"], env_name):
                     continue
                 for key in ("git_repo", "app_path"):
                     path = env_config.get(key)
