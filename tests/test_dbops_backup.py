@@ -564,3 +564,89 @@ class TestCleanupOldBackups:
         assert not old_file.exists()
         assert not old_dir.exists()
         assert new_file.exists()
+
+
+def _aged(path: Path, *, hours: float) -> Path:
+    """Backdate *path*'s mtime by *hours* and return it."""
+    when = time.time() - hours * 3600
+    os.utime(path, (when, when))
+    return path
+
+
+def _dump(directory: Path, name: str, *, hours: float) -> Path:
+    """Write a file dump named *name*, aged *hours*."""
+    path = directory / name
+    path.write_text(name)
+    return _aged(path, hours=hours)
+
+
+class TestCleanupKeepMinimum:
+    """The floor: a corpus can never be emptied by the age rule alone."""
+
+    def test_keep_minimum_exempts_newest_regardless_of_age(self, tmp_path: Path):
+        """The only case that matters: every dump is past the cutoff.
+
+        A stalled producer stops writing; the whole corpus ages out
+        together. Exempting before the age test is what keeps the newest
+        three alive here — exempting after would keep nothing.
+        """
+        for index in range(5):
+            _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
+
+        removed = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=3)
+
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "db_full_0.dump",
+            "db_full_1.dump",
+            "db_full_2.dump",
+        ]
+        assert len(removed) == 2
+
+    def test_keep_minimum_zero_deletes_everything_past_the_cutoff(self, tmp_path: Path):
+        """The default is the pre-#339 behaviour, unchanged."""
+        for index in range(3):
+            _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
+
+        removed = cleanup_old_backups(tmp_path, retention_hours=24)
+
+        assert len(removed) == 3
+        assert list(tmp_path.iterdir()) == []
+
+    def test_keep_minimum_exceeding_corpus_size_deletes_nothing(self, tmp_path: Path):
+        for index in range(2):
+            _dump(tmp_path, f"db_full_{index}.dump", hours=48 + index)
+
+        removed = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=10)
+
+        assert removed == []
+        assert len(list(tmp_path.iterdir())) == 2
+
+    def test_exemption_is_by_mtime_not_by_filename(self, tmp_path: Path):
+        """Timestamps in filenames lie; a re-sync rewrites mtime, not the name.
+
+        ``zzz`` sorts last by name and is the newest by mtime, so a
+        name-ordered implementation would delete exactly the file the
+        floor exists to protect.
+        """
+        newest = _dump(tmp_path, "zzz_full.dump", hours=48)
+        oldest = _dump(tmp_path, "aaa_full.dump", hours=200)
+
+        cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=1)
+
+        assert newest.exists()
+        assert not oldest.exists()
+
+    def test_directory_dumps_count_toward_the_floor(self, tmp_path: Path):
+        """``-Fd`` trees occupy floor slots exactly like file dumps."""
+        for index in range(3):
+            tree = tmp_path / f"db_full_{index}.dump"
+            tree.mkdir()
+            (tree / "toc.dat").write_text("toc")
+            _aged(tree, hours=48 + index)
+
+        removed = cleanup_old_backups(tmp_path, retention_hours=24, keep_minimum=2)
+
+        assert len(removed) == 1
+        assert (tmp_path / "db_full_0.dump").is_dir()
+        assert (tmp_path / "db_full_1.dump").is_dir()
+        assert not (tmp_path / "db_full_2.dump").exists()
