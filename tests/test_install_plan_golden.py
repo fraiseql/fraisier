@@ -221,6 +221,58 @@ fraises:
         script_path: /usr/local/bin/nightly.sh
 """
 
+# #336's own shape, plus the artifact that must NOT follow the same rule.
+# Three fraises share the name `production` across two servers and a fourth
+# sits alone on a third, so one config exercises both predicates: `worker`
+# reaches box-b and not box-a (fraise-owned), while the unit-installer helper
+# reaches every host declaring `production` (env-owned, one per project+env).
+_SCOPED_HOSTS = """\
+name: proj
+servers:
+  a.example.io:
+    machine_hostnames: [abox]
+  b.example.io:
+    machine_hostnames: [bbox]
+  c.example.io:
+    machine_hostnames: [cbox]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: a.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+  worker:
+    type: api
+    environments:
+      production:
+        server: b.example.io
+        app_path: /var/www/worker
+        systemd_service: worker.service
+        git_repo: /var/git/worker.git
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        server: b.example.io
+        app_path: /var/www/nightly
+        systemd_service: nightly.service
+        systemd_timer: nightly.timer
+        script_path: /usr/local/bin/nightly.sh
+  edge:
+    type: api
+    environments:
+      staging:
+        server: c.example.io
+        app_path: /var/www/edge
+        systemd_service: edge.service
+        git_repo: /var/git/edge.git
+"""
+
 # (case name, config, hostname). Two entries for the asymmetric config: the
 # whole point is that the two hosts must plan *different* installs.
 MATRIX = [
@@ -229,6 +281,9 @@ MATRIX = [
     ("asymmetric_prod_only_host", _ASYMMETRIC, "pio"),
     ("per_fraise_servers_a", _PER_FRAISE_SERVERS, "abox"),
     ("per_fraise_servers_b", _PER_FRAISE_SERVERS, "bbox"),
+    ("scoped_hosts_fraise_owned", _SCOPED_HOSTS, "abox"),
+    ("scoped_hosts_with_env_owned_helper", _SCOPED_HOSTS, "bbox"),
+    ("scoped_hosts_other_environment", _SCOPED_HOSTS, "cbox"),
     ("install_helper_rebake", _INSTALL_HELPER, "solo"),
     ("nginx_vhosts", _NGINX, "solo"),
     ("nginx_derived_vhost_name", _NGINX_DERIVED_NAME, "solo"),

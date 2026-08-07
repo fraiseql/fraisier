@@ -25,60 +25,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.test_install_plan_golden import (
+    _SCOPED_HOSTS as SAME_NAME_DIFFERENT_SERVER,
+)
 from tests.test_install_plan_golden import _install_plan, _render
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# #336's own example config: two fraises, the same environment name, two
-# servers. `nightly` is scheduled as well, so the env-owned unit-installer
-# helper is in the tree and the two predicates can be told apart.
-SAME_NAME_DIFFERENT_SERVER = """\
-name: proj
-servers:
-  a.example.io:
-    machine_hostnames: [abox]
-  b.example.io:
-    machine_hostnames: [bbox]
-  c.example.io:
-    machine_hostnames: [cbox]
-scaffold:
-  deploy_user: deployer
-fraises:
-  api:
-    type: api
-    environments:
-      production:
-        server: a.example.io
-        app_path: /var/www/api
-        systemd_service: api.service
-        git_repo: /var/git/api.git
-  worker:
-    type: api
-    environments:
-      production:
-        server: b.example.io
-        app_path: /var/www/worker
-        systemd_service: worker.service
-        git_repo: /var/git/worker.git
-  nightly:
-    type: scheduled
-    environments:
-      production:
-        server: b.example.io
-        app_path: /var/www/nightly
-        systemd_service: nightly.service
-        systemd_timer: nightly.timer
-        script_path: /usr/local/bin/nightly.sh
-  edge:
-    type: api
-    environments:
-      staging:
-        server: c.example.io
-        app_path: /var/www/edge
-        systemd_service: edge.service
-        git_repo: /var/git/edge.git
-"""
 
 # The same two fraises, but `server:` declared once in the global
 # environments: section. That declaration has no owning fraise and binds
