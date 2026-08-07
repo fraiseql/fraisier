@@ -746,3 +746,46 @@ def _check_scaffold_artifact_coverage(config: FraisierConfig | None) -> CheckRes
         f"{len(manifest.artifacts)} artifact(s) classified, "
         f"{len(manifest.installed())} installed by scaffold-install",
     )
+
+
+@register_check("foreign_units")
+def _check_foreign_units(config: FraisierConfig | None) -> CheckResult:
+    """Units installed here that belong to a fraise running somewhere else.
+
+    Before host scoping became fraise-aware (#336), two fraises sharing an
+    environment name across two servers made each host install the other's
+    units. The fix stops new ones arriving; it cannot remove what is already
+    on disk, still enabled and possibly still serving traffic. So this
+    reports them — with their owner, so the operator can tell a leftover
+    from a deliberate co-location — and removes nothing. Only
+    ``scaffold-install --prune-foreign`` acts.
+
+    Uses a dry-run render, which writes nothing.
+    """
+    name = "foreign_units"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.scaffold import foreign as foreign_mod
+
+    try:
+        units = foreign_mod.find_foreign_units(config)
+    except ValidationError as exc:
+        return CheckResult(name, "skip", f"could not classify scaffold: {exc}")
+    except (OSError, ValueError) as exc:
+        return CheckResult(name, "skip", f"could not render scaffold: {exc}")
+
+    if not units:
+        return CheckResult(name, "pass", "no units owned by a non-local fraise")
+
+    listed = ", ".join(f"{u.unit_name} ({u.owner})" for u in units)
+    return CheckResult(
+        name,
+        "warn",
+        f"{len(units)} unit(s) installed here are owned by a fraise that does "
+        f"not run on this host: {listed}",
+        fix_hint=(
+            "they may be another application's running services — review, then "
+            "'fraisier scaffold-install --prune-foreign' to disable and delete"
+        ),
+    )

@@ -20,6 +20,40 @@ from .main import main
 STRICT_SUDOERS_EXIT_CODE = 3
 
 
+def _report_foreign_units(config, *, server: str | None = None) -> None:
+    """Name the units installed here that belong to a fraise running elsewhere.
+
+    A report, never an action. Removing another application's service as a
+    side effect of a diagnostic is how a routine command becomes an outage
+    (#336, decision 5), so this says what is there and who owns it and
+    leaves the operator to decide.
+    """
+    from fraisier.scaffold import foreign as foreign_mod
+
+    try:
+        units = foreign_mod.find_foreign_units(config, server=server)
+    except (OSError, ValueError) as exc:
+        console.print(f"[yellow]![/yellow] could not check for foreign units: {exc}")
+        return
+
+    if not units:
+        return
+
+    console.print(
+        f"\n[yellow]![/yellow] {len(units)} foreign unit(s) — installed here, "
+        "owned by a fraise that does not run on this host:"
+    )
+    for unit in units:
+        console.print(
+            f"    {unit.unit_name}  <- owned by {unit.owner}, "
+            f"installed at {unit.installed_path}"
+        )
+    console.print(
+        "  Nothing was stopped or removed. To disable and delete them:\n"
+        "    fraisier scaffold-install --prune-foreign"
+    )
+
+
 @main.command(name="scaffold-diff")
 @click.argument("fraise", required=False)
 @click.argument("environment", required=False)
@@ -61,6 +95,8 @@ def scaffold_diff(
         fraise_filter=fraise,
         env_filter=environment,
     )
+
+    _report_foreign_units(config, server=server)
 
     if not diffs:
         console.print("[green]✓[/green] No scaffold differences found")
@@ -115,6 +151,35 @@ def scaffold_diff(
 
     # Exit with appropriate code
     raise SystemExit(1 if changed_count > 0 else 0)
+
+
+def _prune_foreign_units(config, *, yes: bool) -> None:
+    """Disable and delete this host's foreign units, on explicit request.
+
+    Reached only through ``--prune-foreign``: this is the one path in the
+    scoping fix that stops a systemd unit, and the unit it stops may be
+    another application's. Typed, listed, and confirmed unless ``--yes``.
+    """
+    from fraisier.scaffold import foreign as foreign_mod
+
+    units = foreign_mod.find_foreign_units(config)
+    if not units:
+        console.print("[green]✓[/green] No foreign units to prune")
+        return
+
+    console.print(
+        f"[yellow]![/yellow] --prune-foreign will disable and delete "
+        f"{len(units)} unit(s):"
+    )
+    for unit in units:
+        console.print(f"    {unit.unit_name}  <- owned by {unit.owner}")
+
+    if not yes and not click.confirm("Disable and delete these units?"):
+        console.print("[yellow]Left in place.[/yellow]")
+        return
+
+    pruned = foreign_mod.prune_foreign_units(config, units)
+    console.print(f"[green]✓[/green] Pruned {len(pruned)} foreign unit(s)")
 
 
 @main.command(name="scaffold")
@@ -342,6 +407,16 @@ def _print_sudoers_diff(
         "server-side scaffold state tree."
     ),
 )
+@click.option(
+    "--prune-foreign",
+    is_flag=True,
+    help=(
+        "Disable and delete units installed here that belong to a fraise "
+        "which does not run on this host. Never happens by default: they may "
+        "be another application's running services. Run 'fraisier "
+        "scaffold-diff' first to see what would go."
+    ),
+)
 @click.pass_context
 def scaffold_install(
     ctx: click.Context,
@@ -351,6 +426,7 @@ def scaffold_install(
     verbose: bool,
     strict_sudoers: bool,
     output_dir_opt: str | None,
+    prune_foreign: bool,
 ) -> None:
     """Install generated scaffold files to system locations.
 
@@ -371,6 +447,9 @@ def scaffold_install(
         fraisier scaffold-install --yes          # Install without prompt
     """
     config = require_config(ctx)
+
+    if prune_foreign and not (dry_run or validate_only):
+        _prune_foreign_units(config, yes=yes)
 
     # Locate the install.sh script
     output_dir = Path(output_dir_opt or config.scaffold.output_dir)
