@@ -1549,18 +1549,18 @@ class ScaffoldRenderer:
 
         self._write_output(out_name, content)
 
-    def nginx_vhost_envs(self) -> dict[str, str]:
-        """Map rendered vhost stem -> the environment it belongs to.
+    def nginx_vhost_scopes(self) -> dict[str, tuple[str, str]]:
+        """Map rendered vhost stem -> the ``(fraise, environment)`` it belongs to.
 
         Walks **every** fraise, not just this host's: per-environment nginx
         configs are deliberately rendered for all servers so the generated
         tree is a complete, committable artifact (#148), and each host's
-        installer gates them with ``_env_active``. Reading only local fraises
-        here would leave the others with no environment — which reads as
+        installer gates them with ``_scope_active``. Reading only local fraises
+        here would leave the others with no owner — which reads as
         *unconditional*, the exact inversion of what is wanted.
         """
         project = self.context["project_name"]
-        stems: dict[str, str] = {}
+        stems: dict[str, tuple[str, str]] = {}
         for fraise in self.context["fraises"]:
             for env_name, env_config in fraise.get("environments", {}).items():
                 if not isinstance(env_config, dict):
@@ -1570,7 +1570,7 @@ class ScaffoldRenderer:
                     continue
                 stems[
                     _nginx_vhost_stem(project, fraise["name"], env_name, nginx_config)
-                ] = env_name
+                ] = (fraise["name"], env_name)
         return stems
 
     def _collect_per_env_nginx(self, dry_run: bool) -> list[str]:

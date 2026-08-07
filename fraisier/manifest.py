@@ -47,18 +47,22 @@ class ManagedPath:
             which today is the venv alone. Every other managed path — app_path,
             git_repo, config_dir, the relocated caches — holds state no deploy
             step recreates, so a mismatch there is raised, not deleted.
-        environments: Environments this path belongs to. Empty means
-            unconditional — a path no single environment owns, like
+        environments: ``(fraise, environment)`` owners of this path. Empty
+            means unconditional — a path no single environment owns, like
             ``/var/lib/fraisier``. A path derived from an environment's config
-            carries that environment so consumers can gate on it: the units
+            carries its owner so consumers can gate on it: the units
             were host-filtered while the directories they live in were not, so
             a production-only host created and chowned the dev host's
             ``git_repo`` and ``app_path`` (#325's shape, one layer down).
 
-            A tuple rather than a single name because paths are deduplicated by
-            location: if two environments name the same directory, it belongs
-            to both, and gating it on whichever was seen first would leave it
-            uncreated on a host running only the other.
+            The owner is a *pair* and not an environment name because two
+            fraises may put the same environment name on different servers
+            (#336); gating on the name alone provisions the neighbour's tree.
+
+            A tuple rather than a single owner because paths are deduplicated
+            by location: if two environments name the same directory, it
+            belongs to both, and gating it on whichever was seen first would
+            leave it uncreated on a host running only the other.
     """
 
     path: Path
@@ -68,7 +72,7 @@ class ManagedPath:
     read_write_units: tuple[str, ...]
     create_if_missing: bool = True
     reconcile_ownership: bool = False
-    environments: tuple[str, ...] = ()
+    environments: tuple[tuple[str, str], ...] = ()
 
     def __str__(self) -> str:
         """Readable representation for logging."""
@@ -229,7 +233,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                         mode=0o755,
                         read_write_units=(socket_stem, "fraisier-webhook"),
                         create_if_missing=True,
-                        environments=(env_name,),
+                        environments=((fraise_name, env_name),),
                     )
                 )
 
@@ -244,7 +248,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                         mode=0o755,
                         read_write_units=(socket_stem, "fraisier-webhook"),
                         create_if_missing=True,
-                        environments=(env_name,),
+                        environments=((fraise_name, env_name),),
                     )
                 )
 
@@ -268,7 +272,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                                 # later, so it is the one path a deploy can
                                 # safely delete and rebuild.
                                 reconcile_ownership=True,
-                                environments=(env_name,),
+                                environments=((fraise_name, env_name),),
                             )
                         )
                         for relative in _RELOCATED_INSTALL_DIRS:
@@ -283,7 +287,7 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
                                     # covers everything beneath it.
                                     read_write_units=(),
                                     create_if_missing=True,
-                                    environments=(env_name,),
+                                    environments=((fraise_name, env_name),),
                                 )
                             )
 

@@ -787,6 +787,7 @@ class TestManifestFileOnDisk:
                 "disposition",
                 "destination",
                 "mode",
+                "fraise",
                 "environment",
                 "sha256",
                 "note",
@@ -826,3 +827,65 @@ class TestManifestFileOnDisk:
         second = self._written(tmp_path / "b")
 
         assert first == second
+
+
+class TestArtifactsCarryTheirOwner:
+    """#336: an artifact is gated by (fraise, environment) or by environment.
+
+    Two predicates, because there are genuinely two kinds. Forcing the
+    env-owned ones through a fraise-keyed gate would mean inventing an
+    owner for them, which is how a second host authority gets born — the
+    disease all of #336, #337 and #339 are instances of.
+    """
+
+    @staticmethod
+    def _manifest(tmp_path, yaml_text):
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(yaml_text)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        return build_artifact_manifest(renderer, renderer.render())
+
+    def test_rendered_artifact_carries_the_declaring_fraise(self, tmp_path):
+        """App services, deploy sockets and the install-helper pair are owned."""
+        manifest = self._manifest(tmp_path, _CONFIG)
+        owned = {
+            a.source: a.fraise for a in manifest.artifacts if a.environment is not None
+        }
+
+        assert owned, "no env-gated artifacts rendered; the test proves nothing"
+        assert set(owned.values()) == {"api"}, owned
+
+    def test_the_unit_installer_pair_has_no_owning_fraise(self, tmp_path):
+        """One helper per (project, environment) by design (#240).
+
+        It serves every scheduled fraise in the environment, so there is no
+        single fraise to name and inventing one would be a second authority.
+        """
+        manifest = self._manifest(tmp_path, _SCHEDULED_CONFIG)
+        pair = manifest.with_disposition(Disposition.UNIT_INSTALLER)
+
+        assert pair, "the scheduled config should render the helper"
+        for artifact in pair:
+            assert artifact.fraise is None, artifact.source
+            assert artifact.environment == "production"
+
+    def test_unowned_artifacts_stay_unowned(self, tmp_path):
+        """A postgresql conf is per environment; nothing else claims it."""
+        manifest = self._manifest(tmp_path, _CONFIG)
+
+        for artifact in manifest.artifacts:
+            if artifact.environment is None:
+                assert artifact.fraise is None, artifact.source
+
+    def test_nginx_vhosts_name_the_fraise_that_declared_them(self, tmp_path):
+        manifest = self._manifest(tmp_path, _CONFIG)
+        vhosts = [
+            a
+            for a in manifest.with_disposition(Disposition.NGINX_VHOST)
+            if a.environment is not None
+        ]
+
+        assert vhosts
+        for vhost in vhosts:
+            assert vhost.fraise == "api", vhost.source
