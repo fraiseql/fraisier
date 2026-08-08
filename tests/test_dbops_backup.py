@@ -761,3 +761,41 @@ class TestCleanupOutcome:
 
         assert outcome.removed == ()
         assert outcome.floor_was_load_bearing is False
+
+    def test_dry_run_reports_what_it_would_remove_without_removing(
+        self, tmp_path: Path
+    ):
+        """`--dry-run` reads the same selection the real prune acts on (#339).
+
+        The alternative — the CLI deriving its own candidate list — would be
+        a second authority for "what expires", which is the disease #337 and
+        #336 are both instances of. It has to be the same code path or the
+        preview is not a preview.
+        """
+        old_file = tmp_path / "old.dump"
+        old_file.write_text("old")
+        old_mtime = time.time() - 48 * 3600
+        os.utime(old_file, (old_mtime, old_mtime))
+        recent = tmp_path / "recent.dump"
+        recent.write_text("recent")
+
+        outcome = cleanup_old_backups(tmp_path, retention_hours=24, dry_run=True)
+
+        assert outcome.removed == (str(old_file),)
+        assert old_file.exists(), "dry_run deleted a file"
+        assert outcome.kept == (str(recent),)
+
+    def test_dry_run_still_honours_the_containment_guard(self, tmp_path: Path):
+        """A preview must not promise to delete something the real run skips."""
+        outside = tmp_path.parent / "outside.dump"
+        outside.write_text("elsewhere")
+        old_mtime = time.time() - 48 * 3600
+        os.utime(outside, (old_mtime, old_mtime))
+        backup_dir = tmp_path / "corpus"
+        backup_dir.mkdir()
+        (backup_dir / "link.dump").symlink_to(outside)
+
+        outcome = cleanup_old_backups(backup_dir, retention_hours=24, dry_run=True)
+
+        assert outcome.removed == ()
+        assert outside.exists()

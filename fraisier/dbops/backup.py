@@ -244,6 +244,7 @@ def cleanup_old_backups(
     retention_hours: int,
     match: str = "*.dump",
     keep_minimum: int = 0,
+    dry_run: bool = False,
 ) -> CleanupOutcome:
     """Remove backup files and directory dumps older than *retention_hours*.
 
@@ -264,6 +265,12 @@ def cleanup_old_backups(
     older than the cutoff, and the whole corpus would otherwise age out
     together.
 
+    *dry_run* selects exactly as a real run does — including the
+    containment guard — and deletes nothing. It is a parameter here rather
+    than a candidate list rebuilt by the caller because a preview derived
+    from a second implementation of "what expires" is not a preview of
+    this one.
+
     Returns a :class:`CleanupOutcome` describing all three groups.
     """
     cutoff = time.time() - retention_hours * 3600
@@ -283,10 +290,11 @@ def cleanup_old_backups(
         resolved = f.resolve()
         if not resolved.is_relative_to(resolved_root):
             continue
-        if f.is_dir():
-            shutil.rmtree(f)
-        else:
-            f.unlink()
+        if not dry_run:
+            if f.is_dir():
+                shutil.rmtree(f)
+            else:
+                f.unlink()
         removed.append(str(f))
 
     return CleanupOutcome(

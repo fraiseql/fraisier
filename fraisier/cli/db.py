@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import click
 from rich.table import Table
 
+from . import _json
 from ._helpers import console
 from .main import main
 
@@ -754,7 +756,38 @@ def db_restore(
         raise SystemExit(1) from exc
 
 
-@main.command(name="backup")
+class _BackupGroup(click.Group):
+    """``fraisier backup <fraise>`` predates ``fraisier backup prune``.
+
+    The documented, tested form takes a fraise as its first positional
+    argument, which a plain :class:`click.Group` would try to resolve as a
+    subcommand name and reject. Anything that is not a known subcommand is
+    therefore routed to ``run``, keeping both surfaces exact.
+
+    The one cost: a fraise named after a subcommand is unreachable through
+    the legacy form. ``prune`` is a poor fraise name and ``fraisier backup
+    run prune -e …`` still reaches it, so this is a documented shadow
+    rather than a lost capability.
+    """
+
+    def resolve_command(self, ctx, args):
+        if args and not args[0].startswith("-") and args[0] not in self.commands:
+            args = ["run", *args]
+        return super().resolve_command(ctx, args)
+
+
+@main.group(name="backup", cls=_BackupGroup)
+def backup_group() -> None:
+    """Database backup and retention commands.
+
+    \b
+    Examples:
+        fraisier backup my_api -e production
+        fraisier backup prune -e development
+    """
+
+
+@backup_group.command(name="run")
 @click.argument("fraise")
 @click.option("--env", "-e", required=True, help="Target environment")
 @click.option(
@@ -850,6 +883,151 @@ def backup_cmd(
         console.print(f"[green]Backup saved: {result.backup_path}[/green]")
     else:
         console.print(f"[red]Backup failed:[/red] {result.error}")
+        raise SystemExit(1)
+
+
+def _select_retain_entries(config, env: str, name: str | None):
+    """The entries ``prune`` should act on, or a message saying why none.
+
+    Every "nothing to do" case is an error rather than a quiet exit 0. The
+    incident this closes is a story about work that did not happen
+    reporting success, and a timer that exits 0 having pruned nothing is
+    indistinguishable from one that pruned correctly.
+    """
+    entries = config.retain_entries(env)
+    if not entries:
+        declared = sorted({e.environment for e in config.all_retain_entries()})
+        known = ", ".join(declared) if declared else "(none)"
+        return None, (
+            f"No retention policy for environment '{env}'. "
+            f"Environments with a backup.environments.<env>.retain block: {known}"
+        )
+    if name is None:
+        return entries, None
+
+    selected = [e for e in entries if e.name == name]
+    if not selected:
+        names = ", ".join(sorted(e.name for e in entries))
+        return None, (
+            f"No retention entry named '{name}' in environment '{env}'. Known: {names}"
+        )
+    return selected, None
+
+
+def _prune_one(entry, *, dry_run: bool):
+    """Apply one entry, or report why it could not be applied."""
+    from fraisier.dbops.backup import cleanup_old_backups
+
+    directory = Path(entry.dir)
+    if not directory.is_dir():
+        return None, (
+            f"{entry.name}: {entry.dir} is not a directory. A retention policy "
+            f"pointed at a path that is not there prunes nothing, every night, "
+            f"reporting success"
+        )
+    outcome = cleanup_old_backups(
+        directory,
+        retention_hours=entry.retention_hours,
+        match=entry.match,
+        keep_minimum=entry.keep_minimum,
+        dry_run=dry_run,
+    )
+    return outcome, None
+
+
+def _stalled_producer_warning(entry, outcome) -> str:
+    """What `floor_was_load_bearing` means, said in the operator's terms."""
+    newest_age = ""
+    survivors = [Path(p) for p in outcome.exempted_by_minimum]
+    if survivors:
+        newest = max(survivors, key=lambda p: p.stat().st_mtime)
+        hours = (time.time() - newest.stat().st_mtime) / 3600
+        newest_age = f" The newest is {hours:.0f}h old ({newest.name})."
+    return (
+        f"WARNING: every backup in {entry.dir} is past its retention window; "
+        f"only keep_minimum={entry.keep_minimum} is holding the corpus open."
+        f"{newest_age} Nothing recent has arrived — check the producer."
+    )
+
+
+@backup_group.command(name="prune")
+@click.option("--env", "-e", required=True, help="Environment whose policy to apply")
+@click.option("--name", default=None, help="Apply one entry rather than all of them")
+@click.option(
+    "--dry-run", is_flag=True, help="List what would be removed, remove nothing"
+)
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report")
+@click.pass_context
+def backup_prune(
+    ctx: click.Context, env: str, name: str | None, dry_run: bool, as_json: bool
+) -> None:
+    """Apply the retention policy for a backup corpus this host receives.
+
+    Deletion runs on the receiving host and only there: no part of this
+    reaches back to the producer, so a compromised sender key cannot erase
+    the corpus it pushed.
+
+    \b
+    Examples:
+        fraisier backup prune -e development
+        fraisier backup prune -e development --name production-full
+        fraisier backup prune -e development --dry-run
+    """
+    config = ctx.obj["config"]
+
+    entries, problem = _select_retain_entries(config, env, name)
+    if entries is None:
+        console.print(f"[red]Error:[/red] {problem}")
+        raise SystemExit(1)
+
+    reports: list[dict] = []
+    failures: list[str] = []
+    warnings: list[str] = []
+
+    for entry in entries:
+        outcome, failure = _prune_one(entry, dry_run=dry_run)
+        if outcome is None:
+            failures.append(failure or "")
+            continue
+        reports.append(
+            {
+                "name": entry.name,
+                "dir": entry.dir,
+                "match": entry.match,
+                "retention_days": entry.retention_days,
+                "keep_minimum": entry.keep_minimum,
+                "dry_run": dry_run,
+                "removed": list(outcome.removed),
+                "kept": list(outcome.kept),
+                "exempted_by_minimum": list(outcome.exempted_by_minimum),
+                "floor_was_load_bearing": outcome.floor_was_load_bearing,
+            }
+        )
+        if outcome.floor_was_load_bearing:
+            warnings.append(_stalled_producer_warning(entry, outcome))
+
+    if as_json:
+        # Nothing else may reach stdout: the report is piped, and a Rich
+        # panel in front of it is a parse error rather than a formatting
+        # nuisance. Warnings and failures go to stderr.
+        click.echo(_json.dumps({"environment": env, "entries": reports}, indent=2))
+    else:
+        for report in reports:
+            verb = "would remove" if dry_run else "removed"
+            console.print(
+                f"[cyan]{report['name']}[/cyan] ({report['dir']}): "
+                f"{verb} {len(report['removed'])}, kept {len(report['kept'])}, "
+                f"floor held {len(report['exempted_by_minimum'])}"
+            )
+            for path in report["removed"]:
+                console.print(f"    - {path}")
+
+    for warning in warnings:
+        click.echo(warning, err=True)
+
+    if failures:
+        for failure in failures:
+            click.echo(f"Error: {failure}", err=True)
         raise SystemExit(1)
 
 
