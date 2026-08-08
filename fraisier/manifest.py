@@ -176,6 +176,25 @@ def build_manifest(config: FraisierConfig) -> PathManifest:
     )
     seen_global.add("/var/lib/fraisier")
 
+    # /var/backups/{project} - backup.service's corpus, via backup.sh
+    #
+    # backup.sh opens with `mkdir -p "${BACKUP_DIR}"`, which reads as the
+    # script provisioning its own directory and cannot be: systemd builds the
+    # unit's mount namespace before ExecStart and refuses to start a unit whose
+    # ReadWritePaths= target is missing, so the script never ran to create it.
+    # Nothing noticed, because backup.timer is enabled on no host (#341).
+    global_paths.append(
+        ManagedPath(
+            path=Path(f"/var/backups/{config.project_name}"),
+            owner=deploy_user,
+            group=deploy_user,
+            mode=0o755,
+            read_write_units=("backup",),
+            create_if_missing=True,
+        )
+    )
+    seen_global.add(f"/var/backups/{config.project_name}")
+
     # /run/fraisier (managed by systemd, don't create)
     # Accessed by deploy services and webhook
     global_paths.append(

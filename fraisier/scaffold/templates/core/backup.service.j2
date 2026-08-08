@@ -21,4 +21,9 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadWritePaths=/var/backups/{{ project_name }}
+{# `-` prefix: systemd builds the mount namespace before ExecStart and refuses
+   to start the unit when a ReadWritePaths= target is missing, so backup.sh's
+   own `mkdir -p` could never run on a host without this directory. install.sh
+   creates it; the prefix is what stops a re-render on a host where an operator
+   moved the corpus from breaking the unit outright (#341). #}
+ReadWritePaths=-/var/backups/{{ project_name }}
