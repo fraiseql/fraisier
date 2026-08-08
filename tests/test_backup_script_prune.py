@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from typing import Any
 
 import pytest
 import yaml
@@ -22,7 +23,7 @@ import yaml
 from fraisier.config import FraisierConfig
 from fraisier.scaffold.renderer import ScaffoldRenderer
 
-_CONFIG = {
+_CONFIG: dict[str, Any] = {
     "name": "proj",
     "scaffold": {"deploy_user": "deployer"},
     "fraises": {

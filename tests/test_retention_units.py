@@ -229,9 +229,7 @@ class TestRenderScope:
         assert len(list((output / "systemd").glob("*-retain-*"))) == 4
 
     def test_renderer_and_manifest_read_the_same_authority(self, tmp_path, monkeypatch):
-        """Deferred from cycle 7.1 — it needs the renderer to exist.
-
-        Monkeypatch the naming helper; the rendered filename and the
+        """Monkeypatch the naming helper; the rendered filename and the
         manifest destination must move together. One fact, one authority:
         the drift #337 was filed for, pinned before it can happen here.
         """
@@ -411,7 +409,7 @@ class TestNoDeleteReachesTheProducer:
 
 
 class TestDiagnostics:
-    """Phase 8 — the fix #339 actually asks for.
+    """The fix #339 actually asks for.
 
     A corpus with no retention installed must be *reported*. The plan
     predicted `scaffold-diff` would need no change because it derives from
@@ -533,3 +531,54 @@ class TestDiagnostics:
         renderer.render()
 
         assert retention_report(renderer, systemd_dir=tmp_path) == []
+
+
+class TestDeletionNeverReachesTheProducer:
+    """Decision 9, asserted over the source tree as well as the output.
+
+    The property #339 asks to preserve: a compromised sender key cannot
+    erase the corpus it pushed. It holds today because fraisier never
+    invokes rsync at all — deletion runs on the receiving host, driven by
+    that host's own config. A property that holds by accident is one a
+    future convenience flag removes silently.
+    """
+
+    def _rsync_lines(self) -> list[str]:
+        """Lines in the package that mention rsync.
+
+        Includes docstring prose, which is where every current mention
+        lives — fraisier does not invoke rsync at all today. Filtering
+        those out would need an AST walk to buy nothing: the assertion
+        below is about the pairing, and prose that happened to name both
+        tokens deserves a second look anyway.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "fraisier"
+        found = []
+        for path in [*root.rglob("*.py"), *root.rglob("*.j2")]:
+            for number, line in enumerate(
+                path.read_text(errors="ignore").splitlines(), start=1
+            ):
+                stripped = line.strip()
+                if stripped.startswith(("#", "*", '"""', "'''", "{#")):
+                    continue
+                if "rsync" in stripped:
+                    found.append(f"{path.relative_to(root)}:{number}: {stripped}")
+        return found
+
+    def test_no_rsync_invocation_carries_a_delete_flag(self):
+        """The assertion that survives someone adding an rsync push.
+
+        A `--delete*` flag on a push to a destination host hands the
+        producer the ability to erase the corpus — exactly what #339 asks
+        to keep impossible, and what the local-deletion design preserves by
+        construction.
+        """
+        offenders = [line for line in self._rsync_lines() if "--delete" in line]
+
+        assert not offenders, (
+            "an rsync invocation gained a delete flag; deletion must run on "
+            "the receiving host, driven by its own retention config:\n"
+            + "\n".join(offenders)
+        )

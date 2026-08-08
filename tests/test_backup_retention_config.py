@@ -78,7 +78,7 @@ backup:
 
 
 class TestRetainParsing:
-    """Cycle 6.1 — the policy is readable before anything renders a unit."""
+    """The policy is readable before anything renders a unit."""
 
     def test_retain_entries_parse_with_defaults(self, tmp_path):
         """The four optional fields default; the rest are declared."""
@@ -239,7 +239,7 @@ class TestRetainSectionWiring:
 
 
 class TestRetainValidation:
-    """Cycle 6.2 — every field reaching a unit file is checked, loudly.
+    """Every field reaching a unit file is checked, loudly.
 
     Each rejection names the YAML path of the offending entry, because an
     operator reading "invalid schedule" against a forty-fraise config has
