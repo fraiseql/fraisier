@@ -36,6 +36,7 @@ import yaml
 
 from fraisier.config._lazy_env import LazyEnv
 from fraisier.config._validation import (
+    parse_retain_entries,
     validate_branch_mapping,
     validate_hooks,
     validate_notifications,
@@ -54,6 +55,7 @@ from fraisier.config.schema import (
     HealthResponseConfig,
     NginxScaffoldConfig,
     PostgresLoggingConfig,
+    RetainEntry,
     ScaffoldConfig,
     ShipCheckConfig,
     ShipConfig,
@@ -195,7 +197,7 @@ class FraisierConfig:
         )
         validate_service_manager(self._config.get("service_manager"))
         # Drop any cached Stage-2 results from a prior load.
-        for prop in ("notifications", "hooks"):
+        for prop in ("notifications", "hooks", "backup_retention"):
             self.__dict__.pop(prop, None)
         self._get_validated_env.cache_clear()
 
@@ -229,6 +231,44 @@ class FraisierConfig:
             validate_hooks,
             self._config.get("hooks", {}),
         )
+
+    @functools.cached_property
+    def backup_retention(self) -> tuple[RetainEntry, ...]:
+        """Every ``backup.environments.<env>.retain`` entry, validated (#339).
+
+        A Stage-2 section like :attr:`hooks`: the check cross-references
+        ``fraises`` for the environment names and reads ``scaffold`` for the
+        default user, neither of which Stage 1 is allowed to touch.
+        ``fraisier validate`` forces it, so an invalid policy surfaces there
+        rather than at scaffold time.
+        """
+        known = set(self.environments) | {
+            env_name
+            for fraise in self.fraises.values()
+            for env_name in (fraise.get("environments") or {})
+        }
+        return parse_retain_entries(
+            self._config.get("backup"),
+            known_environments=known,
+            default_user=self.scaffold.deploy_user,
+        )
+
+    def retain_entries(self, environment: str) -> tuple[RetainEntry, ...]:
+        """The retention entries declared for *environment*, in order.
+
+        Empty for an environment with no policy — which is every environment
+        in every config written before #339.
+        """
+        return tuple(e for e in self.backup_retention if e.environment == environment)
+
+    def all_retain_entries(self) -> tuple[RetainEntry, ...]:
+        """Every entry across every environment.
+
+        What the renderer walks: it writes one unit pair per entry and gates
+        each on its own environment, rather than being handed one
+        environment at a time.
+        """
+        return self.backup_retention
 
     def reload(self) -> None:
         """Reload configuration from file."""

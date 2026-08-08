@@ -486,6 +486,49 @@ class BackupHookConfig:
     compress: bool = True
 
 
+@dataclass(frozen=True)
+class RetainEntry:
+    """One backup corpus a host *receives*, and how long it keeps it (#339).
+
+    Distinct from :class:`BackupHookConfig`, which describes a backup this
+    host *produces*. A received corpus has no owning fraise — it arrives by
+    rsync from somewhere else — which is why the units rendered from it gate
+    on ``_env_active`` rather than ``_scope_active`` (#336 decision 4).
+
+    Every field here reaches a systemd unit file verbatim, so all of them
+    are validated at config load rather than at render time; see
+    :func:`fraisier.config._validation.parse_retain_entries`.
+    """
+
+    environment: str
+    """The receiving environment. Half of the unit's ExecStart selector."""
+
+    name: str
+    """The other half. Defaults to the basename of :attr:`dir`.
+
+    Explicit rather than hash-disambiguated: two entries sharing a basename
+    are a config error naming both, so a unit name never changes silently
+    underneath an operator.
+    """
+
+    dir: str
+    schedule: str
+    retention_days: int
+    match: str = "*.dump"
+    keep_minimum: int = 3
+    user: str = "fraisier"
+
+    @property
+    def retention_hours(self) -> int:
+        """What :func:`fraisier.dbops.backup.cleanup_old_backups` takes.
+
+        The config surface speaks days because a retention policy for a
+        nightly corpus is written in days; the primitive speaks hours
+        because the pre-migration gate needs sub-day precision.
+        """
+        return self.retention_days * 24
+
+
 @dataclass
 class AuditHookConfig:
     """Configuration for post-migration audit hook."""

@@ -150,6 +150,24 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        LazyEnv; line 427
 #                                                        is the str branch.
 #
+#   _validation.py:717 (_retain_str)         after-LazyEnv
+#                                                        backup…retain
+#                                                        fields are baked
+#                                                        into a unit file at
+#                                                        scaffold time, so
+#                                                        !envvar cannot work
+#                                                        there. Line 711
+#                                                        rejects LazyEnv
+#                                                        with that reason;
+#                                                        717 is the str
+#                                                        branch. Widening to
+#                                                        is_string_like
+#                                                        would accept a
+#                                                        placeholder that
+#                                                        renders as a
+#                                                        literal into
+#                                                        ExecStart=.
+#
 #   schema.py:294 (restricted_paths[])       not-eligible
 #                                                        Element-shape
 #                                                        union of str|dict
