@@ -1314,3 +1314,80 @@ fraisier ship major --dry-run
 # Ship without bumping (e.g. docs-only change)
 fraisier ship patch --no-bump
 ```
+
+### The `ship:` block
+
+Checks run in two phases — `fix` before staging, then `validate` and `test`
+together — and a failing phase aborts the ship before anything is committed.
+
+```yaml
+ship:
+  pr_base: main            # PR target; also the base triggers compare against
+  parallel: true
+  checks:
+    - name: ruff
+      command: [uv, run, ruff, check, .]
+      phase: fix
+    - name: pytest
+      command: [uv, run, pytest, -q]
+      phase: test
+      timeout: 600
+    - name: schema-gate
+      command: [uv, run, check-migrations]
+      phase: validate
+      triggers: ["db/**"]   # only when a matching file changed
+```
+
+#### `triggers:` — what counts as changed
+
+A check with no `triggers:` always runs. One with `triggers:` runs when any
+changed file matches any pattern. The changed set is the **union** of:
+
+- **committed** changes on this branch — `merge-base(HEAD, base)..HEAD`
+- **working-tree** changes — staged and unstaged
+
+Both halves matter. Checks run *before* `git add --update`, so uncommitted work
+has to count; and committing before `ship` is normal — `git add --update` stages
+only tracked files, so a new file must be committed by hand. Before v0.62.0 only
+the working tree was consulted, so a committed changeset left a clean tree, an
+empty changed set, and **every** triggered check silently skipped (#346).
+
+Untracked files are **not** included. `fraisier ship` already fails outright on
+untracked files under `db/migrations/`, so the dangerous case is covered without
+letting a scratch file in the tree run unrelated checks.
+
+The base is resolved in this order:
+
+1. `--pr-base` if passed, else `ship.pr_base`
+2. `origin/HEAD` — origin's default branch, a local lookup needing no network
+3. otherwise **undetermined**
+
+An undetermined base runs **every** triggered check and says so. "I cannot tell
+what changed" must never resolve to "nothing changed": a check that runs
+unnecessarily costs time, and one that skips silently costs you the gate.
+
+If you see the undetermined note on every run, set `ship.pr_base`, or
+`git remote set-head origin -a` to give `origin/HEAD` something to resolve to.
+
+#### Pattern matching
+
+Patterns use Python's `fnmatch`, where **`*` crosses `/`** — so `db/*` matches
+`db/migrations/001.sql`, which a gitignore-literate reader would not expect. It
+over-matches rather than under-matches, so a check runs more often than the
+pattern suggests. That is the safe direction and it is left as it is
+deliberately; write `db/**` if you mean "anything under `db/`", and read a bare
+`*` as "anything at all after this point".
+
+#### Reading the output
+
+```
+  note could not determine changed files (no ship.pr_base configured and origin/HEAD does not resolve) — running all 2 triggered check(s)
+  skip schema-gate — no file matched db/** (vs origin/main, 3 file(s) changed)
+  pass ruff (0.4s)
+  FAIL pytest (12.1s)
+```
+
+A `skip` line names the patterns that did not match, the base it compared
+against, and how many files changed — enough to tell "correctly skipped" from
+"skipped because the base was wrong". A skipped check is never counted as a
+pass.
