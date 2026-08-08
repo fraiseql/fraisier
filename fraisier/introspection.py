@@ -119,7 +119,8 @@ _DIAGNOSE_SECTIONS: frozenset[ConfigPath] = frozenset({_ENV_SYSTEMD, _ENV_HEALTH
 
 SUBCOMMAND_CONFIG_SECTIONS: dict[str, frozenset[ConfigPath]] = {
     # Alphabetized for reviewable diffs.
-    "backup": _DB_SECTIONS,
+    "backup prune": frozenset(),  # top-level backup:, not a fraise environment
+    "backup run": _DB_SECTIONS,
     "bootstrap": frozenset({_ENV_FULL}),
     "bootstrap-preflight": frozenset({_ENV_FULL}),
     "db build": _DB_SECTIONS,
