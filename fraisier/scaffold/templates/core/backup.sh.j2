@@ -3,14 +3,50 @@
 # Database backup script for {{ project_name }}
 set -euo pipefail
 
-BACKUP_DIR="/var/backups/{{ project_name }}"
+# FRAISIER_BACKUP_DIR overrides the default, for an operator whose corpus
+# lives elsewhere — and so the prune below can be exercised by a test
+# against a directory it owns. Shell that looks right is not shell that works.
+BACKUP_DIR="${FRAISIER_BACKUP_DIR:-/var/backups/{{ project_name }}}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RETENTION_DAYS=30
+# The newest KEEP_MINIMUM dumps of each database survive the age rule.
+# Without it this script deletes by age alone, so a producer that has
+# stopped producing ages its entire corpus out in one run — on the machine
+# holding the only copies (#339).
+KEEP_MINIMUM=3
 ERRORS=0
 
 mkdir -p "${BACKUP_DIR}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+# Prune one database's dumps: exempt the newest KEEP_MINIMUM, then apply the
+# age rule to the rest. Exempting BEFORE the age test rather than after is
+# what makes "the newest three survive" true in the only case that matters,
+# where every dump is already past the cutoff.
+#
+# The floor is per database, not per directory: all databases share this
+# directory, so one shared count of three would keep three of whichever
+# sorts last and none of the others.
+#
+# `ls -1t` sorts by mtime, newest first, and is portable where `find
+# -printf` is GNU-only. Parsing its output is safe here because this script
+# writes every name it reads: {fraise}_{timestamp}.sql.gz, no spaces.
+prune_with_floor() {
+    local pattern="$1"
+    local index=0
+    local path
+    while IFS= read -r path; do
+        index=$((index + 1))
+        if [ "${index}" -le "${KEEP_MINIMUM}" ]; then
+            continue
+        fi
+        if [ -n "$(find "${path}" -mtime +"${RETENTION_DAYS}" -print)" ]; then
+            rm -f -- "${path}"
+            log "  pruned ${path##*/}"
+        fi
+    done < <(ls -1t "${BACKUP_DIR}"/${pattern} 2>/dev/null || true)
+}
 
 {% for fraise in fraises %}
 {% if not fraise.get('external_db', false) %}
@@ -26,9 +62,13 @@ fi
 
 {% endif %}
 {% endfor %}
-# Prune old backups
-log "Pruning backups older than ${RETENTION_DAYS} days"
-find "${BACKUP_DIR}" -name "*.sql.gz" -mtime +${RETENTION_DAYS} -delete
+# Prune old backups, keeping the newest ${KEEP_MINIMUM} of each database
+log "Pruning backups older than ${RETENTION_DAYS} days (keeping the newest ${KEEP_MINIMUM} of each)"
+{% for fraise in fraises %}
+{% if not fraise.get('external_db', false) %}
+prune_with_floor "{{ fraise.name }}_*.sql.gz"
+{% endif %}
+{% endfor %}
 
 if [ "${ERRORS}" -gt 0 ]; then
     log "ERROR: ${ERRORS} backup(s) failed"
