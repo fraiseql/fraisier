@@ -7,6 +7,349 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-08-08
+
+Four issues, one shape: **work that could not fail visibly.**
+
+`install.sh` had always copied three timer pairs to every host and enabled
+none of them. That was never a decision anyone recorded — it was the absence
+of one, and it is why **all three pairs were broken and nobody could tell**.
+A unit that never starts cannot fail visibly.
+
+The received-corpus path had the same property from the other direction. A
+dump arrived on a host and nothing between its arrival and its restore ever
+asked whether it was a dump: `keep_minimum` counted files without reading
+them, the restore dropped the database three steps before it first opened the
+archive, and no one watched the disk the corpus lived on. Each gap was
+invisible because the thing that would have reported it was the thing missing.
+
+v0.60.0 reached the edge of both. It added `Disposition.TIMER` for #339's
+retention units and had to explain, in three places, why the classification
+applied to those and not to the timers already on every host; and it recorded
+three non-goals rather than leaving them implied. Writing either down forced
+the questions they were deferring.
+
+**Nothing starts on upgrade, and a good dump restores exactly as before.** The
+three timer families are switched by `scaffold.systemd.timers`, every one
+defaulting to off. What changes is that inertness is *declared* rather than
+accidental — and that a restore now refuses an unreadable dump before it
+destroys the database that dump was meant to replace.
+
+### Fixed
+
+- **Two units could never have executed** (#341). `deploy-checker.service`
+  and `restore-staging.service` each set `ProtectHome=true` while their
+  `ExecStart` was `/home/{deploy_user}/.local/bin/fraisier` — the uv-tool
+  install path that `ProtectHome` makes unreachable. Every firing would have
+  been an exec failure. `deploy-service.j2` has carried a comment explaining
+  precisely this since #72; these two contradicted it, and a hardening test
+  listing `ProtectHome=true` as *required* pinned the contradiction in place,
+  so the unit that could never run had a green test calling it correctly
+  hardened.
+
+- **`backup.service` was not loadable at all**, which the issue did not know.
+  Its `ExecStart` read `{{ scaffold.output_dir }}/backup.sh` and rendered
+  `scripts/generated/backup.sh` — a relative path, which systemd refuses. It
+  was the last template still reading `scaffold.output_dir`, the CWD-relative
+  *local render and review* path; #283 moved every other server-side path to
+  `scaffold.state_dir` and missed this one. With an absolute `output_dir` the
+  same defect renders as a path that exists only on the machine that ran
+  `fraisier scaffold`. No template may read `scaffold.output_dir` now, and a
+  test says so.
+
+- **`backup.service` could not start on a host without `/var/backups/{project}`**
+  — every host, since nothing created it. `backup.sh` opens with
+  `mkdir -p "${BACKUP_DIR}"`, which reads as the script provisioning its own
+  directory and cannot be: systemd builds the mount namespace *before*
+  `ExecStart` and refuses to start a unit whose `ReadWritePaths=` target is
+  missing, so the script never ran to create it. The grant is now `-`-prefixed
+  and the directory is a `PathManifest` entry, created and owned like every
+  other managed path.
+
+- **The deploy checker did not check.** Every `ExecStart` passed `--force`,
+  which skips `is_deployment_needed()` — the deployed-vs-latest comparison the
+  unit exists to perform — so each firing redeployed every fraise and
+  environment unconditionally. Compounding it, `health.deploy_poll_interval_seconds`
+  defaulted to **5**: a plausible number for polling a socket, and an
+  implausible one for a timer that git-fetches every fraise on the host. It
+  now defaults to 60, and an explicit value is still honoured as written.
+
+- **One unreachable deploy socket stopped the whole host being polled.**
+  `trigger-deploy` exits 1 on a missing or refused socket, and an un-prefixed
+  failure in a `Type=oneshot` unit aborts every later `ExecStart`. Each
+  per-environment line is now `-`-prefixed: polling one environment must not
+  depend on another being reachable.
+
+- **`fraisier validate` crashed on a bad `scaffold:` section instead of
+  reporting it.** `_collect_all_validation_errors` force-traverses every
+  Stage-2 section so one run names them all, and `scaffold` was never in its
+  list — unnoticed because nothing under it raised. `scaffold.systemd.timers`
+  is the first thing that does, and without this a typo'd timer name escaped
+  the traversal and surfaced as an unhandled `ValidationError` from inside
+  `_check_deploy_user`, replacing every other check's output with a stack
+  trace. Found by smoke-testing the new config surface end-to-end rather than
+  by a test.
+
+- **`host_gate()` matched nothing for an unconditional artifact**, found by
+  this release's own new golden case. It rendered `_env_active ""` when an
+  artifact carried neither fraise nor environment, and the effect was that
+  switching a timer family **on** *removed* its copies from the install plan.
+  It survived because every loop called the macro directly except `plain` —
+  the only one that ever passed such an artifact — which wrapped it in a local
+  `{% if artifact.environment %}` instead. The macro's own docstring says it
+  exists so those loops "cannot drift apart on which predicate an artifact
+  deserves", and one had drifted away from it.
+
+- **A restore destroyed the database before it read the dump** (#343). The
+  `restore_migrate` strategy stopped the service, terminated every backend and
+  dropped and recreated the database — and only *then* handed the file to
+  `pg_restore`. The two earlier steps that look like validation are not:
+  `find_latest_backup` sorts by mtime and the age check compares mtime to a
+  cutoff, so neither opens the file. A dump `pg_restore --list` rejects in
+  under a second therefore cost the staging database it was meant to replace,
+  which is the #339 incident exactly. The archive is now read at a new step
+  before the service is stopped, and an unreadable one aborts with
+  `pg_restore`'s own stderr.
+
+  Deliberately outside both preflight escapes: `--skip-preflight` and
+  `preflight.enabled: false` do not skip it. An emergency restore may
+  reasonably skip *migration* validation; it may not skip "is this a file
+  `pg_restore` can read", because that is the check standing between a corrupt
+  dump and a live database. Preflight would not have caught it anyway — it
+  extracts the **schema**, and a dump truncated inside its data section has a
+  complete header, TOC and schema, so preflight passed on precisely the corpus
+  that would fail.
+
+- **The table-count hand-off claimed a check that was switched off** (#343).
+  `restore_backup` passed `min_tables=0` into confiture's `RestoreOptions`
+  under a comment saying the strategy validated the count itself "after
+  `migrate up` (step 10), so confiture skips its own min-tables check". Step 10
+  is `if cfg.min_tables > 0` over a value that defaults to `0`, so in the
+  default configuration **neither** side validated and a comment said one did.
+  The floor is forwarded now, and an absent floor is stated on the console
+  instead of covered for.
+
+  This is the release's other instance of the same lesson: a hardening test
+  listing `ProtectHome=true` as *required* pinned a unit that could not exec
+  because of it, and a hand-off comment asserted a guarantee by naming a
+  disabled check. Both read as evidence and were not.
+
+- **`keep_minimum` protected the corrupt file first** (#342). It exempted by
+  index into an mtime sort, and a dump still being written is the newest entry
+  in the directory — so the floor's first act was to protect it, and with a
+  stalled producer it held that slot while every readable dump aged out around
+  it. "The newest three are safe" reads like a validity guarantee; it was a
+  count. A dump that contests a floor slot is now read with
+  `pg_restore --list`, and one that fails does not hold a slot.
+
+  The limit is exact, and narrower than it is tempting to claim: **no readable
+  dump is removed that the old floor would have kept**, and anything newly
+  removed is both unreadable *and* already past the retention window. The
+  unreadable dump does lose the exemption it used to hold — that is the point —
+  and an unreadable dump still inside the window is still kept.
+
+- **A receiving host had no disk guard at all** (#344). `check_disk_space`
+  existed and ran on the host that *produces* a dump; a host that receives a
+  corpus by rsync had nothing, and #339's first cause was
+  `/backup/production` on the destination growing until the disk filled.
+  Retention bounds a corpus in the steady state and that is not the same as
+  watching a disk — the policy can be correct while something else on the
+  volume grows, and `keep_minimum` deliberately refuses to delete below its
+  floor.
+
+### Added
+
+- **`scaffold.systemd.timers` (#341)** — three booleans, all defaulting to
+  `false`:
+
+  ```yaml
+  scaffold:
+    systemd:
+      timers:
+        backup: false           # nightly pg_dump | gzip -> /var/backups/{project}
+        deploy_checker: false   # poll each fraise/env, deploy when the branch moved
+        restore_staging: false  # nightly staging restore from the production backup
+  ```
+
+  `false` classifies the pair `PLAIN` — copied and inert, as today. `true`
+  classifies it `TIMER`, which install.sh's existing sequence installs and
+  enables, so switching a family on is a classification change rather than a
+  new code path in the installer. An unknown name or a non-boolean value is a
+  config error naming it: ignoring an unknown key is how an operator comes to
+  believe they enabled a nightly backup that never runs, and coercing a truthy
+  string is the same failure pointing the other way, since YAML reads bare
+  `yes` as a boolean but quoted `"yes"` as a string.
+
+  Keys are stable identifiers, deliberately not the rendered unit filenames —
+  a filename derived in a second place is the drift #323, #325 and #337 each
+  closed.
+
+- **`install.sh` reports what it did not start.** An "Installed and not
+  enabled" block, beside the existing app-managed and known-gap reports,
+  naming each copied timer and the line that enables it.
+
+- **`fraisier doctor` gains `inert_timers`**, always `pass`. Every family off
+  is a configured state, not a fault, and a check that warns about a
+  deliberate choice on every run becomes wallpaper. What it adds is that the
+  state is legible: nothing previously distinguished "copied and running"
+  from "copied and never started".
+
+- **A rendered-unit sweep** (`tests/test_rendered_unit_sanity.py`). No unit may
+  pair `ProtectHome` with an `ExecStart` under `/home`; every `ExecStart` must
+  be absolute; none may point into the local render directory. Asserted over
+  **every** rendered `.service` rather than the three that were wrong, and over
+  rendered output rather than template text — both broken `ExecStart` values
+  were assembled from a Jinja variable, so no grep over the `.j2` files finds
+  them.
+
+- **Two golden matrix cases**, `timer_families_off` and `timer_families_on`.
+  The matrix had no config declaring `restore_migrate`, so the restore-staging
+  pair had never appeared in the golden plan at all, and no case enabled a
+  timer. The `host_gate` bug above is what that omission was hiding.
+
+- **`fraisier.dbops.archive.verify_archive` (#342, #343)** — one answer to "is
+  this a readable pg_dump archive", read by the restore path, `backup prune`
+  and `doctor`. The producing side's TOC check now routes through it too, so
+  there is one implementation and a test rejects a second `pg_restore --list`
+  call site.
+
+  The answer is **three-valued**, and that is the load-bearing part. A host
+  whose job is to hold dumps may have no PostgreSQL client tools, so
+  `UNVERIFIABLE` is its own verdict and is never treated as "the dump is bad" —
+  one caller deletes files on that reasoning and another refuses to restore.
+  `ArchiveCheck.is_bad` is `INVALID`-only, and a tree-wide test rejects any
+  `verdict != VALID` comparison in code so the safe reading stays the only one.
+  Same rule `db restore` already applies to a lock it cannot evaluate.
+
+  The file header is not the check: a dump truncated mid-transfer still carries
+  the `PGDMP` magic, so reading five bytes proves nothing.
+
+- **`backup.environments.<env>.retain[].min_free_gb` (#344)**, optional. On the
+  entry rather than under `backup:` because a threshold is a property of a
+  volume and each entry names its own directory; two corpora on different disks
+  need different numbers. **Absent means no threshold** — which every config
+  written before this is — so the default upgrade path gains information and no
+  new failure.
+
+- **`fraisier doctor` gains `backup_corpus_free_space` (#344).** Fails below a
+  declared threshold naming free space and the floor, passes above it, and
+  passes with no threshold *while saying none is set*. A `retain[].dir` that is
+  not a directory fails — already the #339 shape. A volume whose free space
+  cannot be read is `skip`, never `pass`.
+
+- **`backup prune` reports two new conditions on stderr**, both exiting 0: a
+  dump that was refused a floor slot, and a corpus volume below its threshold.
+  A non-zero exit would convert either into a failed unit and stop the pruning
+  that is the one thing that might still help — the same reasoning as the
+  existing stalled-producer warning. The `--json` report carries an `invalid`
+  list per entry, documented as an **overlay**: every path in it also appears in
+  exactly one of `removed`/`kept`/`exempted_by_minimum`, so summing all four
+  double-counts the corpus.
+
+- **`dbops.backup.free_space_gb`**, the single free-space measurement;
+  `check_disk_space` reads it. A test rejects a second `shutil.disk_usage`
+  caller and caught one immediately — the new doctor check's first draft reached
+  for it directly, which is how the producing and receiving sides came to
+  disagree in the first place.
+
+### Changed
+
+- **`restore-staging` is installed** and is no longer an `UNINSTALLED_GAP`
+  (#341). Its units render only where a fraise declares
+  `database.strategy: restore_migrate` on a staging-named environment, so
+  installation was already gated by intent; firing nightly is not, and stays
+  behind the knob. `_KNOWN_GAPS` is now empty — the classification stays, since
+  it is the honest label for the next artifact rendered, needed and reached by
+  no installer, and its tests synthesise a gap rather than depending on one
+  existing. A test that only passes while a bug exists disappears with the bug.
+
+- **`doctor`'s `scaffold_artifact_coverage` goes `warn` → `pass`** on a
+  `restore_migrate` tree, which has warned in every release until now.
+
+- **The v0.60.0 pins changed shape rather than disappearing.**
+  `test_existing_timers_are_still_not_enabled` asserted the
+  retention-only asymmetry as permanent; it now asserts the rule that replaced
+  it — a timer is enabled if and only if a config asked for it — across the
+  golden matrix, plus the delta between two otherwise identical configs.
+  #339's retention pair still fires with no knob: a retention unit that does
+  not run reproduces the incident it was built to prevent.
+
+- **`docs/doctor.md`'s catalog is complete, and a test keeps it so.** It listed
+  10 of 16 registered checks, and #344 would have made it 10 of 17. Fixed here
+  rather than deferred: documentation describing a subset reads as describing
+  the whole, which is the same defect class as a unit nothing enables. The test
+  compares the catalog against `DOCTOR_CHECKS` in both directions.
+
+- **Retention tests declare their dumps' validity.** Eleven floor tests wrote
+  stub bytes into files, so the real `pg_restore` calls them invalid — meaning
+  they would have asserted all-invalid semantics on a machine with
+  `pg_restore` and all-valid semantics on one without it. An
+  environment-dependent retention test is the argv-dependence flake class PR
+  #306 removed, so the fix is to stop depending on the environment.
+
+### Not fixed, and why
+
+- **The 21-second run in #343 is still unexplained.** Two defects on that path
+  are fixed and neither required the reporter's journals. What the journals
+  would settle is which of them the reporting run actually hit, so #343 stays
+  open on that question.
+
+  One hypothesis is disposed of: the issue suspects `--skip-if-locked` letting
+  a "someone else is doing it" exit read as "it is done".
+  `file_deployment_lock` acquires with `fcntl.LOCK_EX | fcntl.LOCK_NB` and
+  raises on the first `BlockingIOError`, so that path exits in milliseconds and
+  prints `Skipping restore:` while doing it. 21 seconds means real work
+  happened. Also worth recording: `db restore` has **no `--wait` flag**; the
+  reproduction to ask for is the `systemctl start --wait` invocation of the
+  generated unit.
+
+### Rollout
+
+**Re-scaffold and re-install on every host**, both halves and in that order:
+`fraisier scaffold && sudo fraisier scaffold-install --yes`. `install.sh` bakes
+in the hashes of the artifacts it installs and refuses a tree from a different
+render.
+
+**By default nothing starts and nothing new is deleted.** Every pre-existing
+case in the golden install plan gained exactly three lines — creating
+`/var/backups/{project}` — and lost none. No `systemctl enable` line moved. A
+restore of a readable dump runs the same steps in the same order with the same
+exit code, and a prune of a readable corpus removes exactly what it removed
+before.
+
+Cases where behaviour does change:
+
+- **A restore of an unreadable dump** now fails before the service is stopped
+  and before the database is dropped, where it used to fail after. This is the
+  change the release exists for.
+- **A prune of a corpus containing an unreadable dump past its retention
+  window** removes that dump, where the floor used to protect it, and protects a
+  readable one in its place.
+- **A host with no `pg_restore`** loses nothing: both new checks report that
+  they could not run and proceed. Retention behaves exactly as before, because
+  unverifiable dumps spend floor slots normally.
+- **A host where an operator hand-enabled `backup.timer`.** The unit goes from
+  refusing to load to running a nightly `pg_dump | gzip` at 03:00. That is the
+  unit finally working, and it is also the first time that host writes to
+  `/var/backups/{project}`. Its retention is `backup.sh`'s own 30-day window
+  with a floor of 3 per database — **not** #339's `retain:` policy, which
+  describes a corpus this host *receives*. A host can want both; they do not
+  interact.
+- **A host where an operator hand-enabled `deploy-checker.timer`.** It goes
+  from failing to exec on every tick to a real poll — deploying only when the
+  branch has moved, every 60s rather than every 5s unless
+  `deploy_poll_interval_seconds` is set explicitly.
+- **A host where an operator hand-installed the restore-staging pair.**
+  `scaffold-install` now owns those two files and will overwrite them.
+
+`/var/backups/{project}` is created on every host, including ones that enable
+no timer — it is a global managed path with no owning environment, like
+`/opt/fraisier` and `/var/lib/fraisier`. It is empty until a backup runs.
+
+Nothing in this release requires a config change. `scaffold.systemd.timers` and
+`min_free_gb` are both opt-in, and both default to the behaviour a host already
+has.
+
 ## [0.60.0] - 2026-08-08
 
 Retention for a backup corpus a host **receives**. A destination that is
