@@ -1,0 +1,41 @@
+[Unit]
+Description=Prune {{ retain.name }} backups for {{ project_name }} ({{ retain.environment }})
+Documentation=https://fraisier.readthedocs.io/en/latest/deployment-guide.html
+
+[Service]
+Type=oneshot
+User={{ retain.user }}
+Environment=PYTHONDONTWRITEBYTECODE=1
+{# The unit carries a selector, not a policy (#339 decision 8). Directory,
+   glob, retention window and floor stay in fraises.yaml: the injection
+   surface reaching this file is two validated identifiers, and a policy
+   change re-renders the unit only when it moves ReadWritePaths= or the
+   schedule — so scaffold-diff reports the changes that matter.
+
+   Comment markers here carry no minus sign. trim_blocks and lstrip_blocks
+   already drop a standalone comment line; adding whitespace-control markers
+   additionally eats the newline of the directive ABOVE, silently gluing two
+   directives into one that systemd reads as neither. #}
+ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier --config {{ scaffold.config_path }} backup prune --env {{ retain.environment }} --name {{ retain.name }}
+
+# Security hardening
+# ProtectHome intentionally omitted: fraisier is installed as a uv tool and
+# runs from ~/.local, which ProtectHome (any value) makes inaccessible. The
+# two units that pair ProtectHome=true with this binary — deploy-checker and
+# restore-staging — are exactly the two that are never enabled, so their
+# 203/EXEC has never been observed. This one IS enabled.
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+{# Without this, ProtectSystem=strict makes the prune a silent no-op: the unit
+   runs, reports success, and deletes nothing (#317's shape). The grant is the
+   corpus directory and nothing above it. #}
+ReadWritePaths={{ retain.dir }}
+
+# Logging
+SyslogIdentifier=fraisier-retain-{{ retain.name }}

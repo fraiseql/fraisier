@@ -1,0 +1,16 @@
+[Unit]
+Description=Prune {{ retain.name }} backups for {{ project_name }} ({{ retain.environment }})
+
+[Timer]
+{# Exactly one OnCalendar=. systemd *accumulates* triggers — the list is reset
+   only by assigning the empty string — so a second non-empty assignment is a
+   second firing, not an override (#311). #}
+OnCalendar={{ retain.schedule }}
+Unit={{ retention_service_unit }}
+{# A host down at 05:30 still prunes on boot. Without this, the corpus a
+   rebooting host receives grows for as long as it is down at the hour. #}
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
