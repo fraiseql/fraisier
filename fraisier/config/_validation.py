@@ -7,10 +7,11 @@ Free functions that validate sections of the raw config dict loaded by
 """
 
 import re
+from pathlib import PurePosixPath
 from typing import Any, cast
 
 from fraisier.config._lazy_env import LazyEnv, is_string_like
-from fraisier.config.schema import _UNIT_NAME_RE, _VALID_STRATEGIES
+from fraisier.config.schema import _UNIT_NAME_RE, _VALID_STRATEGIES, RetainEntry
 from fraisier.dbops._strategies import ADMIN_STRATEGIES
 from fraisier.errors import ConfigurationError, ValidationError
 
@@ -640,3 +641,355 @@ def validate_hooks(hooks: dict) -> None:
             )
     if errors:
         raise ValidationError(f"Invalid hooks config: {'; '.join(errors)}")
+
+
+# ---------------------------------------------------------------------------
+# backup.environments.<env>.retain (#339)
+# ---------------------------------------------------------------------------
+
+# A unit filename component and a `--name` argv element. Deliberately
+# narrower than a path: it identifies an entry, it does not locate one.
+_RETAIN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+# POSIX-ish username. The leading-letter rule is not cosmetic: it is what
+# stops a `user:` of `-rf` from reaching a command line as an option.
+_RETAIN_USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\$?$")
+
+# Conservative OnCalendar shape. `systemd-analyze calendar` stays the
+# on-host authority — shelling out to it here would make every fraisier
+# invocation on a laptop depend on systemd being installed — so this only
+# has to reject what is obviously not a calendar expression.
+_SCHEDULE_KEYWORDS = frozenset(
+    {
+        "minutely",
+        "hourly",
+        "daily",
+        "weekly",
+        "monthly",
+        "quarterly",
+        "semiannually",
+        "yearly",
+        "annually",
+    }
+)
+_SCHEDULE_RE = re.compile(
+    r"^"
+    r"(?:[A-Za-z]{3}(?:[.,][.,]?[A-Za-z]{3})*\s+)?"  # optional weekday(s)
+    r"(?:[\d*/,.-]+-[\d*/,.-]+-[\d*/,.-]+\s+)?"  # optional date
+    r"[\d*/,.]{1,4}:[\d*/,.]{1,4}(?::[\d*/,.]{1,4})?"  # time
+    r"(?:\s+[A-Za-z0-9/_+-]+)?"  # optional timezone
+    r"\Z"
+)
+
+# systemd expands these inside a unit file, so a validated string would not
+# be the string the unit acts on. `$` is here for the same reason one level
+# down: ExecStart is not shell, but ReadWritePaths= and the shell scripts
+# that read these values are not all one hop away.
+_UNIT_UNSAFE_CHARS = ("\n", "\r", "%", "$", "`", ";")
+
+
+def _reject_unit_unsafe(value: str, path: str, errors: list[str]) -> bool:
+    """Record an error if *value* cannot be written into a unit file.
+
+    Returns True when *value* is clean, so callers can skip the
+    field-specific checks that would otherwise report the same string twice.
+    """
+    for char in _UNIT_UNSAFE_CHARS:
+        if char in value:
+            errors.append(
+                f"{path}: {char!r} is not allowed — this value is written "
+                f"verbatim into a systemd unit file, where a newline appends "
+                f"a directive and '%' expands to something else"
+            )
+            return False
+    return True
+
+
+def _retain_str(entry: dict, key: str, path: str, errors: list[str]) -> str | None:
+    """Read *key* off *entry* as a plain, unit-safe string."""
+    value = entry.get(key)
+    if isinstance(value, LazyEnv):
+        errors.append(
+            f"{path}.{key}: !envvar is not supported here — the value is baked "
+            f"into a unit file at scaffold time, where the variable is not set"
+        )
+        return None
+    if not isinstance(value, str) or not value:
+        errors.append(f"{path}.{key}: expected a non-empty string")
+        return None
+    if not _reject_unit_unsafe(value, f"{path}.{key}", errors):
+        return None
+    return value
+
+
+def _retain_int(
+    entry: dict, key: str, path: str, errors: list[str], *, minimum: int
+) -> int | None:
+    value = entry.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        errors.append(f"{path}.{key}: expected an integer, got {value!r}")
+        return None
+    if value < minimum:
+        errors.append(f"{path}.{key}: must be >= {minimum}, got {value}")
+        return None
+    return value
+
+
+def _validate_retain_dir(entry: dict, path: str, errors: list[str]) -> str | None:
+    from fraisier.dbops._validation import validate_file_path
+
+    value = _retain_str(entry, "dir", path, errors)
+    if value is None:
+        return None
+    if not value.startswith("/"):
+        errors.append(
+            f"{path}.dir: must be an absolute path — it becomes a "
+            f"ReadWritePaths= grant, which systemd resolves against nothing"
+        )
+        return None
+    try:
+        validate_file_path(value)
+    except ValueError as exc:
+        errors.append(f"{path}.dir: {exc}")
+        return None
+    return value
+
+
+def _validate_retain_match(entry: dict, path: str, errors: list[str]) -> str:
+    if "match" not in entry:
+        return "*.dump"
+    value = _retain_str(entry, "match", path, errors)
+    if value is None:
+        return "*.dump"
+    if value.startswith("/") or ".." in PurePosixPath(value).parts:
+        errors.append(
+            f"{path}.match: must stay inside dir: — a glob reaching outside it "
+            f"names files ReadWritePaths= never granted, so the prune would "
+            f"silently do nothing"
+        )
+    return value
+
+
+def _validate_retain_name(
+    entry: dict, directory: str | None, path: str, errors: list[str]
+) -> str | None:
+    if "name" in entry:
+        value = _retain_str(entry, "name", path, errors)
+        if value is None:
+            return None
+        if not _RETAIN_NAME_RE.match(value):
+            errors.append(
+                f"{path}.name: {value!r} is not a safe identifier — it becomes "
+                f"a unit filename and a `--name` argument "
+                f"(letters, digits, '_' and '-' only)"
+            )
+            return None
+        return value
+
+    if directory is None:
+        return None
+    derived = PurePosixPath(directory).name
+    if not _RETAIN_NAME_RE.match(derived):
+        errors.append(
+            f"{path}: the name derived from dir: is {derived!r}, which is not a "
+            f"safe unit-name component — declare an explicit `name:` for this "
+            f"entry (letters, digits, '_' and '-' only)"
+        )
+        return None
+    return derived
+
+
+def _validate_retain_schedule(entry: dict, path: str, errors: list[str]) -> str | None:
+    value = _retain_str(entry, "schedule", path, errors)
+    if value is None:
+        return None
+    if value.lower() in _SCHEDULE_KEYWORDS or _SCHEDULE_RE.match(value):
+        return value
+    errors.append(
+        f"{path}.schedule: {value!r} does not look like a systemd OnCalendar "
+        f"expression (e.g. 'daily' or '*-*-* 05:30:00 UTC'). Check it on the "
+        f"host with `systemd-analyze calendar`"
+    )
+    return None
+
+
+def _validate_retain_user(
+    entry: dict, path: str, default_user: str, errors: list[str]
+) -> str | None:
+    """The account the prune runs as, which becomes a ``User=`` directive.
+
+    ``scaffold.deploy_user`` is checked on the same rule as a declared
+    ``user:``. It reaches the same directive, and a value that is trusted
+    everywhere else in the config is still not one that should be able to
+    reach a unit file unexamined.
+    """
+    if "user" in entry:
+        source = f"{path}.user"
+        value = _retain_str(entry, "user", path, errors)
+        if value is None:
+            return None
+    else:
+        source = "scaffold.deploy_user"
+        value = default_user
+        if not _reject_unit_unsafe(value, source, errors):
+            return None
+
+    if not _RETAIN_USER_RE.match(value):
+        errors.append(
+            f"{source}: {value!r} is not a valid username — it becomes a "
+            f"User= directive, and a leading '-' would reach a command line "
+            f"as an option"
+        )
+        return None
+    return value
+
+
+def _parse_one_retain_entry(
+    entry: Any,
+    *,
+    environment: str,
+    index: int,
+    default_user: str,
+    errors: list[str],
+) -> RetainEntry | None:
+    path = f"backup.environments.{environment}.retain[{index}]"
+    if not isinstance(entry, dict):
+        errors.append(f"{path}: expected a mapping, got {type(entry).__name__}")
+        return None
+
+    directory = _validate_retain_dir(entry, path, errors)
+    name = _validate_retain_name(entry, directory, path, errors)
+    schedule = _validate_retain_schedule(entry, path, errors)
+    match = _validate_retain_match(entry, path, errors)
+    retention_days = _retain_int(entry, "retention_days", path, errors, minimum=1)
+    keep_minimum = (
+        _retain_int(entry, "keep_minimum", path, errors, minimum=0)
+        if "keep_minimum" in entry
+        else 3
+    )
+
+    user = _validate_retain_user(entry, path, default_user, errors)
+
+    if None in (directory, name, schedule, retention_days, keep_minimum, user):
+        return None
+    return RetainEntry(
+        environment=environment,
+        name=cast("str", name),
+        dir=cast("str", directory),
+        schedule=cast("str", schedule),
+        retention_days=cast("int", retention_days),
+        match=match,
+        keep_minimum=cast("int", keep_minimum),
+        user=cast("str", user),
+    )
+
+
+def _reject_duplicate_names(
+    entries: list[tuple[int, RetainEntry]], environment: str, errors: list[str]
+) -> None:
+    """Two entries in one environment cannot share a name.
+
+    Not auto-disambiguated with a hash: the two would then render units
+    whose names change whenever the config around them does, and an
+    operator who ran `systemctl status` on one would be reading the other.
+    """
+    by_name: dict[str, list[int]] = {}
+    for index, entry in entries:
+        by_name.setdefault(entry.name, []).append(index)
+    for name, indices in sorted(by_name.items()):
+        if len(indices) > 1:
+            listed = " and ".join(
+                f"backup.environments.{environment}.retain[{i}]" for i in indices
+            )
+            errors.append(
+                f"{listed} both resolve to the entry name {name!r}. Two entries "
+                f"in one environment cannot share a name — they would render "
+                f"the same unit. Declare an explicit `name:` on one of them"
+            )
+
+
+def parse_retain_entries(
+    backup: Any,
+    *,
+    known_environments: set[str],
+    default_user: str,
+) -> tuple[RetainEntry, ...]:
+    """Parse and validate ``backup.environments.<env>.retain`` (#339).
+
+    Args:
+        backup: The raw top-level ``backup:`` mapping, which every other
+            consumer reads unvalidated. Only the ``environments:`` key is
+            claimed here, so a pre-#339 ``backup:`` block parses to nothing.
+        known_environments: Every environment name some fraise or the global
+            ``environments:`` section declares. A ``retain`` block naming
+            anything else renders units ``_env_active`` never activates —
+            copied, gated, and never firing, which is the incident's own
+            failure mode.
+        default_user: ``scaffold.deploy_user``, the owner of a corpus that
+            arrived over fraisier's own rsync push.
+
+    Returns:
+        Every entry across every environment, in declaration order.
+
+    Raises:
+        ValidationError: Any entry is invalid. All problems in the section
+            are collected first, so one run names them all.
+    """
+    if not isinstance(backup, dict):
+        return ()
+    environments = backup.get("environments")
+    if not environments:
+        return ()
+
+    errors: list[str] = []
+    if not isinstance(environments, dict):
+        raise ValidationError(
+            f"backup.environments: expected a mapping of environment name to "
+            f"retention policy, got {type(environments).__name__}"
+        )
+
+    parsed: list[RetainEntry] = []
+    for environment, env_block in environments.items():
+        if environment not in known_environments:
+            known = ", ".join(sorted(known_environments)) or "(none)"
+            errors.append(
+                f"backup.environments.{environment}: no fraise declares an "
+                f"environment named {environment!r}, so the retention units "
+                f"rendered for it would be installed on no host and never run. "
+                f"Known environments: {known}"
+            )
+            continue
+        if not isinstance(env_block, dict):
+            errors.append(
+                f"backup.environments.{environment}: expected a mapping, got "
+                f"{type(env_block).__name__}"
+            )
+            continue
+        raw_entries = env_block.get("retain")
+        if raw_entries is None:
+            continue
+        if not isinstance(raw_entries, list):
+            errors.append(
+                f"backup.environments.{environment}.retain: expected a list of "
+                f"entries, got {type(raw_entries).__name__}"
+            )
+            continue
+
+        in_env: list[tuple[int, RetainEntry]] = []
+        for index, raw in enumerate(raw_entries):
+            entry = _parse_one_retain_entry(
+                raw,
+                environment=environment,
+                index=index,
+                default_user=default_user,
+                errors=errors,
+            )
+            if entry is not None:
+                in_env.append((index, entry))
+        _reject_duplicate_names(in_env, environment, errors)
+        parsed.extend(entry for _index, entry in in_env)
+
+    if errors:
+        listed = "\n".join(f"  - {e}" for e in errors)
+        raise ValidationError(f"Invalid backup retention config:\n{listed}")
+    return tuple(parsed)
