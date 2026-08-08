@@ -458,7 +458,16 @@ class HealthConfig:
     """Parsed health: section from fraises.yaml."""
 
     startup_timeout_seconds: int = 120
-    deploy_poll_interval_seconds: int = 5
+
+    deploy_poll_interval_seconds: int = 60
+    """`OnUnitActiveSec=` on `deploy-checker.timer`, and nothing else.
+
+    Defaulted to 5 until #341, which is a plausible number for polling a
+    socket and an implausible one for a timer that git-fetches every fraise
+    and environment on the host. It went unnoticed because the unit it
+    configures has never been enabled anywhere. An explicit value is still
+    honoured as written — this is a default, not a floor.
+    """
     endpoints: list[str] = field(default_factory=lambda: ["/health"])
     response: HealthResponseConfig = field(default_factory=HealthResponseConfig)
     version_field: str = "version"

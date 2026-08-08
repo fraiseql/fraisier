@@ -376,7 +376,13 @@ class FraisierConfig:
         raw_response = raw.get("response", {}) or {}
         return HealthConfig(
             startup_timeout_seconds=raw.get("startup_timeout_seconds", 120),
-            deploy_poll_interval_seconds=raw.get("deploy_poll_interval_seconds", 5),
+            # Read off the dataclass rather than respelled here: the value is
+            # documented on the field, and a default that lives in two places
+            # is one edit away from the two disagreeing.
+            deploy_poll_interval_seconds=raw.get(
+                "deploy_poll_interval_seconds",
+                HealthConfig.deploy_poll_interval_seconds,
+            ),
             endpoints=raw.get("endpoints", ["/health"]),
             response=HealthResponseConfig(
                 include_version=raw_response.get("include_version", True),

@@ -39,7 +39,7 @@ class TestHealthConfig:
 
         cfg = HealthConfig()
         assert cfg.startup_timeout_seconds == 120
-        assert cfg.deploy_poll_interval_seconds == 5
+        assert cfg.deploy_poll_interval_seconds == 60
         assert cfg.endpoints == ["/health"]
         assert isinstance(cfg.response, object)
 
@@ -118,7 +118,7 @@ fraises:
         cfg = FraisierConfig(str(config_file))
         health = cfg.health
         assert health.startup_timeout_seconds == 120
-        assert health.deploy_poll_interval_seconds == 5
+        assert health.deploy_poll_interval_seconds == 60
         assert health.endpoints == ["/health"]
         assert health.response.include_version is True
         assert health.response.include_database is False

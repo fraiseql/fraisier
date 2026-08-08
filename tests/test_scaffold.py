@@ -687,6 +687,67 @@ scaffold:
             assert directive in content, f"Missing directive: {directive}"
         assert "ReadWritePaths=" in content
 
+    def _render_deploy_checker(self, tmp_path) -> str:
+        """Two environments, so the per-environment ExecStart lines are real."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+      staging:
+        worker_count: 1
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        ScaffoldRenderer(config).render()
+        return (tmp_path / "output" / "systemd" / "deploy-checker.service").read_text()
+
+    def test_deploy_checker_does_not_force(self, tmp_path):
+        """A checker that checks nothing is a redeploy loop.
+
+        `--force` skips `is_deployment_needed()` (daemon.py), which compares
+        the deployed version against the latest — the exact question this
+        unit exists to ask. With it, every firing redeployed every fraise and
+        environment unconditionally, at the timer's interval, whether or not
+        anything had changed (#341).
+        """
+        content = self._render_deploy_checker(tmp_path)
+
+        assert "trigger-deploy" in content
+        assert "--force" not in content
+
+    def test_deploy_checker_polls_each_environment_independently(self, tmp_path):
+        """One unreachable socket must not stop the other environments.
+
+        `trigger-deploy` exits 1 when the deploy socket is missing or refuses
+        the connection, and an un-prefixed failure in a `Type=oneshot` unit
+        aborts every later ExecStart. So a single environment whose socket was
+        down silently stopped the rest of the host being polled at all.
+
+        `-` is the right semantic and not a swallowed error: polling env A must
+        not depend on env B being reachable, and a genuinely dead socket is the
+        deploy path's own alerting problem — a poll unit failing at every tick
+        buries that signal rather than raising it.
+        """
+        content = self._render_deploy_checker(tmp_path)
+
+        exec_starts = [
+            line
+            for line in content.splitlines()
+            if line.startswith(("ExecStart=", "ExecStart=-"))
+        ]
+        assert len(exec_starts) == 2, f"expected one per environment: {exec_starts}"
+        for line in exec_starts:
+            assert line.startswith("ExecStart=-"), f"failure aborts the rest: {line}"
+
     def test_backup_service_has_security_directives(self, tmp_path):
         """backup.service has all security hardening directives."""
         from fraisier.scaffold.renderer import ScaffoldRenderer

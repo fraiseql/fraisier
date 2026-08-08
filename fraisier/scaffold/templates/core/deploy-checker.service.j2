@@ -10,9 +10,18 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=FRAISIER_SYSTEMCTL_SOCKET=/run/fraisier/systemctl-{{ project_name }}.sock
 {% endif %}
 {% set fraisier_bin = '/home/' ~ scaffold.deploy_user ~ '/.local/bin/fraisier' %}
+{# No --force: it skips is_deployment_needed(), which compares the deployed
+   version against the latest — the question this unit exists to ask. With it,
+   every firing redeployed every fraise and environment unconditionally.
+
+   The `-` prefix makes each line's failure non-fatal. trigger-deploy exits 1
+   on a missing or refused socket, and in a Type=oneshot unit an un-prefixed
+   failure aborts every later ExecStart — so one environment whose socket was
+   down stopped the whole host being polled. Polling env A must not depend on
+   env B. Both #341. #}
 {% for fraise in local_fraises %}
 {% for env_name in fraise.get('environments', {}) %}
-ExecStart={{ fraisier_bin }} --config {{ scaffold.config_path }} trigger-deploy {{ fraise.name }} {{ env_name }} --force
+ExecStart=-{{ fraisier_bin }} --config {{ scaffold.config_path }} trigger-deploy {{ fraise.name }} {{ env_name }}
 {% endfor %}
 {% endfor %}
 
