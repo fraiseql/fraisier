@@ -19,6 +19,8 @@ entry whose presence could carry the intent.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import yaml
 
@@ -362,3 +364,44 @@ class TestDoctorReportsInertTimers:
 
         assert result.status == "pass"
         assert "backup" in result.detail
+
+
+class TestValidateReportsInsteadOfCrashing:
+    """`fraisier validate` must name a bad section, not traceback out of it.
+
+    `_collect_all_validation_errors` force-traverses every Stage-2 section so
+    one run reports them all — but its list omitted `scaffold`, and no section
+    under it raised, so nothing noticed. `scaffold.systemd.timers` is the first
+    thing that does: a typo'd family name reached the user as an unhandled
+    ValidationError from deep inside `_check_deploy_user`, which reads
+    `config.scaffold` with no guard.
+    """
+
+    @staticmethod
+    def _validate(tmp_path, timers):
+        from fraisier.validation import ValidationRunner
+
+        raw: dict[str, Any] = dict(_BASE)
+        raw["scaffold"] = {
+            "output_dir": str(tmp_path / "output"),
+            "systemd": {"timers": timers},
+        }
+        path = tmp_path / "fraises.yaml"
+        path.write_text(yaml.safe_dump(raw))
+        return ValidationRunner(FraisierConfig(path)).run_all()
+
+    def test_a_bad_timer_name_is_a_reported_error(self, tmp_path):
+        results = self._validate(tmp_path, {"backupp": True})
+
+        failures = [r for r in results if not r.passed]
+        assert any("backupp" in (r.message or "") for r in failures), (
+            f"the bad section was not reported: {[r.name for r in failures]}"
+        )
+
+    def test_the_traversal_covers_the_scaffold_section(self, tmp_path):
+        """Named by its yaml path, like every other section."""
+        results = self._validate(tmp_path, {"backupp": True})
+
+        assert any(r.name == "section:scaffold" for r in results), (
+            f"scaffold is not traversed: {[r.name for r in results]}"
+        )

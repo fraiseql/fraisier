@@ -7,6 +7,7 @@ deploy user existence, etc.
 Also provides drift detection for scaffolded files.
 """
 
+import contextlib
 import logging
 import os
 import pwd
@@ -40,6 +41,12 @@ def _collect_all_validation_errors(
         ("notifications", lambda: config.notifications),
         ("hooks", lambda: config.hooks),
         ("backup.environments", lambda: config.backup_retention),
+        # `scaffold` was absent from this list until #341, and nothing noticed
+        # because no section under it raised. `scaffold.systemd.timers` is the
+        # first that does, and without this a typo'd timer name escaped the
+        # traversal and surfaced as an unhandled ValidationError from inside
+        # _check_deploy_user, which reads config.scaffold with no guard.
+        ("scaffold", lambda: config.scaffold),
     ]
     for path, getter in section_getters:
         try:
@@ -228,8 +235,12 @@ class ValidationRunner:
                     )
                 )
 
-        # Global deploy user
-        _check_user(self.config.scaffold.deploy_user, "Deploy user")
+        # Global deploy user. A broken `scaffold:` section is skipped rather
+        # than re-raised: _check_section_traversal has already reported it by
+        # yaml path, and crashing here would replace every remaining check's
+        # output with a traceback (#341).
+        with contextlib.suppress(ValidationError, ConfigurationError):
+            _check_user(self.config.scaffold.deploy_user, "Deploy user")
 
         # Per-environment users
         for fraise_name in self.config.list_fraises():
