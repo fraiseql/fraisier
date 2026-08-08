@@ -176,6 +176,97 @@ class TestInstallScaffold:
         assert "cd " not in " ".join(cmd)
 
 
+class TestInstallScaffoldDeclaresTheDeploy:
+    """install.sh must know a deploy is in flight, on *both* install paths (#349).
+
+    The helper-socket marker only exists on the socket path; the subprocess
+    fallback runs install.sh as a child of the deploy process, where an
+    unguarded `systemctl restart <webhook>` kills the whole cgroup just the
+    same. The caller is the only party that knows, so it declares on both.
+    """
+
+    def test_subprocess_fallback_declares_the_deploy(self, tmp_path):
+        config_path = tmp_path / "fraises.yaml"
+        config_path.write_text("name: myproj\nfraises: {}\n")
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer = _make_deployer_with_runner(mock_runner)
+        deployer._install_scaffold(config_path=config_path)
+
+        env = mock_runner.run.call_args[1]["env"]
+        assert env["FRAISIER_DEPLOY_IN_FLIGHT"] == "1"
+
+    def test_subprocess_fallback_keeps_the_ambient_environment(self, tmp_path):
+        """LocalRunner hands env straight to subprocess.run, which *replaces* it."""
+        config_path = tmp_path / "fraises.yaml"
+        config_path.write_text("name: myproj\nfraises: {}\n")
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer = _make_deployer_with_runner(mock_runner)
+        deployer._install_scaffold(config_path=config_path)
+
+        env = mock_runner.run.call_args[1]["env"]
+        assert "PATH" in env
+
+    def test_configless_fallback_declares_the_deploy(self):
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
+
+        deployer = _make_deployer_with_runner(mock_runner)
+        deployer._install_scaffold(config_path=None)
+
+        env = mock_runner.run.call_args[1]["env"]
+        assert env["FRAISIER_DEPLOY_IN_FLIGHT"] == "1"
+
+    def test_socket_request_declares_the_deploy(self, tmp_path, monkeypatch):
+        """The helper does not inherit the deploy's environment, so the
+        declaration has to travel in the request payload."""
+        import json
+
+        config_path = tmp_path / "fraises.yaml"
+        config_path.write_text("name: myproj\nfraises: {}\n")
+
+        sent: list[bytes] = []
+
+        class _FakeSock:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def connect(self, _path):
+                return None
+
+            def sendall(self, payload):
+                sent.append(payload)
+
+            def makefile(self, _mode):
+                import io
+
+                return io.BytesIO(b'{"ok": true, "stdout": "", "stderr": ""}\n')
+
+        from fraisier.deployers import base as base_mod
+
+        def _fake_socket(*_args, **_kwargs):
+            return _FakeSock()
+
+        monkeypatch.setattr(base_mod._socket_mod, "socket", _fake_socket)
+        monkeypatch.setattr(base_mod.Path, "exists", lambda _self: True)
+
+        deployer = _make_deployer_with_runner(MagicMock())
+        deployer._try_scaffold_install_via_socket(config_path)
+
+        assert sent, "no request was sent"
+        request = json.loads(sent[0].decode())
+        assert request["action"] == "install"
+        assert request["deploy_in_flight"] is True
+
+
 # ---------------------------------------------------------------------------
 # _get_fraisier_executable — resolves the fraisier binary across installs
 # ---------------------------------------------------------------------------

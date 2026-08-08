@@ -103,6 +103,18 @@ def _handle_connection(conn: socket.socket, allowed_script: str) -> None:
         # webhook's NoNewPrivileges (which cannot fall back) — the deploy aborts
         # before the DB step. See install.sh.j2's scaffold-install-helper block.
         helper_env = {**os.environ, "FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER": "1"}
+
+        # Forward the client's declaration that a deploy is in flight, so
+        # install.sh does not restart the unit that deploy is running inside
+        # (#349). This travels in the request because the helper is a separate
+        # root service and does not inherit the deploy's environment.
+        #
+        # Only a literal JSON `true` is honoured, and it is mapped to a fixed
+        # value rather than interpolated: the payload reaches a daemon running
+        # as root, so a client must not be able to name an environment variable
+        # or choose its contents.
+        if request.get("deploy_in_flight") is True:
+            helper_env["FRAISIER_DEPLOY_IN_FLIGHT"] = "1"
         try:
             result = subprocess.run(
                 [_BASH, allowed_script],

@@ -121,6 +121,64 @@ class TestHandleConnection:
         # Inherits the ambient environment rather than replacing it wholesale.
         assert "PATH" in env
 
+    def test_declared_deploy_reaches_install_sh(self, tmp_path):
+        """A request declaring a live deploy sets the marker install.sh reads to
+        decide whether restarting the webhook would kill its own caller (#349)."""
+        script = tmp_path / "install.sh"
+        script.write_text("#!/bin/bash\necho ok")
+        script.chmod(0o755)
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            _call(
+                {"action": "install", "deploy_in_flight": True},
+                allowed_script=str(script),
+            )
+
+        env = mock_run.call_args.kwargs["env"]
+        assert env["FRAISIER_DEPLOY_IN_FLIGHT"] == "1"
+
+    def test_undeclared_request_leaves_the_marker_unset(self, tmp_path):
+        """An operator-invoked install must keep restarting units normally."""
+        script = tmp_path / "install.sh"
+        script.write_text("#!/bin/bash\necho ok")
+        script.chmod(0o755)
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            _call({"action": "install"}, allowed_script=str(script))
+
+        env = mock_run.call_args.kwargs["env"]
+        assert "FRAISIER_DEPLOY_IN_FLIGHT" not in env
+
+    def test_non_boolean_declaration_is_not_trusted(self, tmp_path):
+        """The payload reaches a root daemon; only a real `true` counts."""
+        script = tmp_path / "install.sh"
+        script.write_text("#!/bin/bash\necho ok")
+        script.chmod(0o755)
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            _call(
+                {"action": "install", "deploy_in_flight": "yes; rm -rf /"},
+                allowed_script=str(script),
+            )
+
+        env = mock_run.call_args.kwargs["env"]
+        assert "FRAISIER_DEPLOY_IN_FLIGHT" not in env
+
     def test_unknown_action_is_rejected(self, tmp_path):
         """Unknown actions are rejected without running the script."""
         script = tmp_path / "install.sh"
