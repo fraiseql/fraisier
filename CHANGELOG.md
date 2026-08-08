@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-08-08
+
+`fraisier ship` decided whether a `triggers:` check ran by diffing the **working
+tree**. A changeset that is already committed leaves a clean tree, so the
+changed-file list was empty and **every** triggered check was skipped — with no
+output at all, because the skipped checks were filtered out before the only code
+that prints.
+
+The reporter had 12 triggered checks and a changeset touching 6 files under
+`db/`. Four ran: exactly the four with no `triggers:` at all. Among the silent
+ones was the gate blocking a schema change with no migration — the check
+specifically protecting migrate-only production.
+
+Committing before `ship` is not exotic. `git add --update` stages only tracked
+files, so a changeset adding a new file must be committed by hand; and a check
+that inspects committed history only passes once the work is committed. Together
+there was no working-tree state in which such a check both ran and passed.
+
+This is v0.61.0's theme in the tooling rather than on a host. That release was
+about units that could not fail visibly; this is a check that could not be seen
+*not* to have run.
+
+### Fixed
+
+- **Triggered checks see committed changes** (#346). The changed set is now the
+  **union** of `merge-base(HEAD, base)..HEAD` and the working-tree diff — not a
+  replacement, because checks deliberately run *before* `git add --update`, so
+  uncommitted work must keep counting. Untracked files stay out: `ship` already
+  fails outright on untracked files under `db/migrations/`, so the dangerous case
+  is covered without letting a scratch file run unrelated checks.
+
+- **"I could not tell" no longer means "nothing changed".** `_get_changed_files`
+  returned `[]` both when git failed and when nothing had changed, and `[]` was
+  read as *skip*. So a failed git invocation silently disabled every gate. The
+  changed set is three-valued now, and an undetermined one runs **every**
+  triggered check. Same rule as `db restore`'s lock ("a lock that cannot be
+  evaluated is an error, not a skip") and v0.61.0's `ArchiveVerdict.UNVERIFIABLE`.
+
+- **`--pr-base` reaches trigger evaluation.** `ShipPipeline` was built from
+  `ShipConfig` alone, and the CLI's resolved base only ever went to the
+  version-race check — and only when `--pr` was passed. So `ship --pr-base dev`
+  evaluated triggers against a different base than the PR it was about to open.
+
+- **The base is never the current branch.** `_assert_no_version_race` resolves
+  `pr_base or current_branch` and is right to, but the same fallback is fatal
+  here: on an already-pushed feature branch `merge-base(HEAD,
+  origin/<current-branch>)` is HEAD, so the diff is empty and the bug is
+  reproduced by the fallback meant to fix it. Resolution is
+  `--pr-base`/`ship.pr_base` → `origin/HEAD` → undetermined, and a test pins that
+  the current branch is not used.
+
+- **The changed set is computed once per run**, not once per check. It was called
+  from inside the per-check predicate, so N triggered checks meant N `git diff`
+  subprocesses.
+
+### Added
+
+- **A skipped check says so** — the part that let the bug live. The issue's own
+  words: *the failure is silent, which is the worst part; a skipped check is
+  indistinguishable from a passing one in the output.* Twelve checks collapsing
+  to four would have been noticed the first time it happened.
+
+  ```
+  note could not determine changed files (no ship.pr_base configured …) — running all 2 triggered check(s)
+  skip schema-gate — no file matched db/** (vs origin/main, 3 file(s) changed)
+  pass ruff (0.4s)
+  ```
+
+  The reason names the patterns, the base and the changed-file count, which is
+  what distinguishes "correctly skipped" from "skipped because the base was
+  wrong". `PipelineResult.skipped` carries them separately from `results`:
+  deliberately **not** a `CheckResult` with `success=True`, since anything
+  summing results would count a skip as a pass — the conflation this release is
+  about. A forced run under an undetermined base is announced too, once per
+  phase, because a check running for a reason nobody can see is how the next
+  person concludes `triggers:` does not work.
+
+- **The `ship:` block is documented** — `checks:`, phases, and `triggers:` were
+  not documented anywhere. The new section states what the changed set is, how
+  the base resolves, and that patterns use `fnmatch` semantics where `*` crosses
+  `/`, so `db/*` matches `db/migrations/001.sql`. That over-matches rather than
+  under-matches, so it is left as it is: tightening it would stop a check that
+  fires today, which is a regression in the direction this release is fixing.
+
+### Rollout
+
+Nothing here touches a host, a systemd unit or a database. The whole surface is
+`fraisier ship`'s local pre-commit behaviour, so upgrading changes nothing until
+the next `ship`.
+
+**A repo using `triggers:` will run more checks than it did**, which is the fix.
+Two consequences worth expecting:
+
+- **A check that has not run in a long time may fail.** The honest reading is
+  that it was never passing — this release did not break it, it stopped hiding
+  it. That is the case the reporter hit: the gate protecting migrate-only
+  production had been skipped every run.
+- **Runs are louder.** Every skipped check now prints a line. A run that skips
+  ten checks gains ten lines; a run that used to look short and green now shows
+  why it was short.
+
+If the undetermined note appears on every run, set `ship.pr_base` or run
+`git remote set-head origin -a`.
+
+Closes #346
+
 ## [0.61.0] - 2026-08-08
 
 Four issues, one shape: **work that could not fail visibly.**
