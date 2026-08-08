@@ -323,6 +323,71 @@ backup:
           schedule: "*-*-* 06:00:00 UTC"
 """
 
+# #341's shape: the three timer families install.sh has always copied, and
+# before #341 enabled none of. Two cases from one config, because the
+# behavioural claim of that bundle is a *difference* between them.
+#
+# `restore_migrate` on the staging environment is what renders the
+# restore-staging pair at all — the matrix had no such case, so the pair, and
+# its move from UNINSTALLED_GAP to installed, was invisible here.
+_TIMER_FAMILIES_OFF = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+      staging:
+        server: only.example.io
+        app_path: /var/www/api-stg
+        systemd_service: api-stg.service
+        git_repo: /var/git/api-stg.git
+        database:
+          strategy: restore_migrate
+"""
+
+# The same tree with every family switched on. The delta between the two
+# golden entries is precisely the enable lines: if it is ever anything more,
+# the knob is doing something beyond what it claims.
+_TIMER_FAMILIES_ON = """\
+name: proj
+servers:
+  only.example.io:
+    machine_hostnames: [solo]
+scaffold:
+  deploy_user: deployer
+  systemd:
+    timers:
+      backup: true
+      deploy_checker: true
+      restore_staging: true
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: only.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+      staging:
+        server: only.example.io
+        app_path: /var/www/api-stg
+        systemd_service: api-stg.service
+        git_repo: /var/git/api-stg.git
+        database:
+          strategy: restore_migrate
+"""
+
 # (case name, config, hostname). Two entries for the asymmetric config: the
 # whole point is that the two hosts must plan *different* installs.
 MATRIX = [
@@ -340,6 +405,8 @@ MATRIX = [
     ("scheduled_fraise", _SCHEDULED, "solo"),
     ("receiving_host_with_retention", _RECEIVING_HOST, "cbox"),
     ("non_receiving_host", _RECEIVING_HOST, "abox"),
+    ("timer_families_off", _TIMER_FAMILIES_OFF, "solo"),
+    ("timer_families_on", _TIMER_FAMILIES_ON, "solo"),
 ]
 
 
@@ -651,21 +718,48 @@ class TestRetentionUnitsReachOnlyTheReceivingHost:
             f"no daemon-reload between the copies and the enable: {between}"
         )
 
-    def test_the_pre_existing_timers_are_still_not_enabled(self, plans):
-        """Decision 3, pinned in the plan for every case in the matrix.
+    def test_a_timer_is_enabled_only_where_its_knob_is_on(self, plans):
+        """Pinned in the plan for every case in the matrix.
 
-        `Disposition.TIMER` enables the retention timers and only those.
-        Enabling backup.timer on upgrade would start a legacy
-        `pg_dump | gzip` on every host that has ever run scaffold-install,
-        as a side effect of a retention fix. If this test is failing, that
-        is what you are shipping — do it in its own release.
+        v0.60.0 enabled #339's retention timers and nothing else, and this
+        test asserted that asymmetry as permanent. #341 replaced the
+        asymmetry with a switch: `scaffold.systemd.timers`, every family
+        defaulting to off. So the claim becomes conditional — a timer is
+        enabled if and only if a config asked for it — and `timer_families_on`
+        is the only case in the matrix that asks.
+
+        If this fails on any other case, an upgrade is about to start a
+        nightly `pg_dump | gzip`, a poll-deploy loop, or a staging restore on
+        every host that has ever run scaffold-install, as a side effect of
+        something else. Do that deliberately or not at all.
         """
         for case, plan in plans.items():
+            if case == "timer_families_on":
+                continue
             enabled = [c for c in plan if "enable" in c]
-            for inert in ("backup.timer", "deploy-checker.timer"):
+            for inert in (
+                "backup.timer",
+                "deploy-checker.timer",
+                "restore-staging.timer",
+            ):
                 assert not [c for c in enabled if c.endswith(inert)], (
-                    f"{case}: {inert} is now enabled on upgrade"
+                    f"{case}: {inert} is now enabled without its knob"
                 )
+
+    def test_the_knob_enables_exactly_what_it_names(self, plans):
+        """The other half: the switch has to actually switch.
+
+        Asserted as the delta between two otherwise identical configs, so it
+        cannot pass by the units being enabled for some unrelated reason.
+        """
+        off, on = set(plans["timer_families_off"]), set(plans["timer_families_on"])
+
+        assert on - off == {
+            "sudo systemctl enable --now backup.timer",
+            "sudo systemctl enable --now deploy-checker.timer",
+            "sudo systemctl enable --now restore-staging.timer",
+        }
+        assert off - on == set(), "switching a timer on removed work from the plan"
 
     def test_the_receiving_host_does_not_create_the_corpus_directory(self, plans):
         """A directory install.sh conjured into existence would turn a typo'd

@@ -99,19 +99,21 @@ class Disposition(StrEnum):
     TIMER = "timer"
     """``PLAIN`` plus ``systemctl enable --now`` after the daemon-reload.
 
-    For timers that must actually fire. ``install.sh`` copies timers and
-    enables none of them — ``backup.timer`` and ``deploy-checker.timer`` are
-    installed and inert on every host today — so a retention timer filed as
-    ``PLAIN`` would be rendered, installed, hashed, drift-checked and never
-    run. That is the #339 incident's own failure mode (the artifact exists,
-    the work does not happen) reproduced inside the system built to prevent
-    it.
+    For timers that must actually fire. A timer filed as ``PLAIN`` is
+    rendered, installed, hashed, drift-checked and never run — the #339
+    incident's own failure mode (the artifact exists, the work does not
+    happen) reproduced inside the system built to prevent it. Until #341 that
+    was the state of every timer ``install.sh`` installs.
 
-    Applied to the retention pair only. The existing timers keep their
-    dispositions deliberately: enabling ``backup.timer`` on upgrade would
-    start a legacy ``pg_dump | gzip`` on every host that has ever run
-    ``scaffold-install``, as a side effect of a retention fix. That has its
-    own blast radius and its own issue.
+    Two routes here, and the difference is deliberate:
+
+    - **#339's retention pair, unconditionally.** A retention unit that does
+      not fire *is* the incident, so it is never the operator's call.
+    - **The three families in ``scaffold.systemd.timers``**, when the operator
+      switches one on. They default to off, so an upgrade starts nothing:
+      enabling ``backup.timer`` means starting a legacy ``pg_dump | gzip`` on
+      a host that never asked, and that is a decision with its own blast
+      radius rather than a side effect of a release.
     """
 
     NGINX_VHOST = "nginx_vhost"
@@ -294,38 +296,61 @@ _SCAFFOLD_LOCAL_SOURCES = frozenset(
     }
 )
 
-# Units install.sh copies unconditionally — no environment owns them, so
-# `_env_of_unit` cannot route them and they are listed by name.
+# The timer families `scaffold.systemd.timers` switches, and the units each
+# one owns. Copied unconditionally — no environment owns them, so
+# `_owner_of_unit` cannot route them and they are listed by name.
 #
-# A timer belongs here with the service it activates, never on its own: a timer
-# whose target is not installed is a firing that hits a missing unit, which is
-# how backup.timer/backup.service drifted apart.
-_PLAIN_UNITS = frozenset(
-    {
+# The pair is the unit of classification, deliberately. A timer must never be
+# enabled without the service it activates: neither carries a `Unit=`, so
+# systemd resolves the target by stem, and a timer whose target is missing is a
+# firing into nothing — which is exactly how backup.timer and backup.service
+# drifted apart. Classifying them together makes that structural rather than
+# remembered.
+_TIMER_FAMILY_UNITS: dict[str, tuple[str, str]] = {
+    "backup": ("systemd/backup.timer", "systemd/backup.service"),
+    "deploy_checker": (
         "systemd/deploy-checker.timer",
         "systemd/deploy-checker.service",
-        "systemd/backup.timer",
-        "systemd/backup.service",
-    }
-)
+    ),
+    "restore_staging": (
+        "systemd/restore-staging.timer",
+        "systemd/restore-staging.service",
+    ),
+}
+
+_TIMER_UNIT_FAMILY: dict[str, str] = {
+    source: family
+    for family, sources in _TIMER_FAMILY_UNITS.items()
+    for source in sources
+}
 
 # Rendered, needed, installed by nothing. Kept as data so every instance is
 # enumerated in one reviewable place rather than inferred from silence.
 #
-# What remains here is the self-consistent case: restore-staging's .service and
-# .timer are BOTH uninstalled, so nothing fires into a missing unit. The gaps
-# where an installed timer activated an uninstalled service, or where one
-# component told operators to run an installer that never installed the thing,
-# were closed rather than described.
-_KNOWN_GAPS: dict[str, str] = {
-    "systemd/restore-staging.service": (
-        "restore-staging.timer is rendered alongside it and neither is installed "
-        "by install.sh"
-    ),
-    "systemd/restore-staging.timer": (
-        "rendered but installed by nothing; its .service is in the same state"
-    ),
-}
+# Empty since #341, which installed restore-staging — the last entry, and the
+# only self-consistent one left after v0.57.0 closed the four where an
+# installed timer activated an uninstalled service. The classification stays:
+# it is the honest label for the next artifact that is rendered, needed and
+# reached by no installer, and filing such a thing as MANUAL would launder a
+# live bug into "intentional". An entry here must carry what it breaks.
+_KNOWN_GAPS: dict[str, str] = {}
+
+
+def _inert_note(family: str) -> str:
+    """Why a copied timer is not running, and the one line that changes it.
+
+    `note` was introduced for UNINSTALLED_GAP — "why, for dispositions where
+    the absence of an install needs explaining". "Installed, and deliberately
+    not started" is the same question one step further along, and #341 emptied
+    out the field's original user.
+    """
+    from fraisier.config.schema import TIMER_FAMILIES
+
+    return (
+        f"installed and not enabled; {TIMER_FAMILIES[family]}. "
+        f"Set scaffold.systemd.timers.{family}: true to run it."
+    )
+
 
 _BACKUP_ALERT_RE = re.compile(r"^systemd/fraisier-.+-backup-alert@\.service$")
 
@@ -527,9 +552,18 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
             source, Disposition.PLAIN, destination=f"{SYSTEMD_DIR}/{stem}"
         )
 
-    if source in _PLAIN_UNITS:
+    # The three families install.sh has always copied and, before #341,
+    # enabled none of. The knob picks the disposition; install.sh's existing
+    # `timer` block does the rest, so enabling a family is a classification
+    # change rather than a new code path in the installer.
+    family = _TIMER_UNIT_FAMILY.get(source)
+    if family is not None:
+        enabled = renderer.config.scaffold.systemd.timers.get(family, False)
         return RenderedArtifact(
-            source, Disposition.PLAIN, destination=f"{SYSTEMD_DIR}/{stem}"
+            source,
+            Disposition.TIMER if enabled else Disposition.PLAIN,
+            destination=f"{SYSTEMD_DIR}/{stem}",
+            note=None if enabled else _inert_note(family),
         )
 
     if source.startswith("systemd/"):
