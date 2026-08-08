@@ -5,7 +5,11 @@ OnFailure=fraisier-{{ project_name }}-backup-alert@%n.service
 [Service]
 Type=oneshot
 User={{ scaffold.deploy_user }}
-ExecStart={{ scaffold.output_dir }}/backup.sh
+{# scaffold_state_dir, not scaffold.output_dir: the host reads its tree from
+   the former, while the latter is the CWD-relative local render/review path
+   and rendered `ExecStart=scripts/generated/backup.sh` — not absolute, so
+   systemd refused to load this unit at all (#341, #283). #}
+ExecStart={{ scaffold_state_dir }}/backup.sh
 
 # Security hardening
 NoNewPrivileges=true

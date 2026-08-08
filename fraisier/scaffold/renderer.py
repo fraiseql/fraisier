@@ -614,6 +614,14 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
     return {
         "manifest": build_manifest(config),
         "scaffold": config.scaffold,
+        # The absolute directory the HOST reads its scaffold tree from, which
+        # is not `scaffold.output_dir` — that one is CWD-relative and describes
+        # where `fraisier scaffold` writes for local review (#283). A unit
+        # built from `output_dir` is either unloadable, because systemd
+        # requires an absolute ExecStart, or points at a path that exists only
+        # on the machine that ran `scaffold`. `backup.service` did the first of
+        # those for the project's whole history (#341).
+        "scaffold_state_dir": config.scaffold_state_dir,
         "deployment": config.deployment,
         "health": config.health,
         "webhook": config.webhook,

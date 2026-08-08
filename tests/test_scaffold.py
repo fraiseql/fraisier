@@ -632,10 +632,15 @@ scaffold:
         assert "[Timer]" in content
 
 
+# ProtectHome is deliberately absent, and its absence is itself asserted by
+# tests/test_rendered_unit_sanity.py. This list used to carry `ProtectHome=true`
+# and so pinned #341's bug in place as a requirement: both units invoke
+# /home/{deploy_user}/.local/bin/fraisier, which any ProtectHome value hides
+# (#72, Bug 3). The unit that would have failed on every firing had a passing
+# test saying it was correctly hardened.
 _DEPLOY_CHECKER_SECURITY_DIRECTIVES = [
     "NoNewPrivileges=true",
     "ProtectSystem=strict",
-    "ProtectHome=true",
     "PrivateTmp=true",
     "PrivateDevices=true",
     "ProtectKernelTunables=true",
