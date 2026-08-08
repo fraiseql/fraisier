@@ -83,6 +83,211 @@ if [[ -z "$SCAFFOLD_DIR" ]]; then
   SCAFFOLD_DIR="$(dirname "$(realpath "$0")")"
 fi
 
+# Helper function to run commands conditionally
+_run() {
+  if [[ "$VALIDATE_ONLY" == "true" ]]; then
+    if [[ "$VERBOSE" == "true" ]]; then
+      echo "  [validate] $*"
+    fi
+    return 0
+  elif [[ "$DRY_RUN" == "true" ]]; then
+    echo "  [would run] $*"
+    return 0
+  else
+    if [[ "$VERBOSE" == "true" ]]; then
+      "$@"
+    else
+      "$@" 2>/dev/null || true
+    fi
+  fi
+}
+
+# Like _run, but failures are FATAL — no `|| true`, no stderr suppression — so
+# a broken step surfaces a non-zero exit (with `set -e`) instead of being
+# silently swallowed. Use for steps whose failure a caller must be able to
+# detect, e.g. the install-helper allowlist re-bake (#279): if the helper
+# can't be restarted, the deploy must fail loudly here rather than later at the
+# install step with a misleading "command not allowed".
+_run_strict() {
+  if [[ "$VALIDATE_ONLY" == "true" ]]; then
+    if [[ "$VERBOSE" == "true" ]]; then
+      echo "  [validate] $*"
+    fi
+    return 0
+  elif [[ "$DRY_RUN" == "true" ]]; then
+    echo "  [would run] $*"
+    return 0
+  else
+    "$@"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Nothing installed here may terminate the work that asked for it (#349).
+#
+# A deploy runs *in process* inside one of two units: the webhook service,
+# which executes deploys as background tasks, and a deploy socket's
+# `<stem>@N.service` instance running `fraisier deploy-daemon`. A changed
+# fraises.yaml makes that deploy run this script — so restarting either unit
+# from here kills the deploy that asked for the install. The webhook will not
+# exit while a deploy is in flight, so systemd's stop timeout expires and the
+# process is SIGKILLed, taking the deploy with it and leaving no failure record
+# of its own; the caller sees only a timeout.
+#
+# The deploy socket is the same hazard one step removed: the generated deploy
+# service carries `Requires=<its socket>`, and systemd propagates an explicit
+# restart of a required unit to its dependents. That is the identical mechanism
+# behind the scaffold-install-helper self-restart race guarded further down —
+# that helper's .service also `Requires=` its socket.
+#
+# So every restart of a deploy-hosting unit goes through
+# `_restart_deploy_host_unit`, which defers under a live deploy, names what it
+# deferred and why, and records the debt for the deploy to pay once it has
+# released its lock. A restart that is merely skipped would leave the webhook
+# running its previous unit — old ReadWritePaths=, old Environment= — which is
+# how a fraises.yaml change that adds an environment makes the *next* deploy
+# fail on a read-only filesystem.
+_FRAISIER_DEPLOY_LOCK_DIR="{{ deployment.lock_dir }}"
+_FRAISIER_DEFERRED_LEDGER="${_FRAISIER_DEPLOY_LOCK_DIR}/.deferred-restarts"
+_FRAISIER_DEPLOY_SIGNAL=""
+_FRAISIER_DEFERRED_RESTARTS=()
+# Counted separately because bash's array-length expansion opens with the two
+# characters Jinja uses to start a comment, so writing it here would swallow the
+# rest of this template until the next `#}`.
+_FRAISIER_DEFERRED_COUNT=0
+
+# Is any deployment lock held right now?
+#
+# Probes only lock files that already exist, and opens them read-only: creating
+# one here would leave a root-owned file that the deploy user cannot reopen for
+# writing, which is how `file_deployment_lock` acquires — so a probe would break
+# the next deploy it was meant to protect.
+#
+# Returns 2, not 1, when the probe cannot run at all, so the caller can tell
+# "no deploy is running" from "I could not look".
+_deploy_locks_held() {
+    command -v flock >/dev/null 2>&1 || return 2
+    [ -d "$_FRAISIER_DEPLOY_LOCK_DIR" ] || return 1
+    local f fd
+    for f in "$_FRAISIER_DEPLOY_LOCK_DIR"/*.lock; do
+        [ -e "$f" ] || continue
+        exec {fd}<"$f" 2>/dev/null || continue
+        if flock -n "$fd" 2>/dev/null; then
+            flock -u "$fd" 2>/dev/null || true
+            exec {fd}<&-
+        else
+            exec {fd}<&-
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Is a deploy in flight? Three signals, OR'd, because each covers the others'
+# gaps:
+#
+#   FRAISIER_DEPLOY_IN_FLIGHT   the caller's declaration. `_install_scaffold`
+#                               sets it on BOTH install paths — helper socket
+#                               and subprocess fallback — and it is the only
+#                               signal that works on `lock_backend=database`
+#                               hosts, where there is no *.lock file to probe.
+#   the lock probe              the backstop, so this script does not rest on a
+#                               claim it cannot check, and still protects a
+#                               deploy run by an older fraisier that does not
+#                               declare.
+#   FRAISIER_VIA_SCAFFOLD_...   an older webhook talking to a newer install.sh
+#                               over the helper socket sets only this one.
+#
+# An unevaluable probe resolves to "no deploy is running", with a warning —
+# deliberately the opposite of the rule this project applies elsewhere, and for
+# a stated reason: the authoritative signal for the dangerous path is the
+# caller's declaration, which is never unevaluable. The probe is a backstop, and
+# a backstop that cannot run must not block a manual `scaffold-install`, which
+# is the documented remedy for a unit that has gone stale.
+_deploy_in_flight() {
+    if [ -n "${FRAISIER_DEPLOY_IN_FLIGHT:-}" ]; then
+        _FRAISIER_DEPLOY_SIGNAL="the caller declared a deploy in flight"
+        return 0
+    fi
+    if [ -n "${FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER:-}" ]; then
+        _FRAISIER_DEPLOY_SIGNAL="invoked via the scaffold-install helper, which only a deploy does"
+        return 0
+    fi
+    local rc=0
+    _deploy_locks_held || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        _FRAISIER_DEPLOY_SIGNAL="a deployment lock is held under ${_FRAISIER_DEPLOY_LOCK_DIR}"
+        return 0
+    fi
+    if [ "$rc" -eq 2 ]; then
+        echo "  Warning: could not probe deployment locks under ${_FRAISIER_DEPLOY_LOCK_DIR}" >&2
+        echo "    (flock(1) unavailable). Proceeding as if no deploy were running." >&2
+    fi
+    return 1
+}
+
+# The one place a deploy-hosting unit may be restarted.
+_restart_deploy_host_unit() {
+    local unit="$1"
+    if _deploy_in_flight; then
+        echo "  Deferring restart of ${unit} — ${_FRAISIER_DEPLOY_SIGNAL}."
+        echo "    The new unit is on disk and daemon-reloaded; restarting it now"
+        echo "    would terminate the deploy that asked for this install."
+        _FRAISIER_DEFERRED_RESTARTS+=("${unit}")
+        _FRAISIER_DEFERRED_COUNT=$((_FRAISIER_DEFERRED_COUNT + 1))
+        return 0
+    fi
+    echo "  Restarting ${unit} (terminates anything running inside it)"
+    _run sudo systemctl restart "${unit}" || true
+}
+
+# Record and report the debt, so a restart nobody performed is visible rather
+# than silent. Merged with anything an earlier install left unpaid, because two
+# config-changing deploys in a row must not lose the first one's entry.
+_report_deferred_restarts() {
+    [ "${_FRAISIER_DEFERRED_COUNT}" -gt 0 ] || return 0
+    echo ""
+    echo "Deferred restarts (${_FRAISIER_DEFERRED_COUNT}):"
+    local u
+    for u in "${_FRAISIER_DEFERRED_RESTARTS[@]}"; do
+        echo "  - ${u}"
+    done
+    echo "  These units are installed and daemon-reloaded but are still running"
+    echo "  their previous version. The deploy that requested this install"
+    echo "  restarts them once it releases its deployment lock; 'fraisier doctor'"
+    echo "  reports any that are still pending."
+
+    if [[ "$DRY_RUN" == "true" || "$VALIDATE_ONLY" == "true" ]]; then
+        echo "  [would record] ${_FRAISIER_DEFERRED_LEDGER}"
+        return 0
+    fi
+
+    local pending=()
+    if [ -r "${_FRAISIER_DEFERRED_LEDGER}" ]; then
+        mapfile -t pending < "${_FRAISIER_DEFERRED_LEDGER}"
+    fi
+    if ! printf '%s\n' "${pending[@]}" "${_FRAISIER_DEFERRED_RESTARTS[@]}" \
+        | grep -v '^$' | sort -u > "${_FRAISIER_DEFERRED_LEDGER}" 2>/dev/null; then
+        echo "  Warning: could not record deferred restarts at ${_FRAISIER_DEFERRED_LEDGER}." >&2
+        echo "    Restart these units manually once the deploy finishes:" >&2
+        printf '      %s\n' "${_FRAISIER_DEFERRED_RESTARTS[@]}" >&2
+        return 0
+    fi
+    # The webhook clears this file after paying the debt, and it runs as the
+    # deploy user while this script runs as root.
+    _run sudo chown "${DEPLOY_USER}:${DEPLOY_USER}" "${_FRAISIER_DEFERRED_LEDGER}" || true
+}
+
+# Sourcing this script defines the guard above and stops here; everything below
+# installs. fraisier's own tests source it to drive `_deploy_in_flight` and
+# `_restart_deploy_host_unit` for real, because the defect the guard exists for
+# is *which* systemctl command runs — and a test that stubs the restart proves
+# nothing about that.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
+# ---------------------------------------------------------------------------
+
 # Server detection (baked at scaffold time by fraisier)
 {% if machine_env_map %}
 # Multi-server mode: filter based on runtime hostname.
@@ -154,45 +359,6 @@ echo "Error: 'servers:' section is required in fraises.yaml." >&2
 echo "  Add logical servers and machine hostnames, then re-run 'fraisier scaffold'." >&2
 exit 1
 {% endif %}
-
-# Helper function to run commands conditionally
-_run() {
-  if [[ "$VALIDATE_ONLY" == "true" ]]; then
-    if [[ "$VERBOSE" == "true" ]]; then
-      echo "  [validate] $*"
-    fi
-    return 0
-  elif [[ "$DRY_RUN" == "true" ]]; then
-    echo "  [would run] $*"
-    return 0
-  else
-    if [[ "$VERBOSE" == "true" ]]; then
-      "$@"
-    else
-      "$@" 2>/dev/null || true
-    fi
-  fi
-}
-
-# Like _run, but failures are FATAL — no `|| true`, no stderr suppression — so
-# a broken step surfaces a non-zero exit (with `set -e`) instead of being
-# silently swallowed. Use for steps whose failure a caller must be able to
-# detect, e.g. the install-helper allowlist re-bake (#279): if the helper
-# can't be restarted, the deploy must fail loudly here rather than later at the
-# install step with a misleading "command not allowed".
-_run_strict() {
-  if [[ "$VALIDATE_ONLY" == "true" ]]; then
-    if [[ "$VERBOSE" == "true" ]]; then
-      echo "  [validate] $*"
-    fi
-    return 0
-  elif [[ "$DRY_RUN" == "true" ]]; then
-    echo "  [would run] $*"
-    return 0
-  else
-    "$@"
-  fi
-}
 
 # Verify one manifest artifact against the tree, before anything is installed.
 #
@@ -501,18 +667,33 @@ if [ ! -f "${WEBHOOK_SRC}" ]; then
     echo "  Re-run 'fraisier scaffold' against the full fraises.yaml." >&2
     exit 1
 fi
-echo "  Installing webhook service"
-_run sudo cp "${WEBHOOK_SRC}" "${WEBHOOK_DST}"
-_run sudo systemctl daemon-reload
-_run sudo systemctl restart {{ webhook_service }} || true
+# Only reinstall and restart when the bytes differ. Most fraises.yaml changes
+# touch nothing that reaches this unit — #349's two failing changesets edited
+# `ship:` check definitions — so the common case becomes no restart at all
+# rather than a deferred one. This also makes the rollback path self-cancelling:
+# `_rollback_config` reinstalls the previous fraises.yaml, the unit returns to
+# its old bytes, and the debt recorded above never needed paying.
+if cmp -s "${WEBHOOK_SRC}" "${WEBHOOK_DST}" 2>/dev/null; then
+    echo "  Webhook service unit unchanged — not reinstalled"
+else
+    echo "  Installing webhook service"
+    _run sudo cp "${WEBHOOK_SRC}" "${WEBHOOK_DST}"
+    _run sudo systemctl daemon-reload
+    _restart_deploy_host_unit {{ webhook_service }}
+fi
 # Restart deploy sockets so their socket files are recreated under /run/fraisier/.
 # The webhook service owns RuntimeDirectory=fraisier; even with
 # RuntimeDirectoryPreserve=restart, a first-time install wipes the dir.
+#
+# That reason is also why routing these through the guard costs nothing: a
+# first-time install is, by construction, a state in which no deploy is in
+# flight, so the only case these restarts exist for is the case where the guard
+# lets them through.
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
 if _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
-    _run sudo systemctl restart {{ socket_unit }} || true
+    _restart_deploy_host_unit {{ socket_unit }}
 fi
 {% endfor %}
 {% endfor %}
@@ -532,12 +713,14 @@ if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
     # wipe /run/fraisier/ because older versions had RuntimeDirectory=fraisier.
     _run sudo systemctl daemon-reload
     _run sudo systemctl restart fraisier-{{ project_name }}-systemctl-helper.service 2>/dev/null || true
-    # Restart deploy sockets to ensure socket files exist after any transition turbulence
+    # Restart deploy sockets to ensure socket files exist after any transition
+    # turbulence — through the guard, for the reason given at the first copy of
+    # this loop above.
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
     if _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
-        _run sudo systemctl restart {{ socket_unit }} || true
+        _restart_deploy_host_unit {{ socket_unit }}
     fi
 {% endfor %}
 {% endfor %}
@@ -878,6 +1061,13 @@ echo "        {{ timer.note }}"
 {% endfor %}
 echo "    Set the flag in fraises.yaml and re-run this script to start one."
 {% endif %}
+
+{#- The fourth "here is something this installer did not do" block, and the
+    only one that is owed back: a deferred restart leaves a unit installed and
+    not running, which is the state the three blocks above exist to make
+    visible. Reported last so it sits next to the completion line, and recorded
+    so the deploy can pay it. -#}
+_report_deferred_restarts
 
 echo ""
 echo "==> Setup complete for {{ project_name }}"
