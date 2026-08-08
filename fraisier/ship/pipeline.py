@@ -35,6 +35,54 @@ class PipelineResult:
     duration_seconds: float = 0.0
 
 
+@dataclass(frozen=True)
+class TriggerScope:
+    """The files this ship touches, or the fact that we cannot tell (#346).
+
+    ``files is None`` and ``files == frozenset()`` are **different**, and
+    keeping them apart is the whole point. Empty means "this ship touches
+    nothing, so a triggered check correctly does not run". ``None`` means "I
+    could not determine it, so run everything rather than nothing".
+
+    Before #346 both were ``[]`` and both skipped every triggered check —
+    so a failed ``git`` invocation was indistinguishable from a no-op ship,
+    and both resolved to the reading that runs no gates. The project's rule
+    is the opposite: an unevaluable condition is never silently resolved.
+    See ``db restore``'s lock ("a lock that cannot be evaluated is an error,
+    not a skip") and v0.61.0's ``ArchiveVerdict.UNVERIFIABLE``.
+    """
+
+    files: frozenset[str] | None
+    base: str | None
+    detail: str
+
+    @property
+    def undetermined(self) -> bool:
+        """Nothing is known about what changed.
+
+        Branch on this rather than on the truthiness of :attr:`files`, which
+        cannot tell "no changes" from "no idea" — the conflation #346 was
+        filed for.
+        """
+        return self.files is None
+
+    def matches(self, patterns: list[str]) -> bool:
+        """Whether any changed file matches any of *patterns*.
+
+        ``fnmatch`` semantics, deliberately unchanged (#346): ``*`` crosses
+        ``/``, so ``db/*`` matches ``db/migrations/001.sql`` where a
+        gitignore-literate reader would expect ``db/**``. That over-matches,
+        which runs checks more often than the pattern suggests — the safe
+        direction. Tightening it would stop a check that fires today, which is
+        a regression in exactly the direction this issue is about.
+        """
+        if self.files is None:  # pragma: no cover - callers check undetermined
+            return True
+        return any(
+            fnmatch.fnmatch(f, pattern) for f in self.files for pattern in patterns
+        )
+
+
 class ShipPipeline:
     """Run ship checks in phases: fix → validate+test."""
 
@@ -43,10 +91,18 @@ class ShipPipeline:
         config: ShipConfig,
         cwd: Path,
         console: Console,
+        pr_base: str | None = None,
     ) -> None:
         self._config = config
         self._cwd = cwd
         self._console = console
+        # `--pr-base` never reached trigger evaluation before #346: the pipeline
+        # was built from ShipConfig alone, and the CLI's resolved base was only
+        # threaded to the version-race check (and only when --pr was passed). A
+        # run with `--pr-base dev` therefore evaluated triggers against a
+        # different base than the PR it was about to open.
+        self._pr_base = pr_base if pr_base is not None else config.pr_base
+        self._scope: TriggerScope | None = None
 
     def check_untracked_migrations(self, migrations_dir: Path) -> PipelineResult:
         """Fail if untracked files exist in the migrations directory.
@@ -102,22 +158,27 @@ class ShipPipeline:
 
     def run_verify_phase(self) -> PipelineResult:
         """Run validate + test checks concurrently (after staging)."""
-        checks = [
-            c
-            for c in self._config.checks
-            if c.phase in ("validate", "test") and self._should_run(c)
-        ]
-        if not checks:
-            return PipelineResult(success=True)
-        return self._execute_checks(checks, phase_label="validate+test")
+        return self._run_phases(("validate", "test"), phase_label="validate+test")
 
     def _run_phase(self, phase: str) -> PipelineResult:
-        checks = [
-            c for c in self._config.checks if c.phase == phase and self._should_run(c)
-        ]
-        if not checks:
+        return self._run_phases((phase,), phase_label=phase)
+
+    def _run_phases(
+        self, phases: tuple[str, ...], *, phase_label: str
+    ) -> PipelineResult:
+        """Partition this phase's checks into to-run and skipped.
+
+        The partition is kept rather than discarded. Filtering with a
+        comprehension threw the skipped checks away before `_execute_checks`,
+        which is the only thing that prints — so a skipped check produced no
+        output at all and the run just looked short and green (#346).
+        """
+        scope = self.trigger_scope()
+        selected = [c for c in self._config.checks if c.phase in phases]
+        to_run = [c for c in selected if self._should_run(c, scope)]
+        if not to_run:
             return PipelineResult(success=True)
-        return self._execute_checks(checks, phase_label=phase)
+        return self._execute_checks(to_run, phase_label=phase_label)
 
     def _execute_checks(
         self,
@@ -155,29 +216,120 @@ class ShipPipeline:
             duration_seconds=duration,
         )
 
-    def _should_run(self, check: ShipCheckConfig) -> bool:
-        """Check if a triggered check should run based on changed files."""
+    def _should_run(self, check: ShipCheckConfig, scope: TriggerScope) -> bool:
+        """Whether *check* runs, given what this ship is known to touch.
+
+        A pure predicate over *scope*, so the decision is testable without a
+        repository — and so the scope is resolved once per run rather than once
+        per check, which is what it was before #346.
+        """
         if check.triggers is None:
             return True
-        changed = self._get_changed_files()
-        if not changed:
-            return False
-        return any(
-            fnmatch.fnmatch(f, pattern) for f in changed for pattern in check.triggers
+        if scope.undetermined:
+            # "I cannot tell what changed" must never resolve to "nothing
+            # changed". Running a check unnecessarily costs time; skipping one
+            # silently cost the reporter the gate protecting migrate-only
+            # production.
+            return True
+        return scope.matches(check.triggers)
+
+    def trigger_scope(self) -> TriggerScope:
+        """The changed set for this run, resolved once and reused."""
+        if self._scope is None:
+            self._scope = self._compute_trigger_scope()
+        return self._scope
+
+    def _resolve_trigger_base(self) -> tuple[str | None, str]:
+        """The ref to compare against, most explicit source first.
+
+        ``--pr-base``/``ship.pr_base`` → ``origin/HEAD`` → nothing. The second
+        step is a local ref lookup needing no network, so a repo with no
+        ``ship.pr_base`` still filters correctly instead of degrading to
+        "run everything".
+
+        Deliberately **not** ``pr_base or current_branch``.
+        ``_assert_no_version_race`` resolves it that way and is right to, but
+        here it is fatal: on an already-pushed feature branch
+        ``merge-base(HEAD, origin/<current-branch>)`` is HEAD, so the diff is
+        empty and #346 is reproduced by the fallback meant to fix it.
+        """
+        if self._pr_base:
+            return f"origin/{self._pr_base}", f"ship.pr_base={self._pr_base}"
+
+        head = subprocess.run(
+            ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            cwd=self._cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head.returncode == 0 and head.stdout.strip():
+            return head.stdout.strip(), "origin/HEAD"
+
+        return None, (
+            "no ship.pr_base configured and origin/HEAD does not resolve "
+            "(try `git remote set-head origin -a`)"
         )
 
-    def _get_changed_files(self) -> list[str]:
-        """Get list of changed files (staged + unstaged)."""
+    def _git_files(self, *args: str) -> list[str] | None:
+        """``git`` output as a file list, or ``None`` if the command failed.
+
+        ``None`` rather than ``[]``: the old code collapsed a failed invocation
+        into an empty list, which read as "nothing changed" and skipped every
+        gate.
+        """
         result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD"],
+            ["git", *args],
             cwd=self._cwd,
             capture_output=True,
             text=True,
             check=False,
         )
         if result.returncode != 0:
-            return []
+            return None
         return [line for line in result.stdout.strip().split("\n") if line]
+
+    def _compute_trigger_scope(self) -> TriggerScope:
+        """Committed changes on this branch, unioned with the working tree.
+
+        A union rather than a replacement: the pipeline runs its checks *before*
+        ``git add --update`` and before the commit, so uncommitted work must
+        keep counting. Committed work has to count too, which is #346 — a
+        changeset committed before ``ship`` left a clean tree and an empty diff.
+
+        Untracked files are excluded; ``check_untracked_migrations`` (#181)
+        already fails a ship whose migrations directory has untracked files, and
+        including every untracked file would let a scratch file run unrelated
+        checks.
+        """
+        base, why = self._resolve_trigger_base()
+
+        worktree = self._git_files("diff", "--name-only", "HEAD")
+        if worktree is None:
+            return TriggerScope(None, None, "git diff failed (not a git tree?)")
+
+        if base is None:
+            return TriggerScope(None, None, why)
+
+        merge_base = subprocess.run(
+            ["git", "merge-base", "HEAD", base],
+            cwd=self._cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if merge_base.returncode != 0 or not merge_base.stdout.strip():
+            return TriggerScope(
+                None, base, f"no merge base with {base} (unfetched or unrelated?)"
+            )
+
+        committed = self._git_files(
+            "diff", "--name-only", f"{merge_base.stdout.strip()}..HEAD"
+        )
+        if committed is None:
+            return TriggerScope(None, base, f"git diff against {base} failed")
+
+        return TriggerScope(frozenset(committed) | frozenset(worktree), base, why)
 
     def _print_result(self, result: CheckResult) -> None:
         status = "[green]pass[/green]" if result.success else "[red]FAIL[/red]"

@@ -426,7 +426,15 @@ def _ship_commit_push_deploy(
     race_base = resolved_pr_base if create_pr else None
 
     _ship_with_pipeline(
-        version, ship_config, expected_base_version, bump_kind, race_base, apply_bump
+        version,
+        ship_config,
+        expected_base_version,
+        bump_kind,
+        race_base,
+        apply_bump,
+        # #346: triggers need the resolved base whether or not a PR is being
+        # created, so this is `resolved_pr_base` rather than `race_base`.
+        trigger_base=resolved_pr_base,
     )
 
     if create_pr:
@@ -666,6 +674,7 @@ def _ship_with_pipeline(
     bump_kind: str | None,
     race_base: str | None,
     apply_bump: Callable[[], None] | None = None,
+    trigger_base: str | None = None,
 ) -> None:
     """Ship using the check pipeline (--no-verify commit).
 
@@ -677,6 +686,12 @@ def _ship_with_pipeline(
     *apply_bump*, when given, writes the version bump to disk. It is invoked
     only after every check phase passes (issue #253), so a failed check leaves
     a clean working tree. ``None`` for ``ship --no-bump`` (nothing to write).
+
+    *trigger_base* is the branch `triggers:` are evaluated against (#346). It
+    is distinct from *race_base*, which is deliberately ``None`` unless ``--pr``
+    was passed: a run without ``--pr`` has no version race to lose but still has
+    triggered checks to select. Passing one for the other would evaluate
+    triggers against nothing on every non-PR ship.
     """
     import subprocess
 
@@ -685,7 +700,7 @@ def _ship_with_pipeline(
 
     config = ship_config or _ShipConfig()
     cwd = Path.cwd()
-    pipeline = ShipPipeline(config, cwd, console)
+    pipeline = ShipPipeline(config, cwd, console, pr_base=trigger_base)
 
     # Pre-flight: detect untracked migration files that git add --update
     # would silently leave behind (see issue #181)
