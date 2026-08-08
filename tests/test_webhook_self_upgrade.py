@@ -296,7 +296,7 @@ class TestRunUpgrade:
     def test_install_success_triggers_restart_rpc(self):
         with (
             patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
-            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+            patch("fraisier.drain_restart._call_via_socket") as mock_socket,
         ):
             mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
             rc = _run_upgrade("0.17.0", "fraisier-foo-webhook.service", "/run/x.sock")
@@ -309,7 +309,7 @@ class TestRunUpgrade:
     def test_install_failure_skips_restart(self):
         with (
             patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
-            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+            patch("fraisier.drain_restart._call_via_socket") as mock_socket,
         ):
             mock_run.return_value = SimpleNamespace(
                 returncode=1, stdout="", stderr="oops"
@@ -323,7 +323,7 @@ class TestRunUpgrade:
 
         with (
             patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
-            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+            patch("fraisier.drain_restart._call_via_socket") as mock_socket,
             caplog.at_level(logging.WARNING, logger="fraisier.webhook_self_upgrade"),
         ):
             mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -336,7 +336,7 @@ class TestRunUpgrade:
         with (
             patch("fraisier.webhook_self_upgrade.subprocess.run") as mock_run,
             patch(
-                "fraisier.webhook_self_upgrade._call_via_socket",
+                "fraisier.drain_restart._call_via_socket",
                 side_effect=ConnectionRefusedError("nope"),
             ),
         ):
@@ -410,7 +410,7 @@ class TestWaitForDeploysToDrain:
 
         counts = iter([2, 1, 0])
         with patch(
-            "fraisier.webhook_self_upgrade.count_held_deployment_locks",
+            "fraisier.drain_restart.count_held_deployment_locks",
             side_effect=lambda _ld: next(counts),
         ):
             result = _wait_for_deploys_to_drain(tmp_path, 5, 0.01)
@@ -423,7 +423,7 @@ class TestWaitForDeploysToDrain:
         (tmp_path / "api.lock").touch()
         (tmp_path / "worker.lock").touch()
         with patch(
-            "fraisier.webhook_self_upgrade.count_held_deployment_locks",
+            "fraisier.drain_restart.count_held_deployment_locks",
             return_value=2,
         ):
             result = _wait_for_deploys_to_drain(tmp_path, 0.05, 0.01)
@@ -438,7 +438,7 @@ class TestSendRestart:
         from fraisier.webhook_self_upgrade import _send_restart
 
         with patch(
-            "fraisier.webhook_self_upgrade._call_via_socket",
+            "fraisier.drain_restart._call_via_socket",
             return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
         ) as mock_socket:
             rc = _send_restart("/run/x.sock", "fraisier-foo-webhook.service")
@@ -451,7 +451,7 @@ class TestSendRestart:
         from fraisier.webhook_self_upgrade import _send_restart
 
         with patch(
-            "fraisier.webhook_self_upgrade._call_via_socket",
+            "fraisier.drain_restart._call_via_socket",
             side_effect=ConnectionRefusedError("no socket"),
         ):
             rc = _send_restart("/run/x.sock", "svc")
@@ -461,7 +461,7 @@ class TestSendRestart:
         from fraisier.webhook_self_upgrade import _send_restart
 
         with patch(
-            "fraisier.webhook_self_upgrade._call_via_socket",
+            "fraisier.drain_restart._call_via_socket",
             side_effect=subprocess.CalledProcessError(1, "restart"),
         ):
             rc = _send_restart("/run/x.sock", "svc")
@@ -515,7 +515,7 @@ class TestRunUpgradeDrainCoordination:
                 side_effect=fake_drain,
             ),
             patch(
-                "fraisier.webhook_self_upgrade._call_via_socket",
+                "fraisier.drain_restart._call_via_socket",
                 side_effect=fake_socket,
             ),
         ):
@@ -558,7 +558,7 @@ class TestRunUpgradeDrainCoordination:
                 "fraisier.webhook_self_upgrade._wait_for_deploys_to_drain",
                 return_value=_DrainResult(drained=False, held=["api.lock"]),
             ),
-            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+            patch("fraisier.drain_restart._call_via_socket") as mock_socket,
             caplog.at_level(logging.WARNING, logger="fraisier.webhook_self_upgrade"),
         ):
             rc = _run_upgrade(
@@ -589,7 +589,7 @@ class TestRunUpgradeDrainCoordination:
             patch(
                 "fraisier.webhook_self_upgrade._wait_for_deploys_to_drain"
             ) as mock_drain,
-            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+            patch("fraisier.drain_restart._call_via_socket") as mock_socket,
         ):
             rc = _run_upgrade(
                 "0.31.0",
@@ -617,7 +617,7 @@ class TestRunUpgradeDrainCoordination:
             patch(
                 "fraisier.webhook_self_upgrade._wait_for_deploys_to_drain"
             ) as mock_drain,
-            patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+            patch("fraisier.drain_restart._call_via_socket") as mock_socket,
             caplog.at_level(logging.WARNING, logger="fraisier.webhook_self_upgrade"),
         ):
             rc = _run_upgrade(

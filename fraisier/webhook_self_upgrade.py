@@ -41,19 +41,29 @@ import os
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fraisier.config import get_config
-from fraisier.locking import DRAINING_FLAG_NAME, count_held_deployment_locks
+from fraisier.drain_restart import (
+    DEFAULT_DRAIN_POLL_S,
+    DEFAULT_DRAIN_SETTLE_S,
+    DEFAULT_DRAIN_TIMEOUT_S,
+    DEFAULT_LOCK_DIR,
+    DRAIN_TIMEOUT_RC,
+    DrainResult,
+    draining_flag,
+    held_lock_basenames,
+    send_restart,
+    wait_for_deploys_to_drain,
+)
 from fraisier.service_managers.systemd import _call_via_socket
 from fraisier.versioning import detect_required_fraisier_version
 
 if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 
@@ -61,20 +71,20 @@ log = logging.getLogger(__name__)
 # ReadWritePaths, so a sibling directory is writable by the deploy user.
 _LOG_DIR = Path("/var/lib/fraisier/self-upgrade")
 
-# Distinct from install-failure rc=1 / restart-RPC-failure rc=1 so operators
-# scanning the per-event log can tell drain-timeout apart at a glance.
-_DRAIN_TIMEOUT_RC = 2
-
-_DEFAULT_DRAIN_TIMEOUT_S = 600
-_DEFAULT_DRAIN_POLL_S = 1.0
-_DEFAULT_DRAIN_SETTLE_S = 2.0
-_DEFAULT_LOCK_DIR = "/run/fraisier"
-
-
-@dataclass(frozen=True)
-class _DrainResult:
-    drained: bool
-    held: list[str]
+# Re-exported under their historical private names: this module is where the
+# drain sequence was written, and its tests and callers still reach for these
+# spellings. The implementation now lives in `drain_restart` so the deferred
+# restarts recorded by install.sh share it rather than growing a second copy.
+_DRAIN_TIMEOUT_RC = DRAIN_TIMEOUT_RC
+_DEFAULT_DRAIN_TIMEOUT_S = DEFAULT_DRAIN_TIMEOUT_S
+_DEFAULT_DRAIN_POLL_S = DEFAULT_DRAIN_POLL_S
+_DEFAULT_DRAIN_SETTLE_S = DEFAULT_DRAIN_SETTLE_S
+_DEFAULT_LOCK_DIR = DEFAULT_LOCK_DIR
+_DrainResult = DrainResult
+_with_draining_flag = draining_flag
+_held_lock_basenames = held_lock_basenames
+_wait_for_deploys_to_drain = wait_for_deploys_to_drain
+_send_restart = send_restart
 
 
 @dataclass(frozen=True)
@@ -140,23 +150,28 @@ def maybe_self_upgrade(
     project_name: str,
     enabled: bool,
     spawn: Callable[[str, str], None] | None = None,
-) -> None:
+) -> bool:
     """Best-effort: detect a newer pinned fraisier and spawn a detached upgrade.
+
+    Returns True iff an upgrade worker was spawned. Callers use that to avoid
+    starting a second drain worker: both raise the same single ``.draining``
+    flag, and the first to finish would unlink it out from under the other
+    (#349).
 
     Never raises — a failure here must not break a successful deploy. The
     *spawn* parameter is a test seam; production code leaves it at None and
     uses :func:`_spawn_upgrade`.
     """
     if not enabled:
-        return
+        return False
     try:
         required = detect_required_fraisier_version(app_path)
         if required is None:
-            return
+            return False
         installed = importlib_metadata.version("fraisier")
         try:
             if _parse_semver(required) <= _parse_semver(installed):
-                return
+                return False
         except ValueError:
             log.warning(
                 "self-upgrade: skipping — non-semver version comparison "
@@ -164,7 +179,7 @@ def maybe_self_upgrade(
                 required,
                 installed,
             )
-            return
+            return False
         socket_path = os.environ.get("FRAISIER_SYSTEMCTL_SOCKET", "")
         service = f"fraisier-{project_name}-webhook.service"
         rejection = _preflight_helper_allowlist(socket_path, service)
@@ -179,7 +194,7 @@ def maybe_self_upgrade(
                 required,
                 rejection,
             )
-            return
+            return False
         log.info(
             "self-upgrade: required=%s installed=%s — spawning upgrade for %s",
             required,
@@ -187,8 +202,10 @@ def maybe_self_upgrade(
             project_name,
         )
         (spawn or _spawn_upgrade)(required, project_name)
+        return True
     except Exception:
         log.exception("self-upgrade: skipped due to unexpected error")
+    return False
 
 
 def _open_log_fd(project_name: str):
@@ -270,55 +287,6 @@ def _spawn_upgrade(required: str, project_name: str) -> None:
         stdout=stdout,
         stderr=subprocess.STDOUT,
     )
-
-
-@contextmanager
-def _with_draining_flag(lock_dir: Path) -> Iterator[Path]:
-    """Touch ``{lock_dir}/.draining`` on entry; always unlink on exit."""
-    flag = lock_dir / DRAINING_FLAG_NAME
-    flag.touch()
-    try:
-        yield flag
-    finally:
-        flag.unlink(missing_ok=True)
-
-
-def _held_lock_basenames(lock_dir: Path) -> list[str]:
-    """Names of ``*.lock`` files currently present — used for timeout logging."""
-    if not lock_dir.exists():
-        return []
-    return sorted(p.name for p in lock_dir.glob("*.lock"))
-
-
-def _wait_for_deploys_to_drain(
-    lock_dir: Path,
-    timeout_s: float,
-    poll_s: float,
-) -> _DrainResult:
-    """Block until no ``*.lock`` is flock'd, or the deadline expires.
-
-    Returns a :class:`_DrainResult` so callers can log which locks are still
-    held on timeout (the helper does not parse ``/proc/locks`` for holder
-    PIDs — basenames are enough to identify which fraise hung).
-    """
-    deadline = time.monotonic() + timeout_s
-    while True:
-        held = count_held_deployment_locks(lock_dir)
-        if held == 0:
-            return _DrainResult(drained=True, held=[])
-        if time.monotonic() >= deadline:
-            return _DrainResult(drained=False, held=_held_lock_basenames(lock_dir))
-        time.sleep(poll_s)
-
-
-def _send_restart(socket_path: str, service: str) -> int:
-    """Send the ``restart`` RPC, returning the same rc shape today's code does."""
-    try:
-        _call_via_socket(socket_path, "restart", service)
-    except (ConnectionRefusedError, subprocess.CalledProcessError) as exc:
-        log.error("self-upgrade: restart RPC failed: %s", exc)
-        return 1
-    return 0
 
 
 def _run_install(required: str) -> int:

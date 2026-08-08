@@ -42,6 +42,7 @@ passed.
 | `scaffold_artifact_coverage` | every artifact the manifest declares for this host is installed | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
 | `foreign_units` | no `fraisier` unit on this host belongs to a fraise or environment this host does not own | no | `sudo fraisier scaffold-install --prune` — see [one host authority](deployment-guide.md#scheduled-timers-you-switch-on) |
 | `webhook_hosted_trees_writable` | the installed webhook unit's `ReadWritePaths=` covers every tree it deploys | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
+| `deferred_restarts` | no unit is installed-and-daemon-reloaded while still running its previous version | no | `sudo systemctl restart <unit>` once no deploy is in flight — see [restarts a deploy defers](#restarts-a-deploy-defers) |
 | `sandbox_write_probe` | actually writes into the rendered unit's sandbox under `ProtectSystem=strict` | no | opt-in via `--probe-sandbox`; needs root, else `skip` |
 
 The catalog above is **complete**, and a test asserts it: every name in
@@ -74,6 +75,30 @@ this check to say.
   rendered fragment via `fraisier.scaffold.sudoers_diff.diff_sudoers`.
 - No check prints secret values. `fraises_yaml_resolves` lists env-var
   *names* that are unset, never values.
+
+## Restarts a deploy defers
+
+`install.sh` will not restart a unit that hosts a deploy while a deploy is in
+flight. The webhook runs deploys as in-process background tasks and a deploy
+socket propagates a restart to the `deploy-daemon` instance running one, so
+restarting either would SIGKILL the deploy that asked for the install — which is
+how a `fraises.yaml` change used to fail its own deploy, deterministically.
+
+It records what it skipped in `<deployment.lock_dir>/.deferred-restarts` and
+prints it. The deploy pays that back when it finishes: a detached worker raises
+the `.draining` flag, waits for the deployment locks to release, and sends the
+restart over the systemctl-helper socket. **A ledger entry is cleared only when
+its restart succeeded**, so `deferred_restarts` warns about anything left:
+
+- the drain timed out and the restart was not attempted;
+- the systemctl helper refused the unit — it allowlists services, not sockets;
+- the deploy ran under the socket-activated `deploy-daemon`, whose per-connection
+  service instance can take the detached worker down with its cgroup.
+
+A unit in that state works, on its previous configuration. What it costs is a
+stale `ReadWritePaths=` or `Environment=`, which surfaces later as a deploy
+failing on a read-only filesystem rather than as anything pointing back here.
+Restart the named units once no deploy is running.
 
 ## JSON output
 
