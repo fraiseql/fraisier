@@ -9,6 +9,7 @@ import pytest
 from fraisier.naming import (
     app_service_name,
     deploy_socket_name,
+    retention_unit_names,
     unit_installer_socket_path,
     unit_installer_unit_names,
 )
@@ -108,3 +109,50 @@ class TestUnitInstallerSocketPath:
         assert "production" in socket_unit
         assert path.parent.name == "production"
         assert path.name == "unit-installer-myapp.sock"
+
+
+class TestRetentionUnitNames:
+    """One authority for the retention unit pair's names (#339).
+
+    #337 exists because a path was derived in three places. This helper is
+    written before the second call site rather than after the third: the
+    renderer names the files it writes and the manifest names the files it
+    installs, and both read here.
+    """
+
+    def test_retention_unit_names_are_derived_from_the_entry_name(self):
+        assert retention_unit_names("myapp", "development", "production-full") == (
+            "fraisier-myapp-development-retain-production-full.service",
+            "fraisier-myapp-development-retain-production-full.timer",
+        )
+
+    def test_the_pair_shares_a_stem(self):
+        """systemd resolves a timer's target by stem when there is no `Unit=`.
+
+        A timer and service whose stems differ is a firing into a unit that
+        does not exist — how backup.timer and backup.service drifted apart.
+        """
+        service, timer = retention_unit_names("myapp", "development", "prod")
+
+        assert service.removesuffix(".service") == timer.removesuffix(".timer")
+
+    def test_the_service_comes_first(self):
+        """Install order is load-bearing: enabling a timer whose service is
+        not yet on disk is backup.timer's bug with the ordering inverted."""
+        service, timer = retention_unit_names("myapp", "development", "prod")
+
+        assert service.endswith(".service")
+        assert timer.endswith(".timer")
+
+    def test_two_entries_in_one_environment_get_distinct_names(self):
+        first = retention_unit_names("myapp", "development", "production-full")
+        second = retention_unit_names("myapp", "development", "production-slim")
+
+        assert first != second
+
+    def test_the_same_entry_name_in_two_environments_stays_distinct(self):
+        """A received corpus is keyed by (environment, name), never by name."""
+        dev = retention_unit_names("myapp", "development", "production")
+        staging = retention_unit_names("myapp", "staging", "production")
+
+        assert dev != staging
