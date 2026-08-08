@@ -228,11 +228,25 @@ class CleanupOutcome:
     ``backup_dir`` — appears in none of the three. It is not this
     directory's to hold, so counting it as kept would report a live
     corpus where there is none.
+
+    :attr:`invalid` is an **overlay, not a fourth partition member** (#342).
+    Every name in it also appears in exactly one of the three above, because
+    validity decides whether a dump may *hold a floor slot* — it does not
+    create a new fate. Adding it to the sum would double-count the corpus and
+    break :attr:`floor_was_load_bearing`, which reads the partition.
     """
 
     removed: tuple[str, ...]
     kept: tuple[str, ...]
     exempted_by_minimum: tuple[str, ...]
+    invalid: tuple[str, ...] = ()
+    """Dumps ``pg_restore --list`` rejected while the floor was being allocated.
+
+    Scoped deliberately: only candidates that actually contested a slot are
+    verified, so this is not a corpus audit. A full sweep would shell out once
+    per dump on every nightly prune. ``doctor`` is where the thorough check
+    belongs, and the restore path verifies the dump it is about to restore.
+    """
 
     @property
     def floor_was_load_bearing(self) -> bool:
@@ -272,12 +286,36 @@ def cleanup_old_backups(
     share a directory and expire on different clocks. Both the floor and
     the age rule apply within the matched set only.
 
-    *keep_minimum* newest dumps — by mtime, not by filename — are exempt
-    from the age rule entirely. The exemption is applied *before* the
+    *keep_minimum* newest **valid** dumps — by mtime, not by filename — are
+    exempt from the age rule entirely. The exemption is applied *before* the
     cutoff test rather than after, so the floor still holds in the case
     it exists for: a stalled producer leaves every dump in the corpus
     older than the cutoff, and the whole corpus would otherwise age out
     together.
+
+    Validity entered the floor because of what it was protecting (#342). A
+    dump still being written is the newest entry in the directory, so the
+    floor's first act was to protect the corrupt file — and with a stalled
+    producer, to hold that slot while every valid dump aged out around it.
+    "The newest three are safe" reads like a validity guarantee; it was a
+    count.
+
+    The limit is exact, and narrower than "nothing new is deleted": an
+    ``INVALID`` dump loses its *slot*, so a dump the floor used to hold can
+    now be removed — that is the point. What is guaranteed is that **no valid
+    dump is removed that the validity-blind floor would have kept**, and that
+    anything newly removed is both unreadable and already past the cutoff. The
+    floor shifts by one, so a valid dump that would have aged out survives in
+    the corrupt file's place.
+
+    ``UNVERIFIABLE`` spends slots normally: on a host with no ``pg_restore``
+    every dump is unverifiable, and refusing them slots would turn a missing
+    binary into a corpus-wide retention change.
+
+    Verification is bounded to the candidates that actually contest a slot —
+    nothing is checked when *keep_minimum* is 0, when nothing is past the
+    cutoff, or once the floor is full. A full sweep would shell out once per
+    dump on every nightly run.
 
     *dry_run* selects exactly as a real run does — including the
     containment guard — and deletes nothing. It is a parameter here rather
@@ -285,7 +323,8 @@ def cleanup_old_backups(
     from a second implementation of "what expires" is not a preview of
     this one.
 
-    Returns a :class:`CleanupOutcome` describing all three groups.
+    Returns a :class:`CleanupOutcome` describing all three groups, plus the
+    ``invalid`` overlay.
     """
     cutoff = time.time() - retention_hours * 3600
     resolved_root = backup_dir.resolve()
@@ -293,14 +332,35 @@ def cleanup_old_backups(
     removed: list[str] = []
     kept: list[str] = []
     exempted: list[str] = []
+    invalid: list[str] = []
 
-    for index, (f, mtime) in enumerate(candidates):
+    # Slots consumed so far, not the enumerate index. They coincide exactly
+    # when every candidate is valid — which is what keeps a corpus this
+    # cannot verify retaining as it does today.
+    slots = 0
+
+    for f, mtime in candidates:
         if mtime >= cutoff:
             kept.append(str(f))
+            slots += 1
             continue
-        if index < keep_minimum:
-            exempted.append(str(f))
-            continue
+        if slots < keep_minimum:
+            check = verify_archive(f)
+            if check.is_bad:
+                # No slot spent, so the next valid dump takes this one. Falls
+                # through to the age rule, which removes it only because it
+                # is already past the cutoff.
+                invalid.append(str(f))
+                log.warning(
+                    "Backup %s is not a readable archive and will not hold a "
+                    "keep_minimum slot: %s",
+                    f,
+                    check.detail,
+                )
+            else:
+                exempted.append(str(f))
+                slots += 1
+                continue
         resolved = f.resolve()
         if not resolved.is_relative_to(resolved_root):
             continue
@@ -315,6 +375,7 @@ def cleanup_old_backups(
         removed=tuple(removed),
         kept=tuple(kept),
         exempted_by_minimum=tuple(exempted),
+        invalid=tuple(invalid),
     )
 
 
