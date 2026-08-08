@@ -29,6 +29,11 @@ VALIDATE_ONLY=false
 VERBOSE=false
 STANDALONE=false
 SCAFFOLD_DIR=""
+# Set by --deploy-in-flight. The env-var form cannot cross `sudo`, which resets
+# the environment, and the subprocess install path is
+# deployer -> `fraisier scaffold-install` -> `sudo install.sh`. See the deploy
+# host restart guard below.
+DEPLOY_IN_FLIGHT=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -53,6 +58,10 @@ while [[ $# -gt 0 ]]; do
       STANDALONE=true
       shift 2
       ;;
+    --deploy-in-flight)
+      DEPLOY_IN_FLIGHT=true
+      shift
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo ""
@@ -62,6 +71,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --verbose, -v             Enable verbose output"
       echo "  --standalone              Run without requiring PROJECT_DIR to exist"
       echo "  --scaffold-dir <path>     Path to scaffold files (implies --standalone)"
+      echo "  --deploy-in-flight        A deploy is running; defer restarts of the"
+      echo "                            units that host it (set by fraisier, not you)"
       echo "  --help, -h                Show this help message"
       exit 0
       ;;
@@ -183,14 +194,19 @@ _deploy_locks_held() {
     return 1
 }
 
-# Is a deploy in flight? Three signals, OR'd, because each covers the others'
+# Is a deploy in flight? Four signals, OR'd, because each covers the others'
 # gaps:
 #
-#   FRAISIER_DEPLOY_IN_FLIGHT   the caller's declaration. `_install_scaffold`
-#                               sets it on BOTH install paths — helper socket
-#                               and subprocess fallback — and it is the only
-#                               signal that works on `lock_backend=database`
-#                               hosts, where there is no *.lock file to probe.
+#   --deploy-in-flight          the caller's declaration when it had to cross a
+#                               `sudo`, which resets the environment. This is
+#                               the subprocess install path:
+#                               deploy -> `fraisier scaffold-install` ->
+#                               `sudo install.sh`.
+#   FRAISIER_DEPLOY_IN_FLIGHT   the same declaration where the environment does
+#                               survive: the helper socket forwards it from the
+#                               request payload. Either form is the only signal
+#                               that works on `lock_backend=database` hosts,
+#                               where there is no *.lock file to probe.
 #   the lock probe              the backstop, so this script does not rest on a
 #                               claim it cannot check, and still protects a
 #                               deploy run by an older fraisier that does not
@@ -205,6 +221,10 @@ _deploy_locks_held() {
 # a backstop that cannot run must not block a manual `scaffold-install`, which
 # is the documented remedy for a unit that has gone stale.
 _deploy_in_flight() {
+    if [[ "$DEPLOY_IN_FLIGHT" == "true" ]]; then
+        _FRAISIER_DEPLOY_SIGNAL="the caller declared a deploy in flight (--deploy-in-flight)"
+        return 0
+    fi
     if [ -n "${FRAISIER_DEPLOY_IN_FLIGHT:-}" ]; then
         _FRAISIER_DEPLOY_SIGNAL="the caller declared a deploy in flight"
         return 0

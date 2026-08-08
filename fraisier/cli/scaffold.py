@@ -241,6 +241,33 @@ def scaffold(
         console.print("     fraisier scaffold-install --yes        # Install")
 
 
+def _build_install_cmd(
+    install_script: str,
+    *,
+    dry_run: bool,
+    validate_only: bool,
+    verbose: bool,
+) -> list[str]:
+    """Build the ``sudo install.sh`` argv.
+
+    ``FRAISIER_DEPLOY_IN_FLIGHT`` is re-stated as ``--deploy-in-flight`` because
+    this is the one hop where the environment does not survive: a deploy sets
+    the variable, this process inherits it, and ``sudo`` resets it before
+    ``install.sh`` ever sees it. Without the flag, install.sh would restart the
+    webhook that is running the deploy invoking it (#349).
+    """
+    cmd: list[str] = ["sudo", install_script]
+    if dry_run:
+        cmd.append("--dry-run")
+    if validate_only:
+        cmd.append("--validate-only")
+    if verbose:
+        cmd.append("--verbose")
+    if os.environ.get("FRAISIER_DEPLOY_IN_FLIGHT"):
+        cmd.append("--deploy-in-flight")
+    return cmd
+
+
 def _run_script(cmd: list[str]) -> int:
     """Run a script and return the exit code."""
     try:
@@ -500,14 +527,12 @@ def scaffold_install(
             )
             raise SystemExit(1) from exc
 
-    # Build the command
-    cmd: list[str] = ["sudo", str(install_script)]
-    if dry_run:
-        cmd.append("--dry-run")
-    if validate_only:
-        cmd.append("--validate-only")
-    if verbose:
-        cmd.append("--verbose")
+    cmd = _build_install_cmd(
+        str(install_script),
+        dry_run=dry_run,
+        validate_only=validate_only,
+        verbose=verbose,
+    )
 
     # Show what will happen
     if validate_only:

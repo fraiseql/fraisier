@@ -598,7 +598,15 @@ class BaseDeployer(ABC):
                 _socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM
             ) as sock:
                 sock.connect(socket_path)
-                sock.sendall(b'{"action": "install"}\n')
+                # `deploy_in_flight` tells install.sh that restarting a
+                # deploy-hosting unit would terminate its own caller (#349).
+                # It travels in the payload because the helper runs as a
+                # separate root service and does not inherit this process's
+                # environment. An older helper ignores the extra key.
+                sock.sendall(
+                    json.dumps({"action": "install", "deploy_in_flight": True}).encode()
+                    + b"\n"
+                )
                 with sock.makefile("rb") as f:
                     raw = f.readline()
             response = json.loads(raw.decode())
@@ -652,6 +660,14 @@ class BaseDeployer(ABC):
 
         logger.info("Installing updated scaffold files")
 
+        # The subprocess fallback runs install.sh as a child of this process, so
+        # an unguarded `systemctl restart <webhook>` in it kills this deploy with
+        # the rest of the cgroup — the socket path is not the only one that needs
+        # the declaration (#349). Merged onto os.environ because LocalRunner
+        # hands `env` straight to subprocess.run, which replaces rather than
+        # extends the environment.
+        install_env = {**os.environ, "FRAISIER_DEPLOY_IN_FLIGHT": "1"}
+
         if config_path:
             config_path = Path(config_path)
 
@@ -684,13 +700,16 @@ class BaseDeployer(ABC):
                     "--yes",
                 ],
                 cwd=str(config_path.parent),
+                env=install_env,
             )
         else:
             logger.warning(
                 "No config_path provided to _install_scaffold(); CWD may be wrong"
             )
             fraisier_exe = self._get_fraisier_executable()
-            result = self.runner.run([fraisier_exe, "scaffold-install", "--yes"])
+            result = self.runner.run(
+                [fraisier_exe, "scaffold-install", "--yes"], env=install_env
+            )
 
         if result.returncode != 0:
             raise DeploymentError(f"Failed to install scaffold files: {result.stdout}")
