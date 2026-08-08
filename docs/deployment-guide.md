@@ -1067,6 +1067,43 @@ Two things this does **not** do:
 - **It does not watch the disk.** `keep_minimum` bounds how much a stalled
   producer can delete, not how much a healthy one can write.
 
+### Scheduled timers you switch on
+
+`scaffold-install` copies three more timer pairs to every host and starts none
+of them. Each one does something with a real cost, so each is opt-in:
+
+```yaml
+scaffold:
+  systemd:
+    timers:
+      backup: false           # all three default to false
+      deploy_checker: false
+      restore_staging: false
+```
+
+| family | schedule | what turning it on starts |
+|---|---|---|
+| `backup` | daily 03:00 (±5 min) | `pg_dump \| gzip` of every local database into `/var/backups/{project}` |
+| `deploy_checker` | every `health.deploy_poll_interval_seconds` (default 60) | polls each fraise and environment, deploying the ones whose branch has moved |
+| `restore_staging` | daily 02:00 | restores each `restore_migrate` staging database from the production backup, **overwriting it** |
+
+Set one to `true` and re-run `fraisier scaffold && sudo fraisier
+scaffold-install --yes`; the installer enables it after the units are on disk
+and systemd has re-read them.
+
+`install.sh` lists the ones it left alone at the end of every run, and
+`fraisier doctor`'s `inert_timers` check reports the same. Both are always
+informational — every family off is a configured state, not a fault.
+
+`backup`'s retention is **not** the `retain:` policy above. `backup.sh` carries
+its own 30-day window with a floor of 3 per database; `retain:` describes a
+corpus this host *receives*, which `backup` does not produce. A host can want
+both, and they do not interact.
+
+> `restore_staging`'s units render only where a fraise declares
+> `database.strategy: restore_migrate` on a staging-named environment. The knob
+> does nothing without that.
+
 ---
 
 ## Diagnostic Commands

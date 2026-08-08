@@ -36,6 +36,14 @@ passed.
 | `helper_sudoers` | `/etc/sudoers.d/<project>` exists and is mode 0440 | no | `fraisier scaffold-install` |
 | `pre_migrate_dump_writable` | the installed webhook unit allows writes to `pre_migrate_dump.output_dir` | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
 | `install_compile_bytecode` | a `uv sync` `install.command` passes `--compile-bytecode` | no | add `--compile-bytecode` to `install.command` — see [bytecode and startup time](deployment-guide.md#bytecode-and-startup-time) |
+| `inert_timers` | which `scaffold.systemd.timers` families this host runs, and which it only carries | no | none needed — see [scheduled timers you switch on](deployment-guide.md#scheduled-timers-you-switch-on) |
+
+`inert_timers` is **always `pass`**. Every family off is a configured state,
+not a fault, and a check that warns about a deliberate choice on every run
+becomes wallpaper. What it adds is that the state is legible: `backup.timer`
+and `deploy-checker.timer` were copied to every host and started on none, and
+nothing distinguished "copied and running" from "copied and never started" —
+which is why three of those units stayed broken for years.
 
 `install_compile_bytecode` is **advisory** — it returns `warn`, never `fail`,
 because the cost is startup latency rather than correctness. It resolves
