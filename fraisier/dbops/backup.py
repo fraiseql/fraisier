@@ -204,11 +204,21 @@ def run_backup(
     return BackupResult(success=True, backup_path=backup_path)
 
 
+def free_space_gb(path: str | Path) -> float:
+    """Free space on *path*'s volume, in GB.
+
+    The one place free space is measured (#344). ``check_disk_space`` answers
+    the producing side's yes/no question and ``doctor``'s corpus check needs the
+    number itself to report it, so the measurement is here and both read it
+    rather than each calling ``shutil.disk_usage``. Raises ``OSError`` if the
+    volume cannot be read — callers must not treat that as "there is room".
+    """
+    return shutil.disk_usage(path).free / (1024**3)
+
+
 def check_disk_space(path: str, *, required_gb: int) -> bool:
     """Return True if *path* has at least *required_gb* GB free."""
-    usage = shutil.disk_usage(path)
-    free_gb = usage.free / (1024**3)
-    return free_gb >= required_gb
+    return free_space_gb(path) >= required_gb
 
 
 @dataclass(frozen=True)

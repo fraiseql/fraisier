@@ -568,6 +568,22 @@ class RetainEntry:
     keep_minimum: int = 3
     user: str = "fraisier"
 
+    min_free_gb: int | None = None
+    """Free space this corpus's volume needs, or ``None`` for no threshold (#344).
+
+    On the ``retain`` entry rather than under ``backup:`` because a threshold is
+    a property of a volume and each entry names its own directory; two corpora
+    on different disks need different numbers, and a global would be wrong for
+    at least one of them.
+
+    Retention bounds the corpus in the steady state and that is not the same as
+    alarming on the disk: the policy can be correct and the volume still fill
+    because something else on it grew, and ``keep_minimum`` deliberately refuses
+    to delete below a floor, so a stalled producer plus a full disk is a state
+    retention will not resolve. ``None`` means no threshold — which every config
+    written before this field is — so nothing new fails on upgrade.
+    """
+
     @property
     def retention_hours(self) -> int:
         """What :func:`fraisier.dbops.backup.cleanup_old_backups` takes.

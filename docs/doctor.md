@@ -37,6 +37,18 @@ passed.
 | `pre_migrate_dump_writable` | the installed webhook unit allows writes to `pre_migrate_dump.output_dir` | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
 | `install_compile_bytecode` | a `uv sync` `install.command` passes `--compile-bytecode` | no | add `--compile-bytecode` to `install.command` — see [bytecode and startup time](deployment-guide.md#bytecode-and-startup-time) |
 | `inert_timers` | which `scaffold.systemd.timers` families this host runs, and which it only carries | no | none needed — see [scheduled timers you switch on](deployment-guide.md#scheduled-timers-you-switch-on) |
+| `backup_retention` | every declared `retain` corpus has both halves of its prune unit on disk | no | `sudo fraisier scaffold-install` — until then nothing prunes that corpus |
+| `backup_corpus_free_space` | each `retain[].dir` exists and its volume meets the entry's `min_free_gb` | no | free space on the volume, or declare a threshold — see [`min_free_gb`](deployment-guide.md#min_free_gb--a-policy-is-not-a-disk-alarm) |
+| `scaffold_artifact_coverage` | every artifact the manifest declares for this host is installed | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
+| `foreign_units` | no `fraisier` unit on this host belongs to a fraise or environment this host does not own | no | `sudo fraisier scaffold-install --prune` — see [one host authority](deployment-guide.md#scheduled-timers-you-switch-on) |
+| `webhook_hosted_trees_writable` | the installed webhook unit's `ReadWritePaths=` covers every tree it deploys | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
+| `sandbox_write_probe` | actually writes into the rendered unit's sandbox under `ProtectSystem=strict` | no | opt-in via `--probe-sandbox`; needs root, else `skip` |
+
+The catalog above is **complete**, and a test asserts it: every name in
+`DOCTOR_CHECKS` appears here and vice versa. It had silently fallen six checks
+behind before that test existed, which is the same class of defect as a unit
+nothing enables — documentation that describes a subset reads as describing the
+whole.
 
 `inert_timers` is **always `pass`**. Every family off is a configured state,
 not a fault, and a check that warns about a deliberate choice on every run

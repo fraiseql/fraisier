@@ -875,7 +875,22 @@ def _parse_one_retain_entry(
 
     user = _validate_retain_user(entry, path, default_user, errors)
 
-    if None in (directory, name, schedule, retention_days, keep_minimum, user):
+    # Absent means no threshold (#344), so its absence is not a validation
+    # failure and must not join the None-check below — unlike keep_minimum,
+    # whose default is a number rather than "unset".
+    min_free_gb: int | None = None
+    min_free_ok = True
+    if "min_free_gb" in entry:
+        # minimum=1: keep_minimum: 0 is meaningful (no floor), but
+        # min_free_gb: 0 would mean "warn below zero free bytes", which is a
+        # policy nobody intends. Omitting the key is how you have no threshold.
+        min_free_gb = _retain_int(entry, "min_free_gb", path, errors, minimum=1)
+        min_free_ok = min_free_gb is not None
+
+    if (
+        None in (directory, name, schedule, retention_days, keep_minimum, user)
+        or not min_free_ok
+    ):
         return None
     return RetainEntry(
         environment=environment,
@@ -886,6 +901,7 @@ def _parse_one_retain_entry(
         match=match,
         keep_minimum=cast("int", keep_minimum),
         user=cast("str", user),
+        min_free_gb=min_free_gb,
     )
 
 

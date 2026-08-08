@@ -1019,6 +1019,7 @@ backup:
           schedule: "*-*-* 05:30:00 UTC"
           name: production-full     # default: the dir basename
           user: fraisier            # default: scaffold.deploy_user
+          min_free_gb: 20           # default: none — no threshold
 ```
 
 Each entry renders a `.service` and `.timer` pair that `scaffold-install`
@@ -1059,13 +1060,66 @@ It exits 0 deliberately. A non-zero here would put the timer in `failed` and
 stop the pruning that is still working, on top of a producer that is already
 broken.
 
-Two things this does **not** do:
+#### The floor protects the newest *valid* dumps
 
-- **It counts, it does not validate.** A partially transferred dump is the
-  *newest* by mtime, so it is the first thing the floor protects. Verifying
-  what arrives is a separate concern.
-- **It does not watch the disk.** `keep_minimum` bounds how much a stalled
-  producer can delete, not how much a healthy one can write.
+`keep_minimum` counted and did not validate, so a partially transferred dump —
+the newest thing in the directory by mtime — was the first thing the floor
+protected, and with a stalled producer it held that slot while every good dump
+aged out around it.
+
+A dump that contests a floor slot is now checked with `pg_restore --list`. One
+that fails does not hold a slot, so the next readable dump is protected in its
+place, and the prune names it:
+
+```
+WARNING: 1 backup(s) in /backup/production are not readable archives and were
+not allowed to hold a keep_minimum slot: prod_full_20260808.dump. A dump
+pg_restore cannot list cannot be restored from — check the transfer.
+```
+
+The limit is exact. **No readable dump is removed that the old floor would have
+kept**, and anything newly removed is both unreadable *and* already past the
+retention window. An unreadable dump inside the window is still kept.
+
+Verification is bounded to the dumps that actually contest a slot: nothing is
+checked when `keep_minimum` is 0, when nothing is past the cutoff, or once the
+floor is full. A nightly sweep of a whole corpus would shell out once per file.
+`fraisier doctor` is the thorough check.
+
+On a host with no PostgreSQL client tools every dump is *unverifiable*, which is
+not the same as invalid: those spend floor slots exactly as before, so a missing
+`pg_restore` never becomes a retention change.
+
+#### `min_free_gb` — a policy is not a disk alarm
+
+Retention bounds the corpus in the steady state, and that is not the same as
+watching the disk:
+
+- the policy can be correct and the volume still fill, because something else
+  on it grew;
+- `keep_minimum` deliberately refuses to delete below its floor, so a stalled
+  producer plus a full disk is a state retention will not resolve.
+
+`min_free_gb` sits on the entry rather than under `backup:` because a threshold
+is a property of a volume, and two corpora on different disks need different
+numbers. It is optional, and **absent means no threshold** — which every config
+written before it is, so nothing new fails on upgrade.
+
+With one declared, `fraisier doctor` fails when the volume is below it and
+`backup prune` warns:
+
+```
+WARNING: /backup/production has 5.2GB free, below the min_free_gb=20 declared
+for production-full. Retention bounds this corpus but cannot recover a disk
+something else filled.
+```
+
+The prune still prunes and still exits 0, for the same reason the
+stalled-producer warning does.
+
+A volume whose free space cannot be read is reported as unknown, never as
+"there is room" — the same rule `db restore` applies to a lock it cannot
+evaluate.
 
 ### Scheduled timers you switch on
 
@@ -1103,6 +1157,44 @@ both, and they do not interact.
 > `restore_staging`'s units render only where a fraise declares
 > `database.strategy: restore_migrate` on a staging-named environment. The knob
 > does nothing without that.
+
+### What a restore checks before it destroys anything
+
+`db restore` and the `restore_migrate` strategy drop and recreate the target
+database. Before that happens, the dump it is about to restore is read with
+`pg_restore --list`; a dump that fails is refused **before** the service is
+stopped and before the database is dropped.
+
+This matters because the two steps that look like validation are not.
+`find_latest_backup` sorts by mtime and the age check compares mtime to a
+cutoff — neither opens the file. Until this check existed, the first honest read
+of the archive happened three steps *after* the database was gone, so an
+unreadable dump cost the staging database it was meant to replace.
+
+`--skip-preflight` does not skip it, and neither does
+`database.preflight.enabled: false`. An emergency restore may reasonably skip
+*migration* validation; it may not skip "is this a file `pg_restore` can read",
+because that is the check standing between a corrupt dump and a live database.
+
+On a host without PostgreSQL client tools the check reports that it could not
+run and the restore proceeds, so no host loses the ability to restore.
+
+#### `min_tables` is bookkeeping, not the guard
+
+`database.restore.min_tables` is an optional floor on the table count after
+migrations. It defaults to `0`, meaning **no floor**, and a restore with no floor
+says so rather than leaving the absence to be assumed:
+
+```
+Restore complete: 4 migration(s) applied
+  Note: no table-count floor configured (database.restore.min_tables); the
+  restored database was not checked for emptiness.
+```
+
+Set it if you know roughly how many tables the database should have. But do not
+mistake it for protection against a truncated dump: a dump truncated inside its
+*data* section restores its schema completely, so the tables all exist and are
+empty, and any count passes. The archive check above is what catches that.
 
 ---
 
