@@ -17,9 +17,13 @@ ExecStart={{ fraisier_bin }} --config {{ scaffold.config_path }} trigger-deploy 
 {% endfor %}
 
 # Security hardening
+# ProtectHome intentionally omitted: fraisier is installed as a uv tool and
+# runs from ~/.local, which ProtectHome=yes (and tmpfs) makes inaccessible.
+# This unit set it while its ExecStart was that binary, so every firing would
+# have been a 203/EXEC — unobserved because nothing ever enabled the timer
+# (#341). Swept over every rendered unit by test_rendered_unit_sanity.py.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true

@@ -20,10 +20,10 @@ ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier --config {{ scaff
 
 # Security hardening
 # ProtectHome intentionally omitted: fraisier is installed as a uv tool and
-# runs from ~/.local, which ProtectHome (any value) makes inaccessible. The
-# two units that pair ProtectHome=true with this binary — deploy-checker and
-# restore-staging — are exactly the two that are never enabled, so their
-# 203/EXEC has never been observed. This one IS enabled.
+# runs from ~/.local, which ProtectHome=yes (and tmpfs) makes inaccessible.
+# deploy-checker and restore-staging used to contradict this and would have
+# 203/EXEC'd on their first firing; both were fixed in #341, and the rule now
+# holds over every rendered unit rather than over the three anyone remembered.
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
