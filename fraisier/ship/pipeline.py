@@ -25,6 +25,21 @@ if TYPE_CHECKING:
 _FAILURE_TAIL_LINES = 30
 
 
+@dataclass(frozen=True)
+class SkippedCheck:
+    """A check that did not run, and why (#346).
+
+    Deliberately **not** a :class:`CheckResult` with ``success=True``. That is
+    precisely the conflation this issue is about — anything summing ``results``
+    would count a skip as a pass, which is how twelve checks collapsing to four
+    went unnoticed. Same reasoning as v0.61.0's ``CleanupOutcome.invalid`` being
+    an overlay rather than a fourth partition member.
+    """
+
+    name: str
+    reason: str
+
+
 @dataclass
 class PipelineResult:
     """Aggregate result of the full ship pipeline."""
@@ -33,6 +48,8 @@ class PipelineResult:
     failed_phase: str | None = None
     results: list[CheckResult] = field(default_factory=list)
     duration_seconds: float = 0.0
+    skipped: list[SkippedCheck] = field(default_factory=list)
+    """Checks filtered out by their ``triggers:``. Never counted as passes."""
 
 
 @dataclass(frozen=True)
@@ -166,19 +183,51 @@ class ShipPipeline:
     def _run_phases(
         self, phases: tuple[str, ...], *, phase_label: str
     ) -> PipelineResult:
-        """Partition this phase's checks into to-run and skipped.
+        """Partition this phase's checks into to-run and skipped, and say which.
 
         The partition is kept rather than discarded. Filtering with a
-        comprehension threw the skipped checks away before `_execute_checks`,
+        comprehension threw the skipped checks away before ``_execute_checks``,
         which is the only thing that prints — so a skipped check produced no
-        output at all and the run just looked short and green (#346).
+        output at all and the run just looked short and green (#346). The
+        issue's own headline: a skipped check was indistinguishable from a
+        passing one.
         """
         scope = self.trigger_scope()
-        selected = [c for c in self._config.checks if c.phase in phases]
-        to_run = [c for c in selected if self._should_run(c, scope)]
+        to_run: list[ShipCheckConfig] = []
+        skipped: list[SkippedCheck] = []
+
+        triggered = [c for c in self._config.checks if c.phase in phases and c.triggers]
+        if scope.undetermined and triggered:
+            # Said once per phase rather than per check: the reason is a property
+            # of the run, and repeating a long sentence N times buries it. But it
+            # is said — a check running for a reason nobody can see is how the
+            # next person concludes that `triggers:` does not work.
+            self._console.print(
+                f"  [yellow]note[/yellow] could not determine changed files "
+                f"({scope.detail}) — running all {len(triggered)} triggered check(s)"
+            )
+
+        for check in self._config.checks:
+            if check.phase not in phases:
+                continue
+            if check.triggers is None or scope.undetermined:
+                to_run.append(check)
+                continue
+            if scope.matches(check.triggers):
+                to_run.append(check)
+                continue
+            reason = (
+                f"no file matched {', '.join(check.triggers)} "
+                f"(vs {scope.base}, {len(scope.files or ())} file(s) changed)"
+            )
+            skipped.append(SkippedCheck(name=check.name, reason=reason))
+            self._print_skip(check.name, reason)
+
         if not to_run:
-            return PipelineResult(success=True)
-        return self._execute_checks(to_run, phase_label=phase_label)
+            return PipelineResult(success=True, skipped=skipped)
+        result = self._execute_checks(to_run, phase_label=phase_label)
+        result.skipped = skipped
+        return result
 
     def _execute_checks(
         self,
@@ -330,6 +379,10 @@ class ShipPipeline:
             return TriggerScope(None, base, f"git diff against {base} failed")
 
         return TriggerScope(frozenset(committed) | frozenset(worktree), base, why)
+
+    def _print_skip(self, name: str, reason: str) -> None:
+        """A skip line, shaped like the pass/FAIL lines beside it (#346)."""
+        self._console.print(f"  [yellow]skip[/yellow] {name} — {reason}")
 
     def _print_result(self, result: CheckResult) -> None:
         status = "[green]pass[/green]" if result.success else "[red]FAIL[/red]"
