@@ -94,6 +94,30 @@ def unit_installer_socket_path(project_name: str, env_name: str) -> Path:
     return Path(f"/run/fraisier/{env_name}/unit-installer-{project_name}.sock")
 
 
+def retention_unit_names(
+    project_name: str, env_name: str, entry_name: str
+) -> tuple[str, str]:
+    """Return ``(service_unit, timer_unit)`` for one retention entry (#339).
+
+    One pair per ``(environment, entry)``: a host can receive several
+    corpora into one environment, and the same corpus name can appear in
+    two environments, so neither component alone identifies a pair.
+
+    The renderer names the files it writes and the artifact manifest names
+    the files it installs. Both call here, before there is a second call
+    site rather than after there is a third — which is #337's lesson, and
+    the reason this helper exists at all.
+
+    Returns:
+        The ``.service`` and ``.timer`` names, in the order they are
+        installed. The timer is enabled last and only after its service is
+        on disk; a timer whose target is missing is a firing into nothing,
+        which is how ``backup.timer`` and ``backup.service`` drifted apart.
+    """
+    base = f"fraisier-{project_name}-{env_name}-retain-{entry_name}"
+    return f"{base}.service", f"{base}.timer"
+
+
 def app_service_name(
     project_name: str,
     fraise_name: str,
