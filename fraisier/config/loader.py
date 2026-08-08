@@ -37,6 +37,7 @@ import yaml
 from fraisier.config._lazy_env import LazyEnv
 from fraisier.config._validation import (
     parse_retain_entries,
+    parse_timer_families,
     validate_branch_mapping,
     validate_hooks,
     validate_notifications,
@@ -329,6 +330,7 @@ class FraisierConfig:
             systemd=SystemdScaffoldConfig(
                 security_hardening=raw_systemd.get("security_hardening", True),
                 memory_max_default=raw_systemd.get("memory_max_default", "4G"),
+                timers=parse_timer_families(raw_systemd),
             ),
             nginx=NginxScaffoldConfig(
                 ssl_provider=raw_nginx.get("ssl_provider", "letsencrypt"),
