@@ -114,6 +114,7 @@ def restore_backup(
     connection_url: str,
     db_owner: str | None = None,
     jobs: int = 1,
+    min_tables: int = 0,
 ) -> RestoreResult:
     """Restore a pg_dump backup into *db_name* via confiture's three-phase restore.
 
@@ -121,6 +122,13 @@ def restore_backup(
     a post-load ``ANALYZE`` so each matview replans on real statistics instead of
     the empty ``pg_statistic`` of a freshly loaded database (confiture #172).
     Optionally reassigns ownership to *db_owner* after the restore.
+
+    *min_tables* is confiture's post-restore table-count floor; ``0`` means no
+    floor is configured. Note what it cannot do: a dump truncated inside the
+    data section restores its schema completely, so the tables exist and are
+    empty and any count passes. The floor catches a restore that produced no
+    schema; :func:`fraisier.dbops.archive.verify_archive`, called before the
+    database is dropped, is what catches a truncated archive (#342, #343).
     """
     validate_pg_identifier(db_name, "database name")
     validate_file_path(backup_path)
@@ -141,9 +149,18 @@ def restore_backup(
         # exit_on_error off so they do not abort the restore. jobs == 1 keeps
         # confiture's fail-fast default.
         parallel_restore=jobs > 1,
-        # The RestoreMigrateStrategy validates the table count itself, after
-        # `migrate up` (step 10), so confiture skips its own min-tables check.
-        min_tables=0,
+        # Forwarded, not hardcoded (#343). This read `min_tables=0` under a
+        # comment saying the strategy validated the count itself after
+        # `migrate up` — but that step is `if cfg.min_tables > 0` over a value
+        # defaulting to 0, so in the default configuration neither side
+        # validated and the comment claimed one did.
+        #
+        # 0 is confiture's own default and means *no floor is configured*. That
+        # is a declared state, not a guarantee: the strategy says so in its log
+        # rather than leaving the absence to be inferred. Both checks now run
+        # at their own point — confiture's before migrations, the strategy's
+        # after, where a floor can account for tables migrations create.
+        min_tables=min_tables,
     )
     # confiture emits an explicit -h/-p; only override its RestoreOptions
     # defaults for the parts the URL actually carries (a socket URL with no

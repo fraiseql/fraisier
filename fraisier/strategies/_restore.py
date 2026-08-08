@@ -154,6 +154,7 @@ class RestoreMigrateStrategy(Strategy):
         hooks_config: dict[str, Any] | None = None,
         skip_preflight: bool = False,
     ) -> StrategyResult:
+        from fraisier.dbops.archive import ArchiveVerdict, verify_archive
         from fraisier.dbops.operations import (
             create_db,
             drop_db,
@@ -190,6 +191,35 @@ class RestoreMigrateStrategy(Strategy):
                 raise DatabaseError(
                     f"Backup {backup_file.name} is older than {cfg.max_age_hours}h",
                 )
+
+        # Step 2.4: Prove the archive is readable before anything destructive
+        # happens (#343). Steps 1 and 2 look like validation and are not —
+        # find_latest_backup sorts by mtime and validate_backup_age compares
+        # mtime to a cutoff, so neither opens the file. Until this check, the
+        # first real read was step 6, three steps after the database was
+        # dropped: a dump pg_restore rejects in a second cost the staging
+        # database it was meant to replace, which is the #339 incident.
+        #
+        # Deliberately outside both preflight conditions. --skip-preflight
+        # exists for emergency restores and preflight can be disabled outright;
+        # an emergency restore may skip *migration* validation, but not "is this
+        # a file pg_restore can read", because that is what protects the
+        # database this is about to drop. It also runs *before* preflight, whose
+        # extract_schema_only would otherwise fail on the same file with a
+        # murkier message.
+        #
+        # UNVERIFIABLE is not a bad dump — a host without the PostgreSQL client
+        # tools cannot check, and must not lose the ability to restore because
+        # of it. Warn and continue; is_bad is INVALID-only for this reason.
+        check = verify_archive(backup_file)
+        if check.is_bad:
+            raise DatabaseError(
+                f"Backup {backup_file} is not a readable archive: {check.detail}",
+            )
+        if check.verdict is ArchiveVerdict.UNVERIFIABLE:
+            log.warning(
+                "Could not verify %s before restoring: %s", backup_file, check.detail
+            )
 
         # Step 2.5: Preflight check (before any destructive operations)
         # Service is still running here — preflight only uses a temp DB.
@@ -238,6 +268,7 @@ class RestoreMigrateStrategy(Strategy):
             db_owner=cfg.target_owner,
             connection_url=self._admin_url,
             jobs=cfg.jobs,
+            min_tables=cfg.min_tables,
         )
         restore_secs = restore_result.duration_seconds
         if not restore_result.success:
@@ -314,6 +345,14 @@ class RestoreMigrateStrategy(Strategy):
                     f"Table count validation failed: {count} < {cfg.min_tables}",
                 )
             log.info("Table count validation passed: %d >= %d", count, cfg.min_tables)
+        else:
+            # Said, not assumed (#343). The absence of a floor used to be
+            # covered by a comment claiming this step enforced one. An operator
+            # reading "Restore complete" should learn whether anything counted.
+            log.info(
+                "No table-count floor configured (restore.min_tables); the "
+                "restored database was not checked for emptiness"
+            )
 
         # Step 11: Start service
         if self._service_manager and self._service_name:

@@ -787,6 +787,11 @@ class TestRestoreMigrateStrategy:
             db_owner="app_user",
             connection_url=_ADMIN_URL,
             jobs=1,
+            # Forwarded rather than hardcoded to 0 (#343). It used to be pinned
+            # at 0 under a comment saying step 10 enforced the floor instead —
+            # and step 10 is `if cfg.min_tables > 0` over a default of 0, so
+            # neither side checked. Both check now, at their own point.
+            min_tables=300,
         )
         mock_table.assert_called_once_with(
             "staging_db", min_threshold=300, connection_url=_ADMIN_URL
