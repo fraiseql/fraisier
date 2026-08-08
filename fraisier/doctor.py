@@ -797,3 +797,53 @@ def _check_foreign_units(config: FraisierConfig | None) -> CheckResult:
             "'fraisier scaffold-install --prune-foreign' to disable and delete"
         ),
     )
+
+
+@register_check("backup_retention")
+def _check_backup_retention(config: FraisierConfig | None) -> CheckResult:
+    """Corpora this host says it keeps, and whether anything prunes them.
+
+    #339's incident: a destination host received a nightly corpus, the
+    unit meant to prune it was hand-written in the consuming repo, and it
+    was never installed there. The disk filled. Nothing reported it,
+    because nothing knew the policy existed.
+
+    ``scaffold-diff`` now reports a missing retention unit for free — the
+    units are fraisier's, so they are in the artifact manifest. This
+    answers the operator's version of the question instead: which corpora
+    are declared, and is each one's pair actually on disk.
+
+    Uses a dry-run render, which writes nothing.
+    """
+    name = "backup_retention"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.scaffold.renderer import ScaffoldRenderer
+    from fraisier.scaffold.retention import retention_report
+
+    try:
+        report = retention_report(ScaffoldRenderer(config))
+    except ValidationError as exc:
+        return CheckResult(name, "skip", f"invalid retention config: {exc}")
+    except (OSError, ValueError) as exc:
+        return CheckResult(name, "skip", f"could not read the scaffold: {exc}")
+
+    if not report:
+        return CheckResult(name, "skip", "no backup retention declared")
+
+    missing = [entry for entry in report if not entry.installed]
+    listed = "; ".join(entry.detail for entry in report)
+    if not missing:
+        return CheckResult(name, "pass", listed)
+
+    return CheckResult(
+        name,
+        "warn",
+        listed,
+        fix_hint=(
+            "run 'fraisier scaffold-install' on this host to install and "
+            "enable the retention timers; until then nothing is pruning "
+            f"{', '.join(entry.dir for entry in missing)}"
+        ),
+    )

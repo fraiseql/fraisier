@@ -108,7 +108,24 @@ def compute_scaffold_diff(
 
         # Check for files that exist in install locations but not in scaffold
         for rel_path, installed_path in install_mapping.items():
-            if installed_path.exists() and not (temp_path / rel_path).exists():
+            # `Path.exists()` re-raises EACCES rather than returning False
+            # (it only swallows ENOENT/ENOTDIR/EBADF/ELOOP), and
+            # /etc/sudoers.d is mode 0750 root:root. Unguarded, this loop
+            # aborted the whole diff for any non-root caller — before it
+            # could report a single missing unit. `_compare_files` already
+            # guards its own `exists()`; this one did not.
+            try:
+                installed_exists = installed_path.exists()
+            except PermissionError:
+                results.append(
+                    FileDiff(
+                        generated_path=rel_path,
+                        installed_path=installed_path,
+                        status="permission_denied",
+                    )
+                )
+                continue
+            if installed_exists and not (temp_path / rel_path).exists():
                 # Apply filters
                 if fraise_filter or env_filter:
                     if not _file_matches_filters(rel_path, matching_deploy_paths):
