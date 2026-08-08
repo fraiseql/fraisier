@@ -447,6 +447,44 @@ fraisier backup my_api -e production
 fraisier backup my_api -e production --mode slim
 ```
 
+The positional form above is shorthand for `fraisier backup run my_api -e production`.
+
+---
+
+### fraisier backup prune
+
+Apply the retention policy for a backup corpus this host *receives*, declared
+under `backup.environments.<env>.retain`. See
+[Retention for a corpus you receive](deployment-guide.md#retention-for-a-corpus-you-receive).
+
+```bash
+fraisier backup prune --env ENV [--name ENTRY] [--dry-run] [--json]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-e, --env ENV` | Environment whose policy to apply (required) |
+| `--name ENTRY` | Apply one entry rather than all of them |
+| `--dry-run` | List what would be removed, remove nothing |
+| `--json` | Machine-readable report on stdout |
+
+Exits non-zero for an unknown `--name`, an environment with no policy, or a
+`dir` that is not a directory — a retention policy that pruned nothing must
+not report success. A corpus kept alive only by `keep_minimum` produces a
+WARNING on stderr and exits 0, so a stalled producer does not also stop the
+timer.
+
+**Examples:**
+
+```bash
+fraisier backup prune --env development
+fraisier backup prune --env development --name production-full
+fraisier backup prune --env development --dry-run
+fraisier backup prune --env development --json | jq '.entries[].removed'
+```
+
 ---
 
 ## Infrastructure Commands

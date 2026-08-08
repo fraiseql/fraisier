@@ -310,6 +310,7 @@ fraisier db migrate <fraise> -e <env>            Run migrations only
 fraisier db restore <fraise> -e <env>            Restore from backup (drains connections, force-drops on PG 13+)
 fraisier db reset <fraise> -e <env>              Reset database (development)
 fraisier backup <fraise> -e <env>                Create database backup
+fraisier backup prune --env <env>                Prune a corpus this host receives
 ```
 
 ### Infrastructure

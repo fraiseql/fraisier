@@ -10,13 +10,10 @@ convenience — see :class:`TestRetainValidation`.
 from __future__ import annotations
 
 import textwrap
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 import yaml
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from fraisier.config.loader import FraisierConfig
 from fraisier.errors import ValidationError
@@ -410,3 +407,40 @@ class TestRetainValidation:
         """
         message = self._reject(tmp_path, {**REQUIRED, "match": bad})
         assert "retain[0].match" in message
+
+
+def test_the_documented_example_block_actually_validates(tmp_path):
+    """The `retain:` block in fraises.example.yaml, uncommented, must load.
+
+    A documented example that fails at config load teaches the wrong
+    shape, and is the kind of thing nobody notices because the example is
+    commented out. Extracted from the real file rather than retyped.
+    """
+    example = Path(__file__).resolve().parent.parent / "fraises.example.yaml"
+    lines = example.read_text().splitlines()
+
+    start = next(i for i, ln in enumerate(lines) if ln.strip() == "# backup:")
+    block: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("#"):
+            break
+        body = line[1:].removeprefix(" ")
+        # Skip blank lines and the continuation comments that explain a
+        # field; stop at the first unindented prose line after `backup:`,
+        # which is where the block ends and the usage notes begin.
+        if not body.strip() or body.lstrip().startswith("#"):
+            continue
+        if block and not body.startswith(" "):
+            break
+        block.append(body)
+
+    cfg = tmp_path / "fraises.yaml"
+    cfg.write_text(FRAISES_HEADER + "\n" + "\n".join(block) + "\n")
+
+    (entry,) = FraisierConfig(str(cfg)).retain_entries("development")
+    assert entry.name == "production-full"
+    assert entry.dir == "/backup/production"
+    assert entry.match == "*_full_*.dump"
+    assert entry.keep_minimum == 3
+    assert entry.retention_days == 3
+    assert entry.user == "fraisier"

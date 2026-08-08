@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-08-08
+
+Retention for a backup corpus a host **receives**. A destination that is
+rsync'd a nightly dump has no fraise producing it, so nothing on that host
+knew the corpus existed and nothing pruned it; the unit meant to was
+hand-written in the consuming repo, installed by nobody, and checked by
+nothing until the disk filled.
+
+Built on v0.59.0 rather than beside it: the config surface is keyed by
+environment, and after #336 that predicate means "a fraise **on this host**
+declares this environment". The same YAML that would have inherited a
+cross-install bug one release ago is correctly scoped here with no migration
+and no grandfathered key.
+
+**Purely additive on live hosts.** A config with no `retain:` block renders
+exactly what it rendered in v0.59.0 — the golden install plan gained 109 lines
+and lost none.
+
+### Added
+
+- **`backup.environments.<env>.retain` (#339).** The first validated structure
+  under the top-level `backup:` key, which every other consumer reads raw.
+  Each entry declares a directory, a glob, a retention window, a floor and a
+  schedule; `name` defaults to the directory basename and `user` to
+  `scaffold.deploy_user`. Two entries in one environment may not resolve to
+  the same name — that is a config error naming both, never a silent rename.
+  An environment no fraise declares is rejected at config load rather than
+  rendered into units that would be copied, gated and never fire.
+- **`fraisier backup prune --env <env> [--name] [--dry-run] [--json]`.** The
+  command an operator runs by hand on the destination, and the one the
+  rendered timer invokes. Every "nothing to do" case exits non-zero: an
+  unknown `--name`, an environment with no policy, a `dir` that is not a
+  directory. A corpus kept alive only by its floor produces a WARNING on
+  stderr and exits 0 — a stalled producer must be visible without also
+  putting the timer in `failed`.
+- **`Disposition.TIMER`** — `PLAIN` plus `systemctl enable --now`, after the
+  units are on disk and systemd has re-read them. `install.sh` copies timers
+  and enables none of them, so a retention timer filed as `PLAIN` would be
+  rendered, installed, hashed, drift-checked and never run: the incident's own
+  failure mode reproduced inside the system built to prevent it. Applied to
+  the retention pair **only** — `backup.timer` and `deploy-checker.timer` stay
+  copied-and-inert, pinned by a test and by the golden plan, because enabling
+  `backup.timer` on upgrade would start a legacy `pg_dump | gzip` on every
+  existing host as a side effect of a retention fix. Tracked in **#341**,
+  which also records that two of those units would fail 203/EXEC today if they
+  were enabled (`ProtectHome=true` hides the `~/.local` binary their
+  `ExecStart` names).
+- **`fraisier doctor` reports declared corpora and whether anything prunes
+  them.** `scaffold-diff` reports a missing retention unit for free — the units
+  are fraisier's now, so they are in the artifact manifest.
+- **`naming.retention_unit_names(project, env, entry)`** — one authority for
+  the pair's names, written before the second call site rather than after the
+  third. That is #337's lesson, applied rather than only shipped.
+
+### Changed
+
+- **`cleanup_old_backups` returns `CleanupOutcome`, not `list[str]`.** The
+  three tuples partition the corpus: `kept` would have survived with no floor,
+  `exempted_by_minimum` survived only because of it. Keeping them apart is
+  what makes `floor_was_load_bearing` — "the producer has stalled" — knowable
+  at all; it cannot be reconstructed from a list of deletions. No compatibility
+  shim; the one in-repo caller moved.
+- **`cleanup_old_backups(..., dry_run=True)`** selects exactly as a real run
+  does, containment guard included, and deletes nothing. A parameter rather
+  than a candidate list rebuilt in the CLI: a preview derived from a second
+  implementation of "what expires" previews something else.
+- **The pre-migration dump gate keeps the newest dump** (`keep_minimum=1`). A
+  deliberate behaviour change on live hosts, in the safe direction — it deletes
+  strictly less. That dump is the migration's rollback point; expiring it
+  leaves a migration with nothing to fall back to.
+- **`backup.sh` keeps a minimum too.** Its prune was
+  `find … -mtime +N -delete`: time-based, no floor, on the producing host.
+  The floor is per database, not per directory — one shared count would keep
+  three of whichever name sorts last and none of the others. `BACKUP_DIR` now
+  honours `FRAISIER_BACKUP_DIR`, which is also what lets a test run the real
+  script.
+- **`fraisier backup` is a command group.** `fraisier backup <fraise> -e <env>`
+  is unchanged: anything that is not a known subcommand routes to
+  `backup run`. A fraise named after a subcommand is reachable as
+  `fraisier backup run <fraise>`.
+
+### Fixed
+
+- **`scaffold-diff` aborted for any non-root caller.** Its orphan scan called
+  `Path.exists()` unguarded, and `exists()` swallows only
+  ENOENT/ENOTDIR/EBADF/ELOOP — EACCES is re-raised. `/etc/sudoers.d` is mode
+  0750 root:root, so the whole diff died with `PermissionError` before
+  reporting a single missing unit. `_compare_files` already guarded its own
+  `exists()`; this loop did not. Found because #339 relies on that command
+  reporting. Predates #339 and affected every artifact, not just retention.
+
+### Not covered
+
+Stated so they are not assumed closed. This release closes the retention hole;
+it does not close the validity hole.
+
+- **Nothing verifies a dump a host receives (#342).** `keep_minimum` counts, it
+  does not validate — and a partially transferred dump is the *newest* by
+  mtime, so the floor's first act is to protect it.
+- **`db restore --wait` reported success in 21s for a failed restore (#343).**
+  From #339's tail; journal excerpts offered by the reporter.
+- **No disk-space guard on a receiving host (#344).** The incident's first
+  cause. Retention bounds a corpus in the steady state; it does not alarm.
+
 ## [0.59.0] - 2026-08-08
 
 One theme: a fact has one authority. A host's answer to "which artifacts are
