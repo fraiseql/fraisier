@@ -714,7 +714,74 @@ scaffold:
 
         for directive in _DEPLOY_CHECKER_SECURITY_DIRECTIVES:
             assert directive in content, f"Missing directive: {directive}"
-        assert "ReadWritePaths=/var/backups/" in content
+        # `-`-prefixed; see test_backup_service_tolerates_a_missing_backup_dir.
+        assert "ReadWritePaths=-/var/backups/" in content
+
+    def test_backup_service_tolerates_a_missing_backup_dir(self, tmp_path):
+        """An un-prefixed ReadWritePaths= to a missing path fails unit setup.
+
+        `backup.sh` opens with `mkdir -p "${BACKUP_DIR}"`, which reads as
+        "the script creates its own directory" and cannot: systemd builds the
+        mount namespace *before* ExecStart, and refuses to start the unit when
+        a ReadWritePaths= target does not exist. So on a host that has never
+        had /var/backups/{project} — every host, since nothing creates it —
+        the unit fails before the script gets to create anything.
+
+        `-` makes the grant advisory; install.sh creating the directory is
+        what makes the first run actually write a dump (#341).
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+""".format(output=str(tmp_path / "output")),
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        content = (tmp_path / "output" / "systemd" / "backup.service").read_text()
+        assert "ReadWritePaths=-/var/backups/tp" in content
+
+    def test_install_sh_creates_the_backup_dir(self, tmp_path):
+        """The other half: advisory grant plus a directory that exists.
+
+        Provisioned through the PathManifest rather than a bespoke `mkdir` in
+        the template, so it is created, owned and mode-set by the same
+        `_ensure_dir` as every other managed path — and so `doctor` and the
+        provisioners see it too.
+        """
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(
+            tmp_path,
+            """
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        worker_count: 2
+scaffold:
+  output_dir: {output}
+  deploy_user: deployer
+""".format(output=str(tmp_path / "output")),
+        )
+        renderer = ScaffoldRenderer(config)
+        renderer.render()
+
+        install_sh = (tmp_path / "output" / "install.sh").read_text()
+        assert '_ensure_dir "/var/backups/tp" "deployer" "deployer"' in install_sh
 
     def test_backup_service_has_on_failure_alert_hook(self, tmp_path):
         """backup.service emits OnFailure= so operators see backup failures (#202 Phase 4)."""
