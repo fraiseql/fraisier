@@ -605,6 +605,41 @@ _install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
 {% endif %}
 {% endfor %}
 
+# Retention timers (#339) — `plain` plus an enable, because they have to fire.
+#
+# Every other timer this script installs is copied and left inert: backup.timer
+# and deploy-checker.timer are on every host that has ever run scaffold-install
+# and have never started. A retention timer in that state is the incident this
+# closes — the artifact exists, the work does not happen — so `timer` is a
+# separate disposition rather than a flag on `plain`.
+#
+# The asymmetry is deliberate and NOT an oversight to tidy up: enabling
+# backup.timer on upgrade would start backup.sh, a legacy `pg_dump | gzip`
+# writing to /var/backups/{project}, on every existing host as a side effect of
+# a retention fix. Those timers have their own issue.
+#
+# Order is load-bearing: copy both units, daemon-reload so systemd has read
+# them, THEN enable the timer. Enabling a timer whose .service is not yet on
+# disk — or which systemd has not re-read — is how backup.timer and
+# backup.service drifted apart, with the ordering inverted.
+{% set retention = artifact_manifest.with_disposition('timer') %}
+{% if retention %}
+echo "  Installing retention timers"
+{% for artifact in retention %}
+if {{ host_gate(artifact.fraise, artifact.environment) }}; then
+    _install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
+fi
+{% endfor %}
+_run sudo systemctl daemon-reload
+{% for artifact in retention if artifact.source.endswith('.timer') %}
+{% set timer_unit = artifact.source | replace('systemd/', '') %}
+if {{ host_gate(artifact.fraise, artifact.environment) }}; then
+    echo "  Enabling {{ timer_unit }}"
+    _run sudo systemctl enable --now {{ timer_unit }}
+fi
+{% endfor %}
+{% endif %}
+
 # Clean up stale WatchdogSec directives in existing service files
 # (Older scaffold versions included WatchdogSec which causes issues with uvicorn)
 echo "  Checking for stale WatchdogSec directives in systemd service files"

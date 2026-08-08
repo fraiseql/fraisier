@@ -96,6 +96,24 @@ class Disposition(StrEnum):
     matching units that block does not install.
     """
 
+    TIMER = "timer"
+    """``PLAIN`` plus ``systemctl enable --now`` after the daemon-reload.
+
+    For timers that must actually fire. ``install.sh`` copies timers and
+    enables none of them — ``backup.timer`` and ``deploy-checker.timer`` are
+    installed and inert on every host today — so a retention timer filed as
+    ``PLAIN`` would be rendered, installed, hashed, drift-checked and never
+    run. That is the #339 incident's own failure mode (the artifact exists,
+    the work does not happen) reproduced inside the system built to prevent
+    it.
+
+    Applied to the retention pair only. The existing timers keep their
+    dispositions deliberately: enabling ``backup.timer`` on upgrade would
+    start a legacy ``pg_dump | gzip`` on every host that has ever run
+    ``scaffold-install``, as a side effect of a retention fix. That has its
+    own blast radius and its own issue.
+    """
+
     NGINX_VHOST = "nginx_vhost"
     """Copy to sites-available plus a sites-enabled symlink."""
 
@@ -379,6 +397,12 @@ def _owner_of_unit(renderer: ScaffoldRenderer, source: str) -> tuple[str, str] |
 
 def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | None:
     """Route one rendered file, or None when nothing claims it."""
+    # Resolved through the module rather than bound at import: the renderer
+    # names the files it writes and this names the files it installs, and a
+    # test proves the two move together by patching the authority. A
+    # module-level `from … import` here would make that test pass while the
+    # two sites disagreed, which is the drift it exists to catch.
+    from fraisier.naming import retention_unit_names
     from fraisier.scaffold.renderer import _collect_unit_installer_envs
 
     project = renderer.context["project_name"]
@@ -475,6 +499,23 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
                 Disposition.UNIT_INSTALLER,
                 destination=f"{SYSTEMD_DIR}/{stem}",
                 environment=env_name,
+            )
+
+    # #339's retention pair, one per (environment, retain entry). Matched
+    # against the entries the renderer actually wrote units for, and against
+    # names from the same helper it used, so a rename cannot leave this branch
+    # matching nothing and silently reclassifying the units.
+    #
+    # No `fraise`: a received corpus arrives by rsync from somewhere else and
+    # has no owning fraise here, so it gates on `_env_active` (#336 decision
+    # 4). TIMER rather than PLAIN because it has to fire.
+    for entry in renderer.retention_entries():
+        if stem in retention_unit_names(project, entry.environment, entry.name):
+            return RenderedArtifact(
+                source,
+                Disposition.TIMER,
+                destination=f"{SYSTEMD_DIR}/{stem}",
+                environment=entry.environment,
             )
 
     # backup.service's OnFailure= target. Installed unconditionally, like the

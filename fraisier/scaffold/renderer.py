@@ -1063,6 +1063,10 @@ class ScaffoldRenderer:
             if not dry_run:
                 self._render_template(timer_tpl, timer_out)
 
+        # Retention for corpora this host receives (#339). Env-owned: a
+        # received corpus has no producing fraise here.
+        rendered_files.extend(self._render_retention_units(dry_run))
+
         # Restore-staging only if there are fraises with restore_migrate strategy
         if self._has_restore_migrate_fraise():
             for timer_tpl, timer_out in [
@@ -1599,6 +1603,67 @@ class ScaffoldRenderer:
             if not dry_run:
                 self._render_pg_logging(env_name, pg_conf_out)
         return files
+
+    def retention_entries(self) -> list[Any]:
+        """Retain entries whose environment a *local* fraise declares (#339).
+
+        Filtered exactly as the unit-installer helper is: an entry for an
+        environment no local fraise declares would render units
+        ``_env_active`` never activates. Config load already refuses an
+        environment *no* fraise declares anywhere; this narrows the same
+        rule to the host being rendered for.
+
+        The corpus directory is deliberately *not* registered as a managed
+        path. It is created by whatever receives the rsync push, not by
+        fraisier, and a directory install.sh conjured into existence would
+        turn a typo'd ``dir:`` into a prune that quietly finds nothing —
+        replacing the loud error the command raises today.
+        """
+        local_envs = {
+            env_name
+            for fraise in self.context["local_fraises"]
+            for env_name in fraise.get("environments", {})
+        }
+        return [
+            entry
+            for entry in self.config.all_retain_entries()
+            if entry.environment in local_envs
+        ]
+
+    def _render_retention_units(self, dry_run: bool) -> list[str]:
+        """Render one ``.service``/``.timer`` pair per retain entry."""
+        from fraisier.naming import retention_unit_names
+
+        project_name = self.context["project_name"]
+        rendered: list[str] = []
+        for entry in self.retention_entries():
+            service_unit, timer_unit = retention_unit_names(
+                project_name, entry.environment, entry.name
+            )
+            service_rel = f"systemd/{service_unit}"
+            timer_rel = f"systemd/{timer_unit}"
+            rendered.extend([service_rel, timer_rel])
+            if dry_run:
+                continue
+            # The service is written first: the timer names it, and an
+            # install.sh that enables a timer whose target is not on disk is
+            # backup.timer's bug with the ordering inverted.
+            ctx = {
+                **self.context,
+                "retain": entry,
+                "retention_service_unit": service_unit,
+            }
+            for template_path, out_name in (
+                ("core/backup-retain.service.j2", service_rel),
+                ("core/backup-retain.timer.j2", timer_rel),
+            ):
+                try:
+                    template = self.env.get_template(template_path)
+                    content = template.render(**ctx)
+                except jinja2.TemplateNotFound:
+                    content = f"# Placeholder: {template_path}\n"
+                self._write_output(out_name, content)
+        return rendered
 
     def _render_pg_logging(self, env_name: str, out_name: str) -> None:
         """Render a per-environment PostgreSQL logging config."""
