@@ -311,12 +311,44 @@ class NginxEnvConfig:
         )
 
 
+TIMER_FAMILIES: dict[str, str] = {
+    "backup": "backup.timer — nightly pg_dump | gzip into /var/backups/{project}",
+    "deploy_checker": (
+        "deploy-checker.timer — poll each fraise and environment, deploying "
+        "the ones whose branch moved"
+    ),
+    "restore_staging": (
+        "restore-staging.timer — nightly restore of each restore_migrate "
+        "staging database from the production backup"
+    ),
+}
+"""The timer families `scaffold.systemd.timers` can switch on, and what each does.
+
+One authority, read by the loader's validation, by the artifact classifier that
+turns a family into a ``Disposition``, and by the operator-facing reporting. The
+keys are stable identifiers, deliberately not the rendered unit filenames: a
+filename derived in a second place is the drift this codebase keeps closing
+(#323, #325, #337).
+"""
+
+
 @dataclass
 class SystemdScaffoldConfig:
     """Systemd scaffold options."""
 
     security_hardening: bool = True
     memory_max_default: str = "4G"
+    timers: dict[str, bool] = field(
+        default_factory=lambda: dict.fromkeys(TIMER_FAMILIES, False)
+    )
+    """Which copied timers this host enables. Every family defaults to off.
+
+    `install.sh` copies timer units and, before #341, enabled none of them —
+    not as a decision but as the absence of one, which is why three broken
+    units went unobserved for the project's history. Off-by-default keeps the
+    upgrade path inert; what changes is that the state is now declared, and
+    `install.sh` and `doctor` report the ones they left alone.
+    """
 
 
 @dataclass

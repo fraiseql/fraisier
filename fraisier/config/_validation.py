@@ -11,7 +11,12 @@ from pathlib import PurePosixPath
 from typing import Any, cast
 
 from fraisier.config._lazy_env import LazyEnv, is_string_like
-from fraisier.config.schema import _UNIT_NAME_RE, _VALID_STRATEGIES, RetainEntry
+from fraisier.config.schema import (
+    _UNIT_NAME_RE,
+    _VALID_STRATEGIES,
+    TIMER_FAMILIES,
+    RetainEntry,
+)
 from fraisier.dbops._strategies import ADMIN_STRATEGIES
 from fraisier.errors import ConfigurationError, ValidationError
 
@@ -993,3 +998,62 @@ def parse_retain_entries(
         listed = "\n".join(f"  - {e}" for e in errors)
         raise ValidationError(f"Invalid backup retention config:\n{listed}")
     return tuple(parsed)
+
+
+def parse_timer_families(raw_systemd: Any) -> dict[str, bool]:
+    """Parse and validate ``scaffold.systemd.timers`` (#341).
+
+    Args:
+        raw_systemd: The raw ``scaffold.systemd`` mapping, or anything else an
+            operator wrote there.
+
+    Returns:
+        Every family in :data:`~fraisier.config.schema.TIMER_FAMILIES`, absent
+        ones filled in as ``False``. Naming one timer says nothing about the
+        rest.
+
+    Raises:
+        ValidationError: The section is not a mapping, names a family that does
+            not exist, or gives one a non-boolean value. All problems are
+            collected first, so one run names them all.
+
+        Rejecting rather than ignoring is the point. An unknown key silently
+        dropped is how an operator comes to believe they enabled a nightly
+        backup that never runs — this area's signature failure, and the one
+        #341 exists to stop reproducing. A truthy *string* is the same failure
+        pointing the other way: YAML reads bare ``yes`` as ``True`` but quoted
+        ``"yes"`` as a string, and coercing it would start a nightly
+        ``pg_dump`` for someone who wrote something slightly wrong.
+    """
+    if not isinstance(raw_systemd, dict):
+        return dict.fromkeys(TIMER_FAMILIES, False)
+
+    raw = raw_systemd.get("timers")
+    if raw is None:
+        return dict.fromkeys(TIMER_FAMILIES, False)
+    if not isinstance(raw, dict):
+        raise ValidationError(
+            f"scaffold.systemd.timers: expected a mapping of timer name to "
+            f"true/false, got {type(raw).__name__}. Valid names: "
+            f"{', '.join(sorted(TIMER_FAMILIES))}"
+        )
+
+    errors: list[str] = []
+    for name, value in raw.items():
+        if name not in TIMER_FAMILIES:
+            errors.append(
+                f"scaffold.systemd.timers.{name}: unknown timer. Valid names: "
+                f"{', '.join(sorted(TIMER_FAMILIES))}"
+            )
+        elif not isinstance(value, bool):
+            errors.append(
+                f"scaffold.systemd.timers.{name}: expected true or false, got "
+                f"{value!r}. Quote nothing here — YAML reads bare yes/no as "
+                f"booleans, and a quoted string is not one."
+            )
+
+    if errors:
+        listed = "\n".join(f"  - {e}" for e in errors)
+        raise ValidationError(f"Invalid systemd timer config:\n{listed}")
+
+    return {name: bool(raw.get(name, False)) for name in TIMER_FAMILIES}
