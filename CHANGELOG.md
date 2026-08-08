@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-08-09
+
+**An install that killed the deploy that asked for it.**
+
+When a deploy synced a changed `fraises.yaml`, it regenerated and installed the
+scaffold *in process*, and `install.sh` then ran
+`systemctl restart <project>-webhook.service` — SIGTERMing the very process
+running the deploy. The webhook does not exit while a deploy is in flight, so
+systemd's 90-second stop timeout expired, the process was SIGKILLed, and the
+deploy died mid-flight. **Any change to `fraises.yaml` failed its own deploy,
+deterministically**, and reported as "timeout waiting for deployment" — which
+reads as slow rather than killed.
+
+This is v0.61.0 and v0.62.0's theme once more — *work that could not fail
+visibly* — with the reporter itself destroyed. So this release states the
+invariant rather than patching the site:
+
+> **Nothing fraisier installs may terminate the work that asked for it, and work
+> that starts must end in a record.**
+
+### Fixed
+
+- **`install.sh` no longer restarts a unit that hosts a deploy while a deploy is
+  in flight** ([#349](https://github.com/fraiseql/fraisier/issues/349)). Every
+  such restart now goes through one seam, and a test asserts nothing bypasses it
+  — with a meta-test proving the guard can fail, because a tree-scanning guard
+  that silently matches nothing is indistinguishable from a passing one.
+- **The deploy sockets were the same bug, unreported.** There are *two*
+  deploy-hosting units, not one: the webhook, and a deploy socket's
+  `<stem>@N.service` instance running `fraisier deploy-daemon`. The generated
+  deploy service carries `Requires=<its socket>`, and systemd propagates an
+  explicit restart of a required unit to its dependents — the identical
+  mechanism behind the scaffold-install-helper self-restart race guarded since
+  v0.47.0. Routing them through the seam costs nothing: those restarts exist
+  because a *first-time* install wipes `/run/fraisier/`, and a first-time
+  install is by construction a state with no deploy in flight.
+- **The declaration reaches `install.sh` on every path.** The existing
+  `FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER` marker only exists on the helper-socket
+  path; the subprocess fallback runs `install.sh` as a child of the deploy, where
+  the restart kills the whole cgroup just the same. The deploy now declares
+  itself in the socket request payload *and* in the subprocess environment, and
+  `fraisier scaffold-install` re-states it as `install.sh --deploy-in-flight` —
+  `sudo` resets the environment, and that was the one hop that mattered. The
+  helper honours only a literal JSON `true`, mapped to a fixed variable name: the
+  request reaches a daemon running as root.
+- **`install.sh` also probes the deployment locks itself**, so the decision does
+  not rest on a claim it cannot check. The probe opens existing lock files
+  read-only and never creates one — a root-owned lock file is one the deploy user
+  cannot reopen for writing. An unevaluable probe resolves to "no deploy is
+  running", loudly and deliberately: the authoritative signal is the caller's
+  declaration, which is never unevaluable, and a backstop that cannot run must
+  not block the manual re-bake that is the documented remedy for a stale unit.
+
+### Added
+
+- **A deferred restart is a debt, and the deploy pays it.** Skipping the restart
+  alone would leave the webhook on its previous unit — old `ReadWritePaths=`, old
+  `Environment=` — so a `fraises.yaml` change adding an environment would make
+  the *next* deploy fail on a read-only filesystem. That is the "rendered ≠
+  installed" class v0.57.0 and v0.58.0 were about. The units are recorded in
+  `<deployment.lock_dir>/.deferred-restarts`, and at the end of the deploy a
+  detached worker raises the `.draining` flag, waits for the locks to release and
+  restarts over the systemctl-helper socket — the same sequence the self-upgrade
+  path already used, now shared rather than duplicated.
+- **A `deferred_restarts` doctor check.** An entry is cleared only when its
+  restart succeeded, so anything left is visible: a timed-out drain, a unit the
+  helper refuses (it allowlists services, not sockets), or a deploy run by
+  `deploy-daemon`, whose detached worker can die with its per-connection cgroup.
+  That bound is written down rather than implied.
+- **A killed deploy leaves a record.** `DeploymentStatusFile` gains
+  `owner_pid`, `owner_boot_id` and `owner_invocation_id`. The kernel releases the
+  flock when a deploy is SIGKILLed, so the *lock* recovered from the kill while
+  the record did not: it sat at `deploying` forever and `fraisier status` painted
+  it blue with a growing elapsed time, indistinguishable from a deploy that was
+  working. The webhook now reconciles orphaned records at startup — the restart
+  that kills a deploy is itself what brings the reconciler up — into a new
+  terminal state **`interrupted`**, which is in `FAILURE_STATES`.
+- `interrupted` is deliberately not `failed`: the deploy's own failure path never
+  ran, so nothing rolled back, `version.json` was not restored, and the tree may
+  be half-deployed. `owner_invocation_id` is not used to decide liveness; it is
+  recorded so an operator can recover the dead deploy's journal with
+  `journalctl _SYSTEMD_INVOCATION_ID=<id>`.
+
+### Changed
+
+- **Units are only reinstalled and restarted when their bytes changed.** Both of
+  the reporter's failing changesets edited `ship:` definitions and touched
+  nothing reaching the webhook unit, so most `fraises.yaml` edits now restart
+  nothing at all — and a rollback that reinstalls the previous config cancels its
+  own debt.
+- `read_status` ignores keys it does not know. A self-upgrade puts two fraisier
+  versions on one host by design, and `DeploymentStatusFile(**data)` turned a
+  field added by the newer one into a `TypeError` that took `fraisier status`
+  down with it.
+- Output is louder in the same direction as v0.62.0: every deferral prints the
+  unit and the signal that caused it, every unchanged unit says it was skipped,
+  and a restart that *does* happen announces that it terminates whatever is
+  running inside the unit — so a deploy killed by an older host still names its
+  cause in the journal.
+
+### Upgrade notes
+
+Nothing here adds or removes units, and a host that never changes `fraises.yaml`
+during a deploy behaves exactly as before. Hosts that do will see their
+config-changing deploys succeed for the first time, followed by a webhook restart
+once the deploy finishes rather than during it. Run `fraisier doctor` after
+upgrading: a unit deferred and never restarted is now reported instead of
+silently running an old configuration.
+
 ## [0.62.0] - 2026-08-08
 
 `fraisier ship` decided whether a `triggers:` check ran by diffing the **working

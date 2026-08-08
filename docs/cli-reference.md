@@ -738,6 +738,29 @@ list them with their owner; `--prune-foreign` disables and deletes them.
 | `--verbose`, `-v` | Enable verbose output |
 | `--prune-foreign` | Disable and delete units owned by a fraise that does not run on this host. Never happens by default; run `scaffold-diff` first to see what would go. |
 
+**Restarts under a live deploy** (v0.63.0)
+
+A deploy runs `install.sh` whenever `fraises.yaml` changed, and it runs it from
+*inside* the unit hosting that deploy — the webhook, or a deploy socket's
+`deploy-daemon` instance. Restarting either from there SIGKILLs the deploy that
+asked for the install, which is why any `fraises.yaml` change used to fail its
+own deploy ([#349](https://github.com/fraiseql/fraisier/issues/349)).
+
+`install.sh` now defers those restarts while a deploy is in flight, prints what
+it deferred, and records it in `<deployment.lock_dir>/.deferred-restarts`. The
+deploy pays that back when it finishes: a detached worker waits for the
+deployment locks to drain, then restarts over the systemctl-helper socket. An
+entry is cleared only when its restart succeeded, and `fraisier doctor`'s
+`deferred_restarts` check reports whatever is left — see
+[restarts a deploy defers](doctor.md#restarts-a-deploy-defers).
+
+Units are also only reinstalled and restarted when their bytes actually changed,
+so most `fraises.yaml` edits now restart nothing at all.
+
+Running this command by hand is unaffected: no deploy holds a lock, so every
+restart happens as before. `install.sh --deploy-in-flight` is how fraisier tells
+it otherwise across the `sudo` boundary; it is not a flag to pass yourself.
+
 **Examples:**
 
 ```bash
