@@ -756,6 +756,48 @@ def _check_scaffold_artifact_coverage(config: FraisierConfig | None) -> CheckRes
     )
 
 
+@register_check("inert_timers")
+def _check_inert_timers(config: FraisierConfig | None) -> CheckResult:
+    """Which switchable timers this host runs, and which it only carries.
+
+    Always a ``pass``: every family off is a configured state, not a defect,
+    and warning about a deliberate choice on every run is how a report becomes
+    wallpaper — the more so now that ``scaffold_artifact_coverage`` has gone
+    quiet for the first time (#341 installed the last declared gap).
+
+    What it adds is that the state is *legible*. `backup.timer` and
+    `deploy-checker.timer` were copied to every host and started on none, and
+    nothing distinguished "copied and running" from "copied and never
+    started" — which is precisely why three units stayed broken for the
+    project's whole history.
+    """
+    name = "inert_timers"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.config.schema import TIMER_FAMILIES
+
+    timers = config.scaffold.systemd.timers
+    on = sorted(f for f in TIMER_FAMILIES if timers.get(f))
+    off = sorted(f for f in TIMER_FAMILIES if not timers.get(f))
+
+    detail = f"enabled: {', '.join(on) if on else 'none'}"
+    if off:
+        detail += f"; installed and not enabled: {', '.join(off)}"
+
+    return CheckResult(
+        name,
+        "pass",
+        detail,
+        fix_hint=(
+            f"set scaffold.systemd.timers.<name>: true and re-run "
+            f"scaffold-install to start one ({', '.join(off)})"
+        )
+        if off
+        else None,
+    )
+
+
 @register_check("foreign_units")
 def _check_foreign_units(config: FraisierConfig | None) -> CheckResult:
     """Units installed here that belong to a fraise running somewhere else.

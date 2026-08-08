@@ -268,3 +268,97 @@ class TestOneAuthority:
         for family, sources in _TIMER_FAMILY_UNITS.items():
             suffixes = sorted(s.rsplit(".", 1)[1] for s in sources)
             assert suffixes == ["service", "timer"], f"{family}: {sources}"
+
+
+# --------------------------------------------------------------------------
+# Saying it out loud
+# --------------------------------------------------------------------------
+
+
+class TestInstallShReportsWhatItDidNotStart:
+    """The half that separates this from "fix the units and move on".
+
+    backup.timer and deploy-checker.timer sat inert on every host for the
+    project's whole history and *nothing said so*. Repairing them while
+    leaving that silence intact would reproduce the condition that made the
+    bugs invisible in the first place.
+    """
+
+    def test_an_inert_timer_is_named_with_its_consequence_and_its_switch(
+        self, tmp_path
+    ):
+        out, _by_source = _render(tmp_path)
+        install_sh = (out / "install.sh").read_text()
+
+        assert "Installed and not enabled" in install_sh
+        for family, timer in (
+            ("backup", "backup.timer"),
+            ("deploy_checker", "deploy-checker.timer"),
+            ("restore_staging", "restore-staging.timer"),
+        ):
+            assert timer in install_sh
+            assert f"scaffold.systemd.timers.{family}" in install_sh
+        # The description says what starts happening, with no placeholder left
+        # in it for an operator to puzzle over. Scoped to the block: `install.sh`
+        # comments legitimately use `{project}` to describe naming patterns.
+        block = install_sh.split("Installed and not enabled")[1].split("==>")[0]
+        assert "/var/backups/tp" in block
+        assert "{project}" not in block
+
+    def test_an_enabled_timer_is_not_reported_as_inert(self, tmp_path):
+        """The report has to go quiet, or operators learn to skip it."""
+        out, _by_source = _render(tmp_path, {"backup": True})
+        install_sh = (out / "install.sh").read_text()
+
+        inert_block = install_sh.split("Installed and not enabled")[1]
+        assert "backup.timer" not in inert_block.split("==>")[0]
+
+    def test_the_note_reaches_the_manifest_too(self, tmp_path):
+        """`note` already carried "why this is not installed"; "installed and
+        deliberately not started" is the same question one step along, and
+        #341 emptied out the field's original user."""
+        _out, by_source = _render(tmp_path, {"backup": True})
+
+        assert by_source["systemd/backup.timer"]["note"] is None
+        assert "not enabled" in by_source["systemd/deploy-checker.timer"]["note"]
+
+
+class TestDoctorReportsInertTimers:
+    @staticmethod
+    def _run(tmp_path, timers=None):
+        from fraisier import doctor
+
+        raw = dict(_RENDER_BASE)
+        scaffold: dict = {
+            "output_dir": str(tmp_path / "output"),
+            "deploy_user": "deployer",
+        }
+        if timers is not None:
+            scaffold["systemd"] = {"timers": timers}
+        raw["scaffold"] = scaffold
+        path = tmp_path / "fraises.yaml"
+        path.write_text(yaml.safe_dump(raw))
+        return doctor.DOCTOR_CHECKS["inert_timers"].fn(FraisierConfig(path))
+
+    def test_all_off_is_a_pass_not_a_warning(self, tmp_path):
+        """Every knob off is a configured state, not a defect.
+
+        Warning about a deliberate choice on every run is how a report
+        becomes wallpaper — and the scaffold-artifact check has just gone
+        quiet for the first time, which this must not undo.
+        """
+        result = self._run(tmp_path)
+
+        assert result.status == "pass"
+
+    def test_it_names_the_inert_timers(self, tmp_path):
+        result = self._run(tmp_path)
+
+        assert "backup" in result.detail
+        assert "deploy_checker" in result.detail
+
+    def test_an_enabled_family_is_reported_as_enabled(self, tmp_path):
+        result = self._run(tmp_path, {"backup": True})
+
+        assert result.status == "pass"
+        assert "backup" in result.detail

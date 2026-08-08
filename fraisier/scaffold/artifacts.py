@@ -239,6 +239,26 @@ class ArtifactManifest:
     def gaps(self) -> tuple[RenderedArtifact, ...]:
         return self.with_disposition(Disposition.UNINSTALLED_GAP)
 
+    def inert_timers(self) -> tuple[RenderedArtifact, ...]:
+        """Timers this install copies and deliberately does not start (#341).
+
+        The `.timer` of each switchable family whose knob is off — one entry
+        per family, not two, since naming the `.service` alongside it would
+        report the same decision twice.
+
+        Reported by ``install.sh`` and by ``doctor`` rather than left implied
+        by the absence of an enable line. That absence is what hid three
+        broken units for the project's whole history: the operator saw a
+        successful install, and nothing distinguished "copied, running" from
+        "copied, never started".
+        """
+        return tuple(
+            a
+            for a in self.artifacts
+            if a.disposition is Disposition.PLAIN and a.source in _TIMER_UNIT_FAMILY
+            if a.source.endswith(".timer")
+        )
+
     def unit_installer_pairs(self) -> tuple[UnitInstallerPair, ...]:
         """The unit-installer helpers, socket and service paired per environment.
 
@@ -336,8 +356,8 @@ _TIMER_UNIT_FAMILY: dict[str, str] = {
 _KNOWN_GAPS: dict[str, str] = {}
 
 
-def _inert_note(family: str) -> str:
-    """Why a copied timer is not running, and the one line that changes it.
+def _inert_note(family: str, project: str) -> str:
+    """What enabling a copied-but-inert timer would start, and how to do it.
 
     `note` was introduced for UNINSTALLED_GAP — "why, for dispositions where
     the absence of an install needs explaining". "Installed, and deliberately
@@ -346,10 +366,10 @@ def _inert_note(family: str) -> str:
     """
     from fraisier.config.schema import TIMER_FAMILIES
 
-    return (
-        f"installed and not enabled; {TIMER_FAMILIES[family]}. "
-        f"Set scaffold.systemd.timers.{family}: true to run it."
-    )
+    # Self-contained: this string also stands alone in artifact-manifest.json,
+    # with no surrounding block to say what state it is describing.
+    does = TIMER_FAMILIES[family].format(project=project)
+    return f"not enabled; would run {does}. Enable: scaffold.systemd.timers.{family}"
 
 
 _BACKUP_ALERT_RE = re.compile(r"^systemd/fraisier-.+-backup-alert@\.service$")
@@ -563,7 +583,7 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
             source,
             Disposition.TIMER if enabled else Disposition.PLAIN,
             destination=f"{SYSTEMD_DIR}/{stem}",
-            note=None if enabled else _inert_note(family),
+            note=None if enabled else _inert_note(family, project),
         )
 
     if source.startswith("systemd/"):

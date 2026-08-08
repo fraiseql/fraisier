@@ -312,17 +312,26 @@ class NginxEnvConfig:
 
 
 TIMER_FAMILIES: dict[str, str] = {
-    "backup": "backup.timer — nightly pg_dump | gzip into /var/backups/{project}",
+    "backup": (
+        "a nightly pg_dump | gzip of every local database into "
+        "/var/backups/{project}, pruned after 30 days"
+    ),
     "deploy_checker": (
-        "deploy-checker.timer — poll each fraise and environment, deploying "
-        "the ones whose branch moved"
+        "a poll of every fraise and environment every "
+        "health.deploy_poll_interval_seconds, deploying the ones whose "
+        "branch has moved"
     ),
     "restore_staging": (
-        "restore-staging.timer — nightly restore of each restore_migrate "
-        "staging database from the production backup"
+        "a nightly restore of each restore_migrate staging database from the "
+        "production backup, overwriting it"
     ),
 }
 """The timer families `scaffold.systemd.timers` can switch on, and what each does.
+
+The description is what an operator reads before deciding, so it states what
+turning the family on *starts happening*, not what the unit is called — the
+reporting already prints the unit name beside it. `{project}` is substituted at
+use.
 
 One authority, read by the loader's validation, by the artifact classifier that
 turns a family into a ``Disposition``, and by the operator-facing reporting. The

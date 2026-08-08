@@ -859,6 +859,25 @@ echo "        {{ gap.note }}"
 {% endfor %}
 echo "    These are tracked in the artifact manifest, not silently absent."
 {% endif %}
+{#- Timers copied and deliberately not started (#341).
+
+    The third "here is something this installer did not do" block, and the one
+    with the most history behind it: backup.timer and deploy-checker.timer have
+    been copied to every host that ever ran this script and started on none,
+    and nothing ever said so. Three units were broken the whole time, and the
+    silence is why. An operator reading this output now learns the state, what
+    the timer would do, and the single line that changes it. -#}
+{% set inert = artifact_manifest.inert_timers() %}
+{% if inert %}
+echo ""
+echo "==> Installed and not enabled"
+echo "    Copied to /etc/systemd/system and deliberately not started:"
+{% for timer in inert %}
+echo "      {{ timer.source | replace('systemd/', '') }}"
+echo "        {{ timer.note }}"
+{% endfor %}
+echo "    Set the flag in fraises.yaml and re-run this script to start one."
+{% endif %}
 
 echo ""
 echo "==> Setup complete for {{ project_name }}"
