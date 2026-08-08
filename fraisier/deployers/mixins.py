@@ -20,7 +20,12 @@ from fraisier.git.operations import (
     fetch_and_checkout,
     get_worktree_sha,
 )
-from fraisier.status import DEFAULT_STATUS_DIR, DeploymentStatusFile, write_status
+from fraisier.status import (
+    DEFAULT_STATUS_DIR,
+    DeploymentStatusFile,
+    current_owner,
+    write_status,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -394,10 +399,14 @@ class GitDeployMixin:
 
     def _write_status(self, state: str, **kwargs: Any) -> None:
         """Write deployment status file."""
+        # Stamped on every write, not only the first: the record must always
+        # name a process a reader can look for, so a deploy killed mid-flight is
+        # distinguishable from one still running (#349).
         status = DeploymentStatusFile(
             fraise_name=self.fraise_name,
             environment=self.environment,
             state=state,
+            **current_owner(),
             **kwargs,
         )
         try:
