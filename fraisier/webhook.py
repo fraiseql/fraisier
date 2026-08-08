@@ -33,7 +33,7 @@ from .locking import (
     is_deployment_locked,
     is_draining,
 )
-from .status import FAILURE_STATES, read_status
+from .status import FAILURE_STATES, read_status, reconcile_orphaned_deploys
 from .webhook_rate_limit import check_rate_limit
 from .webhook_self_upgrade import maybe_self_upgrade
 
@@ -67,6 +67,28 @@ def _clear_stale_drain_flag() -> None:
         clear_draining_flag(lock_dir)
     except OSError:
         logger.debug("Could not clear stale draining flag", exc_info=True)
+
+
+def _reconcile_orphaned_deploys() -> None:
+    """Close the record of any deploy whose process did not survive.
+
+    Sits beside ``_clear_stale_drain_flag`` because it cleans up after the same
+    kind of event, and runs at startup for a reason specific to #349: the thing
+    that kills a deploy is a restart of this unit, so the restart that killed it
+    is what brings this function up. Best-effort — a webhook that cannot tidy
+    old records must still start and serve.
+    """
+    try:
+        reconciled = reconcile_orphaned_deploys()
+    except OSError:
+        logger.debug("Could not reconcile orphaned deployment records", exc_info=True)
+        return
+    if reconciled:
+        logger.warning(
+            "Recorded %s as interrupted: the deploys that owned those records "
+            "were terminated without reporting",
+            ", ".join(reconciled),
+        )
 
 
 def _install_sighup_reload() -> asyncio.AbstractEventLoop | None:
@@ -120,6 +142,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage webhook server lifecycle."""
     logger.info("Fraisier webhook server starting")
     _clear_stale_drain_flag()
+    _reconcile_orphaned_deploys()
     sighup_loop = _install_sighup_reload()
     yield
     _remove_sighup_reload(sighup_loop)

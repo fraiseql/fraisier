@@ -10,7 +10,12 @@ import click
 from rich.table import Table
 from rich.tree import Tree
 
-from fraisier.status import elapsed_seconds, read_status
+from fraisier.status import (
+    NON_TERMINAL_STATES,
+    elapsed_seconds,
+    owner_is_gone,
+    read_status,
+)
 
 from ._helpers import _get_deployer, console
 from .main import main
@@ -185,6 +190,13 @@ def status(
     _show_single_status(config, fraise, environment)
 
 
+#: A deploy that was killed did not run its own failure path: nothing rolled
+#: back and version.json was not restored, so this is louder than "failed".
+_INTERRUPTED = (
+    "[bold red]INTERRUPTED — deploy was killed, nothing rolled back[/bold red]"
+)
+
+
 def _compute_deployment_state(
     fraise_name: str, current: str | None, latest: str | None
 ) -> str:
@@ -192,11 +204,20 @@ def _compute_deployment_state(
     # Check status file for active deployment states
     status = read_status(fraise_name)
     if status:
+        if status.state in NON_TERMINAL_STATES and owner_is_gone(status):
+            # The record says a deploy is running and its process is gone: it
+            # was terminated rather than failing, so nothing rolled back. Read
+            # without writing — this path runs as whichever user typed the
+            # command, which may not own the status dir. The webhook's startup
+            # reconciler is what makes it stick (#349).
+            return _INTERRUPTED
         if status.state == "deploying":
             elapsed = elapsed_seconds(status)
             if elapsed is not None:
                 return f"[blue]deploying ({int(elapsed)}s)[/blue]"
             return "[blue]deploying[/blue]"
+        elif status.state == "interrupted":
+            return _INTERRUPTED
         elif status.state == "pending":
             return "[yellow]pending[/yellow]"
         elif status.state == "failed":
