@@ -363,29 +363,38 @@ class TestTimerDisposition:
         reload_before = install_sh.rfind("systemctl daemon-reload", 0, enable)
         assert reload_before != -1, "no daemon-reload precedes the enable"
 
-    def test_existing_timers_are_still_not_enabled(self, rendered):
-        """Decision 3: TIMER enables ONLY the retention timers.
+    def test_retention_is_enabled_without_a_knob(self, rendered):
+        """Decision 3, as #341 left it.
 
-        `backup.timer` and `deploy-checker.timer` stay copied-and-inert.
-        Enabling backup.timer on upgrade would start `backup.sh` — a legacy
-        `pg_dump | gzip` writing to /var/backups/{project} — on every host
-        that has ever run scaffold-install, as a side effect of a retention
-        fix. That has its own blast radius and its own issue.
+        v0.60.0 applied TIMER to the retention pair *only*, and asserted that
+        asymmetry as permanent, because enabling backup.timer on upgrade
+        would have started a legacy `pg_dump | gzip` on every host that had
+        ever run scaffold-install — as a side effect of a retention fix.
 
-        If you are changing this, you are taking on that behaviour change
-        for every existing host. Do it deliberately, in its own release.
+        #341 made that a decision instead of a silence: the other three
+        families are switched by `scaffold.systemd.timers` and every one
+        defaults to off, so the upgrade path is unchanged. What survives here
+        is the part that was never about the asymmetry — retention fires
+        unconditionally, with no knob, because a retention unit that does not
+        run reproduces the exact incident it exists to prevent.
+        """
+        _service, timer = unit_names()
+        install_sh = (rendered / "install.sh").read_text()
+
+        assert f"systemctl enable --now {timer}" in install_sh
+
+    def test_no_other_timer_is_enabled_by_default(self, rendered):
+        """Declaring a `retain:` policy must not start anything else.
+
+        The knobs default to off; a config that only asks for retention gets
+        only retention. `tests/test_timer_enablement.py` owns the knob's own
+        behaviour — this is the seam between the two bundles.
         """
         install_sh = (rendered / "install.sh").read_text()
 
-        for inert in ("backup.timer", "deploy-checker.timer"):
+        for inert in ("backup.timer", "deploy-checker.timer", "restore-staging.timer"):
             assert f"systemctl enable --now {inert}" not in install_sh
             assert f"systemctl enable {inert}" not in install_sh
-
-    def test_restore_staging_units_are_still_uninstalled(self, rendered):
-        """The other declared gap keeps its classification too."""
-        install_sh = (rendered / "install.sh").read_text()
-
-        assert "systemctl enable --now restore-staging.timer" not in install_sh
 
 
 class TestNoDeleteReachesTheProducer:

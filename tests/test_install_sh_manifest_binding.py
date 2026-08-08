@@ -242,12 +242,23 @@ fraises:
 
 
 @pytest.fixture
-def restore_tree(tmp_path):
-    """A tree that still contains a gap — restore-staging's two units.
+def restore_tree(tmp_path, monkeypatch):
+    """A tree containing a gap, synthesised rather than found.
 
-    Both are uninstalled, so unlike the gaps this release closed nothing fires
-    into a missing unit; it stays reported rather than becoming silent.
+    `_KNOWN_GAPS` has been empty since #341 installed restore-staging, its
+    last entry. The gap machinery outlives its first user — it is the honest
+    label for the next artifact that is rendered, needed and reached by no
+    installer — so its reporting is exercised against a declared gap instead
+    of against whichever unit happens to be broken today. A test that only
+    passes while a bug exists disappears with the bug.
     """
+    import fraisier.scaffold.artifacts as artifacts_mod
+
+    monkeypatch.setattr(
+        artifacts_mod,
+        "_KNOWN_GAPS",
+        {"systemd/restore-staging.timer": "nothing installs it; the nightly wont run"},
+    )
     cfg = tmp_path / "fraises.yaml"
     cfg.write_text(_RESTORE_MIGRATE_YAML)
     renderer = ScaffoldRenderer(FraisierConfig(cfg))
@@ -301,8 +312,8 @@ class TestCoverageReport:
         out = _run(restore_tree).stdout
 
         assert "installed by nothing" in out
-        assert "restore-staging.service" in out
-        assert "restore-staging.timer" in out  # the note explains what breaks
+        assert "restore-staging.timer" in out
+        assert "the nightly wont run" in out  # the note explains what breaks
 
     def test_a_tree_with_no_gaps_prints_no_gap_section(self, tree):
         """The report has to be able to go quiet, or operators learn to skip it."""

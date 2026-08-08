@@ -233,12 +233,39 @@ class TestKnownGapsAreNamedNotHidden:
             if artifact.disposition is Disposition.UNINSTALLED_GAP:
                 assert artifact.note, f"{artifact.source} is a gap with no note"
 
-    def test_gaps_are_reported_where_they_are_rendered(self, tmp_path):
-        """restore-staging renders only under a ``restore_migrate`` strategy.
+    def test_a_declared_gap_reaches_the_manifest(self, tmp_path, monkeypatch):
+        """The classification survives having no instances.
 
-        Unlike the gaps this release closed, its .service and .timer are
-        *both* uninstalled — self-consistent, so nothing fires into a missing
-        unit. It stays a named gap rather than a silent one.
+        `_KNOWN_GAPS` emptied out when #341 installed restore-staging, its
+        last entry. The disposition stays — it is the honest label for the
+        next artifact that is rendered, needed and reached by no installer,
+        and filing such a thing as MANUAL would launder a live bug into
+        "intentional" — so it is exercised against a synthesised entry rather
+        than against whichever unit happens to be broken today.
+        """
+        import fraisier.scaffold.artifacts as artifacts_mod
+
+        monkeypatch.setattr(
+            artifacts_mod,
+            "_KNOWN_GAPS",
+            {"systemd/restore-staging.timer": "nothing installs it"},
+        )
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_RESTORE_MIGRATE_CONFIG)
+        renderer = ScaffoldRenderer(FraisierConfig(cfg))
+        renderer.output_dir = tmp_path / "out"
+        rendered = renderer.render()
+
+        manifest = build_artifact_manifest(renderer, rendered)
+        gaps = {a.source: a.note for a in manifest.gaps()}
+
+        assert gaps == {"systemd/restore-staging.timer": "nothing installs it"}
+
+    def test_the_default_tree_declares_no_gaps(self, tmp_path):
+        """restore-staging was the last one (#341).
+
+        Stated positively so that reintroducing a gap is a deliberate act with
+        a failing test attached, rather than something that slips in.
         """
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text(_RESTORE_MIGRATE_CONFIG)
@@ -247,10 +274,8 @@ class TestKnownGapsAreNamedNotHidden:
         rendered = renderer.render()
 
         manifest = build_artifact_manifest(renderer, rendered)
-        gaps = {a.source for a in manifest.gaps()}
 
-        assert "systemd/restore-staging.service" in gaps
-        assert "systemd/restore-staging.timer" in gaps
+        assert manifest.gaps() == ()
 
 
 class TestDeployCheckerServiceIsInstalled:
@@ -697,7 +722,17 @@ class TestDoctorSurfacesCoverage:
 
         return doctor.DOCTOR_CHECKS["scaffold_artifact_coverage"].fn(config)
 
-    def test_reports_the_gaps_as_a_warning(self, tmp_path):
+    def test_reports_the_gaps_as_a_warning(self, tmp_path, monkeypatch):
+        """Synthesised: no tree declares a gap since #341. See
+        TestKnownGapsAreNamedNotHidden::test_a_declared_gap_reaches_the_manifest.
+        """
+        import fraisier.scaffold.artifacts as artifacts_mod
+
+        monkeypatch.setattr(
+            artifacts_mod,
+            "_KNOWN_GAPS",
+            {"systemd/restore-staging.timer": "nothing installs it"},
+        )
         cfg = tmp_path / "fraises.yaml"
         cfg.write_text(_RESTORE_MIGRATE_CONFIG)
 
@@ -706,6 +741,17 @@ class TestDoctorSurfacesCoverage:
         assert result.status == "warn"
         assert "installed by nothing" in result.detail
         assert "restore-staging" in result.detail
+
+    def test_a_restore_migrate_tree_now_reports_ok(self, tmp_path):
+        """The warning cleared for real, not just in the synthesised case.
+
+        This config warned for every release before #341 — it is the one that
+        renders the restore-staging pair.
+        """
+        cfg = tmp_path / "fraises.yaml"
+        cfg.write_text(_RESTORE_MIGRATE_CONFIG)
+
+        assert self._run(FraisierConfig(cfg)).status == "pass"
 
     def test_a_tree_with_no_gaps_reports_ok(self, tmp_path):
         """The warning has to be able to clear, or it is wallpaper."""
