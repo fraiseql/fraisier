@@ -11,10 +11,18 @@ from rich.console import Console
 
 from fraisier.config import ShipCheckConfig, ShipConfig
 from fraisier.ship.checks import CheckResult, run_check
-from fraisier.ship.pipeline import ShipPipeline
+from fraisier.ship.pipeline import ShipPipeline, TriggerScope
 
 if TYPE_CHECKING:
     import pytest
+
+
+def _scope(files: list[str], *, base: str = "origin/main") -> TriggerScope:
+    """A resolved scope over *files*. See test_ship_trigger_scope.py for the
+    real-repository tests behind base resolution and the union diff."""
+    return TriggerScope(
+        files=frozenset(files), base=base, detail=f"ship.pr_base={base}"
+    )
 
 
 def _make_check(
@@ -164,11 +172,18 @@ class TestShipPipeline:
         assert result.success
         assert mock_check.call_count == 2
 
-    @patch("fraisier.ship.pipeline.ShipPipeline._get_changed_files")
+    @patch("fraisier.ship.pipeline.ShipPipeline._compute_trigger_scope")
     @patch("fraisier.ship.pipeline.run_check")
     def test_trigger_filtering_skips_unmatched(self, mock_check, mock_changed):
-        """Checks with triggers are skipped when no files match."""
-        mock_changed.return_value = ["src/main.py"]
+        """Checks with triggers are skipped when no files match.
+
+        Patches `_compute_trigger_scope` (#346). This test used to patch
+        `_get_changed_files` — the method that held the bug — so it asserted
+        filtering against a changed set that could never be empty, and the
+        empty-set path that skipped every gate in production had no coverage at
+        all. Stubbing the thing under suspicion is how a green suite hid this.
+        """
+        mock_changed.return_value = _scope(["src/main.py"])
         mock_check.return_value = CheckResult(
             name="x", success=True, output="", duration_seconds=0.1
         )
@@ -185,11 +200,11 @@ class TestShipPipeline:
         assert result.success
         mock_check.assert_not_called()
 
-    @patch("fraisier.ship.pipeline.ShipPipeline._get_changed_files")
+    @patch("fraisier.ship.pipeline.ShipPipeline._compute_trigger_scope")
     @patch("fraisier.ship.pipeline.run_check")
     def test_trigger_filtering_runs_matched(self, mock_check, mock_changed):
         """Checks with triggers run when files match."""
-        mock_changed.return_value = ["db/migrations/001.sql"]
+        mock_changed.return_value = _scope(["db/migrations/001.sql"])
         mock_check.return_value = CheckResult(
             name="x", success=True, output="", duration_seconds=0.1
         )
