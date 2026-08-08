@@ -93,6 +93,16 @@ class TestRetainParsing:
         assert entry.match == "*.dump"
         assert entry.user == "fraisier"
         assert entry.name == "production"
+        # No threshold declared means no threshold — not a built-in one (#344).
+        # Every config written before this field is in that state, so the
+        # default upgrade path gains information and no new failure.
+        assert entry.min_free_gb is None
+
+    def test_min_free_gb_is_carried_when_declared(self, tmp_path):
+        config = write_entries(tmp_path, {**REQUIRED, "min_free_gb": 20})
+        (entry,) = config.retain_entries("development")
+
+        assert entry.min_free_gb == 20
 
     def test_declared_fields_win_over_every_default(self, tmp_path):
         config = write_config(tmp_path, ONE_ENTRY)
@@ -351,6 +361,22 @@ class TestRetainValidation:
     def test_keep_minimum_must_be_non_negative(self, tmp_path):
         message = self._reject(tmp_path, {**REQUIRED, "keep_minimum": -1})
         assert "retain[0].keep_minimum" in message
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_min_free_gb_must_be_positive(self, tmp_path, bad):
+        """A threshold of zero is not a threshold; say so rather than accept it.
+
+        `keep_minimum: 0` is meaningful — no floor. `min_free_gb: 0` would mean
+        "warn when the disk has less than nothing free", which is a config the
+        operator did not intend to write. Omit the key to have no threshold.
+        """
+        message = self._reject(tmp_path, {**REQUIRED, "min_free_gb": bad})
+        assert "retain[0].min_free_gb" in message
+
+    @pytest.mark.parametrize("bad", ["20", 20.5, True, None])
+    def test_min_free_gb_must_be_an_integer(self, tmp_path, bad):
+        message = self._reject(tmp_path, {**REQUIRED, "min_free_gb": bad})
+        assert "retain[0].min_free_gb" in message
 
     @pytest.mark.parametrize(
         "bad", ["every tuesday", "05:30; rm -rf /", "*-*-* 05:30:00 UTC$(id)"]

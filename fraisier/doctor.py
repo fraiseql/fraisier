@@ -841,6 +841,94 @@ def _check_foreign_units(config: FraisierConfig | None) -> CheckResult:
     )
 
 
+@register_check("backup_corpus_free_space")
+def _check_backup_corpus_free_space(config: FraisierConfig | None) -> CheckResult:
+    """Room on the volumes holding the corpora this host receives (#344).
+
+    ``check_disk_space`` guarded the host that *produces* a dump; a host that
+    receives one by rsync had nothing, and #339's first cause was
+    ``/backup/production`` on the destination filling up.
+
+    Retention is not this check. It bounds the corpus in the steady state, and
+    a correct policy can coexist with a full volume — something else on the
+    disk grew, or ``keep_minimum`` is deliberately refusing to delete below its
+    floor while the producer has stalled. Bounding is not alarming.
+
+    ``min_free_gb`` is optional and absent means *no threshold*, which is every
+    config written before it. Those report their free space and pass, so the
+    absence is declared rather than mistaken for a guarantee (#341's rule).
+    """
+    name = "backup_corpus_free_space"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.dbops.backup import free_space_gb
+
+    try:
+        entries = config.all_retain_entries()
+    except ValidationError as exc:
+        return CheckResult(name, "skip", f"invalid retention config: {exc}")
+
+    if not entries:
+        return CheckResult(name, "skip", "no backup retention declared")
+
+    lines: list[str] = []
+    breached: list[str] = []
+    unmeasurable: list[str] = []
+    missing: list[str] = []
+
+    for entry in entries:
+        if not Path(entry.dir).is_dir():
+            missing.append(entry.dir)
+            lines.append(f"{entry.name}: {entry.dir} is not a directory")
+            continue
+        try:
+            free_gb = free_space_gb(entry.dir)
+        except OSError as exc:
+            # "I could not measure" is never "there is room" — the same rule
+            # `db restore` applies to a lock it cannot evaluate and #342 applies
+            # to an archive it cannot read.
+            unmeasurable.append(f"{entry.dir}: {exc}")
+            lines.append(f"{entry.name}: {entry.dir} — free space unreadable: {exc}")
+            continue
+
+        if entry.min_free_gb is None:
+            lines.append(
+                f"{entry.name}: {entry.dir} — {free_gb:.1f}GB free, no threshold set"
+            )
+            continue
+
+        state = "OK" if free_gb >= entry.min_free_gb else "BELOW"
+        lines.append(
+            f"{entry.name}: {entry.dir} — {free_gb:.1f}GB free, "
+            f"need {entry.min_free_gb}GB ({state})"
+        )
+        if free_gb < entry.min_free_gb:
+            breached.append(f"{entry.dir} ({free_gb:.1f}GB < {entry.min_free_gb}GB)")
+
+    listed = "; ".join(lines)
+
+    if breached or missing:
+        hints = []
+        if breached:
+            hints.append(
+                "free space on " + ", ".join(breached) + " — a retention policy "
+                "bounds the corpus but cannot recover a disk something else filled"
+            )
+        if missing:
+            hints.append(
+                "create " + ", ".join(missing) + " or correct the retain entry: a "
+                "policy pointed at a path that is not there prunes nothing, every "
+                "night, reporting success"
+            )
+        return CheckResult(name, "fail", listed, fix_hint="; ".join(hints))
+
+    if unmeasurable:
+        return CheckResult(name, "skip", listed)
+
+    return CheckResult(name, "pass", listed)
+
+
 @register_check("backup_retention")
 def _check_backup_retention(config: FraisierConfig | None) -> CheckResult:
     """Corpora this host says it keeps, and whether anything prunes them.

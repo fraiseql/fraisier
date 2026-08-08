@@ -323,6 +323,58 @@ backup:
           schedule: "*-*-* 06:00:00 UTC"
 """
 
+# The same receiving host with #344's threshold declared on both entries. The
+# claim is that the plan does *not* move: `min_free_gb` is read at run time by
+# `doctor` and `backup prune`, so it reaches no unit file and no install action.
+#
+# The case exists precisely because that claim is easy to assume and was wrong
+# once already. #341's `host_gate` bug — switching a timer family on *removed*
+# its unit copies — was invisible until a matrix case turned one on. A config
+# surface with no golden case exercising it ON hides its own blast radius, so
+# "this changes nothing" gets pinned rather than asserted in a comment.
+_RECEIVING_HOST_WITH_THRESHOLD = """\
+name: proj
+servers:
+  a.example.io:
+    machine_hostnames: [abox]
+  c.example.io:
+    machine_hostnames: [cbox]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: a.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+  edge:
+    type: api
+    environments:
+      staging:
+        server: c.example.io
+        app_path: /var/www/edge
+        systemd_service: edge.service
+        git_repo: /var/git/edge.git
+backup:
+  environments:
+    staging:
+      retain:
+        - dir: /backup/production
+          match: "*_full_*.dump"
+          retention_days: 3
+          keep_minimum: 3
+          schedule: "*-*-* 05:30:00 UTC"
+          name: production-full
+          min_free_gb: 20
+        - dir: /backup/analytics
+          retention_days: 14
+          schedule: "*-*-* 06:00:00 UTC"
+          min_free_gb: 5
+"""
+
 # #341's shape: the three timer families install.sh has always copied, and
 # before #341 enabled none of. Two cases from one config, because the
 # behavioural claim of that bundle is a *difference* between them.
@@ -405,6 +457,11 @@ MATRIX = [
     ("scheduled_fraise", _SCHEDULED, "solo"),
     ("receiving_host_with_retention", _RECEIVING_HOST, "cbox"),
     ("non_receiving_host", _RECEIVING_HOST, "abox"),
+    (
+        "receiving_host_with_free_space_threshold",
+        _RECEIVING_HOST_WITH_THRESHOLD,
+        "cbox",
+    ),
     ("timer_families_off", _TIMER_FAMILIES_OFF, "solo"),
     ("timer_families_on", _TIMER_FAMILIES_ON, "solo"),
 ]
@@ -760,6 +817,24 @@ class TestRetentionUnitsReachOnlyTheReceivingHost:
             "sudo systemctl enable --now restore-staging.timer",
         }
         assert off - on == set(), "switching a timer on removed work from the plan"
+
+    def test_a_free_space_threshold_changes_no_install_action(self, plans):
+        """#344's `min_free_gb` reaches no unit file, asserted as a delta.
+
+        It is consumed at run time by `doctor` and `backup prune`, so nothing
+        the installer does should differ. Pinned rather than assumed: #341's
+        `host_gate` bug meant switching a timer family *on* removed its unit
+        copies, and it stayed invisible until a matrix case turned one on. A
+        config surface whose ON state no golden case exercises hides its own
+        blast radius.
+        """
+        without = plans["receiving_host_with_retention"]
+        with_threshold = plans["receiving_host_with_free_space_threshold"]
+
+        assert with_threshold == without, (
+            "declaring min_free_gb changed the install plan; it is a run-time "
+            "threshold and must reach no unit"
+        )
 
     def test_the_receiving_host_does_not_create_the_corpus_directory(self, plans):
         """A directory install.sh conjured into existence would turn a typo'd

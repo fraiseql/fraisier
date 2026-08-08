@@ -949,6 +949,33 @@ def _prune_one(entry, *, dry_run: bool):
     return outcome, None
 
 
+def _low_disk_warning(entry) -> str | None:
+    """The corpus volume is below the entry's declared floor (#344).
+
+    A warning and not a failure, deliberately: a non-zero exit here converts a
+    disk warning into a failed unit and stops the pruning that is the one thing
+    that might still help. Returns None when no threshold is declared — which is
+    every config written before the field — or when the volume cannot be read,
+    since "I could not measure" is not "the disk is full" any more than it is
+    "there is room".
+    """
+    if entry.min_free_gb is None:
+        return None
+    from fraisier.dbops.backup import free_space_gb
+
+    try:
+        free_gb = free_space_gb(entry.dir)
+    except OSError:
+        return None
+    if free_gb >= entry.min_free_gb:
+        return None
+    return (
+        f"WARNING: {entry.dir} has {free_gb:.1f}GB free, below the "
+        f"min_free_gb={entry.min_free_gb} declared for {entry.name}. Retention "
+        f"bounds this corpus but cannot recover a disk something else filled."
+    )
+
+
 def _unreadable_dump_warning(entry, outcome) -> str:
     """Name the dumps the floor refused to protect (#342).
 
@@ -1043,6 +1070,9 @@ def backup_prune(
             warnings.append(_unreadable_dump_warning(entry, outcome))
         if outcome.floor_was_load_bearing:
             warnings.append(_stalled_producer_warning(entry, outcome))
+        low_disk = _low_disk_warning(entry)
+        if low_disk:
+            warnings.append(low_disk)
 
     if as_json:
         # Nothing else may reach stdout: the report is piped, and a Rich

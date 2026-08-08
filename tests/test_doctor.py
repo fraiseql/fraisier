@@ -30,6 +30,34 @@ class TestCheckRegistry:
         ):
             assert name in doctor.DOCTOR_CHECKS, f"{name} not in DOCTOR_CHECKS"
 
+    def test_the_docs_catalog_lists_every_registered_check(self):
+        """`docs/doctor.md` describes all of them, or it describes a subset.
+
+        It had drifted six checks behind — `backup_retention`, `foreign_units`,
+        `sandbox_write_probe`, `scaffold_artifact_coverage` and
+        `webhook_hosted_trees_writable` were never added, and #344's
+        `backup_corpus_free_space` would have been the seventh. A catalog that
+        silently covers part of the registry reads as covering all of it, which
+        is the same defect class as a unit nothing enables: the gap is invisible
+        precisely because nothing announces it.
+        """
+        import re
+
+        catalog = Path(__file__).parent.parent / "docs" / "doctor.md"
+        documented = set(
+            re.findall(r"^\| `([a-z_]+)` \|", catalog.read_text(), re.MULTILINE)
+        )
+        registered = set(doctor.DOCTOR_CHECKS)
+
+        assert not registered - documented, (
+            "registered but undocumented in docs/doctor.md: "
+            + ", ".join(sorted(registered - documented))
+        )
+        assert not documented - registered, (
+            "documented in docs/doctor.md but not registered: "
+            + ", ".join(sorted(documented - registered))
+        )
+
     def test_each_check_returns_a_check_result(self):
         # Smoke: every registered check executes against a None config
         # without raising, and returns a CheckResult.

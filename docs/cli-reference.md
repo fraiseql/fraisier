@@ -472,9 +472,22 @@ fraisier backup prune --env ENV [--name ENTRY] [--dry-run] [--json]
 
 Exits non-zero for an unknown `--name`, an environment with no policy, or a
 `dir` that is not a directory — a retention policy that pruned nothing must
-not report success. A corpus kept alive only by `keep_minimum` produces a
-WARNING on stderr and exits 0, so a stalled producer does not also stop the
-timer.
+not report success.
+
+Three conditions produce a WARNING on stderr and exit 0, so that neither a
+broken producer nor a filling disk also stops the timer that is still working:
+
+| condition | warning |
+|---|---|
+| the corpus survived only because of `keep_minimum` | the producer has stalled; names the newest dump's age |
+| a dump contesting a floor slot is not a readable archive | names it; it does not hold a slot |
+| the volume is below the entry's `min_free_gb` | names free space and the threshold |
+
+The `--json` report carries an `invalid` list per entry. It is an **overlay**:
+every path in it also appears in exactly one of `removed`, `kept` or
+`exempted_by_minimum`, so summing all four double-counts the corpus. It lists
+what verifying the floor examined, not a full audit of the directory — use
+`fraisier doctor` for that.
 
 **Examples:**
 
