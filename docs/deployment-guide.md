@@ -1000,6 +1000,73 @@ fraisier deploy my_api production --if-changed
 
 Useful in cron jobs or CI pipelines where you want to avoid no-op deployments.
 
+### Retention for a corpus you receive
+
+A host that is rsync'd backups from somewhere else has no fraise producing
+them, so nothing on that host knows the corpus exists — and nothing prunes
+it. Declare the policy under `backup.environments.<env>.retain`, keyed by the
+**receiving** environment:
+
+```yaml
+backup:
+  environments:
+    development:                    # the host that receives the corpus
+      retain:
+        - dir: /backup/production
+          match: "*_full_*.dump"    # default "*.dump"
+          retention_days: 3
+          keep_minimum: 3           # default 3
+          schedule: "*-*-* 05:30:00 UTC"
+          name: production-full     # default: the dir basename
+          user: fraisier            # default: scaffold.deploy_user
+```
+
+Each entry renders a `.service` and `.timer` pair that `scaffold-install`
+installs **and enables**. `fraisier scaffold-diff` reports a missing one and
+`fraisier doctor` reports a corpus nothing is pruning — which is the part
+that was missing when a destination host filled its disk: the unit meant to
+prune it was hand-written in the consuming repo and checked by nobody.
+
+Run it by hand on the destination:
+
+```bash
+fraisier backup prune --env development
+fraisier backup prune --env development --name production-full --dry-run
+fraisier backup prune --env development --json
+```
+
+**Deletion runs on the destination, and only there.** Nothing gives the
+producing side a way to expire this host's copies, and no `rsync --delete*`
+flag appears anywhere fraisier renders: a compromised sender key cannot erase
+the corpus it pushed.
+
+#### `keep_minimum` and the stalled-producer warning
+
+`keep_minimum` exempts the newest N dumps from the age rule *entirely*,
+before the cutoff is applied. Without it, a producer that stops producing
+ages its whole corpus out in one run — every dump is past the window on the
+same night, and the destination is left with nothing.
+
+When the floor is the only reason anything survived, the prune says so:
+
+```
+WARNING: every backup in /backup/production is past its retention window;
+only keep_minimum=3 is holding the corpus open. The newest is 96h old
+(prod_full_20260804.dump). Nothing recent has arrived — check the producer.
+```
+
+It exits 0 deliberately. A non-zero here would put the timer in `failed` and
+stop the pruning that is still working, on top of a producer that is already
+broken.
+
+Two things this does **not** do:
+
+- **It counts, it does not validate.** A partially transferred dump is the
+  *newest* by mtime, so it is the first thing the floor protects. Verifying
+  what arrives is a separate concern.
+- **It does not watch the disk.** `keep_minimum` bounds how much a stalled
+  producer can delete, not how much a healthy one can write.
+
 ---
 
 ## Diagnostic Commands

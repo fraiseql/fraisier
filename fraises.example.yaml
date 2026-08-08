@@ -392,3 +392,54 @@ branch_mapping:
 #   # v0.18.0+ to pick it up. Until then the install succeeds but the
 #   # restart RPC fails (and is logged).
 #   self_upgrade: true
+
+# ============================================================
+# BACKUP RETENTION FOR A CORPUS THIS HOST *RECEIVES*
+# ============================================================
+# Keyed by the RECEIVING environment, not by the producing one. A host that
+# is rsync'd a nightly dump from somewhere else has no fraise producing it,
+# so there is no fraise to key this on — which is why these units gate on
+# "does a fraise on this host declare this environment?" rather than on a
+# fraise name.
+#
+# Deletion runs here, on the destination, and only here. Nothing in fraisier
+# gives the producing side a way to expire this host's copies, and no
+# `rsync --delete*` flag appears anywhere in what it renders: a compromised
+# sender key cannot erase the corpus it pushed.
+#
+# Each entry renders a .service and .timer pair that fraisier installs AND
+# enables, so `fraisier scaffold-diff` reports a missing one and `fraisier
+# doctor` reports a corpus nothing is pruning.
+#
+# backup:
+#   environments:
+#     development:                    # the host that RECEIVES the corpus
+#       retain:
+#         - dir: /backup/production   # absolute; granted via ReadWritePaths=
+#           match: "*_full_*.dump"    # default "*.dump"; scopes the glob so
+#                                     # full and slim dumps expire separately
+#           retention_days: 3
+#           keep_minimum: 3           # default 3. The newest N survive the age
+#                                     # rule ENTIRELY. Without it, a producer
+#                                     # that stops producing ages the whole
+#                                     # corpus out in one run — the outage this
+#                                     # exists for. It counts, it does not
+#                                     # validate: a partially transferred dump
+#                                     # is the newest by mtime and is therefore
+#                                     # the first thing the floor protects.
+#           schedule: "*-*-* 05:30:00 UTC"   # systemd OnCalendar
+#           name: production-full     # optional; defaults to the dir basename.
+#                                     # Two entries in one environment may not
+#                                     # share a name — that is a config error
+#                                     # naming both, never a silent rename.
+#           user: fraisier            # optional; defaults to scaffold.deploy_user.
+#                                     # Whoever owns the corpus, which is
+#                                     # whoever receives the rsync push.
+#
+# Run it by hand on the destination:
+#   fraisier backup prune --env development
+#   fraisier backup prune --env development --name production-full --dry-run
+#
+# A WARNING on stderr saying the floor was the only thing holding the corpus
+# open means nothing recent has arrived — check the producer. It exits 0, so
+# a stalled producer does not also stop the timer.
