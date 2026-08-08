@@ -707,6 +707,20 @@ def db_restore(
 
             msg = f"{result.migrations_applied} migration(s) applied"
             console.print(f"[green]Restore complete:[/green] {msg}")
+
+            # Said, not assumed (#343). `min_tables` defaulting to 0 meant no
+            # table-count floor ran anywhere, while a comment in dbops.restore
+            # claimed the strategy enforced one. An operator reading "Restore
+            # complete" should learn whether anything counted. This goes to the
+            # console rather than the log because `fraisier` only configures
+            # logging under -v, and the generated timer unit passes no flags —
+            # an INFO line would reach neither the terminal nor the journal.
+            if int(restore_cfg.get("min_tables", 0)) <= 0:
+                console.print(
+                    "  [yellow]Note:[/yellow] no table-count floor configured "
+                    "(database.restore.min_tables); the restored database was "
+                    "not checked for emptiness."
+                )
             if result.total_duration_seconds > 0:
                 console.print(
                     f"  Restore: {result.restore_duration_seconds:.1f}s"
