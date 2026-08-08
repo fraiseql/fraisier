@@ -46,7 +46,7 @@ class TestConcurrentDeployNotKilled:
                     return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ),
                 patch(
-                    "fraisier.webhook_self_upgrade._call_via_socket",
+                    "fraisier.drain_restart._call_via_socket",
                     side_effect=restart_mock,
                 ),
             ):
@@ -147,7 +147,7 @@ class TestDrainTimeoutObservable:
                     "fraisier.webhook_self_upgrade.subprocess.run",
                     return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ),
-                patch("fraisier.webhook_self_upgrade._call_via_socket") as mock_socket,
+                patch("fraisier.drain_restart._call_via_socket") as mock_socket,
                 caplog.at_level(
                     logging.WARNING, logger="fraisier.webhook_self_upgrade"
                 ),

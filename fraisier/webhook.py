@@ -23,6 +23,7 @@ from .config._lazy_env import LazyEnv, to_str
 if TYPE_CHECKING:
     from .config.loader import FraisierConfig
     from .database import FraisierDB
+from .deferred_restart import maybe_apply_deferred_restarts
 from .duration_estimate import build_estimate, to_dispatch_dict
 from .errors import ConfigurationError, DeploymentError, DeploymentLockError
 from .git import GitProvider, WebhookEvent, get_provider
@@ -341,6 +342,7 @@ async def _run_deployment(
     db: "FraisierDB",
 ) -> None:
     """Run the actual deployment within a lock."""
+    upgrading = False
     try:
         fraise_type = fraise_config.get("type")
 
@@ -409,7 +411,7 @@ async def _run_deployment(
             app_path = fraise_config.get("app_path")
             if app_path:
                 webhook_cfg = config.webhook
-                maybe_self_upgrade(
+                upgrading = maybe_self_upgrade(
                     Path(app_path),
                     project_name=config.project_name,
                     enabled=bool(webhook_cfg.get("self_upgrade", True)),
@@ -419,6 +421,23 @@ async def _run_deployment(
                 f"Deployment failed: {fraise_name}/{environment} "
                 f"- {result.error_message}"
             )
+
+        # Pay whatever install.sh deferred because this deploy was in flight
+        # (#349). Run on failure too: the units were installed either way, and a
+        # rollback that restores the previous fraises.yaml reinstalls their old
+        # bytes, so install.sh records no debt and this is a no-op.
+        #
+        # Skipped while a self-upgrade is in flight. That worker restarts the
+        # webhook anyway, which is the debt — and both workers raise the same
+        # single `.draining` flag, so the first to finish would clear it out
+        # from under the other.
+        if not upgrading:
+            lock_dir = _get_lock_dir(config)
+            if lock_dir is not None:
+                maybe_apply_deferred_restarts(
+                    lock_dir=lock_dir,
+                    socket_path=os.environ.get("FRAISIER_SYSTEMCTL_SOCKET", ""),
+                )
 
     except (DeploymentError, ConfigurationError, OSError) as e:
         logger.exception(

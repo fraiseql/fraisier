@@ -977,3 +977,47 @@ def _check_backup_retention(config: FraisierConfig | None) -> CheckResult:
             f"{', '.join(entry.dir for entry in missing)}"
         ),
     )
+
+
+@register_check("deferred_restarts")
+def _check_deferred_restarts(config: FraisierConfig | None) -> CheckResult:
+    """Units installed by a deploy and still running their previous version.
+
+    ``install.sh`` may not restart a unit that hosts a deploy — the webhook runs
+    deploys in process, so restarting it mid-deploy SIGKILLs the deploy that
+    asked for the install (#349). It records what it deferred instead, and the
+    deploy pays that back once its lock releases.
+
+    This is the backstop for a debt that was never paid: a drain that timed out,
+    a unit the systemctl helper refuses (it allowlists services, not sockets), or
+    a deploy run by the socket-activated ``deploy-daemon``, whose detached worker
+    can be killed with its own per-connection service instance.
+
+    ``warn``, not ``fail``: the host is running, just on an older unit. What it
+    costs is a stale ``ReadWritePaths=`` or ``Environment=``, which is how a
+    later deploy meets a read-only filesystem.
+    """
+    name = "deferred_restarts"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.deferred_restart import read_deferred_restarts
+
+    lock_dir = getattr(getattr(config, "deployment", None), "lock_dir", None)
+    if not lock_dir:
+        return CheckResult(name, "skip", "no deployment.lock_dir configured")
+
+    pending = read_deferred_restarts(Path(lock_dir))
+    if not pending:
+        return CheckResult(name, "pass", f"nothing pending under {lock_dir}")
+
+    return CheckResult(
+        name,
+        "warn",
+        f"installed but not restarted: {', '.join(pending)}",
+        fix_hint=(
+            "these units are on disk and daemon-reloaded but are running their "
+            "previous version; restart them once no deploy is in flight: "
+            f"sudo systemctl restart {' '.join(pending)}"
+        ),
+    )
