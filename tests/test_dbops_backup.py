@@ -1,5 +1,6 @@
 """Tests for fraisier.dbops.backup module."""
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fraisier.dbops.archive import ArchiveCheck, ArchiveVerdict
 from fraisier.dbops.backup import (
     _previous_same_mode_backup,
     _verify_backup_toc,
@@ -412,34 +414,90 @@ class TestRunBackupJobs:
 
 
 class TestVerifyBackupToc:
-    """Test _verify_backup_toc helper."""
+    """The producing side reads the same seam as the receiving side (#342).
 
-    def test_passes_when_pg_restore_list_succeeds(self):
-        with patch("fraisier.dbops.backup._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "; Archive header...\n", "")
+    "What makes a dump valid" had one implementation here and was about to grow
+    a second for the restore and prune paths. It stays one: this helper is an
+    adapter over `verify_archive`, keeping `run_backup`'s (ok, error) shape.
+    """
+
+    def test_delegates_to_the_shared_seam(self):
+        with patch("fraisier.dbops.backup.verify_archive") as verify:
+            verify.return_value = ArchiveCheck(ArchiveVerdict.VALID, "")
             ok, err = _verify_backup_toc(
                 "/backups/proddb_full.dump", connection_url=_TEST_URL
             )
+        verify.assert_called_once()
+        assert str(verify.call_args[0][0]) == "/backups/proddb_full.dump"
         assert ok is True
         assert err == ""
 
-    def test_fails_when_pg_restore_list_errors(self):
-        with patch("fraisier.dbops.backup._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (1, "", "pg_restore: error reading file")
+    def test_invalid_archive_fails_verification(self):
+        with patch("fraisier.dbops.backup.verify_archive") as verify:
+            verify.return_value = ArchiveCheck(
+                ArchiveVerdict.INVALID, "pg_restore: error reading file"
+            )
             ok, err = _verify_backup_toc(
                 "/backups/proddb_full.dump", connection_url=_TEST_URL
             )
         assert ok is False
         assert "error reading file" in err
 
-    def test_calls_pg_restore_with_list_flag(self):
-        with patch("fraisier.dbops.backup._pg_cmd") as mock_cmd:
-            mock_cmd.return_value = (0, "", "")
-            _verify_backup_toc("/backups/proddb_full.dump", connection_url=_TEST_URL)
-        cmd = mock_cmd.call_args[0][0]
-        assert cmd[0] == "pg_restore"
-        assert "--list" in cmd
-        assert "/backups/proddb_full.dump" in cmd
+    def test_unverifiable_does_not_fail_the_backup(self, caplog):
+        """A dump pg_dump just wrote is not condemned by a missing pg_restore.
+
+        Previously this path raised FileNotFoundError out of `run_backup`, so
+        a host without the client tools crashed its own backup. It is a warning
+        now — but a warning, not silence: the dump went out unverified.
+        """
+        with (
+            patch("fraisier.dbops.backup.verify_archive") as verify,
+            caplog.at_level(logging.WARNING, logger="fraisier.dbops.backup"),
+        ):
+            verify.return_value = ArchiveCheck(
+                ArchiveVerdict.UNVERIFIABLE, "pg_restore not found on PATH"
+            )
+            ok, err = _verify_backup_toc(
+                "/backups/proddb_full.dump", connection_url=_TEST_URL
+            )
+        assert ok is True
+        assert err == ""
+        assert "pg_restore not found on PATH" in caplog.text
+
+    def test_no_second_pg_restore_list_implementation(self):
+        """One place builds that argv. Stated where it can be enforced.
+
+        Two copies is how the producing side ended up TOC-verifying while the
+        receiving side verified nothing — the gap #342 was filed for.
+
+        Matches the *argv construction* (a sequence literal carrying both
+        tokens), not the string `--list`, which `fraisier sync` also has as a
+        click flag.
+        """
+        import ast
+
+        import fraisier
+
+        package = Path(fraisier.__file__).parent
+        offenders = []
+        for path in sorted(package.rglob("*.py")):
+            if path.name == "archive.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.List | ast.Tuple):
+                    continue
+                literals = {
+                    e.value
+                    for e in node.elts
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)
+                }
+                if "pg_restore" in literals and "--list" in literals:
+                    offenders.append(f"{path.relative_to(package)}:{node.lineno}")
+
+        assert not offenders, (
+            "a second pg_restore --list call site (use dbops.archive."
+            "verify_archive):\n" + "\n".join(offenders)
+        )
 
 
 class TestPreviousSameModeBackup:
