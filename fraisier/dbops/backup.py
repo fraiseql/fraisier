@@ -4,6 +4,7 @@ Supports full and slim backup modes, disk space checks, retention
 cleanup, and per-destination schedule matching.
 """
 
+import logging
 import re
 import shutil
 import time
@@ -12,7 +13,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
+from fraisier.dbops.archive import ArchiveVerdict, verify_archive
 from fraisier.dbops.operations import _pg_cmd
+
+log = logging.getLogger(__name__)
 
 _COMPRESSION_RE = re.compile(r"^(zstd|lz4|gzip|none)(:\d+)?$")
 
@@ -35,20 +39,30 @@ def _validate_compression(value: str) -> None:
 def _verify_backup_toc(
     backup_path: str,
     *,
-    connection_url: str,
+    connection_url: str,  # noqa: ARG001  # Reason: kept for call-site stability
 ) -> tuple[bool, str]:
-    """Verify a backup file's TOC by running ``pg_restore --list``.
+    """Verify a just-written dump, in ``run_backup``'s (ok, error) shape.
 
-    No database connection is required — ``--list`` reads the archive's
-    header only. Catches truncated/corrupt dumps that would otherwise be
-    discovered hours later during a restore attempt.
+    Adapter over :func:`fraisier.dbops.archive.verify_archive`, which is the
+    one implementation of "is this a readable archive" — the restore and prune
+    paths read the same seam (#342). *connection_url* is accepted and unused:
+    ``pg_restore --list`` never connects, and removing the parameter would
+    churn a working call site for nothing.
 
-    Returns (True, "") on success, (False, stderr) on failure.
+    An ``UNVERIFIABLE`` result does **not** fail the backup. The dump was
+    written by the ``pg_dump`` that just succeeded, and a host missing the
+    client tools should not have its backup condemned by the absence of the
+    thing that would have cleared it — it previously raised
+    ``FileNotFoundError`` straight out of ``run_backup``. It is logged, so the
+    dump does not go out unverified *and* unmentioned.
+
+    Returns (True, "") when the dump is not known-bad, (False, detail) when it is.
     """
-    cmd = ["pg_restore", "--list", backup_path]
-    code, _, stderr = _pg_cmd(cmd, connection_url=connection_url)
-    if code != 0:
-        return False, stderr.strip()
+    check = verify_archive(backup_path)
+    if check.is_bad:
+        return False, check.detail
+    if check.verdict is ArchiveVerdict.UNVERIFIABLE:
+        log.warning("Backup %s could not be verified: %s", backup_path, check.detail)
     return True, ""
 
 
