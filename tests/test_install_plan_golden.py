@@ -273,6 +273,56 @@ fraises:
         git_repo: /var/git/edge.git
 """
 
+# #339's shape: a host that *receives* a backup corpus. `cbox` carries
+# `edge`/staging and declares a retain policy for it, so it installs and
+# ENABLES a retention pair. `abox` carries `api`/production and declares
+# none, so it must plan neither — the retention units are env-owned, and
+# "env-owned" must not degrade into "unconditional".
+#
+# Note the corpus has no producing fraise anywhere in this config. That is
+# the point: it arrives by rsync from a machine fraisier does not manage,
+# which is why the units gate on `_env_active` rather than `_scope_active`.
+_RECEIVING_HOST = """\
+name: proj
+servers:
+  a.example.io:
+    machine_hostnames: [abox]
+  c.example.io:
+    machine_hostnames: [cbox]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: a.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+  edge:
+    type: api
+    environments:
+      staging:
+        server: c.example.io
+        app_path: /var/www/edge
+        systemd_service: edge.service
+        git_repo: /var/git/edge.git
+backup:
+  environments:
+    staging:
+      retain:
+        - dir: /backup/production
+          match: "*_full_*.dump"
+          retention_days: 3
+          keep_minimum: 3
+          schedule: "*-*-* 05:30:00 UTC"
+          name: production-full
+        - dir: /backup/analytics
+          retention_days: 14
+          schedule: "*-*-* 06:00:00 UTC"
+"""
+
 # (case name, config, hostname). Two entries for the asymmetric config: the
 # whole point is that the two hosts must plan *different* installs.
 MATRIX = [
@@ -288,6 +338,8 @@ MATRIX = [
     ("nginx_vhosts", _NGINX, "solo"),
     ("nginx_derived_vhost_name", _NGINX_DERIVED_NAME, "solo"),
     ("scheduled_fraise", _SCHEDULED, "solo"),
+    ("receiving_host_with_retention", _RECEIVING_HOST, "cbox"),
+    ("non_receiving_host", _RECEIVING_HOST, "abox"),
 ]
 
 
@@ -536,4 +588,108 @@ class TestDerivedVhostNameIsInstalled:
 
         assert any(
             "sites-enabled/proj_api_production" in c for c in plan if "ln -sf" in c
+        )
+
+
+class TestRetentionUnitsReachOnlyTheReceivingHost:
+    """#339, pinned in the plan rather than only in the renderer's tests.
+
+    The renderer's own tests assert what it writes. This asserts what a
+    given host *plans to install* after `_env_active` has run against a
+    real hostname — which is where "env-owned" would quietly become
+    "unconditional".
+    """
+
+    def test_only_the_receiving_host_installs_the_retention_units(self, plans):
+        receiving = " ".join(plans["receiving_host_with_retention"])
+        other = " ".join(plans["non_receiving_host"])
+
+        assert "retain-production-full.service" in receiving
+        assert "retain-production-full.timer" in receiving
+        assert "retain-" not in other, (
+            "a host with no retain policy for its environments planned a "
+            "retention install; the units are env-owned, not unconditional"
+        )
+
+    def test_both_entries_in_the_environment_get_a_pair(self, plans):
+        """The second entry takes its name from the dir basename."""
+        receiving = " ".join(plans["receiving_host_with_retention"])
+
+        assert "retain-analytics.service" in receiving
+        assert "retain-analytics.timer" in receiving
+
+    def test_the_timer_is_enabled_and_the_service_is_not(self, plans):
+        """The timer is the schedule; enabling the service too would run the
+        prune once at boot as well."""
+        ops = [c for c in plans["receiving_host_with_retention"] if "retain-" in c]
+        enables = [c for c in ops if "enable" in c]
+
+        assert len(enables) == 2, f"expected one enable per timer: {enables}"
+        assert all(c.endswith(".timer") for c in enables), enables
+
+    def test_the_pair_is_copied_before_the_timer_is_enabled(self, plans):
+        """Enabling a timer whose .service is not on disk is backup.timer's
+        bug with the ordering inverted."""
+        ops = [c for c in plans["receiving_host_with_retention"] if "retain-" in c]
+        verbs = [c.split()[2] if "systemctl" in c else "cp" for c in ops]
+
+        assert verbs.count("cp") == 4, f"expected two pairs copied: {ops}"
+        assert max(i for i, v in enumerate(verbs) if v == "cp") < verbs.index(
+            "enable"
+        ), f"a timer is enabled before every unit is on disk: {ops}"
+
+    def test_daemon_reload_separates_the_copies_from_the_enable(self, plans):
+        """`enable --now` on a unit systemd has not re-read starts the old one."""
+        plan = plans["receiving_host_with_retention"]
+        last_copy = max(i for i, c in enumerate(plan) if "retain-" in c and "cp" in c)
+        first_enable = min(
+            i for i, c in enumerate(plan) if "retain-" in c and "enable" in c
+        )
+        between = plan[last_copy:first_enable]
+
+        assert any("daemon-reload" in c for c in between), (
+            f"no daemon-reload between the copies and the enable: {between}"
+        )
+
+    def test_the_pre_existing_timers_are_still_not_enabled(self, plans):
+        """Decision 3, pinned in the plan for every case in the matrix.
+
+        `Disposition.TIMER` enables the retention timers and only those.
+        Enabling backup.timer on upgrade would start a legacy
+        `pg_dump | gzip` on every host that has ever run scaffold-install,
+        as a side effect of a retention fix. If this test is failing, that
+        is what you are shipping — do it in its own release.
+        """
+        for case, plan in plans.items():
+            enabled = [c for c in plan if "enable" in c]
+            for inert in ("backup.timer", "deploy-checker.timer"):
+                assert not [c for c in enabled if c.endswith(inert)], (
+                    f"{case}: {inert} is now enabled on upgrade"
+                )
+
+    def test_the_receiving_host_does_not_create_the_corpus_directory(self, plans):
+        """A directory install.sh conjured into existence would turn a typo'd
+        `dir:` into a prune that quietly finds nothing, replacing the loud
+        error `backup prune` raises today."""
+        plan = " ".join(plans["receiving_host_with_retention"])
+
+        assert "mkdir -p /backup/production" not in plan
+        assert "mkdir -p /backup/analytics" not in plan
+
+    def test_a_non_receiving_host_plans_nothing_for_retention(self, plans):
+        """Not even a daemon-reload.
+
+        The tree is rendered for every environment in the config, so the
+        retention block is present in install.sh on hosts that install none
+        of it. An unconditional reload there is a planned command matching
+        no work — caught by this pin on the first regeneration.
+        """
+        receiving = plans["receiving_host_with_retention"]
+        other = plans["non_receiving_host"]
+        reloads = "sudo systemctl daemon-reload"
+
+        assert not [c for c in other if "retain-" in c]
+        assert receiving.count(reloads) == other.count(reloads) + 1, (
+            "the retention block must add exactly one reload, and only where "
+            "it installs something"
         )

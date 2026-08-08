@@ -625,12 +625,21 @@ _install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
 {% set retention = artifact_manifest.with_disposition('timer') %}
 {% if retention %}
 echo "  Installing retention timers"
+# The reload is conditional on something having been copied. The tree is
+# rendered for every environment in the config, so this block exists on hosts
+# that install none of it; an unconditional reload there is a command in the
+# plan that corresponds to no work — which is the noise a golden pin exists to
+# keep out.
+_RETENTION_INSTALLED=false
 {% for artifact in retention %}
 if {{ host_gate(artifact.fraise, artifact.environment) }}; then
     _install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
+    _RETENTION_INSTALLED=true
 fi
 {% endfor %}
-_run sudo systemctl daemon-reload
+if [ "$_RETENTION_INSTALLED" = true ]; then
+    _run sudo systemctl daemon-reload
+fi
 {% for artifact in retention if artifact.source.endswith('.timer') %}
 {% set timer_unit = artifact.source | replace('systemd/', '') %}
 if {{ host_gate(artifact.fraise, artifact.environment) }}; then

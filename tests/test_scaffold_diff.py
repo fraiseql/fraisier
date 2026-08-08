@@ -175,3 +175,26 @@ def test_apply_scaffold_diffs_noop_when_nothing_to_apply():
     assert applied == []
     assert failed == []
     mock_run.assert_not_called()
+
+
+def test_orphan_scan_survives_an_unreadable_install_directory():
+    """`scaffold-diff` must not abort on a directory it cannot stat.
+
+    `Path.exists()` swallows only ENOENT/ENOTDIR/EBADF/ELOOP — EACCES is
+    re-raised. `/etc/sudoers.d` is mode 0750 root:root, so the orphan scan
+    aborted the entire diff for any non-root caller, before it could
+    report a single missing unit. Found while adding #339's retention
+    units to the diff; the bug predates them and affects every artifact.
+    """
+    from fraisier.scaffold.diff import _compare_files
+
+    denied = MagicMock(spec=Path)
+    denied.exists.side_effect = PermissionError(13, "Permission denied")
+
+    generated = MagicMock(spec=Path)
+    generated.parent.parent = "root"
+    generated.relative_to.return_value = "sudoers"
+
+    result = _compare_files(generated, denied)
+
+    assert result.status == "permission_denied"

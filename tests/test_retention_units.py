@@ -408,3 +408,128 @@ class TestNoDeleteReachesTheProducer:
                 offenders.append(str(path.relative_to(rendered)))
 
         assert not offenders, f"rsync --delete* reached: {offenders}"
+
+
+class TestDiagnostics:
+    """Phase 8 — the fix #339 actually asks for.
+
+    A corpus with no retention installed must be *reported*. The plan
+    predicted `scaffold-diff` would need no change because it derives from
+    `get_install_mapping()`, which derives from the manifest. These assert
+    that rather than assuming it: if it had needed a change, that would
+    have been a finding about the manifest, not about the diff.
+    """
+
+    def test_scaffold_diff_maps_the_retention_units(self, tmp_path):
+        """The mapping scaffold-diff compares against carries them."""
+        config = dict(_BASE)
+        config["scaffold"] = {
+            "deploy_user": "fraisier",
+            "output_dir": str(tmp_path / "output"),
+        }
+        config["backup"] = {"environments": {"development": {"retain": [RETAIN]}}}
+        path = tmp_path / "fraises.yaml"
+        path.write_text(yaml.safe_dump(config))
+        renderer = ScaffoldRenderer(FraisierConfig(path))
+        renderer.render()
+
+        mapping = renderer.get_install_mapping()
+        service, timer = unit_names()
+
+        assert mapping[f"systemd/{service}"].as_posix() == (
+            f"/etc/systemd/system/{service}"
+        )
+        assert mapping[f"systemd/{timer}"].as_posix() == (
+            f"/etc/systemd/system/{timer}"
+        )
+
+    def test_scaffold_diff_reports_a_missing_retention_unit(self, tmp_path):
+        """A host that never installed the pair sees it as missing.
+
+        This is the reported half of the incident: the retention unit the
+        destination host was supposed to have was hand-written, lived in the
+        consuming repo, and nothing checked it was there. Run through the
+        real `compute_scaffold_diff`, whose install targets under
+        /etc/systemd/system do not exist on a test machine.
+        """
+        from fraisier.scaffold.diff import compute_scaffold_diff
+
+        config = dict(_BASE)
+        config["scaffold"] = {
+            "deploy_user": "fraisier",
+            "output_dir": str(tmp_path / "output"),
+        }
+        config["backup"] = {"environments": {"development": {"retain": [RETAIN]}}}
+        path = tmp_path / "fraises.yaml"
+        path.write_text(yaml.safe_dump(config))
+
+        diffs = compute_scaffold_diff(FraisierConfig(path))
+
+        service, timer = unit_names()
+        by_source = {d.generated_path: d for d in diffs}
+        assert by_source[f"systemd/{service}"].status == "missing_installed"
+        assert by_source[f"systemd/{timer}"].status == "missing_installed"
+
+    def test_doctor_lists_retention_entries_with_install_state(self, tmp_path):
+        """`doctor` names each corpus and whether its timer is installed."""
+        from fraisier.scaffold.retention import retention_report
+
+        config = dict(_BASE)
+        config["scaffold"] = {
+            "deploy_user": "fraisier",
+            "output_dir": str(tmp_path / "output"),
+        }
+        config["backup"] = {"environments": {"development": {"retain": [RETAIN]}}}
+        path = tmp_path / "fraises.yaml"
+        path.write_text(yaml.safe_dump(config))
+        renderer = ScaffoldRenderer(FraisierConfig(path))
+        renderer.render()
+
+        installed_root = tmp_path / "etc" / "systemd" / "system"
+        installed_root.mkdir(parents=True)
+
+        (report,) = retention_report(renderer, systemd_dir=installed_root)
+        assert report.name == "production-full"
+        assert report.dir == "/backup/production"
+        assert report.environment == "development"
+        assert report.timer_installed is False
+        assert report.service_installed is False
+
+    def test_doctor_reports_an_installed_pair_as_installed(self, tmp_path):
+        from fraisier.scaffold.retention import retention_report
+
+        config = dict(_BASE)
+        config["scaffold"] = {
+            "deploy_user": "fraisier",
+            "output_dir": str(tmp_path / "output"),
+        }
+        config["backup"] = {"environments": {"development": {"retain": [RETAIN]}}}
+        path = tmp_path / "fraises.yaml"
+        path.write_text(yaml.safe_dump(config))
+        renderer = ScaffoldRenderer(FraisierConfig(path))
+        renderer.render()
+
+        installed_root = tmp_path / "etc" / "systemd" / "system"
+        installed_root.mkdir(parents=True)
+        service, timer = unit_names()
+        (installed_root / service).write_text("x")
+        (installed_root / timer).write_text("x")
+
+        (report,) = retention_report(renderer, systemd_dir=installed_root)
+        assert report.timer_installed is True
+        assert report.service_installed is True
+
+    def test_no_retain_config_reports_nothing(self, tmp_path):
+        from fraisier.scaffold.retention import retention_report
+
+        config = dict(_BASE)
+        config["scaffold"] = {
+            "deploy_user": "fraisier",
+            "output_dir": str(tmp_path / "output"),
+        }
+        path = tmp_path / "fraises.yaml"
+        path.write_text(yaml.safe_dump(config))
+        renderer = ScaffoldRenderer(FraisierConfig(path))
+        renderer.render()
+
+        assert retention_report(renderer, systemd_dir=tmp_path) == []
