@@ -638,6 +638,29 @@ def _dump(directory: Path, name: str, *, hours: float) -> Path:
     return _aged(path, hours=hours)
 
 
+@pytest.fixture
+def dumps_are_valid():
+    """The floor consults validity now (#342), so a floor test must declare it.
+
+    Without this the real `pg_restore --list` runs against these stub files and
+    calls every one INVALID — so the test would assert all-invalid semantics on
+    a machine that has `pg_restore` and all-valid semantics on one that does
+    not. An environment-dependent retention test is the argv-dependence flake
+    class PR #306 removed; the fix there was to stop depending on the
+    environment, not to skip the test.
+
+    Stating it per class also keeps the floor's new precondition visible: these
+    tests describe what the floor does *given valid dumps*, which is no longer
+    the only case.
+    """
+    with patch(
+        "fraisier.dbops.backup.verify_archive",
+        side_effect=lambda _path: ArchiveCheck(ArchiveVerdict.VALID, ""),
+    ):
+        yield
+
+
+@pytest.mark.usefixtures("dumps_are_valid")
 class TestCleanupKeepMinimum:
     """The floor: a corpus can never be emptied by the age rule alone."""
 
@@ -768,6 +791,7 @@ class TestCleanupMatch:
         assert link.is_symlink()
 
 
+@pytest.mark.usefixtures("dumps_are_valid")
 class TestCleanupOutcome:
     """The prune reports what it did, including why anything survived."""
 

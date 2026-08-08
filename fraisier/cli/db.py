@@ -949,6 +949,25 @@ def _prune_one(entry, *, dry_run: bool):
     return outcome, None
 
 
+def _unreadable_dump_warning(entry, outcome) -> str:
+    """Name the dumps the floor refused to protect (#342).
+
+    Goes through the same stderr channel as the stalled-producer warning rather
+    than relying on `cleanup_old_backups`'s log line: without `-v` the root
+    logger has no handler, so that line only reaches stderr via
+    `logging.lastResort` — which any earlier `basicConfig` call would silently
+    redirect. The two warnings together describe the #339 state completely:
+    nothing recent is arriving *and* what did arrive cannot be read.
+    """
+    names = ", ".join(Path(p).name for p in outcome.invalid)
+    return (
+        f"WARNING: {len(outcome.invalid)} backup(s) in {entry.dir} are not "
+        f"readable archives and were not allowed to hold a keep_minimum slot: "
+        f"{names}. A dump pg_restore cannot list cannot be restored from — "
+        f"check the transfer from the producer."
+    )
+
+
 def _stalled_producer_warning(entry, outcome) -> str:
     """What `floor_was_load_bearing` means, said in the operator's terms."""
     newest_age = ""
@@ -1015,8 +1034,13 @@ def backup_prune(
                 "kept": list(outcome.kept),
                 "exempted_by_minimum": list(outcome.exempted_by_minimum),
                 "floor_was_load_bearing": outcome.floor_was_load_bearing,
+                # Overlay, not a fourth partition member: every name here also
+                # appears in exactly one of removed/kept/exempted_by_minimum.
+                "invalid": list(outcome.invalid),
             }
         )
+        if outcome.invalid:
+            warnings.append(_unreadable_dump_warning(entry, outcome))
         if outcome.floor_was_load_bearing:
             warnings.append(_stalled_producer_warning(entry, outcome))
 

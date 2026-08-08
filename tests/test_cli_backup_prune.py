@@ -42,6 +42,31 @@ def runner():
     return CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def dumps_are_valid():
+    """The floor consults archive validity now (#342), so say what these are.
+
+    `corpus()` writes `"x"` into each file — not a pg_dump archive. Without
+    this the real `pg_restore --list` runs and calls every dump INVALID, so the
+    floor exempts nothing and these tests would assert all-invalid semantics on
+    a machine with `pg_restore` and all-valid semantics on one without it. An
+    environment-dependent retention test is the flake class PR #306 removed.
+
+    Autouse because the subject here is the *command*, not the floor: a test
+    that means to exercise invalid dumps overrides this deliberately, and
+    validity mechanics live in test_retention_floor_validity.py.
+    """
+    from unittest.mock import patch
+
+    from fraisier.dbops.archive import ArchiveCheck, ArchiveVerdict
+
+    with patch(
+        "fraisier.dbops.backup.verify_archive",
+        side_effect=lambda _path: ArchiveCheck(ArchiveVerdict.VALID, ""),
+    ):
+        yield
+
+
 def aged(path, *, hours: float):
     """Backdate *path* by *hours*, so the age rule has something to act on."""
     when = time.time() - hours * 3600
