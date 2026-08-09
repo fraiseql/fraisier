@@ -42,7 +42,6 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -59,8 +58,13 @@ from fraisier.drain_restart import (
     send_restart,
     wait_for_deploys_to_drain,
 )
+from fraisier.self_upgrade_record import (
+    clear_self_upgrade_failure,
+    record_self_upgrade_failure,
+)
 from fraisier.service_managers.systemd import _call_via_socket
 from fraisier.versioning import detect_required_fraisier_version
+from fraisier.worker_logging import configure_worker_logging, open_worker_log
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable
@@ -209,14 +213,13 @@ def maybe_self_upgrade(
 
 
 def _open_log_fd(project_name: str):
-    """Open a log file under :data:`_LOG_DIR`. Fall back to DEVNULL on failure."""
-    try:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-        return (_LOG_DIR / f"{project_name}-{ts}.log").open("ab")
-    except OSError as exc:
-        log.warning("self-upgrade: could not open log file (%s); using DEVNULL", exc)
-        return subprocess.DEVNULL
+    """Open a log file under :data:`_LOG_DIR`. Fall back to DEVNULL on failure.
+
+    Reads the module-level :data:`_LOG_DIR` at call time so tests that
+    monkeypatch it keep working; the shared helper takes the directory as an
+    argument for exactly that reason.
+    """
+    return open_worker_log(_LOG_DIR, project_name)
 
 
 def _resolve_spawn_args() -> _SpawnArgs:
@@ -289,8 +292,14 @@ def _spawn_upgrade(required: str, project_name: str) -> None:
     )
 
 
-def _run_install(required: str) -> int:
-    """Run the install command, log failure, return rc."""
+def _run_install(required: str, *, lock_dir: Path | None = None) -> int:
+    """Run the install command, record and log any failure, return rc.
+
+    ``uv tool install --force`` removes before it verifies, so a non-zero rc can
+    mean the tool venv is now half-removed and every entrypoint dangling. The
+    record is what makes that visible: the log below reaches only this worker's
+    own file, which nothing surfaces (#351).
+    """
     cmd = _build_install_cmd(required)
     log.info("self-upgrade: running %s", " ".join(cmd))
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
@@ -300,7 +309,26 @@ def _run_install(required: str) -> int:
             result.returncode,
             result.stderr,
         )
+        if lock_dir is not None:
+            record_self_upgrade_failure(
+                lock_dir,
+                required=required,
+                installed=_installed_version(),
+                rc=result.returncode,
+                detail=(result.stderr or "").strip(),
+            )
+    elif lock_dir is not None:
+        # Cleared only on a landing, so a debt nobody paid stays on the books.
+        clear_self_upgrade_failure(lock_dir)
     return result.returncode
+
+
+def _installed_version() -> str:
+    """Best-effort: the version running right now, for the failure record."""
+    try:
+        return importlib_metadata.version("fraisier")
+    except Exception:  # pragma: no cover - metadata is present in practice
+        return "unknown"
 
 
 def _run_upgrade(
@@ -324,7 +352,7 @@ def _run_upgrade(
             "self-upgrade: lock_dir unresolved; running install + restart "
             "without drain coordination"
         )
-        rc = _run_install(required)
+        rc = _run_install(required, lock_dir=lock_dir)
         if rc != 0:
             return rc
         if not socket_path:
@@ -339,7 +367,7 @@ def _run_upgrade(
     # Flag covers install + drain so dispatch refuses new deploys for the
     # entire upgrade window, not just the drain tail.
     with _with_draining_flag(lock_dir):
-        rc = _run_install(required)
+        rc = _run_install(required, lock_dir=lock_dir)
         if rc != 0:
             return rc
         if not socket_path:
@@ -368,6 +396,7 @@ def _run_upgrade(
 
 
 def _main() -> None:
+    configure_worker_logging()
     parser = argparse.ArgumentParser(prog="fraisier.webhook_self_upgrade")
     parser.add_argument("--required", required=True)
     parser.add_argument("--service", required=True)
