@@ -235,9 +235,26 @@ def trigger_deploy(
             # socket_stem was derived from deploy_socket_name() above.
             unit_pattern = f"{socket_stem}@*.service"
             os.execvp("journalctl", ["journalctl", "-u", unit_pattern, "-f"])
-        elif wait and response_data:
-            # Parse and display result
+        elif wait:
+            # --wait asked for the outcome, so anything short of a result the
+            # daemon actually sent is an outcome we do not know — and an unknown
+            # outcome must never read as a success. The deploy unit can be killed
+            # mid-run (its own socket restarted under it, #349), which closes the
+            # connection with nothing written on it; reporting that as "triggered
+            # successfully" is how a nightly restore skipped for a day while
+            # systemd recorded ExecMainStatus=0.
             from fraisier._output import success
+
+            if not response_data:
+                console.print(
+                    "[red]Error:[/red] Deployment reported no result — the "
+                    "connection closed before the daemon sent one.\n"
+                    "[yellow]Hint:[/yellow] The deploy unit likely died mid-run. "
+                    "Check what it logged:\n"
+                    f"  journalctl -u '{socket_stem}@*.service' --since '-1h'"
+                )
+                sock.close()
+                raise SystemExit(1)
 
             try:
                 result = json.loads(response_data.decode("utf-8"))
@@ -258,9 +275,13 @@ def trigger_deploy(
                     raise SystemExit(1)
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 console.print(
-                    f"[yellow]Warning:[/yellow] Could not parse deployment result: {e}"
+                    f"[red]Error:[/red] Could not parse deployment result: {e}\n"
+                    "[yellow]Hint:[/yellow] The deploy ran, but its outcome is "
+                    "unknown. Check status: "
+                    f"fraisier deployment-status {fraise}"
                 )
-                success("Deployment triggered successfully")
+                sock.close()
+                raise SystemExit(1) from None
         else:
             from fraisier._output import success
 
