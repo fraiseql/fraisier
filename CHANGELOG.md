@@ -27,6 +27,15 @@ invariant rather than patching the site:
 > **Nothing fraisier installs may terminate the work that asked for it, and work
 > that starts must end in a record.**
 
+[#351](https://github.com/fraiseql/fraisier/issues/351) turned out to be the same
+invariant one level up, so it ships here too: a failed self-upgrade left the tool
+venv half-removed and every entrypoint dangling, reported only to a file nothing
+reads. Where #349 was an install destroying the deploy that asked for it, #351
+was fraisier destroying *itself* and staying quiet about it. The reach extends
+accordingly:
+
+> **A tool that replaces itself must leave a working tool, and must say so.**
+
 ### Fixed
 
 - **`install.sh` no longer restarts a unit that hosts a deploy while a deploy is
@@ -89,6 +98,35 @@ invariant rather than patching the site:
   be half-deployed. `owner_invocation_id` is not used to decide liveness; it is
   recorded so an operator can recover the dead deploy's journal with
   `journalctl _SYSTEMD_INVOCATION_ID=<id>`.
+- **A self-upgrade that does not land says so, and does not make it worse**
+  ([#351](https://github.com/fraiseql/fraisier/issues/351)). `uv tool install
+  --force` removes before it verifies, so an install that failed partway left the
+  tool venv half-removed — `bin/` gone, `lib/` intact — and every
+  `~/.local/bin/fraisier*` symlink dangling, including the one the webhook unit
+  names in `ExecStart=`. The running process outlived its deleted binary, so
+  `is-active`, the health check and the version endpoint all looked normal; the
+  damage surfaced only at the next restart, as 203/EXEC.
+  - The worker now **resolves its own unit's entrypoint after the install and
+    refuses the restart when it does not resolve** — on a zero rc as well as a
+    non-zero one, because success is not proof. Restarting at that moment would
+    turn a latent problem into an outage: the process running is the only working
+    fraisier left on the host.
+  - A failed upgrade is recorded in
+    `<deployment.lock_dir>/.self-upgrade-failure`, **cleared only when a later
+    upgrade lands**, and reported by a new `self_upgrade_failure` doctor check.
+  - A new **`unit_entrypoints`** doctor check asks the question from the other
+    end: every installed unit's `ExecStart=` fraisier binary must exist and be
+    executable. It takes no config — the units on disk are the input — and it
+    does not care how the host got there, so it catches a machine that is already
+    in this state today.
+- **Both detached workers were mute, and that had a one-line cause.** Neither
+  `webhook_self_upgrade` nor `deferred_restart` configured logging, so Python fell
+  back to `logging.lastResort` — WARNING level, straight to stderr — and every
+  `log.info` was dropped, including the line naming the command about to run. The
+  deferred-restart worker was additionally spawned onto `DEVNULL` for both stdout
+  and stderr, so even its warnings were unrecoverable: the ledger recorded *that*
+  a debt went unpaid and nothing recorded *why*. Both now route through one named
+  seam, with a guard test asserting every `python -m` worker uses it.
 
 ### Changed
 
@@ -127,6 +165,12 @@ Upgrading will also pull confiture forward from 0.38.x to 0.44.x. Nothing in
 fraisier's behaviour changes with it — the full suite passes unmodified against
 0.44.0 — but the resolved version moves, so a host that pins its own confiture
 should check that pin.
+
+`fraisier doctor` gains two checks worth running once after upgrading.
+`unit_entrypoints` reports `fail` if any installed unit names a fraisier binary
+that no longer resolves — a host whose earlier self-upgrade failed is already in
+that state, and will not restart until it is repaired. `self_upgrade_failure`
+reports the upgrade that left it there, if one did.
 
 ## [0.62.0] - 2026-08-08
 
