@@ -39,6 +39,7 @@ passed.
 | `inert_timers` | which `scaffold.systemd.timers` families this host runs, and which it only carries | no | none needed — see [scheduled timers you switch on](deployment-guide.md#scheduled-timers-you-switch-on) |
 | `backup_retention` | every declared `retain` corpus has both halves of its prune unit on disk | no | `sudo fraisier scaffold-install` — until then nothing prunes that corpus |
 | `self_upgrade_failure` | the last webhook self-upgrade landed, rather than leaving the tool venv half-removed | no | clear foreign-owned `__pycache__`, then `uv tool install --force fraisier==<version>` — see [a self-upgrade that did not land](#a-self-upgrade-that-did-not-land) |
+| `unit_entrypoints` | every installed unit's `ExecStart=` fraisier binary exists and is executable | no | reinstall the tool venv — a unit whose entrypoint dangles fails 203/EXEC at its next restart |
 | `backup_corpus_free_space` | each `retain[].dir` exists and its volume meets the entry's `min_free_gb` | no | free space on the volume, or declare a threshold — see [`min_free_gb`](deployment-guide.md#min_free_gb--a-policy-is-not-a-disk-alarm) |
 | `scaffold_artifact_coverage` | every artifact the manifest declares for this host is installed | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
 | `foreign_units` | no `fraisier` unit on this host belongs to a fraise or environment this host does not own | no | `sudo fraisier scaffold-install --prune` — see [one host authority](deployment-guide.md#scheduled-timers-you-switch-on) |
@@ -136,6 +137,24 @@ sudo systemctl restart fraisier-<project>-webhook.service
 
 The worker's own log, which records the command it ran and the full stderr, is
 under `/var/lib/fraisier/self-upgrade/`.
+
+`unit_entrypoints` asks the same question from the other end, and does not care
+how the host got there: it reads every `*.service` under `/etc/systemd/system`,
+takes the binary from each `ExecStart=`, keeps the ones named `fraisier*`, and
+checks that each still exists and is executable. A failed self-upgrade, a
+half-finished manual install and a pruned venv all read the same to it. It takes
+no configuration — the units on disk are the input — so it still answers on a
+host whose `fraises.yaml` will not load.
+
+It reports `fail` rather than `warn`, because unlike a deferred restart the unit
+cannot start at all: the service running now is the last one that ever will,
+until it is fixed. Existence is checked before `os.access`, since `os.access`
+with `X_OK` is permissive for root and a root-run `doctor` would otherwise call
+a missing file executable.
+
+If no unit names a fraisier binary, the check reports `skip` and says so, rather
+than `pass`. A scan that matched nothing must not read as a clean bill of
+health.
 
 ## JSON output
 
