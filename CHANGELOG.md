@@ -106,6 +106,13 @@ invariant rather than patching the site:
   and a restart that *does* happen announces that it terminates whatever is
   running inside the unit — so a deploy killed by an older host still names its
   cause in the journal.
+- **confiture is tracked through 0.44** (`fraiseql-confiture>=0.38.0,<0.45`,
+  [#262](https://github.com/fraiseql/fraisier/issues/262)). The `<0.39` cap was
+  holding consumers on 0.38.1 with nothing behind it: the migrate/build/preflight
+  surface fraisier consumes is unchanged across 0.38→0.44, and 0.44's
+  `CREATE OR REPLACE` change is gated on a `window_safe` flag fraisier never
+  reads, so it cannot alter deploy behaviour here. The upper bound stays, because
+  its job is to prevent silent drift onto a *future* schema change.
 
 ### Upgrade notes
 
@@ -115,6 +122,11 @@ config-changing deploys succeed for the first time, followed by a webhook restar
 once the deploy finishes rather than during it. Run `fraisier doctor` after
 upgrading: a unit deferred and never restarted is now reported instead of
 silently running an old configuration.
+
+Upgrading will also pull confiture forward from 0.38.x to 0.44.x. Nothing in
+fraisier's behaviour changes with it — the full suite passes unmodified against
+0.44.0 — but the resolved version moves, so a host that pins its own confiture
+should check that pin.
 
 ## [0.62.0] - 2026-08-08
 
