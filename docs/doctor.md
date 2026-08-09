@@ -38,6 +38,7 @@ passed.
 | `install_compile_bytecode` | a `uv sync` `install.command` passes `--compile-bytecode` | no | add `--compile-bytecode` to `install.command` — see [bytecode and startup time](deployment-guide.md#bytecode-and-startup-time) |
 | `inert_timers` | which `scaffold.systemd.timers` families this host runs, and which it only carries | no | none needed — see [scheduled timers you switch on](deployment-guide.md#scheduled-timers-you-switch-on) |
 | `backup_retention` | every declared `retain` corpus has both halves of its prune unit on disk | no | `sudo fraisier scaffold-install` — until then nothing prunes that corpus |
+| `self_upgrade_failure` | the last webhook self-upgrade landed, rather than leaving the tool venv half-removed | no | clear foreign-owned `__pycache__`, then `uv tool install --force fraisier==<version>` — see [a self-upgrade that did not land](#a-self-upgrade-that-did-not-land) |
 | `backup_corpus_free_space` | each `retain[].dir` exists and its volume meets the entry's `min_free_gb` | no | free space on the volume, or declare a threshold — see [`min_free_gb`](deployment-guide.md#min_free_gb--a-policy-is-not-a-disk-alarm) |
 | `scaffold_artifact_coverage` | every artifact the manifest declares for this host is installed | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
 | `foreign_units` | no `fraisier` unit on this host belongs to a fraise or environment this host does not own | no | `sudo fraisier scaffold-install --prune` — see [one host authority](deployment-guide.md#scheduled-timers-you-switch-on) |
@@ -99,6 +100,42 @@ A unit in that state works, on its previous configuration. What it costs is a
 stale `ReadWritePaths=` or `Environment=`, which surfaces later as a deploy
 failing on a read-only filesystem rather than as anything pointing back here.
 Restart the named units once no deploy is running.
+
+## A self-upgrade that did not land
+
+When a deployed `pyproject.toml` pins a newer fraisier, the webhook detaches a
+worker that runs `uv tool install --force`. That command **removes before it
+verifies**, so a failure partway through can leave the tool venv half-removed —
+`bin/` gone, `lib/` intact — and every `~/.local/bin/fraisier*` symlink
+dangling, including the one the webhook unit names in `ExecStart=`.
+
+The running webhook survives this, because a live process outlives its deleted
+binary. That is exactly what makes it dangerous: `systemctl is-active`, the
+health check and the version endpoint all look normal, and nothing reveals the
+damage until the next restart fails with status 203/EXEC — which, on a deploy
+host, is often the restart you are relying on to fix something else.
+
+`self_upgrade_failure` reads
+`<deployment.lock_dir>/.self-upgrade-failure`, written by the worker when the
+install returns non-zero and **cleared only when a later upgrade lands**. It
+reports the version pair, the exit code and the recorded cause.
+
+The most common cause is foreign-owned bytecode the deploy user cannot delete:
+the helper daemons run as root out of the same venv, and while every unit sets
+`PYTHONDONTWRITEBYTECODE=1`, an interpreter started as root *outside* a unit
+still writes `fraisier/__pycache__/__init__.*.pyc` before fraisier's own
+in-process guard can take effect. To recover:
+
+```bash
+ls -l ~/.local/bin/fraisier*                     # dangling?
+sudo find ~/.local/share/uv/tools -name __pycache__ \
+     ! -user "$(id -un)" -type d -exec rm -rf {} +
+uv tool install --force fraisier==<version>
+sudo systemctl restart fraisier-<project>-webhook.service
+```
+
+The worker's own log, which records the command it ran and the full stderr, is
+under `/var/lib/fraisier/self-upgrade/`.
 
 ## JSON output
 

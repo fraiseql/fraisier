@@ -45,8 +45,15 @@ from fraisier.drain_restart import (
     send_restart,
     wait_for_deploys_to_drain,
 )
+from fraisier.worker_logging import configure_worker_logging, open_worker_log
 
 log = logging.getLogger(__name__)
+
+#: Beside the self-upgrade worker's logs, for the same reason: this worker is
+#: detached and outlives its parent, so its stderr has nowhere else to go.
+#: It used to be spawned onto DEVNULL, which discarded the only explanation of
+#: *why* a deferred restart went unpaid.
+_LOG_DIR = Path("/var/lib/fraisier/deferred-restart")
 
 #: Lives beside ``.draining`` in the lock dir, and dot-prefixed for the same
 #: reason: ``count_held_deployment_locks`` globs ``*.lock`` and must not see it.
@@ -185,19 +192,24 @@ def maybe_apply_deferred_restarts(
             str(drain_settle_s),
         ]
         # start_new_session so the worker survives the restart it is about to
-        # request, the same reason the self-upgrade worker detaches.
+        # request, the same reason the self-upgrade worker detaches. Its output
+        # goes to a file rather than DEVNULL: the ledger records *that* a debt
+        # went unpaid, and only this log records *why* — a drain that timed out
+        # reads nothing like a unit the helper refused (#351).
+        stdout = open_worker_log(_LOG_DIR, "deferred-restart")
         subprocess.Popen(
             cmd,
             start_new_session=True,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=subprocess.STDOUT,
         )
     except Exception:
         log.exception("deferred-restart: could not schedule the pending restarts")
 
 
 def _main() -> None:  # pragma: no cover - exercised via run_deferred_restarts
+    configure_worker_logging()
     parser = argparse.ArgumentParser(prog="fraisier.deferred_restart")
     parser.add_argument(
         "--socket", default=os.environ.get("FRAISIER_SYSTEMCTL_SOCKET", "")

@@ -1021,3 +1021,54 @@ def _check_deferred_restarts(config: FraisierConfig | None) -> CheckResult:
             f"sudo systemctl restart {' '.join(pending)}"
         ),
     )
+
+
+@register_check("self_upgrade_failure")
+def _check_self_upgrade_failure(config: FraisierConfig | None) -> CheckResult:
+    """A self-upgrade that ran and did not land (#351).
+
+    ``uv tool install --force`` removes before it verifies, so a failed upgrade
+    can leave the tool venv half-removed — ``bin/`` gone, ``lib/`` intact, every
+    ``~/.local/bin/fraisier*`` symlink dangling. The running webhook survives it
+    (a live process outlives its deleted binary), which is precisely why this
+    needs reporting: nothing looks wrong until the next restart fails 203/EXEC,
+    and on a deploy host that restart is often what you are relying on to fix
+    something else.
+
+    ``warn``, not ``fail``: the host is up and serving. What it has lost is the
+    ability to come back if it stops.
+    """
+    name = "self_upgrade_failure"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.self_upgrade_record import read_self_upgrade_failure
+
+    lock_dir = getattr(getattr(config, "deployment", None), "lock_dir", None)
+    if not lock_dir:
+        return CheckResult(name, "skip", "no deployment.lock_dir configured")
+
+    failure = read_self_upgrade_failure(Path(lock_dir))
+    if failure is None:
+        return CheckResult(name, "pass", "the last self-upgrade landed")
+
+    when = f" at {failure.recorded_at}" if failure.recorded_at else ""
+    return CheckResult(
+        name,
+        "warn",
+        (
+            f"upgrade to {failure.required} from {failure.installed} failed"
+            f" (rc={failure.rc}){when}"
+        ),
+        fix_hint=(
+            "check the entrypoints are still executable — a failed "
+            "`uv tool install --force` can leave the tool venv half-removed:\n"
+            "  ls -l ~/.local/bin/fraisier*\n"
+            "If they dangle, clear any foreign-owned bytecode blocking the "
+            "removal and reinstall:\n"
+            "  sudo find ~/.local/share/uv/tools -name __pycache__ "
+            "! -user $(id -un) -type d -exec rm -rf {} +\n"
+            f"  uv tool install --force fraisier=={failure.required}\n"
+            f"Recorded cause: {failure.detail[:300]}"
+        ),
+    )
