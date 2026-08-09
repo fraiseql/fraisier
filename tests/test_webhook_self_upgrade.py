@@ -301,7 +301,11 @@ class TestRunUpgrade:
             mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
             rc = _run_upgrade("0.17.0", "fraisier-foo-webhook.service", "/run/x.sock")
         assert rc == 0
-        assert mock_run.call_args[0][0] == _build_install_cmd("0.17.0")
+        # The install is one of several subprocess calls now: `uv tool dir`
+        # brackets it to sweep foreign __pycache__ and verify the entrypoint (#351).
+        assert _build_install_cmd("0.17.0") in [
+            call[0][0] for call in mock_run.call_args_list
+        ]
         mock_socket.assert_called_once_with(
             "/run/x.sock", "restart", "fraisier-foo-webhook.service"
         )
@@ -480,7 +484,12 @@ class TestRunUpgradeDrainCoordination:
 
         events: list[str] = []
 
-        def fake_install(*_a, **_kw):
+        def fake_install(cmd, *_a, **_kw):
+            # The `uv tool dir` probes that bracket the install (#351) are not
+            # part of the flag lifecycle this test pins, and an empty stdout
+            # leaves them unresolved so neither sweep nor verification runs.
+            if cmd[:3] == ["uv", "tool", "dir"]:
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             events.append(
                 "flag_set" if (tmp_path / DRAINING_FLAG_NAME).exists() else "flag_unset"
             )
@@ -756,3 +765,186 @@ def test_main_entrypoint_empty_lock_dir_yields_none(monkeypatch):
     with pytest.raises(SystemExit):
         mod._main()
     assert captured["kwargs"]["lock_dir"] is None
+
+
+def _stat_with_foreign(real_stat, foreign: set[Path]):
+    """Return a Path.stat replacement reporting *foreign* paths as another user's.
+
+    Only ``st_uid`` is rewritten — everything else proxies the real result, so
+    ``is_dir()`` and friends keep working off ``st_mode``.
+    """
+
+    class _Stat:
+        def __init__(self, real, uid):
+            self._real = real
+            self.st_uid = uid
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    def fake_stat(self, *args, **kwargs):
+        st = real_stat(self, *args, **kwargs)
+        if self in foreign:
+            return _Stat(st, st.st_uid + 1)
+        return st
+
+    return fake_stat
+
+
+class TestForeignPycacheSweep:
+    """A root-owned __pycache__ is what makes `uv tool install --force` fail
+    halfway and leave the venv without a bin/ (#351)."""
+
+    def test_removes_dirs_owned_by_another_user(self, tmp_path, monkeypatch):
+        from fraisier.webhook_self_upgrade import _sweep_foreign_pycache
+
+        mine = tmp_path / "pkg" / "__pycache__"
+        theirs = tmp_path / "other" / "__pycache__"
+        for d in (mine, theirs):
+            d.mkdir(parents=True)
+            (d / "mod.pyc").write_bytes(b"x")
+
+        monkeypatch.setattr(Path, "stat", _stat_with_foreign(Path.stat, {theirs}))
+
+        removed = _sweep_foreign_pycache(tmp_path)
+
+        assert removed == 1
+        assert not theirs.exists()
+        assert mine.exists()
+
+    def test_missing_tree_is_not_an_error(self, tmp_path):
+        from fraisier.webhook_self_upgrade import _sweep_foreign_pycache
+
+        assert _sweep_foreign_pycache(tmp_path / "nope") == 0
+
+    def test_undeletable_dir_is_warned_not_raised(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from fraisier.webhook_self_upgrade import _sweep_foreign_pycache
+
+        stuck = tmp_path / "pkg" / "__pycache__"
+        stuck.mkdir(parents=True)
+
+        monkeypatch.setattr(Path, "stat", _stat_with_foreign(Path.stat, {stuck}))
+        monkeypatch.setattr(
+            "fraisier.webhook_self_upgrade.shutil.rmtree",
+            MagicMock(side_effect=OSError("read-only")),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="fraisier.webhook_self_upgrade"):
+            assert _sweep_foreign_pycache(tmp_path) == 0
+        assert "could not remove" in caplog.text
+
+
+class TestEntrypointVerification:
+    """`uv tool install` exiting 0 is not proof the tool is usable (#351)."""
+
+    @staticmethod
+    def _uv_says(bin_dir: Path | None, version_result=None):
+        """Route `uv tool dir --bin` to bin_dir and the entrypoint to version_result."""
+
+        def runner(cmd, *_a, **_kw):
+            if cmd[:3] == ["uv", "tool", "dir"]:
+                out = "" if bin_dir is None else f"{bin_dir}\n"
+                return SimpleNamespace(returncode=0, stdout=out, stderr="")
+            if cmd[-1] == "--version":
+                return version_result
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        return runner
+
+    def test_missing_entrypoint_is_reported_as_broken(self, tmp_path, caplog):
+        import logging
+
+        from fraisier.webhook_self_upgrade import _entrypoint_is_broken
+
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.subprocess.run",
+                side_effect=self._uv_says(tmp_path),
+            ),
+            caplog.at_level(logging.ERROR, logger="fraisier.webhook_self_upgrade"),
+        ):
+            assert _entrypoint_is_broken("0.63.0") is True
+        assert "half-removed" in caplog.text
+        assert "203/EXEC" in caplog.text
+
+    def test_working_entrypoint_at_the_right_version_is_not_broken(self, tmp_path):
+        from fraisier.webhook_self_upgrade import _entrypoint_is_broken
+
+        exe = tmp_path / "fraisier"
+        exe.write_text("#!/bin/sh\n")
+
+        version = SimpleNamespace(
+            returncode=0, stdout="fraisier, version 0.63.0\n", stderr=""
+        )
+        with patch(
+            "fraisier.webhook_self_upgrade.subprocess.run",
+            side_effect=self._uv_says(tmp_path, version),
+        ):
+            assert _entrypoint_is_broken("0.63.0") is False
+
+    def test_entrypoint_reporting_the_old_version_is_broken(self, tmp_path, caplog):
+        import logging
+
+        from fraisier.webhook_self_upgrade import _entrypoint_is_broken
+
+        exe = tmp_path / "fraisier"
+        exe.write_text("#!/bin/sh\n")
+
+        version = SimpleNamespace(
+            returncode=0, stdout="fraisier, version 0.57.0\n", stderr=""
+        )
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.subprocess.run",
+                side_effect=self._uv_says(tmp_path, version),
+            ),
+            caplog.at_level(logging.ERROR, logger="fraisier.webhook_self_upgrade"),
+        ):
+            assert _entrypoint_is_broken("0.63.0") is True
+        assert "did not take" in caplog.text
+
+    def test_unresolvable_bin_dir_leaves_it_unverified(self, caplog):
+        import logging
+
+        from fraisier.webhook_self_upgrade import _entrypoint_is_broken
+
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.subprocess.run",
+                side_effect=self._uv_says(None),
+            ),
+            caplog.at_level(logging.WARNING, logger="fraisier.webhook_self_upgrade"),
+        ):
+            assert _entrypoint_is_broken("0.63.0") is False
+        assert "unverified" in caplog.text
+
+    def test_run_install_fails_when_the_entrypoint_vanished(self, tmp_path):
+        """The whole point: uv exits 0, the tool is gone, the rc says so."""
+        from fraisier.webhook_self_upgrade import (
+            _ENTRYPOINT_MISSING_RC,
+            _run_install,
+        )
+
+        with patch(
+            "fraisier.webhook_self_upgrade.subprocess.run",
+            side_effect=self._uv_says(tmp_path),
+        ):
+            assert _run_install("0.63.0") == _ENTRYPOINT_MISSING_RC
+
+    def test_a_broken_install_skips_the_restart(self, tmp_path):
+        """A half-removed venv must not be handed a restart — that is the 203/EXEC."""
+        from fraisier.webhook_self_upgrade import _ENTRYPOINT_MISSING_RC
+
+        with (
+            patch(
+                "fraisier.webhook_self_upgrade.subprocess.run",
+                side_effect=self._uv_says(tmp_path),
+            ),
+            patch("fraisier.drain_restart._call_via_socket") as mock_socket,
+        ):
+            rc = _run_upgrade("0.63.0", "fraisier-foo-webhook.service", "/run/x.sock")
+
+        assert rc == _ENTRYPOINT_MISSING_RC
+        mock_socket.assert_not_called()

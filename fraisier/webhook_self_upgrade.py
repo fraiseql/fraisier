@@ -6,8 +6,12 @@ running, ``maybe_self_upgrade`` detaches a worker subprocess that:
 1. touches the ``.draining`` flag in ``lock_dir`` so any new deploy hitting
    the webhook during the upgrade window is refused with HTTP 503 +
    ``Retry-After`` rather than being silently killed by the restart RPC,
-2. runs ``uv tool install --force --refresh-package fraisier fraisier=={X}``
-   against the webhook user's own uv tool dir,
+2. sweeps foreign-owned ``__pycache__`` out of the uv tool dir, runs
+   ``uv tool install --force --refresh-package fraisier fraisier=={X}``
+   against the webhook user's own uv tool dir, and confirms an entrypoint
+   at the requested version survived it (#351) — an install that exits 0
+   having removed ``bin/`` and not rewritten it is otherwise invisible
+   until the restart that follows fails 203/EXEC,
 3. sleeps a short *settle* delay so any deploy accepted in the small window
    between dispatch acceptance and lock acquisition reaches its
    ``with deployment_lock(...)`` line before the worker counts in-flight
@@ -38,6 +42,7 @@ import argparse
 import importlib.metadata as importlib_metadata
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -85,6 +90,10 @@ _with_draining_flag = draining_flag
 _held_lock_basenames = held_lock_basenames
 _wait_for_deploys_to_drain = wait_for_deploys_to_drain
 _send_restart = send_restart
+
+# An install that ran but left no working `fraisier` behind (#351). Distinct
+# from uv's own exit codes so the log says which half of the step failed.
+_ENTRYPOINT_MISSING_RC = 91
 
 
 @dataclass(frozen=True)
@@ -289,8 +298,127 @@ def _spawn_upgrade(required: str, project_name: str) -> None:
     )
 
 
+def _uv_tool_dir(flag: str | None = None) -> Path | None:
+    """Ask uv where it keeps tools (or their executables). None if it won't say."""
+    cmd = ["uv", "tool", "dir"] + ([flag] if flag else [])
+    try:
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    except OSError:
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return Path(result.stdout.strip())
+
+
+def _sweep_foreign_pycache(tools_dir: Path) -> int:
+    """Remove ``__pycache__`` directories the current user does not own.
+
+    A root-owned ``__pycache__`` inside the tool venv — left by anything that
+    once ran fraisier as root — makes ``uv tool install --force`` fail partway
+    through, *after* it has removed the old ``bin/``. The venv is then
+    half-removed: every entrypoint dangles and the next webhook restart dies
+    203/EXEC (#351). Sweeping first is what keeps the install atomic in
+    practice; it is best-effort, because a directory we cannot remove is
+    exactly the one uv is about to trip over, and the entrypoint check after
+    the install is what actually holds the line.
+    """
+    if not tools_dir.is_dir():
+        return 0
+    uid = os.getuid()
+    removed = 0
+    for path in sorted(tools_dir.rglob("__pycache__"), reverse=True):
+        if not path.is_dir():
+            continue
+        try:
+            if path.stat().st_uid == uid:
+                continue
+        except OSError:
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            log.warning("self-upgrade: could not remove %s: %s", path, exc)
+            continue
+        removed += 1
+    if removed:
+        log.info(
+            "self-upgrade: removed %d foreign-owned __pycache__ dir(s) under %s",
+            removed,
+            tools_dir,
+        )
+    return removed
+
+
+def _entrypoint_is_broken(required: str) -> bool:
+    """Report *positive evidence* that the install left no working ``fraisier``.
+
+    ``uv tool install`` exiting 0 is not proof the tool is usable: the failure
+    this guards against removes the venv's ``bin/`` and never rewrites it, so
+    the only symptom used to be a webhook that would not start — one restart
+    later, and with nothing in the journal to say why (#351).
+
+    Absence of evidence is not evidence. If uv will not say where its
+    executables live, this warns and returns False rather than failing an
+    upgrade that most likely worked: the check exists to catch a specific
+    silent breakage, not to gate upgrades on uv's introspection being present.
+    """
+    bin_dir = _uv_tool_dir("--bin")
+    if bin_dir is None:
+        log.warning(
+            "self-upgrade: could not resolve `uv tool dir --bin`; the installed "
+            "entrypoint is left unverified"
+        )
+        return False
+
+    exe = bin_dir / "fraisier"
+    if not exe.exists():
+        log.error(
+            "self-upgrade: install reported success but no fraisier entrypoint "
+            "exists at %s — the tool venv is half-removed. Recover with "
+            "`uv tool install --force fraisier==%s` as the webhook user before "
+            "the unit is restarted, or it will fail 203/EXEC",
+            exe,
+            required,
+        )
+        return True
+
+    try:
+        result = subprocess.run(
+            [str(exe), "--version"], check=False, capture_output=True, text=True
+        )
+    except OSError as exc:
+        log.error("self-upgrade: %s exists but will not execute: %s", exe, exc)
+        return True
+
+    if result.returncode != 0:
+        log.error(
+            "self-upgrade: %s --version failed rc=%s stderr=%s",
+            exe,
+            result.returncode,
+            result.stderr.strip(),
+        )
+        return True
+
+    if required not in result.stdout:
+        log.error(
+            "self-upgrade: %s reports %r after installing %s — the upgrade did "
+            "not take",
+            exe,
+            result.stdout.strip(),
+            required,
+        )
+        return True
+
+    log.info("self-upgrade: verified entrypoint %s at %s", exe, required)
+    return False
+
+
 def _run_install(required: str) -> int:
     """Run the install command, log failure, return rc."""
+    tools_dir = _uv_tool_dir()
+    if tools_dir is not None:
+        _sweep_foreign_pycache(tools_dir)
+
     cmd = _build_install_cmd(required)
     log.info("self-upgrade: running %s", " ".join(cmd))
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
@@ -300,6 +428,10 @@ def _run_install(required: str) -> int:
             result.returncode,
             result.stderr,
         )
+        return result.returncode
+
+    if _entrypoint_is_broken(required):
+        return _ENTRYPOINT_MISSING_RC
     return result.returncode
 
 
