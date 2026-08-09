@@ -328,6 +328,28 @@ def _check_install_compile_bytecode(config: FraisierConfig | None) -> CheckResul
     return CheckResult(name, "pass", f"{checked} `uv sync` command(s) compile bytecode")
 
 
+#: Where installed units live. A module constant so tests can point it at a
+#: temporary tree rather than needing a real systemd.
+SYSTEMD_UNIT_DIR = Path("/etc/systemd/system")
+
+#: systemd allows these before the executable in ``ExecStart=``: ``@`` (override
+#: argv[0]), ``-`` (ignore failure), ``:`` (no variable expansion), ``+``/``!``/
+#: ``!!`` (privilege modifiers). They are not part of the path.
+_EXEC_PREFIXES = "@-:+!"
+
+
+def _exec_start_binary(line: str) -> str | None:
+    """The executable named by an ``ExecStart=`` line, or None for other lines."""
+    stripped = line.strip()
+    directive, sep, value = stripped.partition("=")
+    if not sep or directive.strip() != "ExecStart":
+        return None
+    value = value.strip().lstrip(_EXEC_PREFIXES).strip()
+    if not value:
+        return None
+    return value.split()[0]
+
+
 def _installed_webhook_unit(project_name: str) -> Path:
     """Where scaffold-install puts the webhook unit. Seam for tests."""
     return Path("/etc/systemd/system") / f"fraisier-{project_name}-webhook.service"
@@ -1019,6 +1041,82 @@ def _check_deferred_restarts(config: FraisierConfig | None) -> CheckResult:
             "these units are on disk and daemon-reloaded but are running their "
             "previous version; restart them once no deploy is in flight: "
             f"sudo systemctl restart {' '.join(pending)}"
+        ),
+    )
+
+
+@register_check("unit_entrypoints")
+def _check_unit_entrypoints(_config: FraisierConfig | None) -> CheckResult:
+    """Every installed unit names a fraisier binary that is still executable (#351).
+
+    A failed ``uv tool install --force`` can leave the tool venv half-removed —
+    ``bin/`` gone, ``lib/`` intact — so every ``~/.local/bin/fraisier*`` symlink
+    dangles, including the one the webhook unit names in ``ExecStart=``. The
+    running process outlives its deleted binary, so ``is-active``, the health
+    check and the version endpoint all look normal. The damage surfaces only at
+    the next restart, as status 203/EXEC.
+
+    This asks the question directly and does not care how the host got there: a
+    failed self-upgrade, a half-finished manual install and a pruned venv all
+    read the same. It takes no config — the units on disk are the input — so it
+    still answers on a host whose ``fraises.yaml`` will not load.
+
+    ``fail``, not ``warn``: unlike a deferred restart, this unit cannot start at
+    all. The service running now is the last one that ever will, until it is
+    fixed.
+    """
+    name = "unit_entrypoints"
+    try:
+        unit_files = sorted(SYSTEMD_UNIT_DIR.glob("*.service"))
+    except OSError as exc:
+        return CheckResult(name, "skip", f"could not read {SYSTEMD_UNIT_DIR}: {exc}")
+    if not unit_files:
+        return CheckResult(name, "skip", f"no units installed under {SYSTEMD_UNIT_DIR}")
+
+    broken: list[tuple[str, str]] = []
+    checked = 0
+    for unit in unit_files:
+        try:
+            text = unit.read_text()
+        except (OSError, UnicodeDecodeError):
+            # A unit we cannot read is not evidence of anything; the artifact
+            # coverage check is what reports units that should not be here.
+            continue
+        for line in text.splitlines():
+            binary = _exec_start_binary(line)
+            if binary is None or not Path(binary).name.startswith("fraisier"):
+                continue
+            checked += 1
+            # Existence first: os.access(X_OK) is permissive for root, so a
+            # root-run doctor would otherwise call a missing file executable.
+            target = Path(binary)
+            if not target.exists() or not os.access(binary, os.X_OK):
+                broken.append((unit.name, binary))
+
+    if not checked:
+        # Distinct from "pass" on purpose: a scan that matched nothing must not
+        # read as a clean bill of health.
+        return CheckResult(
+            name,
+            "skip",
+            f"no fraisier entrypoints named by units in {SYSTEMD_UNIT_DIR}",
+        )
+    if not broken:
+        return CheckResult(name, "pass", f"{checked} unit entrypoint(s) resolve")
+
+    listed = "; ".join(f"{unit} -> {binary}" for unit, binary in broken)
+    return CheckResult(
+        name,
+        "fail",
+        f"{len(broken)} of {checked} unit entrypoint(s) do not resolve: {listed}",
+        fix_hint=(
+            "these units cannot start — the next restart fails 203/EXEC. A "
+            "failed `uv tool install --force` leaves the tool venv half-removed "
+            "(bin/ gone, lib/ intact). Reinstall:\n"
+            "  sudo find ~/.local/share/uv/tools -name __pycache__ "
+            "! -user $(id -un) -type d -exec rm -rf {} +\n"
+            "  uv tool install --force fraisier==<version>\n"
+            "then verify with `ls -l ~/.local/bin/fraisier*`."
         ),
     )
 
