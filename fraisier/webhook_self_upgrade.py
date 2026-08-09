@@ -60,6 +60,7 @@ from fraisier.drain_restart import (
 )
 from fraisier.self_upgrade_record import (
     clear_self_upgrade_failure,
+    read_self_upgrade_failure,
     record_self_upgrade_failure,
 )
 from fraisier.service_managers.systemd import _call_via_socket
@@ -74,6 +75,14 @@ log = logging.getLogger(__name__)
 # Webhook units run with ProtectSystem=strict and have /var/lib/fraisier in
 # ReadWritePaths, so a sibling directory is writable by the deploy user.
 _LOG_DIR = Path("/var/lib/fraisier/self-upgrade")
+
+#: Where the worker resolves its own unit's ``ExecStart=``. A module constant so
+#: tests can point it at a temporary tree.
+_UNIT_DIR = Path("/etc/systemd/system")
+
+#: The install ran but left the unit unable to start, so no restart was sent.
+#: Distinct from the install's own rc: the operator's next move is different.
+ENTRYPOINT_BROKEN_RC = 4
 
 # Re-exported under their historical private names: this module is where the
 # drain sequence was written, and its tests and callers still reach for these
@@ -331,6 +340,94 @@ def _installed_version() -> str:
         return "unknown"
 
 
+def _unit_entrypoint(service: str) -> str | None:
+    """The binary the installed unit names in ``ExecStart=``, or None.
+
+    None means *unknown*, not *fine*: the unit may be absent, unreadable, or
+    generated somewhere this worker cannot see. Callers treat that as abstention
+    (see :func:`_entrypoint_is_broken`).
+    """
+    from fraisier.doctor import _exec_start_binary
+
+    try:
+        text = (_UNIT_DIR / service).read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in text.splitlines():
+        binary = _exec_start_binary(line)
+        if binary is not None:
+            return binary
+    return None
+
+
+def _entrypoint_is_broken(service: str) -> str | None:
+    """The unresolvable entrypoint path, or None when it resolves or is unknown.
+
+    ``uv tool install --force`` removes before it verifies, so after any install
+    — successful or not — the binary this unit names may no longer exist. The
+    worst thing to do at that moment is request a restart: the running process
+    is the only working fraisier left on the host, and restarting it turns a
+    latent problem into an outage.
+
+    **Abstains when the unit cannot be read.** Blocking a restart on a guess
+    would strand the host in the other direction, and the ``unit_entrypoints``
+    doctor check reports the same condition without needing to be right here.
+    """
+    binary = _unit_entrypoint(service)
+    if binary is None:
+        return None
+    target = Path(binary)
+    # Existence first: os.access(X_OK) is permissive for root.
+    if target.exists() and os.access(binary, os.X_OK):
+        return None
+    return binary
+
+
+def _refuse_restart_for_broken_entrypoint(
+    service: str,
+    binary: str,
+    *,
+    required: str,
+    lock_dir: Path | None,
+    rc: int,
+) -> None:
+    """Log loudly and record that the venv did not survive the install."""
+    log.error(
+        "self-upgrade: NOT restarting %s — its ExecStart binary %s no longer "
+        "resolves. `uv tool install --force` removes before it verifies, so the "
+        "tool venv is half-removed and this unit would fail 203/EXEC. The "
+        "process running now is the only working fraisier on this host. "
+        "Recover with: sudo find ~/.local/share/uv/tools -name __pycache__ "
+        "! -user $(id -un) -type d -exec rm -rf {} + && "
+        "uv tool install --force fraisier==%s",
+        service,
+        binary,
+        required,
+    )
+    if lock_dir is None:
+        return
+    consequence = (
+        f"{service} ExecStart={binary} does not resolve after the install; "
+        "restart refused to avoid 203/EXEC"
+    )
+    # A failed install already recorded uv's own stderr. That is the *cause* and
+    # this is the *consequence*; an operator needs both, so the earlier detail is
+    # carried forward rather than overwritten by this second write.
+    previous = read_self_upgrade_failure(lock_dir)
+    detail = (
+        f"{previous.detail}\n\n{consequence}"
+        if previous is not None and previous.detail
+        else consequence
+    )
+    record_self_upgrade_failure(
+        lock_dir,
+        required=required,
+        installed=_installed_version(),
+        rc=rc,
+        detail=detail,
+    )
+
+
 def _run_upgrade(
     required: str,
     service: str,
@@ -353,6 +450,12 @@ def _run_upgrade(
             "without drain coordination"
         )
         rc = _run_install(required, lock_dir=lock_dir)
+        broken = _entrypoint_is_broken(service)
+        if broken is not None:
+            _refuse_restart_for_broken_entrypoint(
+                service, broken, required=required, lock_dir=lock_dir, rc=rc
+            )
+            return rc or ENTRYPOINT_BROKEN_RC
         if rc != 0:
             return rc
         if not socket_path:
@@ -368,6 +471,14 @@ def _run_upgrade(
     # entire upgrade window, not just the drain tail.
     with _with_draining_flag(lock_dir):
         rc = _run_install(required, lock_dir=lock_dir)
+        # Checked on both outcomes: --force removes before it verifies, so a
+        # non-zero rc and a zero rc can leave the same half-removed venv.
+        broken = _entrypoint_is_broken(service)
+        if broken is not None:
+            _refuse_restart_for_broken_entrypoint(
+                service, broken, required=required, lock_dir=lock_dir, rc=rc
+            )
+            return rc or ENTRYPOINT_BROKEN_RC
         if rc != 0:
             return rc
         if not socket_path:
