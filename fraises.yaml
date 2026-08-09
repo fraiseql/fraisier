@@ -42,11 +42,6 @@ ship:
       command: ["uv", "run", "ruff", "check", "."]
       phase: validate
     - name: pytest
-      command:
-        - "uv"
-        - "run"
-        - "pytest"
-        - "--deselect"
-        - "tests/test_install_helper.py::TestMainConnectionErrorLogging::test_handler_crash_is_logged_with_exception_object"
+      command: ["uv", "run", "pytest"]
       phase: test
       timeout: 300
