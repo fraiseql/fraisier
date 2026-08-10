@@ -285,6 +285,25 @@ class TestADepartedPeerCannotChangeTheOutcome:
         assert run.exit_code == 0, run.output
 
 
+class TestTheWriteDoesNotStealFdZero:
+    """`socket.socket(fileno=0)` *owns* fd 0 and closes it when collected.
+
+    Built early and dropped, that closes stdin out from under a running
+    deployment. `os.dup(0)` gives the socket object an fd of its own to close.
+    """
+
+    def test_fd_zero_is_still_open_after_the_result_is_written(self) -> None:
+        import gc
+
+        from fraisier.cli._deploy import _write_to_accepted_connection
+
+        with accepted_connection() as client:
+            _write_to_accepted_connection('{"success": true}')
+            gc.collect()
+            os.fstat(0)  # OSError(EBADF) here means fd 0 was taken and closed
+            assert client.recv(65536) == b'{"success": true}'
+
+
 class TestThePipeFormIsUntouched:
     """`echo '{…}' | fraisier deploy-daemon --project=api` is documented.
 
