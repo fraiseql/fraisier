@@ -471,3 +471,31 @@ class TestTriggerDeployWaitOutcomeIsKnown:
 
         assert result.exit_code == 0, result.output
         assert "Deployment triggered successfully" in result.output
+
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_empty_result_names_the_version_skew_remedy(
+        self, mock_get_config, mock_path_class, mock_socket_class
+    ):
+        """The CLI upgrades itself long before the units are re-rendered.
+
+        A deploy service older than v0.64.0 has no result channel at all, so
+        every `--wait` on that host exits 1 until it is reinstalled. Telling
+        the operator to retry would be telling them to wait forever; the
+        message has to name the reinstall and the command that finds every
+        affected unit.
+        """
+        runner = CliRunner()
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        mock_sock.recv.return_value = b""
+
+        result = runner.invoke(
+            main,
+            ["trigger-deploy", "api", "prod", "--wait"],
+            obj={"skip_health": False},
+        )
+
+        assert result.exit_code == 1, result.output
+        assert "scaffold-install" in result.output
+        assert "doctor" in result.output

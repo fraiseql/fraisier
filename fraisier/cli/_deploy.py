@@ -310,12 +310,23 @@ def trigger_deploy(
             from fraisier._output import success
 
             if not response_data:
+                # Two causes, and the first is the common one right after an
+                # upgrade: the CLI replaces itself via self-upgrade while the
+                # deploy unit only changes when someone re-runs a scaffold
+                # install, so a host can be new-client/old-unit for weeks. Such
+                # a unit has no result channel at all and retrying never helps.
                 console.print(
                     "[red]Error:[/red] Deployment reported no result — the "
                     "connection closed before the daemon sent one.\n"
-                    "[yellow]Hint:[/yellow] The deploy unit likely died mid-run. "
-                    "Check what it logged:\n"
-                    f"  journalctl -u '{socket_stem}@*.service' --since '-1h'"
+                    "[yellow]Hint:[/yellow] Two causes, likeliest first:\n"
+                    "  1. This host's deploy unit predates v0.64.0 and cannot "
+                    "return a result.\n"
+                    "     Re-render and reinstall it — retrying will not help:\n"
+                    "       fraisier scaffold && fraisier scaffold-install\n"
+                    "     fraisier doctor lists every deploy unit that cannot "
+                    "answer.\n"
+                    "  2. The deploy unit died mid-run. Check what it logged:\n"
+                    f"       journalctl -u '{socket_stem}@*.service' --since '-1h'"
                 )
                 sock.close()
                 raise SystemExit(1)
