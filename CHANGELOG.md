@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-08-10
+
+**An outcome nobody could receive.**
+
+`trigger-deploy --wait` printed `ok Deployment triggered successfully` and exited
+0 in **7 seconds** for a nightly staging restore whose real runtime is ~33
+minutes. The wrapping systemd unit recorded a clean exit. Staging silently stayed
+a day stale, and it was found only by comparing relation-file mtimes — row counts
+on a stale database are correct.
+
+The reported defect was the `--wait` guard, and it is real. But reading the
+source turned up something larger and stranger: **the result channel has never
+existed.** `deploy-service.j2` sets `StandardInput=socket` under an `Accept=yes`
+socket, so fd 0 *is* the accepted client connection — and it also sets
+`StandardOutput=journal`, so the `print()` carrying the machine-readable result
+went to the journal instead. Those three lines have been unchanged since socket
+activation was implemented in April.
+
+So the 7-second incident is not a race that produced an empty response. It is the
+*only* response that transport could ever produce, observed on a run short enough
+for someone to notice. Every `--wait` deploy in this project's history — success,
+failure, crash, all of them — read an empty response and took the
+fire-and-forget branch.
+
+This is the sixth instance of v0.61.0–v0.63.0's heading — *work that could not
+fail visibly*. The previous five destroyed or omitted the reporter. This one is
+worse: the reporting channel was never connected. So the invariant, not the site:
+
+> **A caller that asked for an outcome receives one, or an error — never a report
+> of an outcome that could not have arrived.**
+
+[#343](https://github.com/fraiseql/fraisier/issues/343)'s restore half is the
+same invariant against a database, narrowed to what a table count can actually
+prove:
+
+> **A restore reports success against the schema the archive says it carries, not
+> against a floor nobody configured.**
+
+**Order matters here, and the phases exist to enforce it.** Making `--wait` refuse
+to invent an outcome is only an improvement once an outcome can reach it. Shipped
+alone against today's units, it would have turned *every* `--wait` deploy —
+including the successful ones — into an exit 1. Nightly units that currently lie
+would have started failing outright.
+
+### Fixed
+
+- **The daemon's result reaches the connection that asked for it**
+  ([#356](https://github.com/fraiseql/fraisier/issues/356)). `deploy_daemon`
+  writes its JSON result to the accepted socket on fd 0, and keeps writing it to
+  stdout as well, so the journal holds the record it has always held and the
+  documented `echo '{…}' | fraisier deploy-daemon` pipe form is untouched.
+  `StandardOutput=journal` stays — it is deliberate (#72 Bug 2: `systemd` 255
+  versus Debian 12's 252) and flipping it would have put Rich-styled prose on the
+  wire ahead of the JSON, trading an empty response for an unparseable one.
+- **All seven terminating paths report, not two.** Empty stdin, an exception
+  while reading stdin, an unparseable request, a project mismatch and an
+  exception out of `execute_deployment_request` each printed prose and exited 1
+  having written nothing machine-readable at all. #356 attributed the empty
+  response to #349 killing the unit; #349 was one trigger out of six, and the
+  other five are ordinary control flow. Each now names its own reason.
+- **A departed peer cannot change the outcome.** `deploy-checker` fires
+  `trigger-deploy` with no `--wait` and closes in milliseconds, so half an hour
+  later the daemon writes to a socket whose peer is long gone. Unhandled, that
+  `BrokenPipeError` would raise *after* a successful deployment and take the
+  unit's exit code with it — inverting the bug rather than fixing it. The write
+  is wrapped, logged, and cannot touch the exit code.
+- **`--wait` reports the outcome it received.** An empty response is an error
+  naming both causes and the remedy for each; an unparseable response is an error
+  too, where it used to print a yellow warning and then the success line — the
+  same lie in a quieter voice, since a warning is not an exit code. Without
+  `--wait`, nothing changes: the caller never asked.
+- **`--follow` is bound by the same invariant.** It implies `--wait`, drained the
+  result off the socket, and then exec'd into `journalctl` *before* looking at
+  it — exiting with journalctl's status, which says nothing about the deploy. It
+  now reports the outcome first and follows the logs only for a deployment that
+  succeeded.
+- **`min_tables_schema` is forwarded to confiture**
+  ([#343](https://github.com/fraiseql/fraisier/issues/343)). It was defaulting to
+  `public` while the count could describe any schema. The host that reported #356
+  keeps its heaps in `tenant`, so this is the half that makes an archive-derived
+  floor safe rather than a guaranteed false failure on a perfect restore.
+
+### Added
+
+- **A restore proves its schema arrived** (#343). `verify_archive` already ran
+  `pg_restore --list` and then discarded the table of contents; it now counts the
+  `TABLE DATA` entries **per schema** from output it already had in memory — no
+  second invocation. The count becomes the floor confiture enforces *before*
+  migrations, because the TOC describes the archive, so the database that must
+  satisfy it is the one before `migrate up`. A shortfall fails the restore.
+
+  This closes a hole `min_tables` only *declared*: it defaults to `0` and the
+  strategy's floor is `if cfg.min_tables > 0`, so in the default configuration
+  nothing counted anything and a near-empty restore exited 0 with a yellow note.
+
+  **What it does not do, stated plainly because the CHANGELOG must not imply
+  otherwise: it does not prove the data arrived.** A dump truncated inside its
+  data section restores a complete, empty schema and passes any count —
+  `dbops/restore.py` has said so in its own docstring the whole time. Relation
+  mtimes, which is how #356 was found, remain the check for stale-but-intact
+  data. That hole stays open and gets an issue of its own.
+- **`doctor deploy_result_channel`** finds hosts that cannot answer (#356).
+  Making `--wait` honest means every host whose deploy unit still runs a
+  pre-v0.64.0 fraisier now fails `--wait` — and that skew is the *normal* upgrade
+  order, not an edge case: the CLI replaces itself via self-upgrade while the
+  deploy unit's binary changes only when someone re-runs a scaffold install. The
+  check reads the **installed** units, finds every service whose `ExecStart=`
+  runs `deploy-daemon`, and asks that binary its version. Three-valued, following
+  `ArchiveCheck`: `fail` for a stale binary, `warn` for one it could not
+  interrogate — the deploy user's binary is routinely unreadable by whoever runs
+  `doctor`, and "I could not ask" is not "this host is broken" — and `skip` when
+  there was nothing to look at.
+
+### Upgrading
+
+Reinstall the deploy units on every host, or `--wait` will exit 1 there:
+
+```bash
+fraisier scaffold && sudo fraisier scaffold-install --yes
+fraisier doctor          # deploy_result_channel lists anything still stale
+```
+
+Hosts that never pass `--wait` are unaffected.
+
 ## [0.63.0] - 2026-08-09
 
 **An install that killed the deploy that asked for it.**
