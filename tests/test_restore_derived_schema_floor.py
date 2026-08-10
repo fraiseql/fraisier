@@ -14,7 +14,13 @@ Two things this deliberately does not do:
   #356's own host keeps its heaps in `tenant`.
 - It does not prove the data arrived. A dump truncated inside its data section
   restores a complete, empty schema and passes any count; `dbops/restore.py`
-  says so in its own docstring. That hole stays open.
+  says so in its own docstring.
+
+  What it took #358 to establish is that the floor not seeing a truncation does
+  not mean nothing does — `pg_restore` fails on one, serially and in parallel,
+  and `test_restore_truncated_archive.py` pins it. The gap the floor really
+  leaves is a restore that never ran at all, which no count can see because a
+  database nobody rewrote holds correct counts. `dbops/receipt.py` covers that.
 """
 
 from __future__ import annotations

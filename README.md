@@ -308,6 +308,7 @@ fraisier version bump patch|minor|major          Bump version number
 ```
 fraisier db migrate <fraise> -e <env>            Run migrations only
 fraisier db restore <fraise> -e <env>            Restore from backup (drains connections, force-drops on PG 13+)
+fraisier db receipt <fraise> <env>               When did a restore last rewrite this database? (0 fresh, 1 stale, 3 unknown)
 fraisier db reset <fraise> -e <env>              Reset database (development)
 fraisier backup <fraise> -e <env>                Create database backup
 fraisier backup prune --env <env>                Prune a corpus this host receives

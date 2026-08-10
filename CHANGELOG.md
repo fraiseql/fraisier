@@ -7,6 +7,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-08-10
+
+**Counting harder cannot see a restore that never ran.**
+
+[#358](https://github.com/fraiseql/fraisier/issues/358) was filed against
+v0.64.0's schema floor with a correct observation — a dump truncated inside its
+data section restores a complete, empty schema, so no table-count floor of any
+derivation can see it — and reached for row counts as the answer. Before
+building that, we measured. The measurement changed the work.
+
+The issue conflates two failures:
+
+- **Partial data.** The schema arrived, the rows did not.
+- **Non-actuation.** The pipeline never ran; staging keeps yesterday's database.
+  Counts, floors and `pg_restore`'s exit are all *correct*, because nothing
+  about the content is wrong. It is only old.
+
+**Partial data turned out to already be caught, on both restore paths.** Against
+a real PostgreSQL, a `-Fc` dump cut at 50%, 90% and 98% fails the restore every
+time: `pg_restore` cannot read past the cut, writes a `pg_restore: error:` line
+and exits non-zero, and confiture fails the section. That holds for `jobs > 1`
+too, where `exit_on_error` is off — tolerating a non-zero *exit* is not the same
+as tolerating an *error line*. The premise still holds exactly as #358 states it
+(the table of contents parses, `verify_archive` returns VALID, the derived floor
+is satisfied by an empty schema); it is the restore, not the checks around it,
+that refuses. That is now pinned by a test rather than believed.
+
+So the row-count manifest #358 asks for was **not built**. It exists only to
+close the half that is already closed, it is the most expensive option on the
+table — a producer, a consumer, snapshot skew against `pg_dump`'s own snapshot,
+a tolerance band, and a three-valued case for every dump predating it — and it
+would not have caught the failure that was actually reported.
+
+**Non-actuation is the residual, and it is the #343 signature** ("success in 21s,
+staging a day stale"). It is unreachable by counting: the cure is evidence the
+heap was written *this run*.
+
+### Added
+
+- **A restore leaves a receipt proving it ran** (#358). The pipeline mints a
+  token per run and writes it, with the backup's path and size, into a
+  `fraisier.restore_receipt` table in the database it just restored — then reads
+  it straight back and compares. A round trip through the database, not a
+  variable the pipeline set and then trusted.
+
+  The token is the whole mechanism. A restore that never ran leaves the
+  *previous* run's receipt in place, so "a receipt exists" matches every time
+  and proves nothing; `verify_actuation` therefore refuses to answer without a
+  criterion — a run id, or a freshness window.
+
+  Four-valued, following `ArchiveCheck`: `ACTUATED` is the only proof, `STALE`
+  the only conviction, and `MISSING` (restored by hand, or by an older fraisier)
+  and `UNVERIFIABLE` (no `psql`, no connection) say nothing in either direction.
+  A receipt that could not be written **does not fail the restore** — it is
+  bookkeeping written after every real check has already passed, and it is
+  reported as *not verified*, never as verified.
+
+  The table lives in a dedicated `fraisier` schema, not `public`: both floors
+  guarding a restore count `relkind='r'` in one schema, so a bookkeeping table
+  in `public` would quietly raise them, and a schema comparison would read it as
+  drift. It needs no migration and no cleanup — the next restore's DROP+CREATE
+  takes it with everything else.
+
+- **`fraisier db receipt <fraise> <env>`** asks a database when a restore last
+  rewrote it. This is the half that actually catches the reported failure: the
+  pipeline's own read-back runs inside the process that did the writing, which
+  proves the write landed but cannot prove a run happened — when the run does
+  not happen, that code does not execute either. The durable row is what an
+  independent caller interrogates the next morning.
+
+  Three answers, three exit codes, so a monitoring timer can tell them apart:
+  `0` rewritten inside the window, `1` stale, and **`3` not checked**. Not `0`,
+  because a host that cannot check must not report what a host that checked and
+  passed reports — that is `min_tables=0`'s silent hole moved into monitoring.
+  Not `1`, because a missing `psql` should not page the way a stale staging
+  database does.
+
+- **`--check-heap`** reports relation-file mtimes, the check #358 names. Opt-in
+  and advisory: it needs superuser or `pg_read_server_files`, which managed
+  PostgreSQL commonly refuses, and autovacuum moves mtimes after a no-op — a
+  false *pass*, never a false fail. It corroborates the receipt and never moves
+  the exit code. When the two disagree both are printed; "the receipt says today
+  and the heap says last week" is something an operator wants told, not
+  something the tool should settle silently.
+
+### Fixed
+
+- `_pg_cmd` accepts stdin, so `psql`'s `:'var'` binding is usable at all. `-c`
+  hands its string to the server unread, so the variables were never
+  substituted; only input psql lexes itself gets them. Found by a test that put
+  a quote in a backup path.
+
+### Notes
+
+- **The docstrings that were wrong are corrected.** `dbops/restore.py` and
+  v0.64.0's CHANGELOG both said a truncated dump was an open hole. The floor
+  cannot see one — that part was right — but the restore fails on it anyway.
+- **The rollback template carries no receipt.** It is taken before `migrate up`
+  and the receipt is written after, so a database rolled back onto it reads
+  `MISSING`. That is correct: after a rollback it is not the state any completed
+  run produced, and `MISSING` says *not proven* rather than *stale*.
+- No confiture change and no version floor: the receipt is entirely fraisier's.
+
 ## [0.64.0] - 2026-08-10
 
 **An outcome nobody could receive.**
@@ -112,6 +215,11 @@ would have started failing outright.
   mtimes, which is how #356 was found, remain the check for stale-but-intact
   data. That hole stays open as
   [#358](https://github.com/fraiseql/fraisier/issues/358).
+
+  *Corrected in v0.65.0: the floor indeed cannot see a truncation, but the
+  restore fails on one regardless — `pg_restore` errors and exits non-zero, on
+  both the serial and parallel paths. The hole #358 really leaves open is a
+  restore that never ran, which v0.65.0 closes with an actuation receipt.*
 - **`doctor deploy_result_channel`** finds hosts that cannot answer (#356).
   Making `--wait` honest means every host whose deploy unit still runs a
   pre-v0.64.0 fraisier now fails `--wait` — and that skew is the *normal* upgrade
