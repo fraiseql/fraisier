@@ -82,7 +82,10 @@ would have started failing outright.
   result off the socket, and then exec'd into `journalctl` *before* looking at
   it — exiting with journalctl's status, which says nothing about the deploy. It
   now reports the outcome first and follows the logs only for a deployment that
-  succeeded.
+  succeeded. It still exec's `journalctl` only once the recv loop has drained —
+  that is, once the deploy is already over — so it follows nothing live; that
+  second oddity is untouched here and tracked as
+  [#357](https://github.com/fraiseql/fraisier/issues/357).
 - **`min_tables_schema` is forwarded to confiture**
   ([#343](https://github.com/fraiseql/fraisier/issues/343)). It was defaulting to
   `public` while the count could describe any schema. The host that reported #356
@@ -107,7 +110,8 @@ would have started failing outright.
   data section restores a complete, empty schema and passes any count —
   `dbops/restore.py` has said so in its own docstring the whole time. Relation
   mtimes, which is how #356 was found, remain the check for stale-but-intact
-  data. That hole stays open and gets an issue of its own.
+  data. That hole stays open as
+  [#358](https://github.com/fraiseql/fraisier/issues/358).
 - **`doctor deploy_result_channel`** finds hosts that cannot answer (#356).
   Making `--wait` honest means every host whose deploy unit still runs a
   pre-v0.64.0 fraisier now fails `--wait` — and that skew is the *normal* upgrade
