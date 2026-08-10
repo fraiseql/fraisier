@@ -260,6 +260,23 @@ class RestoreMigrateStrategy(Strategy):
             )
         log.info("Recreated database %s", cfg.db_name)
 
+        # The archive states the floor it can satisfy, so nobody has to invent
+        # a number (#343). confiture's pre-migration counter is the instrument:
+        # `pg_class WHERE relkind='r'` in a parameterised schema, which is
+        # apples-to-apples with the TOC's TABLE DATA entries. Pre-migration is
+        # the right checkpoint too — the TOC describes the archive, so the
+        # database that must satisfy it is the one before `migrate up`; applied
+        # after, any migration that drops or renames a table false-fails.
+        #
+        # None means the archive stated nothing — UNVERIFIABLE, or a
+        # --schema-only dump with no TABLE DATA entries. That falls back to the
+        # operator's floor and is reported as unchecked, never as a floor of 0.
+        derived = check.schema_floor
+        if derived is not None:
+            floor_schema, floor_tables = derived
+        else:
+            floor_schema, floor_tables = "public", cfg.min_tables
+
         # Step 6 + 7: pg_restore (with optional ownership fix)
         t_total = time.monotonic()
         restore_result = restore_backup(
@@ -268,7 +285,8 @@ class RestoreMigrateStrategy(Strategy):
             db_owner=cfg.target_owner,
             connection_url=self._admin_url,
             jobs=cfg.jobs,
-            min_tables=cfg.min_tables,
+            min_tables=floor_tables,
+            min_tables_schema=floor_schema,
         )
         restore_secs = restore_result.duration_seconds
         if not restore_result.success:
@@ -386,6 +404,8 @@ class RestoreMigrateStrategy(Strategy):
             restore_duration_seconds=restore_secs,
             migration_duration_seconds=migration_secs,
             total_duration_seconds=total_secs,
+            schema_floor=derived,
+            unchecked_schemas=check.unchecked_schemas,
         )
 
     def rollback(

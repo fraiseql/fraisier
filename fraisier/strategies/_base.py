@@ -19,6 +19,17 @@ class StrategyResult:
     migration_duration_seconds: float = 0.0
     total_duration_seconds: float = 0.0
 
+    schema_floor: tuple[str, int] | None = None
+    """``(schema, tables)`` the archive's own TOC required, or None if none was.
+
+    None is *not checked* — an unverifiable archive or a ``--schema-only`` dump
+    — and a caller reporting it must not say the restore was checked and
+    passed. It proves the **schema** arrived; it cannot prove the data did.
+    """
+
+    unchecked_schemas: tuple[str, ...] = ()
+    """Schemas in the archive the derived floor did not cover."""
+
 
 @dataclass
 class ValidationResult:

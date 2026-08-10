@@ -85,6 +85,39 @@ class ArchiveCheck:
         """
         return self.verdict is ArchiveVerdict.INVALID
 
+    @property
+    def schema_floor(self) -> tuple[str, int] | None:
+        """The principal data schema and how many base tables it carries.
+
+        ``None`` when the archive states no floor: ``UNVERIFIABLE``,
+        ``INVALID``, or a ``--schema-only`` dump carrying no ``TABLE DATA``
+        entries at all. A caller must report that as *not checked*, never as
+        checked and passed — three routes to the same silence, and only one of
+        them was ever guarded.
+
+        One schema, because the counter that enforces it takes one. The
+        principal schema is the one carrying the most table data, ties broken
+        by name so the choice is deterministic across runs.
+        """
+        if not self.table_data_by_schema:
+            return None
+        schema = min(
+            self.table_data_by_schema,
+            key=lambda s: (-self.table_data_by_schema[s], s),
+        )
+        return schema, self.table_data_by_schema[schema]
+
+    @property
+    def unchecked_schemas(self) -> tuple[str, ...]:
+        """Schemas the archive carries that the derived floor does not cover.
+
+        Named rather than folded into a sum. Summing them would restore exactly
+        the mismatch this per-schema counting exists to avoid.
+        """
+        floor = self.schema_floor
+        covered = {floor[0]} if floor else set()
+        return tuple(sorted(set(self.table_data_by_schema) - covered))
+
 
 #: Fields of a TOC entry once the ``dumpId;`` prefix is removed:
 #: ``catalogId oid TAG SCHEMA NAME OWNER``. The tag begins at index 2.

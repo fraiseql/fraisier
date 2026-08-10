@@ -115,6 +115,7 @@ def restore_backup(
     db_owner: str | None = None,
     jobs: int = 1,
     min_tables: int = 0,
+    min_tables_schema: str = "public",
 ) -> RestoreResult:
     """Restore a pg_dump backup into *db_name* via confiture's three-phase restore.
 
@@ -161,6 +162,12 @@ def restore_backup(
         # at their own point — confiture's before migrations, the strategy's
         # after, where a floor can account for tables migrations create.
         min_tables=min_tables,
+        # Forwarded too, and this is the half that makes a derived floor safe
+        # (#343). It defaulted to confiture's `public` while the caller's count
+        # could describe any schema — and #356's own host keeps its heaps in
+        # `tenant`, so a floor derived from one schema and asserted against
+        # another is a guaranteed false failure on a perfectly good restore.
+        min_tables_schema=min_tables_schema,
     )
     # confiture emits an explicit -h/-p; only override its RestoreOptions
     # defaults for the parts the URL actually carries (a socket URL with no

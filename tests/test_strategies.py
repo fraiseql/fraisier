@@ -792,6 +792,11 @@ class TestRestoreMigrateStrategy:
             # and step 10 is `if cfg.min_tables > 0` over a default of 0, so
             # neither side checked. Both check now, at their own point.
             min_tables=300,
+            # This archive states no floor of its own (the verify_archive stub
+            # carries no TOC counts), so the operator's floor is what confiture
+            # gets, in confiture's own default schema. When an archive *does*
+            # state one, both values come from it instead — #343.
+            min_tables_schema="public",
         )
         mock_table.assert_called_once_with(
             "staging_db", min_threshold=300, connection_url=_ADMIN_URL
