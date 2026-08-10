@@ -26,6 +26,42 @@ Socket activation allows web applications to trigger deployments by writing JSON
 /run/fraisier/api-staging/deploy.sock
 ```
 
+### The Result Channel
+
+The socket unit sets `Accept=yes` and the service sets `StandardInput=socket`, so
+systemd hands each connection to a fresh `<stem>@N.service` instance with **fd 0
+already connected to the client**. The daemon writes its JSON result there:
+
+```
+{"success": true, "status": "success", "version": "abc123",
+ "duration": 1987.4, "error": null, "message": "Deployment completed"}
+```
+
+Exactly one object per connection, on **every** terminating path — including the
+five that end before a deployment ever runs (empty stdin, unreadable stdin, an
+unparseable request, a project mismatch, and an exception out of the deployment
+itself). Each of those carries its own reason in `error`, because "failed" on its
+own names nothing.
+
+Three properties worth knowing:
+
+- **`StandardOutput=journal` is deliberate and stays.** Setting it to `socket`
+  would put Rich-styled human output on the wire ahead of the JSON, trading an
+  empty response for an unparseable one. The result goes to fd 0 explicitly
+  instead, and stdout keeps carrying a copy into the journal.
+- **The result is written to a duplicate of fd 0, never to fd 0 directly.**
+  `socket.socket(fileno=0)` takes ownership of the descriptor and closes it when
+  collected — stdin closed out from under a running deployment.
+- **A departed peer is normal, not an error.** `deploy-checker` triggers deploys
+  without `--wait` and closes immediately, so half an hour later the write fails
+  with `EPIPE`. That is logged and cannot affect the exit code, which belongs to
+  the deployment alone.
+
+Before v0.64.0 the daemon wrote its result to stdout only, which
+`StandardOutput=journal` sent to the journal — so no `--wait` client ever
+received one. See [`doctor`](doctor.md#a-deploy-socket-that-cannot-answer) for
+finding hosts whose deploy units still run an older fraisier.
+
 ### Security Model
 
 - **Socket permissions**: Owned by web user (www-data), readable/writable by web group

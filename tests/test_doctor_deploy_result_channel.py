@@ -1,11 +1,10 @@
 """Can each installed deploy service actually answer a `--wait` client? (#356)
 
-Phase 1 gave `deploy_daemon` a result channel, and Phase 2 made `--wait` exit 1
-when no result arrives. Together those turn a host whose deploy unit still runs
-a pre-v0.64.0 fraisier into a host where every `--wait` deploy fails — and that
-is the *normal* upgrade order, not an edge case: the CLI replaces itself via
-self-upgrade while the deploy unit's binary only changes when someone re-runs a
-scaffold install.
+v0.64.0 gave `deploy_daemon` a result channel and made `--wait` exit 1 when no
+result arrives. Together those turn a host whose deploy unit still runs an older
+fraisier into a host where every `--wait` deploy fails — and that is the *normal*
+upgrade order, not an edge case: the CLI replaces itself via self-upgrade while
+the deploy unit's binary only changes when someone re-runs a scaffold install.
 
 The unit file itself is unchanged by the fix (the result goes to fd 0, which
 `StandardInput=socket` already provided), so the discriminator is the version of
