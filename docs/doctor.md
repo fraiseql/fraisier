@@ -46,6 +46,7 @@ passed.
 | `webhook_hosted_trees_writable` | the installed webhook unit's `ReadWritePaths=` covers every tree it deploys | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
 | `deferred_restarts` | no unit is installed-and-daemon-reloaded while still running its previous version | no | `sudo systemctl restart <unit>` once no deploy is in flight — see [restarts a deploy defers](#restarts-a-deploy-defers) |
 | `sandbox_write_probe` | actually writes into the rendered unit's sandbox under `ProtectSystem=strict` | no | opt-in via `--probe-sandbox`; needs root, else `skip` |
+| `deploy_result_channel` | every installed deploy service runs a fraisier new enough to return a result to `--wait` | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` — see [a deploy socket that cannot answer](#a-deploy-socket-that-cannot-answer) |
 
 The catalog above is **complete**, and a test asserts it: every name in
 `DOCTOR_CHECKS` appears here and vice versa. It had silently fallen six checks
@@ -155,6 +156,58 @@ a missing file executable.
 If no unit names a fraisier binary, the check reports `skip` and says so, rather
 than `pass`. A scan that matched nothing must not read as a clean bill of
 health.
+
+## A deploy socket that cannot answer
+
+`trigger-deploy --wait` exists so a caller can tell "done" from "started". Until
+v0.64.0 it could not: `deploy-service` sets `StandardInput=socket` under an
+`Accept=yes` socket, so fd 0 *is* the accepted client connection, but the
+daemon wrote its machine-readable result with `print()` — to fd 1, which
+`StandardOutput=journal` sends to the journal. The result never reached the
+client. Every `--wait` run read an empty response and reported
+`Deployment triggered successfully`, exit 0, whatever had actually happened.
+
+v0.64.0 fixes both halves: the daemon writes the result to the connection, and
+`--wait` treats a missing or unparseable result as a failure rather than
+inventing a success.
+
+That second half has a cost, and this check is how you pay it deliberately. A
+host whose deploy unit still runs a **pre-v0.64.0** fraisier cannot return a
+result at all, so every `--wait` deploy against it now exits 1. And that skew is
+the normal upgrade order rather than an edge case: the CLI replaces itself via
+self-upgrade, while the deploy unit's binary changes only when someone re-runs a
+scaffold install. A host can sit new-client/old-unit for weeks.
+
+`deploy_result_channel` reads the **installed** units — not the rendered ones —
+finds every service whose `ExecStart=` runs `deploy-daemon`, and asks that
+binary its version. The unit file itself is unchanged by the fix (the result
+goes to fd 0, which `StandardInput=socket` already provided), so the binary is
+the only thing that can answer the question.
+
+It takes no config: the units on disk are the input, so it still reports on a
+host whose `fraises.yaml` will not load. Deploy units on a host almost always
+share one binary, so it is asked once and the answer reused.
+
+Three verdicts, and the third is the point:
+
+- `fail` — a unit runs a fraisier older than 0.64.0. Named per unit, and the
+  unit name is the `(fraise, environment)` identity. Retrying will not help;
+  re-render and reinstall:
+
+  ```bash
+  fraisier scaffold && sudo fraisier scaffold-install --yes
+  ls -l ~/.local/bin/fraisier          # confirm the binary moved
+  ```
+
+- `warn` — the binary would not say what it is. Usually the deploy user's
+  `~/.local/bin/fraisier` is simply not readable by whoever ran `doctor`. This
+  is *unverifiable*, not broken, and follows `ArchiveCheck`'s three-valued
+  precedent: "I could not ask" is not "this host is broken". Ask it directly
+  with `sudo -u <deploy_user>`.
+
+- `skip` — no deploy services are installed here, or the unit directory could
+  not be read. As with `unit_entrypoints`, a scan that matched nothing reports
+  `skip` rather than `pass`.
 
 ## JSON output
 
