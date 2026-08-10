@@ -173,7 +173,11 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
 @click.option(
     "--follow",
     is_flag=True,
-    help="Wait and stream live service logs via journalctl (implies --wait)",
+    help=(
+        "Wait, report the outcome, then stream live service logs via "
+        "journalctl (implies --wait; a failed deploy exits non-zero instead "
+        "of tailing)"
+    ),
 )
 @click.option(
     "--timeout", type=int, default=300, help="Timeout in seconds (default: 300)"
@@ -295,13 +299,13 @@ def trigger_deploy(
                 )
                 raise SystemExit(1) from None
 
-        # Handle wait/follow modes
-        if follow:
-            # Exec into journalctl to follow logs.
-            # socket_stem was derived from deploy_socket_name() above.
-            unit_pattern = f"{socket_stem}@*.service"
-            os.execvp("journalctl", ["journalctl", "-u", unit_pattern, "-f"])
-        elif wait:
+        # Handle wait/follow modes. --follow implies --wait, so it is a caller
+        # that asked for an outcome and is bound by the same invariant: it used
+        # to drain the result off the socket and exec into journalctl before
+        # looking at it, exiting with journalctl's status instead of the
+        # deploy's. The outcome is reported first now, and the logs are
+        # followed only for a deployment that actually succeeded.
+        if wait:
             # --wait asked for the outcome, so anything short of a result the
             # daemon actually sent is an outcome we do not know — and an unknown
             # outcome must never read as a success. Reporting one is how a
@@ -341,6 +345,12 @@ def trigger_deploy(
                     if result.get("duration"):
                         console.print(f"Duration: {result['duration']:.1f}s")
                     sock.close()
+                    if follow:
+                        # socket_stem was derived from deploy_socket_name().
+                        unit_pattern = f"{socket_stem}@*.service"
+                        os.execvp(
+                            "journalctl", ["journalctl", "-u", unit_pattern, "-f"]
+                        )
                     raise SystemExit(0)
                 else:
                     console.print(
