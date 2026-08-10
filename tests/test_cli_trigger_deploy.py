@@ -162,7 +162,13 @@ class TestTriggerDeployWait:
     def test_trigger_deploy_follow_execs_journalctl(
         self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
     ):
-        """Test trigger-deploy --follow execs into journalctl."""
+        """Test trigger-deploy --follow execs into journalctl.
+
+        The result is supplied because `--follow` implies `--wait`: since #356
+        the logs are followed only once a real success has been reported. The
+        empty-response case is covered by
+        `TestFollowIsBoundByTheSameInvariant`, where it exits 1 instead.
+        """
         runner = CliRunner()
 
         # Mock config
@@ -180,13 +186,16 @@ class TestTriggerDeployWait:
             "/run/fraisier/myproject-prod/deploy.sock"
         )
 
-        # Mock socket — recv must return empty bytes to break the read loop
+        # Mock socket — a successful result, then empty bytes to break the loop
         mock_sock = MagicMock()
         mock_socket_class.return_value = mock_sock
         mock_sock.connect.return_value = None
         mock_sock.sendall.return_value = None
         mock_sock.shutdown.return_value = None
-        mock_sock.recv.return_value = b""
+        mock_sock.recv.side_effect = [
+            json.dumps({"success": True, "message": "done"}).encode(),
+            b"",
+        ]
 
         runner.invoke(
             main,
@@ -499,3 +508,93 @@ class TestTriggerDeployWaitOutcomeIsKnown:
         assert result.exit_code == 1, result.output
         assert "scaffold-install" in result.output
         assert "doctor" in result.output
+
+
+class TestFollowIsBoundByTheSameInvariant:
+    """`--follow` implies `--wait`, so it is a caller that asked for an outcome.
+
+    It drained the result off the socket and then discarded it: the exec into
+    journalctl happened before the result was looked at, so the process exited
+    with journalctl's status, which says nothing about the deploy. A flag that
+    implies `--wait` and then ignores the invariant is the next issue in this
+    series.
+    """
+
+    @staticmethod
+    def _wire(mock_get_config, mock_path_class, mock_socket_class):
+        return TestTriggerDeployWaitOutcomeIsKnown._wire(
+            mock_get_config, mock_path_class, mock_socket_class
+        )
+
+    @patch("fraisier.cli._deploy.os.execvp")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_follow_does_not_tail_logs_for_a_failed_deployment(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
+    ):
+        """A failed deploy exits 1 rather than handing the shell to journalctl."""
+        runner = CliRunner()
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        payload = json.dumps({"success": False, "error": "migrations failed"}).encode()
+        mock_sock.recv.side_effect = [payload, b""]
+
+        result = runner.invoke(
+            main,
+            ["trigger-deploy", "api", "prod", "--follow"],
+            obj={"skip_health": False},
+        )
+
+        assert result.exit_code == 1, result.output
+        assert "migrations failed" in result.output
+        mock_execvp.assert_not_called()
+
+    @patch("fraisier.cli._deploy.os.execvp")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_follow_does_not_tail_logs_when_no_result_arrives(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
+    ):
+        """An unknown outcome under --follow is still an unknown outcome."""
+        runner = CliRunner()
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        mock_sock.recv.return_value = b""
+
+        result = runner.invoke(
+            main,
+            ["trigger-deploy", "api", "prod", "--follow"],
+            obj={"skip_health": False},
+        )
+
+        assert result.exit_code == 1, result.output
+        assert "triggered successfully" not in result.output
+        mock_execvp.assert_not_called()
+
+    @patch("fraisier.cli._deploy.os.execvp")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_follow_reports_the_outcome_then_tails_the_logs(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
+    ):
+        """On success the summary is printed first — exec would erase it."""
+        runner = CliRunner()
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        payload = json.dumps(
+            {"success": True, "message": "done", "version": "abc123", "duration": 4.2}
+        ).encode()
+        mock_sock.recv.side_effect = [payload, b""]
+
+        result = runner.invoke(
+            main,
+            ["trigger-deploy", "api", "prod", "--follow"],
+            obj={"skip_health": False},
+        )
+
+        assert "Deployment successful" in result.output
+        mock_execvp.assert_called_once()
+        argv = mock_execvp.call_args[0][1]
+        assert argv[:2] == ["journalctl", "-u"]
+        assert argv[2] == "fraisier-api-prod@*.service"
+        assert argv[3] == "-f"
