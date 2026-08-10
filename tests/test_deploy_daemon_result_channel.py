@@ -145,3 +145,82 @@ class TestOutcomeReachesTheConnection:
         text = wire.decode("utf-8")
         _, consumed = json.JSONDecoder().raw_decode(text)
         assert text[consumed:].strip() == "", f"trailing bytes on the wire: {text!r}"
+
+
+class TestEveryErrorPathReportsItsReason:
+    """The five paths that terminate before a deployment result exists.
+
+    Each used to print prose to the journal and exit 1 having written nothing
+    machine-readable at all. #356 attributed the empty response to #349 killing
+    the unit; #349 was one trigger out of six, and these five are ordinary
+    control flow rather than races.
+    """
+
+    def test_empty_stdin_says_so_on_the_wire(self) -> None:
+        with accepted_connection() as client:
+            run = CliRunner().invoke(
+                main, ["deploy-daemon", "--project", "api"], input=""
+            )
+            wire = read_result(client)
+
+        assert run.exit_code == 1
+        payload = json.loads(wire.decode("utf-8"))
+        assert payload["success"] is False
+        assert payload["error"] == "No input received on stdin"
+
+    def test_undecodable_stdin_says_so_on_the_wire(self) -> None:
+        """A client writing non-UTF-8 makes ``sys.stdin.read()`` itself raise."""
+        with accepted_connection() as client:
+            run = CliRunner().invoke(
+                main, ["deploy-daemon", "--project", "api"], input=b"\xff\xfe\x00binary"
+            )
+            wire = read_result(client)
+
+        assert run.exit_code == 1
+        payload = json.loads(wire.decode("utf-8"))
+        assert payload["success"] is False
+        assert payload["error"].startswith("Error reading stdin:")
+
+    def test_unparseable_request_says_so_on_the_wire(self) -> None:
+        with accepted_connection() as client:
+            run = CliRunner().invoke(
+                main, ["deploy-daemon", "--project", "api"], input="not-valid-json"
+            )
+            wire = read_result(client)
+
+        assert run.exit_code == 1
+        payload = json.loads(wire.decode("utf-8"))
+        assert payload["success"] is False
+        assert payload["error"].startswith("Error parsing request:")
+
+    def test_project_mismatch_says_which_projects_on_the_wire(self) -> None:
+        mismatched = json.loads(REQUEST)
+        mismatched["project"] = "other"
+
+        with accepted_connection() as client:
+            run = CliRunner().invoke(
+                main,
+                ["deploy-daemon", "--project", "api"],
+                input=json.dumps(mismatched),
+            )
+            wire = read_result(client)
+
+        assert run.exit_code == 1
+        payload = json.loads(wire.decode("utf-8"))
+        assert payload["success"] is False
+        assert "requested 'other'" in payload["error"]
+        assert "configured for 'api'" in payload["error"]
+
+    def test_execution_raising_says_so_on_the_wire(self) -> None:
+        with accepted_connection() as client:
+            with patch("fraisier.daemon.execute_deployment_request") as execute:
+                execute.side_effect = RuntimeError("git fetch: host key mismatch")
+                run = CliRunner().invoke(
+                    main, ["deploy-daemon", "--project", "api"], input=REQUEST
+                )
+            wire = read_result(client)
+
+        assert run.exit_code == 1
+        payload = json.loads(wire.decode("utf-8"))
+        assert payload["success"] is False
+        assert "git fetch: host key mismatch" in payload["error"]
