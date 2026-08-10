@@ -5,7 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fraisier.dbops.receipt import ActuationCheck
 
 
 @dataclass
@@ -29,6 +32,18 @@ class StrategyResult:
 
     unchecked_schemas: tuple[str, ...] = ()
     """Schemas in the archive the derived floor did not cover."""
+
+    actuation: ActuationCheck | None = None
+    """Evidence that **this run** rewrote the database, read back out of it.
+
+    The floor above proves the schema arrived. This proves a restore happened at
+    all — the failure no count can see, because a database that was never
+    rewritten holds correct counts of stale data (#358).
+
+    None, and every verdict other than ``ACTUATED``, mean *not proven*. Only
+    ``ACTUATED`` is proof, and it is never a reason to fail a restore: the
+    receipt is bookkeeping written after every real check has already passed.
+    """
 
 
 @dataclass

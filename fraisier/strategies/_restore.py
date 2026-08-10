@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fraisier.config.schema import PreflightConfig
 from fraisier.dbops.confiture import migrate_down, migrate_up
 
 from ._base import Strategy, StrategyResult
+
+if TYPE_CHECKING:
+    from fraisier.dbops.receipt import ActuationCheck
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +148,63 @@ class RestoreMigrateStrategy(Strategy):
                 recovery_hint=hint,
             )
 
+    def _record_actuation(self, backup_file: Path, run_id: str) -> ActuationCheck:
+        """Leave *run_id* in the restored database, then read it back.
+
+        The token is what makes this a check rather than a formality: a restore
+        that never ran leaves the *previous* run's receipt in place, so the
+        presence of a receipt matches every time and proves nothing. Only a
+        receipt naming the run that is asking can distinguish "this pipeline
+        rewrote the database" from "some pipeline once did" (#358).
+
+        Reading it back is a round trip through the database rather than trust
+        in a variable this process just set.
+
+        Never raises, and never fails the restore. It runs after every check the
+        restore actually has, so a failure here is bookkeeping that did not
+        happen — reported as UNVERIFIABLE, which is *not proven* rather than
+        *proven bad*, exactly as an unverifiable archive is at step 2.4.
+        """
+        from fraisier.dbops.receipt import (
+            ActuationCheck,
+            ActuationVerdict,
+            RestoreReceipt,
+            verify_actuation,
+            write_receipt,
+        )
+
+        try:
+            backup_bytes = backup_file.stat().st_size
+        except OSError:
+            # The archive was readable minutes ago; if it is not now, that is
+            # worth recording as unknown rather than guessing a size.
+            backup_bytes = 0
+
+        receipt = RestoreReceipt(
+            run_id=run_id,
+            backup_path=str(backup_file),
+            backup_bytes=backup_bytes,
+            restored_at=datetime.now(UTC),
+            age_seconds=0.0,
+        )
+        failure = write_receipt(
+            self._config.db_name,
+            connection_url=self._admin_url,
+            receipt=receipt,
+        )
+        if failure is not None:
+            log.warning("Could not record the restore receipt: %s", failure)
+            return ActuationCheck(ActuationVerdict.UNVERIFIABLE, failure)
+
+        check = verify_actuation(
+            self._config.db_name,
+            connection_url=self._admin_url,
+            expected_run_id=run_id,
+        )
+        if not check.is_actuated:
+            log.warning("Restore receipt not confirmed: %s", check.detail)
+        return check
+
     def execute(
         self,
         confiture_config: Path,
@@ -169,6 +231,13 @@ class RestoreMigrateStrategy(Strategy):
         from fraisier.errors import DatabaseError
 
         cfg = self._config
+
+        # Minted before anything happens, so the token belongs to this run and
+        # to no other. It is written into the restored database at the end and
+        # read back from it; a pipeline that never ran leaves the previous
+        # run's token behind, which is the only way to tell a stale staging
+        # database from a fresh one whose counts happen to match (#358).
+        run_id = uuid.uuid4().hex
 
         # Step 1: Resolve backup file
         if cfg.backup_path is not None:
@@ -381,6 +450,20 @@ class RestoreMigrateStrategy(Strategy):
                 "for emptiness"
             )
 
+        # Step 10.5: Leave this run's receipt in the database it just rewrote.
+        #
+        # After every check, not before: a receipt written earlier would name a
+        # run that had not finished, and a migration or floor failure would
+        # leave the database asserting an outcome that never happened. A receipt
+        # therefore means "this run completed", which is what a later caller
+        # wants to know.
+        #
+        # The rollback template is taken before `migrate up`, so it carries no
+        # receipt; a database rolled back onto it reads as MISSING. That is
+        # correct — after a rollback it is not the state any completed run
+        # produced, and MISSING says "not proven" rather than "stale".
+        actuation = self._record_actuation(backup_file, run_id)
+
         # Step 11: Start service
         if self._service_manager and self._service_name:
             try:
@@ -415,6 +498,7 @@ class RestoreMigrateStrategy(Strategy):
             total_duration_seconds=total_secs,
             schema_floor=derived,
             unchecked_schemas=check.unchecked_schemas,
+            actuation=actuation,
         )
 
     def rollback(
