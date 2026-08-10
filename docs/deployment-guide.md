@@ -1194,7 +1194,61 @@ Restore complete: 4 migration(s) applied
 Set it if you know roughly how many tables the database should have. But do not
 mistake it for protection against a truncated dump: a dump truncated inside its
 *data* section restores its schema completely, so the tables all exist and are
-empty, and any count passes. The archive check above is what catches that.
+empty, and any count passes.
+
+What catches a truncated dump is `pg_restore` itself — it cannot read past the
+cut, so it errors and exits non-zero and the restore fails, on both the serial
+and the parallel path. The floor never sees it, and does not need to.
+
+#### The one thing no count can see: a restore that never ran
+
+A staging database nobody rewrote holds yesterday's data, and yesterday's data
+has entirely correct counts. That is the failure behind #343 and #356 — a
+nightly restore reporting success while staging silently stayed a day stale —
+and it is invisible to every check above, because nothing about the *content* is
+wrong. It is only old.
+
+So each restore leaves a receipt: a token minted for that run, written into the
+database it just restored along with the backup's path and size. The run reads
+it straight back; a later caller reads it whenever it wants to know:
+
+```
+$ fraisier db receipt api staging
+Actuated: mydb_staging was rewritten 2.4h ago by run 7f3c9e21…
+  From backup: /backup/production/db_full_20260810_lz4.dump
+```
+
+```
+$ fraisier db receipt api staging --max-age-hours 26
+Stale: mydb_staging was last rewritten 31.2h ago by run 1a9b…, which is older
+than the 26.0h window
+```
+
+The token matters more than the row. A restore that never ran leaves the
+*previous* run's receipt behind, so the mere presence of a receipt matches every
+time and proves nothing — the check is always against something: a run id, or a
+freshness window.
+
+Exit codes, so a monitoring timer can act on it:
+
+| code | meaning |
+|------|---------|
+| `0`  | a restore rewrote the database inside the window |
+| `1`  | the last restore is older than the window — staging is stale |
+| `3`  | no receipt, or the check could not run. **Not checked, not passed.** |
+
+`3` is deliberately not `0`: a host that cannot check must not report what a host
+that checked and passed reports. It is deliberately not `1` either — a missing
+`psql` should not page anyone the way a stale staging database should.
+
+A database restored by hand, or by a fraisier older than v0.65.0, has no receipt
+and reads as `MISSING` (exit 3). That is *not proven*, not *stale*.
+
+`--check-heap` adds relation-file mtimes as a second opinion. It is opt-in
+because it needs superuser or `pg_read_server_files`, which managed PostgreSQL
+commonly refuses, and it never changes the exit code: autovacuum moves mtimes
+after a restore that did nothing, so it can pass a database the receipt
+correctly calls stale. When the two disagree, both are printed.
 
 ---
 

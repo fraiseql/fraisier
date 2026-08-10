@@ -129,7 +129,21 @@ def restore_backup(
     data section restores its schema completely, so the tables exist and are
     empty and any count passes. The floor catches a restore that produced no
     schema; :func:`fraisier.dbops.archive.verify_archive`, called before the
-    database is dropped, is what catches a truncated archive (#342, #343).
+    database is dropped, is what catches an archive whose *table of contents*
+    is unreadable (#342, #343).
+
+    Neither of them catches a truncation, and neither has to: ``pg_restore``
+    does. It cannot read past the cut, writes a ``pg_restore: error:`` line and
+    exits non-zero, and confiture fails the section on ``returncode != 0 and
+    (exit_on_error or errors)``. That holds for ``jobs > 1`` too, where
+    ``exit_on_error`` is off — the ``or errors`` half carries it, because
+    tolerating a non-zero *exit* is not the same as tolerating an *error line*.
+    Measured, not assumed, and pinned by
+    ``tests/integration/test_restore_truncated_archive.py`` (#358).
+
+    What none of the above can see is a restore that never ran: a database
+    nobody rewrote holds stale data with entirely correct counts. That is what
+    :mod:`fraisier.dbops.receipt` is for.
     """
     validate_pg_identifier(db_name, "database name")
     validate_file_path(backup_path)
