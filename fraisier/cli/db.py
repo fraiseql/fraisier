@@ -40,6 +40,36 @@ def _get_db_config(
     return fraise, env_config
 
 
+def _report_actuation(actuation) -> None:
+    """Print what proved — or did not prove — that this run rewrote the database.
+
+    Three outcomes, three different lines, on purpose. The one failure this
+    exists to catch is a restore that reports success while staging keeps
+    yesterday's data (#343, #356), so a run that could not obtain the proof must
+    not print anything a reader could mistake for having obtained it.
+
+    ``None`` means the strategy predates the receipt — say nothing rather than
+    invent a verdict for it.
+    """
+    from fraisier.dbops.receipt import ActuationVerdict
+
+    if actuation is None:
+        return
+    if actuation.verdict is ActuationVerdict.ACTUATED and actuation.receipt:
+        receipt = actuation.receipt
+        console.print(
+            f"  Actuation: run {receipt.run_id} wrote this database, read back "
+            f"out of it — the restore ran, it did not merely report success."
+        )
+    elif actuation.verdict is ActuationVerdict.STALE:
+        console.print(f"  [red]Actuation failed:[/red] {actuation.detail}")
+    else:
+        console.print(
+            f"  [yellow]Actuation not verified:[/yellow] {actuation.detail}. "
+            "This says nothing either way — it is not a passed check."
+        )
+
+
 @db.command(name="exec")
 @click.argument("fraise")
 @click.option("--env", "-e", required=True, help="Target environment")
@@ -746,6 +776,16 @@ def db_restore(
                     "(--schema-only, or pg_restore unavailable); the restored "
                     "database was not checked for emptiness."
                 )
+
+            # What the floor above cannot tell anyone: that a restore happened
+            # at all (#358). A staging database nobody rewrote holds correct
+            # counts of yesterday's data, so the evidence has to be a token this
+            # run minted and then read back out of the database. Reported here
+            # in the same voice as the floor — including when it could not be
+            # obtained, because "not verified" and "verified" must not look
+            # alike to someone skimming a nightly log.
+            _report_actuation(getattr(result, "actuation", None))
+
             if result.total_duration_seconds > 0:
                 console.print(
                     f"  Restore: {result.restore_duration_seconds:.1f}s"
@@ -793,6 +833,175 @@ def db_restore(
             "`fraisier setup`; after a reboot it appears when the webhook starts."
         )
         raise SystemExit(1) from exc
+
+
+#: ``db receipt`` exits 3 when it could not reach a verdict. Not 0: a host that
+#: cannot check must not report what a host that checked and passed reports —
+#: that is the ``min_tables=0`` silent hole (#343) moved into monitoring. Not 1
+#: either, because a monitoring timer that pages on a stale staging database
+#: should not page on a host missing ``psql``.
+_RECEIPT_EXIT_UNKNOWN = 3
+
+
+@db.command(name="receipt")
+@click.argument("fraise")
+@click.argument("environment")
+@click.option(
+    "--max-age-hours",
+    type=float,
+    default=None,
+    help=(
+        "How recently a restore must have rewritten the database. "
+        "Defaults to the fraise's database.restore.max_age_hours."
+    ),
+)
+@click.option(
+    "--check-heap",
+    is_flag=True,
+    help=(
+        "Also report relation-file mtimes. Needs superuser or "
+        "pg_read_server_files; corroborates the receipt, never overrides it."
+    ),
+)
+@click.option(
+    "--heap-schema",
+    default="public",
+    show_default=True,
+    help="Schema whose base tables --check-heap inspects. One schema, never summed.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the verdict as JSON")
+@click.pass_context
+def db_receipt(
+    ctx: click.Context,
+    fraise: str,
+    environment: str,
+    max_age_hours: float | None,
+    check_heap: bool,
+    heap_schema: str,
+    as_json: bool,
+) -> None:
+    """Ask a database when a fraisier restore last rewrote it.
+
+    Every count taken on a stale database is correct — that is what makes a
+    nightly restore that silently stopped running so hard to notice (#343,
+    #356). Each restore leaves a token behind; this reads it back and reports
+    how long ago the run that left it finished.
+
+    \b
+    Exit codes:
+      0  a restore rewrote this database inside the window
+      1  the last restore is older than the window — staging is stale
+      3  no receipt, or the check could not run. Not checked, not passed.
+
+    \b
+    Examples:
+        fraisier db receipt api staging
+        fraisier db receipt api staging --max-age-hours 26 --json
+    """
+    from fraisier.dbops.guard import is_external_db
+    from fraisier.dbops.receipt import ActuationVerdict, verify_actuation
+
+    config = ctx.obj["config"]
+    fraise_cfg, env_config = _get_db_config(config, fraise, environment)
+    if not fraise_cfg or not env_config:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"
+        )
+        raise SystemExit(1)
+
+    if is_external_db(fraise_cfg):
+        console.print(f"[yellow]Skipping '{fraise}': external_db is true[/yellow]")
+        return
+
+    db_cfg = env_config.get("database", {})
+    db_name = db_cfg.get("name", fraise)
+    admin_url = db_cfg.get("admin_url")
+    if not admin_url:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' env '{environment}' has no "
+            "admin_url; set database.admin_url in fraise/env/*.yaml"
+        )
+        raise SystemExit(1)
+
+    # The restore path's own notion of how stale an input may be, reused as the
+    # notion of how stale an output may be.
+    window = max_age_hours
+    if window is None:
+        window = float((db_cfg.get("restore") or {}).get("max_age_hours", 48.0))
+
+    check = verify_actuation(db_name, connection_url=admin_url, max_age_hours=window)
+    receipt = check.receipt
+
+    # Opt-in, and reported as a line rather than folded into the verdict. It
+    # answers a related but weaker question — mtimes move for autovacuum too, so
+    # it can pass a database the receipt correctly calls stale — and it needs a
+    # privilege most managed PostgreSQL will not grant, which would otherwise
+    # print "could not read" on every run. When the two disagree both are shown:
+    # "the receipt says today and the heap says last week" is something an
+    # operator wants told, not something this should settle silently.
+    heap = None
+    if check_heap:
+        from fraisier.dbops.receipt import relation_freshness
+
+        heap = relation_freshness(
+            db_name,
+            schema=heap_schema,
+            connection_url=admin_url,
+            within_hours=window,
+        )
+
+    if as_json:
+        click.echo(
+            _json.dumps(
+                {
+                    "database": db_name,
+                    "verdict": check.verdict.value,
+                    "detail": check.detail,
+                    "max_age_hours": window,
+                    "run_id": receipt.run_id if receipt else None,
+                    "backup_path": receipt.backup_path if receipt else None,
+                    "backup_bytes": receipt.backup_bytes if receipt else None,
+                    "restored_at": receipt.restored_at.isoformat() if receipt else None,
+                    "age_hours": receipt.age_hours if receipt else None,
+                    "heap": (
+                        {"verdict": heap.verdict.value, "detail": heap.detail}
+                        if heap
+                        else None
+                    ),
+                },
+                indent=2,
+            )
+        )
+    elif check.verdict is ActuationVerdict.ACTUATED and receipt:
+        console.print(
+            f"[green]Actuated:[/green] {db_name} was rewritten "
+            f"{receipt.age_hours:.1f}h ago by run {receipt.run_id}"
+        )
+        console.print(f"  From backup: {receipt.backup_path}")
+    elif check.verdict is ActuationVerdict.STALE:
+        console.print(f"[red]Stale:[/red] {check.detail}")
+        if receipt:
+            console.print(f"  Last backup restored: {receipt.backup_path}")
+    else:
+        console.print(f"[yellow]Not checked:[/yellow] {check.detail}")
+        console.print(
+            "  This says nothing either way about the database — it is not a "
+            "passed check and not a failed one."
+        )
+
+    if heap is not None and not as_json:
+        colour = {
+            ActuationVerdict.ACTUATED: "green",
+            ActuationVerdict.STALE: "red",
+        }.get(heap.verdict, "yellow")
+        console.print(f"  [{colour}]Heap mtimes:[/{colour}] {heap.detail}")
+
+    # The receipt decides. The heap check corroborates and does not vote: it
+    # passes a stale database whose autovacuum happened to run, so letting it
+    # move the exit code would trade a reliable signal for an unreliable one.
+    if check.verdict is ActuationVerdict.ACTUATED:
+        return
+    raise SystemExit(1 if check.is_bad else _RECEIPT_EXIT_UNKNOWN)
 
 
 class _BackupGroup(click.Group):
