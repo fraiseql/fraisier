@@ -24,7 +24,7 @@ second on the corpus that matters.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -56,6 +56,20 @@ class ArchiveCheck:
     verdict: ArchiveVerdict
     detail: str
 
+    table_data_by_schema: dict[str, int] = field(default_factory=dict)
+    """``TABLE DATA`` entries in the table of contents, counted per schema.
+
+    Empty unless the verdict is ``VALID``, and empty for a ``--schema-only``
+    dump, which carries none. **An empty mapping is "nothing was learned", not
+    "a floor of zero"** — the same rule as ``UNVERIFIABLE``. A caller deriving
+    a floor must say it did not check rather than that it checked and passed.
+
+    Per schema, never summed: entries span every schema in the archive while
+    the counters that verify a restore look at one. A whole-archive floor
+    compared against a single schema's count is a guaranteed false failure on a
+    host whose tables live outside ``public``.
+    """
+
     @property
     def is_valid(self) -> bool:
         """The archive was read successfully."""
@@ -70,6 +84,43 @@ class ArchiveCheck:
         that would have cleared it.
         """
         return self.verdict is ArchiveVerdict.INVALID
+
+
+#: Fields of a TOC entry once the ``dumpId;`` prefix is removed:
+#: ``catalogId oid TAG SCHEMA NAME OWNER``. The tag begins at index 2.
+_TAG_INDEX = 2
+#: An entry needs a schema and a name after a two-word tag to be counted.
+_MIN_ENTRY_FIELDS = 6
+
+
+def _table_data_counts(toc: str) -> dict[str, int]:
+    """Count ``TABLE DATA`` entries per schema in a ``pg_restore --list`` TOC.
+
+    ``relkind='r'`` is what this is apples-to-apples with: pg_dump emits one
+    ``TABLE DATA`` entry per dumped base table whatever its row count, emits
+    ``MATERIALIZED VIEW DATA`` for matviews, emits nothing for views, and
+    attaches partition data to the leaf partitions rather than to the parent.
+
+    The tag is read **positionally**, not by substring. Header and comment
+    lines share the stream, tags are multi-word, and a table *named*
+    ``my TABLE DATA table`` would otherwise be counted as an entry it is not.
+    """
+    counts: dict[str, int] = {}
+    for raw in toc.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(";"):
+            continue  # header or comment
+        dump_id, sep, rest = line.partition(";")
+        if not sep or not dump_id.strip().isdigit():
+            continue
+        fields = rest.split()
+        if len(fields) < _MIN_ENTRY_FIELDS:
+            continue
+        if fields[_TAG_INDEX : _TAG_INDEX + 2] != ["TABLE", "DATA"]:
+            continue
+        schema = fields[_TAG_INDEX + 2]
+        counts[schema] = counts.get(schema, 0) + 1
+    return counts
 
 
 def _list_command(path: Path) -> list[str]:
@@ -127,4 +178,6 @@ def verify_archive(path: Path | str) -> ArchiveCheck:
             or f"pg_restore --list exited with code {result.returncode}",
         )
 
-    return ArchiveCheck(ArchiveVerdict.VALID, "")
+    return ArchiveCheck(
+        ArchiveVerdict.VALID, "", _table_data_counts(result.stdout or "")
+    )

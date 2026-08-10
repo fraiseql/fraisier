@@ -215,3 +215,115 @@ class TestVerifyArchiveCommand:
             )
             check = verify_archive(str(dump))
         assert check.verdict is ArchiveVerdict.VALID
+
+
+#: A faithful `pg_restore --list` table of contents: header comments, a SCHEMA
+#: entry whose schema field is `-`, base tables in two schemas, a matview (whose
+#: data tag is MATERIALIZED VIEW DATA, not TABLE DATA), a view (no data entry at
+#: all), and a quoted table name that *contains* the words TABLE DATA.
+_TOC = """;
+; Archive created at 2026-08-09 02:00:00 UTC
+;     dbname: printoptim
+;     TOC Entries: 12
+;     Format: CUSTOM
+;     Dumped by pg_dump version: 16.3
+;
+;
+; Selected TOC Entries:
+;
+5; 2615 16385 SCHEMA - tenant postgres
+216; 1259 16456 TABLE tenant tb_order postgres
+217; 1259 16460 TABLE tenant tb_customer postgres
+218; 1259 16470 TABLE public flyway_schema_history postgres
+219; 1259 16480 VIEW public v_orders postgres
+220; 1259 16490 MATERIALIZED VIEW public mv_daily postgres
+221; 1259 16495 TABLE public my TABLE DATA table postgres
+4102; 0 16456 TABLE DATA tenant tb_order postgres
+4103; 0 16460 TABLE DATA tenant tb_customer postgres
+4104; 0 16470 TABLE DATA public flyway_schema_history postgres
+4105; 0 16490 MATERIALIZED VIEW DATA public mv_daily postgres
+"""
+
+
+def _valid_with_toc(tmp_path: Path, toc: str):
+    dump = tmp_path / "proddb_full.dump"
+    dump.write_bytes(_PGDUMP_MAGIC + b"\x00" * 64)
+    with patch("fraisier.dbops.archive.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=toc, stderr=""
+        )
+        return verify_archive(dump)
+
+
+class TestTheArchiveStatesItsSchemaFloor:
+    """The TOC is already in `result.stdout` and was being thrown away (#343).
+
+    Counting it costs one pass over a string held in memory; no second
+    `pg_restore` invocation is needed.
+    """
+
+    def test_table_data_is_counted_per_schema(self, tmp_path: Path):
+        check = _valid_with_toc(tmp_path, _TOC)
+
+        assert check.verdict is ArchiveVerdict.VALID
+        assert check.table_data_by_schema == {"tenant": 2, "public": 1}
+
+    def test_schemas_are_never_summed(self, tmp_path: Path):
+        """A whole-TOC floor against a single schema's count false-fails.
+
+        #356's own host keeps its heaps in `tenant`; a floor of 3 derived from
+        the whole TOC and compared against `public` would fail a perfect
+        restore.
+        """
+        check = _valid_with_toc(tmp_path, _TOC)
+
+        assert sum(check.table_data_by_schema.values()) == 3
+        assert check.table_data_by_schema["tenant"] == 2
+        assert check.table_data_by_schema["public"] == 1
+
+    def test_matview_data_is_not_table_data(self, tmp_path: Path):
+        """pg_dump emits MATERIALIZED VIEW DATA for matviews, and it is not it."""
+        check = _valid_with_toc(tmp_path, _TOC)
+
+        assert check.table_data_by_schema.get("public") == 1
+
+    def test_the_tag_is_read_positionally_not_by_substring(self, tmp_path: Path):
+        """A table *named* `my TABLE DATA table` must not count as an entry.
+
+        `"TABLE DATA" in line` counts it; reading the tag field positionally
+        does not. Header and comment lines share the same stream.
+        """
+        one_liner = "221; 1259 16495 TABLE public my TABLE DATA table postgres\n"
+        check = _valid_with_toc(tmp_path, one_liner)
+
+        assert check.table_data_by_schema == {}
+
+    def test_a_schema_only_dump_has_no_floor_to_state(self, tmp_path: Path):
+        """`--schema-only` produces zero TABLE DATA entries — a VALID archive."""
+        schema_only = (
+            ";\n; Selected TOC Entries:\n;\n"
+            "216; 1259 16456 TABLE tenant tb_order postgres\n"
+        )
+        check = _valid_with_toc(tmp_path, schema_only)
+
+        assert check.verdict is ArchiveVerdict.VALID
+        assert check.table_data_by_schema == {}
+
+    def test_an_unverifiable_archive_states_no_counts(self, tmp_path: Path):
+        """Absence of a tool is not a floor of zero."""
+        check = verify_archive(tmp_path / "gone.dump")
+
+        assert check.verdict is ArchiveVerdict.UNVERIFIABLE
+        assert check.table_data_by_schema == {}
+
+    def test_an_invalid_archive_states_no_counts(self, tmp_path: Path):
+        dump = tmp_path / "truncated.dump"
+        dump.write_bytes(_PGDUMP_MAGIC + b"\x00" * 8)
+        with patch("fraisier.dbops.archive.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="unexpected end of file"
+            )
+            check = verify_archive(dump)
+
+        assert check.verdict is ArchiveVerdict.INVALID
+        assert check.table_data_by_schema == {}
