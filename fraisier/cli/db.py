@@ -842,6 +842,14 @@ def db_restore(
 #: should not page on a host missing ``psql``.
 _RECEIPT_EXIT_UNKNOWN = 3
 
+#: How recently a restore must have rewritten the database, when nothing says
+#: otherwise. Deliberately *not* ``database.restore.max_age_hours``, which asks a
+#: different question — how old the backup *file* may be. A 48h tolerance for an
+#: input is a reasonable thing to configure and a uselessly loose window for "did
+#: last night's restore run": a nightly that stopped a day ago would still pass.
+#: 26h suits a nightly cadence — a couple of hours of slack, and no more.
+_DEFAULT_ACTUATION_WINDOW_HOURS = 26.0
+
 
 @db.command(name="receipt")
 @click.argument("fraise")
@@ -851,8 +859,9 @@ _RECEIPT_EXIT_UNKNOWN = 3
     type=float,
     default=None,
     help=(
-        "How recently a restore must have rewritten the database. "
-        "Defaults to the fraise's database.restore.max_age_hours."
+        "How recently a restore must have rewritten the database. Defaults to "
+        "the fraise's database.restore.max_actuation_age_hours "
+        f"(default {_DEFAULT_ACTUATION_WINDOW_HOURS:g}h)."
     ),
 )
 @click.option(
@@ -865,9 +874,12 @@ _RECEIPT_EXIT_UNKNOWN = 3
 )
 @click.option(
     "--heap-schema",
-    default="public",
-    show_default=True,
-    help="Schema whose base tables --check-heap inspects. One schema, never summed.",
+    default=None,
+    help=(
+        "Schema whose base tables --check-heap inspects. One schema, never "
+        "summed. Defaults to the schema the restore derived its floor for, as "
+        "recorded in the receipt, and to 'public' when the receipt names none."
+    ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the verdict as JSON")
 @click.pass_context
@@ -877,7 +889,7 @@ def db_receipt(
     environment: str,
     max_age_hours: float | None,
     check_heap: bool,
-    heap_schema: str,
+    heap_schema: str | None,
     as_json: bool,
 ) -> None:
     """Ask a database when a fraisier restore last rewrote it.
@@ -896,7 +908,7 @@ def db_receipt(
     \b
     Examples:
         fraisier db receipt api staging
-        fraisier db receipt api staging --max-age-hours 26 --json
+        fraisier db receipt api staging --max-age-hours 12 --json
     """
     from fraisier.dbops.guard import is_external_db
     from fraisier.dbops.receipt import ActuationVerdict, verify_actuation
@@ -923,14 +935,30 @@ def db_receipt(
         )
         raise SystemExit(1)
 
-    # The restore path's own notion of how stale an input may be, reused as the
-    # notion of how stale an output may be.
+    # Its own key, not the restore's `max_age_hours`. That one bounds the age of
+    # the backup *file* the restore is allowed to load; this one bounds how long
+    # ago a restore last ran. On a nightly cadence they are different numbers,
+    # and borrowing the input tolerance for the output question makes the window
+    # far too loose to notice the failure it exists to catch.
     window = max_age_hours
     if window is None:
-        window = float((db_cfg.get("restore") or {}).get("max_age_hours", 48.0))
+        window = float(
+            (db_cfg.get("restore") or {}).get(
+                "max_actuation_age_hours", _DEFAULT_ACTUATION_WINDOW_HOURS
+            )
+        )
 
     check = verify_actuation(db_name, connection_url=admin_url, max_age_hours=window)
     receipt = check.receipt
+
+    # The receipt names where this database's heaps actually live, because the
+    # restore derived it from the archive and nothing else can. Guessing
+    # `public` on a host whose tables are in `tenant` finds no base tables and
+    # returns UNVERIFIABLE — silence, precisely where the cross-check is most
+    # wanted. That is the mismatch the v0.64.0 floor fix removed, and it is not
+    # being reintroduced one command over. Resolved unconditionally so the JSON
+    # can report which schema was looked in.
+    schema = heap_schema or (receipt.floor_schema if receipt else None) or "public"
 
     # Opt-in, and reported as a line rather than folded into the verdict. It
     # answers a related but weaker question — mtimes move for autovacuum too, so
@@ -945,7 +973,7 @@ def db_receipt(
 
         heap = relation_freshness(
             db_name,
-            schema=heap_schema,
+            schema=schema,
             connection_url=admin_url,
             within_hours=window,
         )
@@ -963,8 +991,16 @@ def db_receipt(
                     "backup_bytes": receipt.backup_bytes if receipt else None,
                     "restored_at": receipt.restored_at.isoformat() if receipt else None,
                     "age_hours": receipt.age_hours if receipt else None,
+                    "floor_schema": receipt.floor_schema if receipt else None,
+                    # The schema is reported alongside the verdict because it is
+                    # resolved rather than given: an operator reading
+                    # UNVERIFIABLE needs to see which schema was looked in.
                     "heap": (
-                        {"verdict": heap.verdict.value, "detail": heap.detail}
+                        {
+                            "verdict": heap.verdict.value,
+                            "detail": heap.detail,
+                            "schema": schema,
+                        }
                         if heap
                         else None
                     ),

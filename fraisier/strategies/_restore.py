@@ -148,7 +148,12 @@ class RestoreMigrateStrategy(Strategy):
                 recovery_hint=hint,
             )
 
-    def _record_actuation(self, backup_file: Path, run_id: str) -> ActuationCheck:
+    def _record_actuation(
+        self,
+        backup_file: Path,
+        run_id: str,
+        floor_schema: str | None = None,
+    ) -> ActuationCheck:
         """Leave *run_id* in the restored database, then read it back.
 
         The token is what makes this a check rather than a formality: a restore
@@ -159,6 +164,13 @@ class RestoreMigrateStrategy(Strategy):
 
         Reading it back is a round trip through the database rather than trust
         in a variable this process just set.
+
+        *floor_schema* is the schema this run derived its table-count floor for.
+        It is recorded because here is the only place it is known: it comes off
+        the archive's table of contents, and ``fraisier db receipt`` — which
+        cross-checks relation mtimes the next morning — has no archive and no
+        configuration key to learn it from. ``None`` when the archive stated no
+        floor; the reader falls back rather than being told a guess.
 
         Never raises, and never fails the restore. It runs after every check the
         restore actually has, so a failure here is bookkeeping that did not
@@ -186,6 +198,7 @@ class RestoreMigrateStrategy(Strategy):
             backup_bytes=backup_bytes,
             restored_at=datetime.now(UTC),
             age_seconds=0.0,
+            floor_schema=floor_schema,
         )
         failure = write_receipt(
             self._config.db_name,
@@ -462,7 +475,14 @@ class RestoreMigrateStrategy(Strategy):
         # receipt; a database rolled back onto it reads as MISSING. That is
         # correct — after a rollback it is not the state any completed run
         # produced, and MISSING says "not proven" rather than "stale".
-        actuation = self._record_actuation(backup_file, run_id)
+        #
+        # `derived[0]`, not `floor_schema`: the fallback above names `public` so
+        # the floor has somewhere to count, but recording that would be
+        # indistinguishable from an archive that actually stated `public`. Only
+        # what the archive said is recorded.
+        actuation = self._record_actuation(
+            backup_file, run_id, derived[0] if derived else None
+        )
 
         # Step 11: Start service
         if self._service_manager and self._service_name:

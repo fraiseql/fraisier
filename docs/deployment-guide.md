@@ -1224,6 +1224,23 @@ Stale: mydb_staging was last rewritten 31.2h ago by run 1a9b…, which is older
 than the 26.0h window
 ```
 
+The window has its own key, because it answers its own question:
+
+```yaml
+restore:
+  max_age_hours: 48                 # how old the backup *file* may be
+  max_actuation_age_hours: 26       # how long ago a restore must have run
+```
+
+They are not the same number and must not be shared. `max_age_hours` bounds an
+input: how stale an archive the restore is willing to load, where 48h is a
+comfortable tolerance. `max_actuation_age_hours` bounds an outcome: how long ago
+a restore last rewrote this database. On a nightly cadence, a 48h answer to that
+second question passes a staging database whose restore stopped running
+yesterday — the failure the receipt exists to catch. It defaults to 26h: a
+couple of hours of slack on a nightly, and no more. `--max-age-hours` overrides
+it for one run.
+
 The token matters more than the row. A restore that never ran leaves the
 *previous* run's receipt behind, so the mere presence of a receipt matches every
 time and proves nothing — the check is always against something: a run id, or a
@@ -1249,6 +1266,12 @@ because it needs superuser or `pg_read_server_files`, which managed PostgreSQL
 commonly refuses, and it never changes the exit code: autovacuum moves mtimes
 after a restore that did nothing, so it can pass a database the receipt
 correctly calls stale. When the two disagree, both are printed.
+
+It inspects one schema, never summed across schemas — the same rule the
+table-count floor follows. Which schema is not asked of the operator: the
+restore derived it from the archive's table of contents and recorded it in the
+receipt, so a host whose heaps live in `tenant` is checked against `tenant`.
+`--heap-schema` overrides it; a receipt naming none falls back to `public`.
 
 ---
 

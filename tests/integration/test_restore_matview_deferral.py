@@ -9,17 +9,22 @@ fraisier, and the matview must come out populated with the deferral accounting
 reported — the unit tests only prove the options handed to confiture, not that
 the two actually run together.
 
-Skipped unless a local PostgreSQL with ``createdb`` privilege and the client
-tools (``pg_dump`` / ``pg_restore``) are reachable — the shared ``socket_dir``
-fixture in ``conftest.py`` decides that.
+Skipped unless a PostgreSQL with ``createdb`` privilege and the client tools
+(``pg_dump`` / ``pg_restore``) are reachable — over a unix socket locally, or
+over TCP against CI's service container. The shared ``pg_target`` fixture in
+``conftest.py`` decides that.
 """
 
 from __future__ import annotations
 
 import contextlib
 import subprocess
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from tests.integration.conftest import PgTarget
 
 pytestmark = pytest.mark.integration
 
@@ -29,24 +34,20 @@ _SRC_DB = "fraisier_it_mv_src"
 _DST_DB = "fraisier_it_mv_dst"
 
 
-def _dsn(db: str, socket_dir: str) -> str:
-    return f"postgresql:///{db}?host={socket_dir}"
-
-
-def _exec(db: str, socket_dir: str, *statements: str) -> None:
-    with psycopg.connect(_dsn(db, socket_dir), autocommit=True) as conn:
+def _exec(db: str, target: PgTarget, *statements: str) -> None:
+    with psycopg.connect(target.dsn(db), autocommit=True) as conn:
         for statement in statements:
             conn.execute(statement)
 
 
-def _drop_databases(socket_dir: str) -> None:
+def _drop_databases(target: PgTarget) -> None:
     for db in (_SRC_DB, _DST_DB):
         with contextlib.suppress(Exception):
-            _exec("postgres", socket_dir, f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
+            _exec("postgres", target, f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
 
 
 @pytest.mark.parametrize("jobs", [1, 4])
-def test_restore_backup_populates_matview_end_to_end(socket_dir, tmp_path, jobs):
+def test_restore_backup_populates_matview_end_to_end(pg_target, tmp_path, jobs):
     """A restored backup with a populated matview comes out populated.
 
     Proves confiture's deferred-refresh path runs through fraisier for both the
@@ -59,12 +60,12 @@ def test_restore_backup_populates_matview_end_to_end(socket_dir, tmp_path, jobs)
     from fraisier.dbops.restore import restore_backup
 
     dump_path = tmp_path / "src.dump"
-    _drop_databases(socket_dir)
+    _drop_databases(pg_target)
     try:
-        _exec("postgres", socket_dir, f"CREATE DATABASE {_SRC_DB}")
+        _exec("postgres", pg_target, f"CREATE DATABASE {_SRC_DB}")
         _exec(
             _SRC_DB,
-            socket_dir,
+            pg_target,
             "CREATE TABLE t (id int PRIMARY KEY, label text)",
             "INSERT INTO t SELECT g, 'row' || g FROM generate_series(1, 500) g",
             "CREATE MATERIALIZED VIEW mv AS "
@@ -74,17 +75,17 @@ def test_restore_backup_populates_matview_end_to_end(socket_dir, tmp_path, jobs)
         # confiture's three-phase restore requires custom (-Fc) or directory
         # format; a plain SQL dump is rejected.
         subprocess.run(
-            ["pg_dump", "-Fc", "-h", socket_dir, "-d", _SRC_DB, "-f", str(dump_path)],
+            ["pg_dump", "-Fc", "-d", pg_target.dsn(_SRC_DB), "-f", str(dump_path)],
             check=True,
             capture_output=True,
             text=True,
         )
-        _exec("postgres", socket_dir, f"CREATE DATABASE {_DST_DB}")
+        _exec("postgres", pg_target, f"CREATE DATABASE {_DST_DB}")
 
         result = restore_backup(
             backup_path=str(dump_path),
             db_name=_DST_DB,
-            connection_url=_dsn("postgres", socket_dir),
+            connection_url=pg_target.dsn("postgres"),
             jobs=jobs,
         )
 
@@ -95,11 +96,11 @@ def test_restore_backup_populates_matview_end_to_end(socket_dir, tmp_path, jobs)
         assert result.matviews_refreshed == 1
         assert result.analyze_ran is True
 
-        with psycopg.connect(_dsn(_DST_DB, socket_dir)) as conn:
+        with psycopg.connect(pg_target.dsn(_DST_DB)) as conn:
             table_rows = conn.execute("SELECT count(*) FROM t").fetchone()[0]
             matview_rows = conn.execute("SELECT count(*) FROM mv").fetchone()[0]
         assert table_rows == 500
         # Populated by the deferred refresh — not left empty.
         assert matview_rows == 500
     finally:
-        _drop_databases(socket_dir)
+        _drop_databases(pg_target)

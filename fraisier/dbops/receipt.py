@@ -64,17 +64,29 @@ RECEIPT_TABLE = f"{RECEIPT_SCHEMA}.restore_receipt"
 
 _SECONDS_PER_HOUR = 3600.0
 
+#: ``floor_schema`` is the schema the restore derived its table-count floor for,
+#: recorded because that is the only moment it is knowable: it comes off the
+#: archive's table of contents during the restore and is configured nowhere, so
+#: a caller reading the receipt the next morning has no archive to derive it
+#: from. NULL means the archive stated no floor — the reader falls back, the
+#: writer does not invent.
 _WRITE_SQL = f"""
 CREATE SCHEMA IF NOT EXISTS {RECEIPT_SCHEMA};
 CREATE TABLE IF NOT EXISTS {RECEIPT_TABLE} (
     run_id       text        PRIMARY KEY,
     backup_path  text        NOT NULL,
     backup_bytes bigint      NOT NULL,
-    restored_at  timestamptz NOT NULL DEFAULT now()
+    restored_at  timestamptz NOT NULL DEFAULT now(),
+    floor_schema text
 );
 DELETE FROM {RECEIPT_TABLE};
-INSERT INTO {RECEIPT_TABLE} (run_id, backup_path, backup_bytes)
-VALUES (:'run_id', :'backup_path', :'backup_bytes'::bigint);
+INSERT INTO {RECEIPT_TABLE} (run_id, backup_path, backup_bytes, floor_schema)
+VALUES (
+    :'run_id',
+    :'backup_path',
+    :'backup_bytes'::bigint,
+    NULLIF(:'floor_schema', '')
+);
 """
 
 #: Does the receipt table exist at all? Asked separately, and by ``to_regclass``
@@ -84,14 +96,17 @@ _PROBE_SQL = f"SELECT to_regclass('{RECEIPT_TABLE}') IS NOT NULL"
 
 #: ``age_seconds`` is computed by the server, from the server's own clock, so a
 #: host whose clock has drifted cannot make a stale restore look fresh.
+#:
+#: ``t.*`` rather than a column list, because the table above is created with
+#: ``CREATE TABLE IF NOT EXISTS`` and therefore never migrated: naming a column
+#: added later would turn a readable receipt written by an earlier fraisier into
+#: UNVERIFIABLE. Whatever columns are there arrive as JSON keys, and
+#: :func:`_parse_receipt` treats the ones it does not find as absent.
 _READ_SQL = f"""
 SELECT to_json(r) FROM (
-    SELECT run_id,
-           backup_path,
-           backup_bytes,
-           restored_at,
+    SELECT t.*,
            extract(epoch FROM (now() - restored_at)) AS age_seconds
-    FROM {RECEIPT_TABLE}
+    FROM {RECEIPT_TABLE} t
     ORDER BY restored_at DESC
     LIMIT 1
 ) r
@@ -166,6 +181,15 @@ class RestoreReceipt:
     age_seconds: float
     """How long ago that was, measured by the server rather than the client."""
 
+    floor_schema: str | None = None
+    """The schema that run derived its table-count floor for, if it derived one.
+
+    Where this database's heaps actually live, recorded by the only party that
+    can know: the restore, from the archive's table of contents. ``None`` means
+    the archive stated no floor, or the receipt predates this column — in both
+    cases a reader falls back rather than believing ``public``.
+    """
+
     @property
     def age_hours(self) -> float:
         return self.age_seconds / _SECONDS_PER_HOUR
@@ -200,7 +224,14 @@ class ActuationCheck:
         return self.verdict is ActuationVerdict.STALE
 
 
-def _psql(db_name: str, sql: str, *, connection_url: str, bind: dict[str, str]):
+def _psql(
+    db_name: str,
+    sql: str,
+    *,
+    connection_url: str,
+    bind: dict[str, str],
+    single_transaction: bool = False,
+):
     """Run *sql* against *db_name*, binding *bind* as psql variables.
 
     Values go in through ``-v name=value`` and are read back in the SQL as
@@ -215,8 +246,16 @@ def _psql(db_name: str, sql: str, *, connection_url: str, bind: dict[str, str]):
     ``ON_ERROR_STOP=1`` matters more than it looks: without it psql exits 0 on a
     statement that failed, so a caller checking the exit code would read a
     failed write as a successful one.
+
+    *single_transaction* adds ``-1``, for a script whose statements are only
+    meaningful together. It is the write's: that script deletes the standing
+    receipt before inserting the new one, so a failure between the two would
+    otherwise commit the delete and leave a present-but-empty table, which reads
+    as MISSING — a database claiming no run ever wrote it.
     """
     cmd = ["psql", "-d", db_name, "-t", "-A", "-v", "ON_ERROR_STOP=1"]
+    if single_transaction:
+        cmd.append("-1")
     for name, value in bind.items():
         cmd += ["-v", f"{name}={value}"]
     cmd += ["-f", "-"]
@@ -249,7 +288,11 @@ def write_receipt(
                 "run_id": receipt.run_id,
                 "backup_path": receipt.backup_path,
                 "backup_bytes": str(receipt.backup_bytes),
+                # Bound like every other value: a schema name is data here, not
+                # an identifier position, and NULLIF turns "" back into NULL.
+                "floor_schema": receipt.floor_schema or "",
             },
+            single_transaction=True,
         )
     except FileNotFoundError:
         return "psql not found on PATH — the restore receipt was not written"
@@ -264,15 +307,22 @@ def write_receipt(
 
 
 def _parse_receipt(payload: str) -> RestoreReceipt | None:
-    """Parse one ``to_json`` row, or None if it is not one."""
+    """Parse one ``to_json`` row, or None if it is not one.
+
+    ``floor_schema`` is read with ``.get``: a receipt written before that column
+    existed is a complete receipt missing one optional fact, not an unreadable
+    one, and the table it lives in is never migrated.
+    """
     try:
         row = json.loads(payload)
+        floor_schema = row.get("floor_schema")
         return RestoreReceipt(
             run_id=str(row["run_id"]),
             backup_path=str(row["backup_path"]),
             backup_bytes=int(row["backup_bytes"]),
             restored_at=datetime.fromisoformat(row["restored_at"]),
             age_seconds=float(row["age_seconds"]),
+            floor_schema=str(floor_schema) if floor_schema else None,
         )
     except (ValueError, TypeError, KeyError):
         return None
