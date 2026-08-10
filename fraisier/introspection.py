@@ -127,6 +127,7 @@ SUBCOMMAND_CONFIG_SECTIONS: dict[str, frozenset[ConfigPath]] = {
     "db exec": _DB_SECTIONS,
     "db migrate": _DB_SECTIONS,
     "db preflight": _DB_SECTIONS,
+    "db receipt": _DB_SECTIONS,
     "db reset": _DB_SECTIONS,
     "db restore": _DB_SECTIONS,
     "db-check": _DB_SECTIONS,
