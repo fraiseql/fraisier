@@ -349,3 +349,81 @@ class TestWhatWasCheckedIsStated:
 
         assert res.exit_code == 0, res.output
         assert "no table-count floor" in res.output.lower()
+
+
+class TestAShortfallFailsTheRestore:
+    """Report-only is what v0.61.0 already shipped, and it was not enough.
+
+    confiture's counter returns `success=False` when the count is under the
+    floor; `restore_backup` turns that into a failed `RestoreResult` and the
+    strategy raises. Pinned because "derive a floor and then warn about it" is
+    the shape this issue exists to stop.
+    """
+
+    def test_confitures_shortfall_becomes_a_restore_failure(self):
+        restorer = MagicMock()
+        restorer.return_value.restore.return_value = MagicMock(
+            success=False,
+            errors=["Table count 3 is below minimum 240 in schema 'tenant'"],
+        )
+        with patch("fraisier.dbops.restore.DatabaseRestorer", restorer):
+            result = restore_backup(
+                backup_path="/backup/production/db.dump",
+                db_name="staging_db",
+                connection_url=_ADMIN_URL,
+                min_tables=240,
+                min_tables_schema="tenant",
+            )
+
+        assert result.success is False
+        assert "below minimum 240" in result.error
+
+    def test_the_strategy_raises_rather_than_reporting_success(self):
+        from fraisier.errors import DatabaseError
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "fraisier.dbops.restore.find_latest_backup",
+                    return_value=Path("/backup/production/db.dump"),
+                )
+            )
+            stack.enter_context(
+                patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+            )
+            stack.enter_context(
+                patch(
+                    "fraisier.dbops.archive.verify_archive",
+                    return_value=ArchiveCheck(
+                        ArchiveVerdict.VALID, "", {"tenant": 240}
+                    ),
+                )
+            )
+            for target, value in (
+                ("fraisier.dbops.operations.drop_db", (0, "", "")),
+                ("fraisier.dbops.operations.create_db", (0, "", "")),
+                ("fraisier.dbops.operations.terminate_backends", None),
+            ):
+                stack.enter_context(patch(target, return_value=value))
+            stack.enter_context(
+                patch(
+                    "fraisier.dbops.restore.restore_backup",
+                    return_value=RestoreResult(
+                        success=False, error="Table count 3 is below minimum 240"
+                    ),
+                )
+            )
+            strategy = RestoreMigrateStrategy(
+                RestoreConfig(
+                    db_name="staging_db",
+                    backup_dir=Path("/backup/production"),
+                    preflight=PreflightConfig(enabled=False),
+                ),
+                admin_url=_ADMIN_URL,
+            )
+            try:
+                strategy.execute(Path("confiture.yaml"))
+            except DatabaseError as exc:
+                assert "below minimum 240" in str(exc)
+            else:
+                raise AssertionError("a schema shortfall must not report success")
