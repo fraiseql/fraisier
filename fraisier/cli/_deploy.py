@@ -12,6 +12,67 @@ from ._helpers import console
 from .main import main
 
 
+def _failure_result(error: str) -> dict[str, object]:
+    """A machine-readable result for a path that never reached a deployment.
+
+    Same six keys as the success payload, so a client parses one shape whatever
+    happened. The reason goes in ``error`` verbatim: these are the paths an
+    operator most needs named, and "failed" on its own names nothing.
+    """
+    return {
+        "success": False,
+        "status": "failed",
+        "version": None,
+        "duration": None,
+        "error": error,
+        "message": None,
+    }
+
+
+def _write_to_accepted_connection(result_json: str) -> None:
+    """Write the result to the socket systemd accepted on fd 0, if there is one.
+
+    Under ``Accept=yes`` + ``StandardInput=socket`` fd 0 *is* the client
+    connection, so this is the only channel that reaches a waiting
+    ``trigger-deploy``. ``StandardOutput=journal`` is deliberate (#72 Bug 2),
+    which is why stdout cannot carry the result.
+
+    Never raises. ``deploy-checker.service.j2`` triggers deploys *without*
+    ``--wait`` and closes at once, so half an hour later the peer is normally
+    gone — a departed client must not turn a successful deployment into a
+    failed unit.
+    """
+    import socket
+    import stat
+
+    try:
+        if not stat.S_ISSOCK(os.fstat(0).st_mode):
+            return  # the documented pipe form; stdout already carried it
+    except OSError:
+        return  # fd 0 is closed — there is nobody to answer
+
+    try:
+        # os.dup(0), never socket.socket(fileno=0): the latter *owns* fd 0 and
+        # closes it when collected, out from under a deployment reading stdin.
+        with socket.socket(fileno=os.dup(0)) as conn:
+            conn.sendall(result_json.encode("utf-8"))
+    except OSError as e:
+        console.print(f"[yellow]Note:[/yellow] no client received the result: {e}")
+
+
+def _emit_result(payload: dict[str, object]) -> None:
+    """Send the deployment result everywhere it is owed.
+
+    stdout keeps the record the journal has always held; the accepted
+    connection is what a ``--wait`` client reads.
+    """
+    import json
+
+    result_json = json.dumps(payload)
+    print(result_json)  # print() not console.print(): machine-readable output
+    _write_to_accepted_connection(result_json)
+
+
 @main.command()
 @click.option("--project", required=True, help="Project name to deploy")
 @click.pass_context
@@ -30,42 +91,48 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
 
     from fraisier.daemon import execute_deployment_request, parse_deployment_request
 
-    # Read JSON from stdin
+    # Read JSON from stdin. Every terminating path below reports a result on
+    # the connection first — a caller that asked for an outcome gets one, and
+    # these five are the paths that used to answer with nothing at all (#356).
     try:
         json_input = sys.stdin.read().strip()
-        if not json_input:
-            console.print("[red]Error:[/red] No input received on stdin")
-            raise SystemExit(1)
     except Exception as e:
+        _emit_result(_failure_result(f"Error reading stdin: {e}"))
         console.print(f"[red]Error reading stdin:[/red] {e}")
         raise SystemExit(1) from None
+
+    if not json_input:
+        _emit_result(_failure_result("No input received on stdin"))
+        console.print("[red]Error:[/red] No input received on stdin")
+        raise SystemExit(1)
 
     # Parse and validate request
     try:
         request = parse_deployment_request(json_input)
     except ValueError as e:
+        _emit_result(_failure_result(f"Error parsing request: {e}"))
         console.print(f"[red]Error parsing request:[/red] {e}")
         raise SystemExit(1) from None
 
     # Validate project matches
     if request.project != project:
-        console.print(
-            f"[red]Error:[/red] Project mismatch: requested '{request.project}' "
+        mismatch = (
+            f"Project mismatch: requested '{request.project}' "
             f"but daemon configured for '{project}'"
         )
+        _emit_result(_failure_result(mismatch))
+        console.print(f"[red]Error:[/red] {mismatch}")
         raise SystemExit(1)
 
     # Execute deployment
     try:
         result = execute_deployment_request(request)
     except Exception as e:
+        _emit_result(_failure_result(f"Error executing deployment: {e}"))
         console.print(f"[red]Error executing deployment:[/red] {e}")
         raise SystemExit(1) from None
 
-    # Write JSON result to stdout (for socket clients)
-    import json
-
-    result_json = json.dumps(
+    _emit_result(
         {
             "success": result.success,
             "status": result.status,
@@ -75,7 +142,6 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
             "message": result.message,
         }
     )
-    print(result_json)  # Use print() not console.print() for machine-readable output
 
     # Also write human-readable output to stderr for systemd logs
     if result.success:
