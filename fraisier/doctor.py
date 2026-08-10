@@ -22,6 +22,7 @@ Security
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1169,4 +1170,145 @@ def _check_self_upgrade_failure(config: FraisierConfig | None) -> CheckResult:
             f"  uv tool install --force fraisier=={failure.required}\n"
             f"Recorded cause: {failure.detail[:300]}"
         ),
+    )
+
+
+#: The release in which ``deploy_daemon`` began writing its result to the
+#: accepted connection (#356). Before it, the result went to the journal via
+#: ``print()`` and no ``--wait`` client could ever receive one.
+RESULT_CHANNEL_SINCE = (0, 64, 0)
+
+_VERSION_IN_OUTPUT = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def _binary_semver(binary: str) -> tuple[int, int, int] | None:
+    """Ask a fraisier binary its version. None when it will not say.
+
+    None is *unverifiable*, not old: the deploy user's binary is frequently
+    unreadable by whoever runs ``doctor``, and "I could not ask" must not read
+    as "this host is broken".
+    """
+    try:
+        proc = subprocess.run(
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    match = _VERSION_IN_OUTPUT.search(proc.stdout or "")
+    if match is None:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _installed_deploy_entrypoints() -> dict[str, str] | None:
+    """Map each installed deploy service to the fraisier binary it runs.
+
+    Deploy services are identified by what they execute — ``deploy-daemon`` —
+    rather than by unit name, so a hand-written or renamed unit is found too.
+    None when the unit directory cannot be read at all.
+    """
+    try:
+        unit_files = sorted(SYSTEMD_UNIT_DIR.glob("*.service"))
+    except OSError:
+        return None
+
+    entrypoints: dict[str, str] = {}
+    for unit in unit_files:
+        try:
+            text = unit.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            binary = _exec_start_binary(line)
+            if binary is None or "deploy-daemon" not in line:
+                continue
+            entrypoints[unit.name] = binary
+    return entrypoints
+
+
+@register_check("deploy_result_channel")
+def _check_deploy_result_channel(_config: FraisierConfig | None) -> CheckResult:
+    """Every installed deploy service can return a result to ``--wait`` (#356).
+
+    ``trigger-deploy --wait`` now exits 1 when no result arrives, because
+    reporting an outcome that never came is how a nightly staging restore
+    skipped a full day while systemd recorded a clean exit. The cost is that a
+    host whose deploy unit still runs a pre-v0.64.0 fraisier fails every
+    ``--wait`` deploy until it is reinstalled — and that skew is the *normal*
+    upgrade order: the CLI replaces itself via self-upgrade, while the deploy
+    unit's binary changes only when someone re-runs a scaffold install.
+
+    This is what finds those hosts before their next nightly does. The unit
+    file is unchanged by the fix — the result goes to fd 0, which
+    ``StandardInput=socket`` already provided — so the discriminator is the
+    version of the binary the *installed* unit names in ``ExecStart=``.
+
+    Takes no config: the units on disk are the input, so it still answers on a
+    host whose ``fraises.yaml`` will not load.
+    """
+    name = "deploy_result_channel"
+
+    entrypoints = _installed_deploy_entrypoints()
+    if entrypoints is None:
+        return CheckResult(name, "skip", f"could not read {SYSTEMD_UNIT_DIR}")
+    if not entrypoints:
+        # Distinct from "pass" on purpose: a scan that matched nothing must not
+        # read as a clean bill of health.
+        return CheckResult(
+            name, "skip", f"no deploy services installed under {SYSTEMD_UNIT_DIR}"
+        )
+
+    # Deploy units on a host almost always share one binary; ask each once.
+    versions = {binary: _binary_semver(binary) for binary in set(entrypoints.values())}
+
+    stale: list[str] = []
+    unknown: list[str] = []
+    for unit_name, binary in sorted(entrypoints.items()):
+        semver = versions[binary]
+        if semver is None:
+            unknown.append(f"{unit_name} -> {binary}")
+        elif semver < RESULT_CHANNEL_SINCE:
+            stale.append(f"{unit_name} -> {'.'.join(str(p) for p in semver)}")
+
+    since = ".".join(str(p) for p in RESULT_CHANNEL_SINCE)
+    if stale:
+        return CheckResult(
+            name,
+            "fail",
+            f"{len(stale)} of {len(entrypoints)} deploy service(s) run a fraisier "
+            f"older than {since} and cannot return a result to --wait: "
+            f"{'; '.join(stale)}",
+            fix_hint=(
+                "every `trigger-deploy --wait` against these exits 1 until the "
+                "unit runs a newer fraisier — retrying does not help. Re-render "
+                "and reinstall:\n"
+                "  fraisier scaffold && fraisier scaffold-install\n"
+                "then confirm the deploy user's binary moved: "
+                "`ls -l ~/.local/bin/fraisier`"
+            ),
+        )
+    if unknown:
+        return CheckResult(
+            name,
+            "warn",
+            f"could not determine the fraisier version behind "
+            f"{len(unknown)} of {len(entrypoints)} deploy service(s): "
+            f"{'; '.join(unknown)}",
+            fix_hint=(
+                "this is unverifiable, not broken — the deploy user's binary is "
+                "usually not readable by whoever runs doctor. Ask it directly: "
+                "`sudo -u <deploy_user> ~<deploy_user>/.local/bin/fraisier "
+                "--version`"
+            ),
+        )
+    return CheckResult(
+        name,
+        "pass",
+        f"{len(entrypoints)} deploy service(s) run fraisier {since} or newer",
     )
