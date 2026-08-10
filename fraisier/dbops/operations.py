@@ -57,6 +57,7 @@ def _pg_cmd(
     cmd: list[str],
     *,
     connection_url: str,
+    input_text: str | None = None,
 ) -> tuple[int, str, str]:
     """Run a PostgreSQL CLI command against *connection_url*.
 
@@ -66,6 +67,12 @@ def _pg_cmd(
     The database path from the URL is also forwarded when the caller has
     not already specified one: ``-d`` for psql/pg_restore,
     ``--maintenance-db`` for createdb/dropdb.
+
+    *input_text* is written to the process's stdin. It exists for ``psql -f -``,
+    which is the only way to get psql's ``:'var'`` binding: ``-c`` hands its
+    string straight to the server, so psql never sees the variables and never
+    substitutes them. A caller with values to bind pipes the script instead of
+    quoting into it.
 
     Returns (exit_code, stdout, stderr).
     """
@@ -87,6 +94,7 @@ def _pg_cmd(
         text=True,
         check=False,
         env=run_env,
+        input=input_text,
     )
     return result.returncode, result.stdout, result.stderr
 
