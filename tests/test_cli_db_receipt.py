@@ -24,7 +24,7 @@ from fraisier.dbops.receipt import ActuationCheck, ActuationVerdict, RestoreRece
 _ADMIN_URL = "postgresql://postgres@localhost:5432/postgres"
 
 
-def _receipt(run_id="run-7", age_hours=1.5):
+def _receipt(run_id="run-7", age_hours=1.5, floor_schema=None):
     from datetime import UTC, datetime
 
     return RestoreReceipt(
@@ -33,10 +33,17 @@ def _receipt(run_id="run-7", age_hours=1.5):
         backup_bytes=987654,
         restored_at=datetime(2026, 8, 10, 3, 0, tzinfo=UTC),
         age_seconds=age_hours * 3600,
+        floor_schema=floor_schema,
     )
 
 
-def _config(*, max_age_hours=48.0, external=False):
+def _config(*, max_age_hours=48.0, max_actuation_age_hours=None, external=False):
+    restore = {
+        "backup_dir": "/backup/production",
+        "max_age_hours": max_age_hours,
+    }
+    if max_actuation_age_hours is not None:
+        restore["max_actuation_age_hours"] = max_actuation_age_hours
     config = MagicMock()
     config.get_fraise.return_value = {"type": "api", "external_db": external}
     config.get_fraise_environment.return_value = {
@@ -45,10 +52,7 @@ def _config(*, max_age_hours=48.0, external=False):
         "database": {
             "name": "mydb_staging",
             "admin_url": _ADMIN_URL,
-            "restore": {
-                "backup_dir": "/backup/production",
-                "max_age_hours": max_age_hours,
-            },
+            "restore": restore,
         },
     }
     config._config = {"backup": {}}
@@ -112,12 +116,46 @@ class TestTheThreeAnswersHaveThreeExits:
 
 
 class TestTheWindow:
-    def test_the_restores_own_max_age_is_the_default(self):
-        """How stale an input may be is reused as how stale an output may be."""
+    """Two different questions, two different knobs.
+
+    ``max_age_hours`` asks how old the *backup file* may be. This command asks
+    how recently a *restore* actually ran. On a nightly cadence those numbers
+    are not the same, and the 48h a backup-age tolerance is comfortable with is
+    far too loose a window to notice that last night's restore never happened —
+    which is the failure the receipt exists to catch.
+    """
+
+    def test_the_actuation_window_is_its_own_key(self):
+        check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", _receipt())
+        _, verify = _invoke(check, config=_config(max_actuation_age_hours=8.0))
+
+        assert verify.call_args.kwargs["max_age_hours"] == 8.0
+
+    def test_the_backup_age_knob_does_not_move_it(self):
+        """The bug this separation removes: a 48h backup tolerance silently
+        becoming a 48h "did the restore run" window."""
+        from fraisier.cli.db import _DEFAULT_ACTUATION_WINDOW_HOURS
+
         check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", _receipt())
         _, verify = _invoke(check, config=_config(max_age_hours=12.0))
 
-        assert verify.call_args.kwargs["max_age_hours"] == 12.0
+        assert verify.call_args.kwargs["max_age_hours"] == (
+            _DEFAULT_ACTUATION_WINDOW_HOURS
+        )
+
+    def test_the_default_suits_a_nightly_cadence(self):
+        """Longer than a day, so a late nightly is not a page; shorter than two,
+        so a nightly that stopped running is."""
+        from fraisier.cli.db import _DEFAULT_ACTUATION_WINDOW_HOURS
+
+        assert 24.0 < _DEFAULT_ACTUATION_WINDOW_HOURS < 48.0
+
+        check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", _receipt())
+        _, verify = _invoke(check)
+
+        assert verify.call_args.kwargs["max_age_hours"] == (
+            _DEFAULT_ACTUATION_WINDOW_HOURS
+        )
 
     def test_the_flag_overrides_it(self):
         check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", _receipt())
@@ -213,6 +251,8 @@ class TestTheHeapCheckCorroboratesWithoutVoting:
         assert "all 12 base table(s) fresh" in result.output
 
     def test_it_asks_about_one_named_schema(self):
+        from fraisier.cli.db import _DEFAULT_ACTUATION_WINDOW_HOURS
+
         check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", _receipt())
         heap = ActuationCheck(ActuationVerdict.ACTUATED, "fresh")
         _, freshness = self._invoke_with_heap(
@@ -220,7 +260,55 @@ class TestTheHeapCheckCorroboratesWithoutVoting:
         )
 
         assert freshness.call_args.kwargs["schema"] == "tenant"
-        assert freshness.call_args.kwargs["within_hours"] == 48.0
+        assert freshness.call_args.kwargs["within_hours"] == (
+            _DEFAULT_ACTUATION_WINDOW_HOURS
+        )
+
+    def test_the_schema_defaults_to_the_one_the_restore_derived(self):
+        """The operator should not have to know, and cannot be asked to.
+
+        On a host whose heaps live in ``tenant`` — #356's host — a cross-check
+        hardcoded to ``public`` finds no base tables and returns UNVERIFIABLE:
+        silence, exactly where the check is most needed. The restore knew the
+        schema, so the receipt carries it.
+        """
+        check = ActuationCheck(
+            ActuationVerdict.ACTUATED, "ok", _receipt(floor_schema="tenant")
+        )
+        heap = ActuationCheck(ActuationVerdict.ACTUATED, "fresh")
+        _, freshness = self._invoke_with_heap(check, heap, "--check-heap")
+
+        assert freshness.call_args.kwargs["schema"] == "tenant"
+
+    def test_the_flag_still_overrides_the_receipt(self):
+        check = ActuationCheck(
+            ActuationVerdict.ACTUATED, "ok", _receipt(floor_schema="tenant")
+        )
+        heap = ActuationCheck(ActuationVerdict.ACTUATED, "fresh")
+        _, freshness = self._invoke_with_heap(
+            check, heap, "--check-heap", "--heap-schema", "reporting"
+        )
+
+        assert freshness.call_args.kwargs["schema"] == "reporting"
+
+    @pytest.mark.parametrize(
+        "check",
+        [
+            ActuationCheck(ActuationVerdict.ACTUATED, "ok", _receipt()),
+            ActuationCheck(ActuationVerdict.MISSING, "no receipt"),
+        ],
+        ids=["receipt-carries-none", "no-receipt-at-all"],
+    )
+    def test_it_falls_back_to_public(self, check):
+        """A receipt written before the column existed, and no receipt at all.
+
+        Both are the pre-#358 world, and both must still get a check rather than
+        a crash — ``public`` is the right guess when nothing better is recorded.
+        """
+        heap = ActuationCheck(ActuationVerdict.ACTUATED, "fresh")
+        _, freshness = self._invoke_with_heap(check, heap, "--check-heap")
+
+        assert freshness.call_args.kwargs["schema"] == "public"
 
     def test_a_stale_heap_does_not_fail_a_verified_receipt(self):
         """Autovacuum moves mtimes, so this signal cannot be allowed to vote.
@@ -259,6 +347,22 @@ class TestTheHeapCheckCorroboratesWithoutVoting:
         payload = json.loads(result.output)
         assert payload["heap"]["verdict"] == "stale"
         assert payload["heap"]["detail"] == "3 of 12 stale"
+
+    def test_json_names_the_schema_it_resolved(self):
+        """Resolved rather than given, so it has to be reported.
+
+        An operator reading UNVERIFIABLE needs to know which schema was looked
+        in before they can tell a denied privilege from an empty guess.
+        """
+        check = ActuationCheck(
+            ActuationVerdict.ACTUATED, "ok", _receipt(floor_schema="tenant")
+        )
+        heap = ActuationCheck(ActuationVerdict.UNVERIFIABLE, "no base tables")
+        result, _ = self._invoke_with_heap(check, heap, "--check-heap", "--json")
+
+        payload = json.loads(result.output)
+        assert payload["floor_schema"] == "tenant"
+        assert payload["heap"]["schema"] == "tenant"
 
     def test_json_omits_it_when_not_asked(self):
         check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", _receipt())

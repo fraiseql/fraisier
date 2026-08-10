@@ -70,6 +70,22 @@ heap was written *this run*.
   drift. It needs no migration and no cleanup — the next restore's DROP+CREATE
   takes it with everything else.
 
+  The receipt also records **which schema the run derived its floor for**
+  (`floor_schema`). That is knowable at exactly one moment: `min_tables_schema`
+  comes off the archive's table of contents during the restore and is configured
+  nowhere, so a caller arriving the next morning has no archive and no key to
+  read it from. Recording it is what lets the mtime cross-check ask about
+  `tenant` on a host whose heaps are in `tenant`. NULL when the archive stated
+  no floor — the reader falls back to `public`, the writer does not invent.
+
+- **`database.restore.max_actuation_age_hours`** — how recently a restore must
+  have rewritten the database, defaulting to 26h. Deliberately *not*
+  `max_age_hours`, which answers a different question: how old the backup *file*
+  may be. A 48h tolerance is reasonable for an input and uselessly loose for an
+  outcome — on a nightly cadence it passes a staging database whose restore
+  stopped running yesterday, which is the exact failure the receipt exists to
+  catch. Two questions, two knobs.
+
 - **`fraisier db receipt <fraise> <env>`** asks a database when a restore last
   rewrote it. This is the half that actually catches the reported failure: the
   pipeline's own read-back runs inside the process that did the writing, which
@@ -92,12 +108,35 @@ heap was written *this run*.
   and the heap says last week" is something an operator wants told, not
   something the tool should settle silently.
 
+  It inspects the schema the receipt names, so `--heap-schema` is an override
+  rather than a thing the operator must remember. Defaulting it to `public` on
+  a host whose heaps are in `tenant` would find no base tables and return
+  UNVERIFIABLE — silence, precisely where the check is most wanted, and the same
+  `public`-vs-`tenant` mismatch v0.64.0 removed from the floor.
+
 ### Fixed
 
 - `_pg_cmd` accepts stdin, so `psql`'s `:'var'` binding is usable at all. `-c`
   hands its string to the server unread, so the variables were never
   substituted; only input psql lexes itself gets them. Found by a test that put
   a quote in a backup path.
+
+- **The tests carrying this release's guarantee did not run in CI.** The
+  integration harness discovered PostgreSQL over a unix socket only; every
+  workflow provides one as a service container over TCP with no socket shared
+  into the runner. So the fixture skipped, and the nine tests proving a
+  truncated dump fails the restore and the nine proving the receipt round-trips
+  through real SQL reported green without executing — a check that could not
+  fail visibly, one layer above the code this release is about. Discovery now
+  takes `FRAISIER_TEST_PG_URL` first and builds per-database DSNs over either
+  transport, and the discovery itself is pinned by unit tests that always run.
+
+- **The receipt write is one transaction.** Its script deletes the standing
+  receipt before inserting the new one; run as separate statements, a failure
+  between the two committed the delete and left the table present and empty —
+  which reads as `MISSING`, a database claiming no run has ever written it.
+  Worse than the truth, and now impossible: `psql -1`, with `ON_ERROR_STOP=1`
+  still deciding that a failure is a failure.
 
 ### Notes
 

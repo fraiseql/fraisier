@@ -49,9 +49,14 @@ def _execute(
     verify_result: ActuationCheck | None = None,
     min_tables: int = 0,
     order: list[str] | None = None,
+    table_data_by_schema: dict[str, int] | None = None,
 ):
     """Drive the strategy to completion with the receipt seam mocked."""
-    check = ArchiveCheck(ArchiveVerdict.VALID, "", {"public": 12})
+    # `is None`, not `or`: an empty mapping is a meaningful case — an archive
+    # that stated no floor at all.
+    if table_data_by_schema is None:
+        table_data_by_schema = {"public": 12}
+    check = ArchiveCheck(ArchiveVerdict.VALID, "", table_data_by_schema)
 
     def _note(name, value):
         def _fn(*_args, **_kwargs):
@@ -170,6 +175,27 @@ class TestTheRunLeavesAReceipt:
 
         minted = writer.call_args.kwargs["receipt"].run_id
         assert verifier.call_args.kwargs["expected_run_id"] == minted
+
+    def test_the_receipt_records_the_schema_the_floor_was_derived_for(self):
+        """The one moment this is knowable is the moment the receipt is written.
+
+        ``min_tables_schema`` comes off the archive's table of contents during
+        the restore and is configured nowhere; a caller reading the receipt the
+        next morning has no archive and no key to look up. Recording it here is
+        what lets the mtime cross-check ask about ``tenant`` on a host whose
+        heaps are in ``tenant``, without the operator naming it by hand.
+        """
+        writer, _, _ = _execute(table_data_by_schema={"tenant": 40, "public": 2})
+
+        assert writer.call_args.kwargs["receipt"].floor_schema == "tenant"
+
+    def test_an_archive_stating_no_floor_records_no_schema(self):
+        """Not ``public`` by guess: the reader falls back, the writer does not
+        invent. A recorded ``public`` would be indistinguishable from a run that
+        actually derived ``public``."""
+        writer, _, _ = _execute(table_data_by_schema={})
+
+        assert writer.call_args.kwargs["receipt"].floor_schema is None
 
     def test_the_result_carries_the_verified_receipt(self):
         _, _, result = _execute(verify_result=_actuated("tok-9"))

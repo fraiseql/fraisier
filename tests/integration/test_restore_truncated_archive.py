@@ -20,16 +20,22 @@ in ``pg_restore``'s stderr. It is asserted here at fraisier's own boundary, on
 ``restore_backup(...).success``, so a confiture bump that reclassifies those
 lines fails this test rather than a nightly.
 
-Skipped unless a local PostgreSQL with ``createdb`` privilege and the client
-tools are reachable.
+Skipped unless a PostgreSQL with ``createdb`` privilege and the client tools are
+reachable — over a unix socket locally, or over TCP against CI's service
+container. The shared ``pg_target`` fixture in ``conftest.py`` decides that; a
+promise this test makes about a confiture bump is only kept where it runs.
 """
 
 from __future__ import annotations
 
 import contextlib
 import subprocess
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from tests.integration.conftest import PgTarget
 
 pytestmark = pytest.mark.integration
 
@@ -49,37 +55,33 @@ _ROWS = 20_000
 _CUT_FRACTIONS = (0.5, 0.9, 0.98)
 
 
-def _dsn(db: str, socket_dir: str) -> str:
-    return f"postgresql:///{db}?host={socket_dir}"
-
-
-def _exec(db: str, socket_dir: str, *statements: str) -> None:
-    with psycopg.connect(_dsn(db, socket_dir), autocommit=True) as conn:
+def _exec(db: str, target: PgTarget, *statements: str) -> None:
+    with psycopg.connect(target.dsn(db), autocommit=True) as conn:
         for statement in statements:
             conn.execute(statement)
 
 
-def _drop_databases(socket_dir: str) -> None:
+def _drop_databases(target: PgTarget) -> None:
     for db in (_SRC_DB, _DST_DB):
         with contextlib.suppress(Exception):
-            _exec("postgres", socket_dir, f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
+            _exec("postgres", target, f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
 
 
 @pytest.fixture
-def truncated_dumps(socket_dir, tmp_path):
-    """Yield ``(socket_dir, {fraction: path})`` for one dump cut at each depth.
+def truncated_dumps(pg_target, tmp_path):
+    """Yield ``(pg_target, {fraction: path})`` for one dump cut at each depth.
 
     The source database is built and dumped once; the cuts are byte slices of
     that single dump, so every case describes the same archive truncated at a
     different point.
     """
     full = tmp_path / "src.dump"
-    _drop_databases(socket_dir)
+    _drop_databases(pg_target)
     try:
-        _exec("postgres", socket_dir, f"CREATE DATABASE {_SRC_DB}")
+        _exec("postgres", pg_target, f"CREATE DATABASE {_SRC_DB}")
         _exec(
             _SRC_DB,
-            socket_dir,
+            pg_target,
             "CREATE TABLE t (id int PRIMARY KEY, label text)",
             f"INSERT INTO t SELECT g, repeat('x', 200) || g "
             f"FROM generate_series(1, {_ROWS}) g",
@@ -89,8 +91,10 @@ def truncated_dumps(socket_dir, tmp_path):
         )
         # Custom format: confiture's three-phase restore rejects a plain SQL
         # dump, and only -Fc/-Fd carry the table of contents this is about.
+        # The whole DSN goes in as -d, which addresses either transport and
+        # carries the credentials a TCP server asks for.
         subprocess.run(
-            ["pg_dump", "-Fc", "-h", socket_dir, "-d", _SRC_DB, "-f", str(full)],
+            ["pg_dump", "-Fc", "-d", pg_target.dsn(_SRC_DB), "-f", str(full)],
             check=True,
             capture_output=True,
             text=True,
@@ -101,9 +105,9 @@ def truncated_dumps(socket_dir, tmp_path):
             cut = tmp_path / f"cut_{int(fraction * 100)}.dump"
             cut.write_bytes(payload[: int(len(payload) * fraction)])
             cuts[fraction] = cut
-        yield socket_dir, cuts
+        yield pg_target, cuts
     finally:
-        _drop_databases(socket_dir)
+        _drop_databases(pg_target)
 
 
 @pytest.mark.parametrize("fraction", _CUT_FRACTIONS)
@@ -145,17 +149,17 @@ def test_truncated_dump_fails_the_restore(truncated_dumps, fraction, jobs):
     """
     from fraisier.dbops.restore import restore_backup
 
-    socket_dir, cuts = truncated_dumps
+    pg_target, cuts = truncated_dumps
     cut = cuts[fraction]
 
     with contextlib.suppress(Exception):
-        _exec("postgres", socket_dir, f"DROP DATABASE IF EXISTS {_DST_DB} WITH (FORCE)")
-    _exec("postgres", socket_dir, f"CREATE DATABASE {_DST_DB}")
+        _exec("postgres", pg_target, f"DROP DATABASE IF EXISTS {_DST_DB} WITH (FORCE)")
+    _exec("postgres", pg_target, f"CREATE DATABASE {_DST_DB}")
 
     result = restore_backup(
         backup_path=str(cut),
         db_name=_DST_DB,
-        connection_url=_dsn("postgres", socket_dir),
+        connection_url=pg_target.dsn("postgres"),
         jobs=jobs,
         # The floor the archive states about itself — the one v0.64.0 derives and
         # enforces. Passing it here is deliberate: the restore must fail on the

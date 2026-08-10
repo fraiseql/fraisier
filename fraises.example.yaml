@@ -87,6 +87,7 @@ fraises:
             backup_dir: /backup/production
             backup_pattern: "*.dump"          # glob for finding backups
             max_age_hours: 48                 # reject backups older than this
+            max_actuation_age_hours: 26       # `db receipt`: how recently a restore must have run
             target_owner: myapp_user          # fix ownership after restore
             create_template: true             # create rollback template before migrating
             template_name: myapp_staging_template

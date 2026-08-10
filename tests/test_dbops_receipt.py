@@ -31,6 +31,7 @@ def _row_json(**overrides) -> str:
         "backup_bytes": 4096,
         "restored_at": "2026-08-10T09:00:00+00:00",
         "age_seconds": 120.0,
+        "floor_schema": "public",
     }
     row.update(overrides)
     return json.dumps(row)
@@ -281,6 +282,137 @@ def test_a_criterion_is_required():
 def test_verify_validates_the_database_name():
     with pytest.raises(ValueError, match="database name"):
         verify_actuation('bad"; DROP', connection_url=_URL, max_age_hours=1)
+
+
+def test_the_write_is_one_transaction():
+    """A half-written receipt reads as MISSING, which is a lie about the run.
+
+    The script creates, deletes and inserts. Run as separate statements, a
+    failure at the INSERT commits the DELETE and leaves the table present and
+    empty — the previous run's receipt destroyed and nothing in its place.
+    ``-1`` makes the four statements one unit; ``ON_ERROR_STOP=1`` still decides
+    that a failure is a failure.
+    """
+    seen = {}
+
+    def fake(cmd, *, connection_url, input_text=None):
+        seen["cmd"] = cmd
+        return 0, "", ""
+
+    receipt = RestoreReceipt("t", "/b.dump", 1, datetime.now(UTC), 0.0)
+    with patch("fraisier.dbops.receipt._pg_cmd", fake):
+        write_receipt("stagingdb", connection_url=_URL, receipt=receipt)
+
+    assert "-1" in seen["cmd"]
+    assert "ON_ERROR_STOP=1" in seen["cmd"]
+
+
+def test_reads_are_not_wrapped_in_a_transaction():
+    """``-1`` is for the write. A read has nothing to roll back."""
+    seen = []
+
+    def fake(cmd, *, connection_url, input_text=None):
+        seen.append(cmd)
+        return 0, "f\n", ""
+
+    with patch("fraisier.dbops.receipt._pg_cmd", fake):
+        verify_actuation("stagingdb", connection_url=_URL, max_age_hours=24)
+
+    assert all("-1" not in cmd for cmd in seen)
+
+
+# --------------------------------------------------------------------------
+# Cycle 4: which schema the heaps are in
+# --------------------------------------------------------------------------
+
+
+def test_the_write_records_the_schema_the_floor_was_derived_for():
+    """The restore knows it; nothing that reads the receipt later can.
+
+    ``min_tables_schema`` is derived from the archive's table of contents at
+    restore time and is not configured anywhere, so a caller arriving the next
+    morning has no source to read it from — unless the receipt carries it. A
+    host whose heaps live in ``tenant`` and a cross-check defaulting to
+    ``public`` is the same mismatch v0.64.0 removed from the floor.
+    """
+    seen = {}
+
+    def fake(cmd, *, connection_url, input_text=None):
+        seen["cmd"] = cmd
+        seen["sql"] = input_text
+        return 0, "", ""
+
+    receipt = RestoreReceipt(
+        run_id="tok",
+        backup_path="/backup/x.dump",
+        backup_bytes=17,
+        restored_at=datetime.now(UTC),
+        age_seconds=0.0,
+        floor_schema="tenant",
+    )
+    with patch("fraisier.dbops.receipt._pg_cmd", fake):
+        assert write_receipt("stagingdb", connection_url=_URL, receipt=receipt) is None
+
+    assert "floor_schema=tenant" in seen["cmd"]
+    assert ":'floor_schema'" in seen["sql"]
+    # Bound, not interpolated — an identifier-shaped value is still data.
+    assert "tenant" not in seen["sql"]
+
+
+def test_a_receipt_with_no_schema_writes_null_rather_than_an_empty_name():
+    """psql binds a missing value as ``''``; a schema named "" exists nowhere.
+
+    NULL is the honest record of "this run derived no floor", and it is what
+    the reader falls back to ``public`` on.
+    """
+    from fraisier.dbops.receipt import _WRITE_SQL
+
+    seen = {}
+
+    def fake(cmd, *, connection_url, input_text=None):
+        seen["cmd"] = cmd
+        return 0, "", ""
+
+    receipt = RestoreReceipt("t", "/b.dump", 1, datetime.now(UTC), 0.0)
+    with patch("fraisier.dbops.receipt._pg_cmd", fake):
+        write_receipt("stagingdb", connection_url=_URL, receipt=receipt)
+
+    assert "floor_schema=" in seen["cmd"]
+    assert "NULLIF(:'floor_schema', '')" in _WRITE_SQL
+
+
+def test_the_recorded_schema_reads_back():
+    with patch(
+        "fraisier.dbops.receipt._pg_cmd",
+        _responses((0, "t\n", ""), (0, _row_json(floor_schema="tenant") + "\n", "")),
+    ):
+        check = verify_actuation("stagingdb", connection_url=_URL, max_age_hours=24)
+
+    assert check.receipt is not None
+    assert check.receipt.floor_schema == "tenant"
+
+
+@pytest.mark.parametrize("row", [{"floor_schema": None}, {}])
+def test_a_receipt_without_a_schema_is_still_a_receipt(row):
+    """A NULL column, and a table written before the column existed.
+
+    ``CREATE TABLE IF NOT EXISTS`` never migrates an existing table, so the read
+    must survive a receipt that predates the column rather than degrading a
+    perfectly good verdict to UNVERIFIABLE.
+    """
+    payload = json.loads(_row_json())
+    payload.pop("floor_schema", None)
+    payload.update(row)
+
+    with patch(
+        "fraisier.dbops.receipt._pg_cmd",
+        _responses((0, "t\n", ""), (0, json.dumps(payload) + "\n", "")),
+    ):
+        check = verify_actuation("stagingdb", connection_url=_URL, max_age_hours=24)
+
+    assert check.verdict is ActuationVerdict.ACTUATED
+    assert check.receipt is not None
+    assert check.receipt.floor_schema is None
 
 
 def test_receipt_lives_outside_public():
