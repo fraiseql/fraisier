@@ -715,11 +715,36 @@ def db_restore(
             # console rather than the log because `fraisier` only configures
             # logging under -v, and the generated timer unit passes no flags —
             # an INFO line would reach neither the terminal nor the journal.
-            if int(restore_cfg.get("min_tables", 0)) <= 0:
+            # The archive can state its own floor now (#343), so "not checked"
+            # stopped being true whenever it does. What must not creep in is the
+            # opposite claim: a table count proves the schema arrived and says
+            # nothing about the data, which `dbops/restore.py` documents.
+            schema_floor = getattr(result, "schema_floor", None)
+            if schema_floor is not None:
+                floor_schema, floor_tables = schema_floor
+                console.print(
+                    f"  Schema floor: {floor_tables} base table(s) required in "
+                    f"'{floor_schema}', from the archive's own table of "
+                    "contents — met."
+                )
+                unchecked = getattr(result, "unchecked_schemas", ())
+                if unchecked:
+                    console.print(
+                        "  [yellow]Not checked:[/yellow] "
+                        f"{', '.join(unchecked)} also carry table data in this "
+                        "archive; the floor covers the largest schema only."
+                    )
+                console.print(
+                    "  [dim]This checks the schema arrived, not the data — a "
+                    "dump truncated inside its data section restores a "
+                    "complete, empty schema.[/dim]"
+                )
+            elif int(restore_cfg.get("min_tables", 0)) <= 0:
                 console.print(
                     "  [yellow]Note:[/yellow] no table-count floor configured "
-                    "(database.restore.min_tables); the restored database was "
-                    "not checked for emptiness."
+                    "(database.restore.min_tables) and the archive stated none "
+                    "(--schema-only, or pg_restore unavailable); the restored "
+                    "database was not checked for emptiness."
                 )
             if result.total_duration_seconds > 0:
                 console.print(

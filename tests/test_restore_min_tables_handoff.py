@@ -272,6 +272,12 @@ class TestTheCliSaysIt:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit, because a bare MagicMock auto-creates this attribute as
+            # a truthy mock and the CLI branches on it (#343). These cases are
+            # "the archive stated no floor"; the derived-floor cases live in
+            # test_restore_derived_schema_floor.py.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch(

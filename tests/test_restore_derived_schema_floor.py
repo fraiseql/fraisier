@@ -230,3 +230,122 @@ class TestTheOperatorFloorKeepsItsOwnCheckpoint:
         )
 
         assert counted.call_count == 0  # no operator floor configured
+
+
+class TestWhatWasCheckedIsStated:
+    """A floor nobody can read is the same silence in a different place.
+
+    `fraisier` configures logging only under `-v`, and the generated timer unit
+    passes no flags, so an INFO line reaches neither the terminal nor the
+    journal. The declaration goes through the console, whose stdout systemd
+    captures.
+    """
+
+    @staticmethod
+    def _config(min_tables: int | None):
+        restore: dict = {
+            "backup_dir": "/backup/production",
+            "backup_pattern": "*.dump",
+            "max_age_hours": 48.0,
+        }
+        if min_tables is not None:
+            restore["min_tables"] = min_tables
+        config = MagicMock()
+        config.get_fraise.return_value = {"type": "api"}
+        config.get_fraise_environment.return_value = {
+            "type": "api",
+            "app_path": "/var/www/api",
+            "systemd_service": "api.staging.service",
+            "database": {
+                "name": "mydb_staging",
+                "strategy": "restore_migrate",
+                "admin_url": _ADMIN_URL,
+                "confiture_config": "confiture.yaml",
+                "restore": restore,
+            },
+        }
+        config._config = {"backup": {}}
+        config.deployment = MagicMock()
+        config.deployment.get_strategy.return_value = "restore_migrate"
+        config.list_fraises_detailed.return_value = []
+        return config
+
+    def _invoke(
+        self,
+        *,
+        min_tables: int | None = None,
+        schema_floor: tuple[str, int] | None = None,
+        unchecked_schemas: tuple[str, ...] = (),
+    ):
+        from click.testing import CliRunner
+
+        from fraisier.cli.main import main
+
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=0,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+            schema_floor=schema_floor,
+            unchecked_schemas=unchecked_schemas,
+        )
+        with (
+            patch(
+                "fraisier.cli.main.get_config", return_value=self._config(min_tables)
+            ),
+            patch("fraisier.locking.deployment_lock", MagicMock()),
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch("fraisier.systemd.SystemdServiceManager"),
+            patch(
+                "fraisier.dbops.restore.find_latest_backup",
+                return_value="/backup/production/x.dump",
+            ),
+            patch("fraisier.dbops.restore.validate_backup_age"),
+            patch(
+                "fraisier.post_migrate.run_configured_post_migrate", return_value=None
+            ),
+        ):
+            return CliRunner().invoke(main, ["db", "restore", "api", "staging"])
+
+    def test_a_derived_floor_names_the_schema_and_the_count(self):
+        res = self._invoke(schema_floor=("tenant", 240))
+
+        assert res.exit_code == 0, res.output
+        assert "240" in res.output
+        assert "tenant" in res.output
+
+    def test_a_derived_floor_is_not_reported_as_unchecked(self):
+        res = self._invoke(schema_floor=("tenant", 240))
+
+        assert "not checked for emptiness" not in res.output.lower()
+
+    def test_the_schemas_outside_the_floor_are_named(self):
+        res = self._invoke(
+            schema_floor=("tenant", 240), unchecked_schemas=("audit", "public")
+        )
+
+        assert "audit" in res.output
+        assert "public" in res.output
+
+    def test_it_does_not_claim_the_data_was_checked(self):
+        """A truncated data section restores a complete, empty schema.
+
+        The repository's own docstring says a table count cannot catch that, so
+        the operator-facing line must not imply otherwise.
+        """
+        res = self._invoke(schema_floor=("tenant", 240))
+        lowered = res.output.lower()
+
+        assert "schema" in lowered
+        assert "not the data" in lowered or "not that the data" in lowered
+
+    def test_an_archive_stating_no_floor_still_says_nothing_was_checked(self):
+        res = self._invoke(schema_floor=None)
+
+        assert res.exit_code == 0, res.output
+        assert "no table-count floor" in res.output.lower()
