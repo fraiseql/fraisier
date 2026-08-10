@@ -224,3 +224,124 @@ class TestEveryErrorPathReportsItsReason:
         payload = json.loads(wire.decode("utf-8"))
         assert payload["success"] is False
         assert "git fetch: host key mismatch" in payload["error"]
+
+
+class TestADepartedPeerCannotChangeTheOutcome:
+    """`deploy-checker.service.j2:24` runs trigger-deploy with no ``--wait``.
+
+    That client sends, shuts down its write half, skips the recv loop and
+    closes — in milliseconds. Half an hour later the daemon writes its result
+    to a socket whose peer is long gone. Unhandled, the `BrokenPipeError` would
+    raise *after* a successful deployment and take the unit's exit code with
+    it, inverting the very bug this phase fixes.
+
+    Each test asserts the note, which is only printed from the `except OSError`
+    branch — so a guard that stopped being exercised fails the test rather than
+    passing it quietly.
+    """
+
+    def test_success_survives_a_peer_that_already_left(self) -> None:
+        with accepted_connection() as client:
+            client.close()  # what every deploy-checker fire does
+            with patch("fraisier.daemon.execute_deployment_request") as execute:
+                execute.return_value = deployment_result()
+                run = CliRunner().invoke(
+                    main, ["deploy-daemon", "--project", "api"], input=REQUEST
+                )
+
+        assert run.exit_code == 0, run.output
+        assert "no client received the result" in run.output
+        assert run.exception is None or isinstance(run.exception, SystemExit)
+
+    def test_failure_still_exits_one_when_the_peer_already_left(self) -> None:
+        """The exit code is the deployment's, in both directions."""
+        with accepted_connection() as client:
+            client.close()
+            with patch("fraisier.daemon.execute_deployment_request") as execute:
+                execute.return_value = deployment_result(
+                    success=False, status="failed", error_message="migration failed"
+                )
+                run = CliRunner().invoke(
+                    main, ["deploy-daemon", "--project", "api"], input=REQUEST
+                )
+
+        assert run.exit_code == 1
+        assert "no client received the result" in run.output
+
+    def test_a_closed_fd_zero_is_not_an_error(self) -> None:
+        """`os.fstat(0)` raises EBADF rather than reporting "not a socket"."""
+        saved_stdin = os.dup(0)
+        try:
+            os.close(0)
+            with patch("fraisier.daemon.execute_deployment_request") as execute:
+                execute.return_value = deployment_result()
+                run = CliRunner().invoke(
+                    main, ["deploy-daemon", "--project", "api"], input=REQUEST
+                )
+        finally:
+            os.dup2(saved_stdin, 0)
+            os.close(saved_stdin)
+
+        assert run.exit_code == 0, run.output
+
+
+class TestThePipeFormIsUntouched:
+    """`echo '{…}' | fraisier deploy-daemon --project=api` is documented.
+
+    fd 0 there is a pipe, not a socket, so the result keeps going to stdout —
+    which is also what keeps `StandardOutput=journal` carrying the record it
+    has always carried under socket activation.
+    """
+
+    def test_result_json_still_goes_to_stdout(self) -> None:
+        with patch("fraisier.daemon.execute_deployment_request") as execute:
+            execute.return_value = deployment_result()
+            run = CliRunner().invoke(
+                main, ["deploy-daemon", "--project", "api"], input=REQUEST
+            )
+
+        assert run.exit_code == 0
+        json_lines = [
+            line for line in run.output.splitlines() if line.strip().startswith("{")
+        ]
+        assert len(json_lines) == 1, run.output
+        payload = json.loads(json_lines[0])
+        assert payload["success"] is True
+        assert payload["version"] == "abc123"
+
+    def test_journal_prose_is_unchanged(self) -> None:
+        """The human lines the journal has always shown, still shown."""
+        with patch("fraisier.daemon.execute_deployment_request") as execute:
+            execute.return_value = deployment_result()
+            run = CliRunner().invoke(
+                main, ["deploy-daemon", "--project", "api"], input=REQUEST
+            )
+
+        assert "Deployment successful - Deployment completed" in run.output
+        assert "Version: abc123" in run.output
+
+
+class TestAnOlderClientStillParsesTheResult:
+    """v0.63.0 guards the result path with `elif wait and response_data:`.
+
+    A 0.63.0 CLI against a v0.64.0 daemon is the safe direction of the skew:
+    the guard it already has now sees a non-empty response and parses it. This
+    replays that guard's shape rather than installing 0.63.0.
+    """
+
+    def test_the_old_guard_shape_reads_the_new_payload(self) -> None:
+        with accepted_connection() as client:
+            with patch("fraisier.daemon.execute_deployment_request") as execute:
+                execute.return_value = deployment_result()
+                CliRunner().invoke(
+                    main, ["deploy-daemon", "--project", "api"], input=REQUEST
+                )
+            response_data = read_result(client)
+
+        wait = True
+        assert wait and response_data  # the v0.63.0 guard, verbatim
+        result = json.loads(response_data.decode("utf-8"))
+        assert result["success"] is True
+        assert result.get("message") == "Deployment completed"
+        assert result.get("version") == "abc123"
+        assert result.get("duration") == 45.5
