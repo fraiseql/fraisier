@@ -363,13 +363,22 @@ class RestoreMigrateStrategy(Strategy):
                     f"Table count validation failed: {count} < {cfg.min_tables}",
                 )
             log.info("Table count validation passed: %d >= %d", count, cfg.min_tables)
+        elif derived is not None:
+            log.info(
+                "No operator floor configured (restore.min_tables); the "
+                "archive's own floor of %d base table(s) in schema %s was "
+                "enforced before migrations",
+                derived[1],
+                derived[0],
+            )
         else:
             # Said, not assumed (#343). The absence of a floor used to be
             # covered by a comment claiming this step enforced one. An operator
             # reading "Restore complete" should learn whether anything counted.
             log.info(
-                "No table-count floor configured (restore.min_tables); the "
-                "restored database was not checked for emptiness"
+                "No table-count floor configured (restore.min_tables) and the "
+                "archive stated none; the restored database was not checked "
+                "for emptiness"
             )
 
         # Step 11: Start service

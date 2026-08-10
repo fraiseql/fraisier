@@ -365,6 +365,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -456,6 +461,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -503,6 +513,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -533,6 +548,11 @@ class TestDbRestore:
             restore_duration_seconds=45.3,
             migration_duration_seconds=12.7,
             total_duration_seconds=58.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). This case states no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -557,6 +577,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -629,6 +654,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -660,6 +690,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -693,6 +728,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -724,6 +764,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
@@ -758,6 +803,11 @@ class TestDbRestore:
             total_duration_seconds=0.0,
             restore_duration_seconds=0.0,
             migration_duration_seconds=0.0,
+            # Explicit: a bare MagicMock auto-creates this as a truthy mock
+            # and `db restore` branches on it to report the archive-derived
+            # schema floor (#343). These cases state no floor.
+            schema_floor=None,
+            unchecked_schemas=(),
         )
         with (
             patch("fraisier.dbops.guard.is_external_db", return_value=False),
