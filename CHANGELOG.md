@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.65.1] - 2026-08-30
+
+**A cap is a pin, and this one was pinning somebody else.**
+
+[#362](https://github.com/fraiseql/fraisier/issues/362). fraisier 0.65.0 capped
+`fraiseql-confiture` at `<0.45`. confiture 0.45.0 shipped, and the cap — not
+lockfile inertia — is what held downstream in place: `printoptim_backend`
+raising its own floor to `fraiseql-confiture[ast]>=0.44.0` resolved straight
+back to 0.44.x, silently, because a transitive cap wins over a direct floor and
+says nothing while it does. Second time this has happened, after 0.38.1 → 0.44.0.
+
+### Changed
+
+- **`fraiseql-confiture>=0.38.0,<0.46`** (was `<0.45`), lock refreshed to 0.45.0.
+
+  confiture 0.45.0 ([confiture #211](https://github.com/fraiseql/confiture/issues/211))
+  appends the `resolution_hint` to `str(ConfiturError)`. Confiture computes that
+  hint at 232 raise sites and, before 0.45.0, only its own Rich renderer and
+  `--format json` envelope ever read it — every library consumer that renders an
+  exception by its string form dropped it on the floor. That is the whole reason
+  this bump is worth a release rather than a lockfile nudge: downstream,
+  `parallel_rc=2` has four distinct causes (a wiped `/dev/shm/pg_test_ram`, an
+  unmanaged test template, a template rebuild outrunning `pytest-timeout`,
+  cross-session template contention), separable only by the traceback — which
+  was discarding the very hint confiture had already computed.
+
+  The one thing that could have broken here is fraisier matching on a confiture
+  error *string*, since `str(e)` grew a `\nHint: …` tail while `e.message` kept
+  the raw text. **Nothing does.** Every site that takes `str(exc)` off a
+  confiture exception propagates it outward — `RestoreResult.error`,
+  `MigrationResult.errors`, a `log.warning` — and the tests over those paths
+  assert with `in`, never `==`, so the hint now rides along into fraisier's own
+  output and no branch moves. Both machine-readable surfaces are untouched: the
+  JSON envelope's `message` stays hint-free (confiture's `to_dict()` moved from
+  `str(self)` to `self.message`, same content) and `envelope_error_code` reads
+  `error_code`, while `classify_error` keyword-matches CLI stderr, whose text
+  0.45.0 explicitly does not change. Verified, not assumed: 5335 passed / 7
+  skipped, and the confiture integration suite run against a real PostgreSQL
+  with `FRAISIER_TEST_PG_URL` set — 60 passed, **0 skipped**, because those four
+  confiture tests skip themselves without it and a skip is not a pass.
+
+- **The cap stays one minor wide, deliberately.** `<1.0` plus contract tests was
+  considered and declined for now. A `<1.0` cap is exactly what produced
+  [#262](https://github.com/fraiseql/fraisier/issues/262): environments resolved
+  a confiture whose preflight `--against` JSON schema fraisier could not parse,
+  `against_data.get("migrations", [])` returned `[]`, and a real exit-1 preflight
+  failure was read as a pass. The exit-code table is contract-tested
+  (`tests/test_confiture_contract.py`); the surfaces that actually broke — the
+  preflight `--against` schema, `Migrator`/`MigratorSession`,
+  `DatabaseRestorer`/`RestoreOptions`, `SchemaBuilder`, `Environment` — are not.
+  Widening belongs behind those tests, not ahead of them, and `pyproject.toml`
+  now records that reasoning where the next person to reach for the cap will
+  read it.
+
 ## [0.65.0] - 2026-08-10
 
 **Counting harder cannot see a restore that never ran.**

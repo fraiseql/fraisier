@@ -16,18 +16,27 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 dependencies = [
-  # Tracks the 0.38→0.44 range: fraisier's confiture integration (Migrator /
+  # Tracks the 0.38→0.45 range: fraisier's confiture integration (Migrator /
   # Environment Python API result shapes, preflight --against JSON schema
   # {ok,summary,issues[]} + exit codes 0/7) targets it. 0.38 adds the
   # machine-readable exit-code semantic-class table (EXIT_CODE_SEMANTIC_CLASS)
   # that dbops/confiture_contract.py now imports live for zero-drift
   # classification; the migrate/build/preflight surface fraisier consumes is
-  # unchanged across 0.35→0.44 (0.37's `migrate verify` exit-code change is a
+  # unchanged across 0.35→0.45 (0.37's `migrate verify` exit-code change is a
   # CLI-only break fraisier's Python paths do not touch, and 0.44's
   # `CREATE OR REPLACE` change is gated on a `window_safe` flag fraisier never
-  # reads). The upper bound prevents silent drift onto a future schema change
-  # (issue #262).
-  "fraiseql-confiture>=0.38.0,<0.45",
+  # reads). 0.45 appends `resolution_hint` to `str(ConfiturError)`; every
+  # fraisier consumer of that string *propagates* it (into RestoreResult.error,
+  # MigrationResult.errors, a log line) rather than matching on it, the two
+  # machine-readable surfaces are untouched — the JSON envelope's `message`
+  # stays hint-free and `envelope_error_code` reads `error_code`, and
+  # `classify_error` keyword-matches CLI stderr, whose text is unchanged — so
+  # the hint reaches fraisier's own output and nothing else moves.
+  # The upper bound prevents silent drift onto a future schema change: a
+  # `<1.0` cap is precisely what let #262 resolve a confiture whose preflight
+  # JSON fraisier could not parse, and read the unparsed result as a pass.
+  # Widen one minor at a time, on a green suite (issue #262, #362).
+  "fraiseql-confiture>=0.38.0,<0.46",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
@@ -42,7 +51,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.65.0"
+version = "0.65.1"
 
 [project.optional-dependencies]
 all-databases = [
