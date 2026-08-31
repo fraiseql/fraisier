@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1169,6 +1170,75 @@ def _check_self_upgrade_failure(config: FraisierConfig | None) -> CheckResult:
             "! -user $(id -un) -type d -exec rm -rf {} +\n"
             f"  uv tool install --force fraisier=={failure.required}\n"
             f"Recorded cause: {failure.detail[:300]}"
+        ),
+    )
+
+
+@register_check("refused_dispatch")
+def _check_refused_dispatch(config: FraisierConfig | None) -> CheckResult:
+    """A deploy that was requested and never ran (#365).
+
+    While a self-upgrade drains, the webhook answers new dispatches with 503.
+    The back-pressure is right; the request being *gone* afterwards is not.
+    Nothing in ``health``, nothing in ``deployment-status``, no row — the
+    branch just stayed undeployed and looked like one nobody had pushed.
+
+    ``warn``, not ``fail``, matching ``self_upgrade_failure``: the host is up
+    and serving. What it has lost is a request.
+    """
+    name = "refused_dispatch"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.locking import draining_flag_age_s
+    from fraisier.refused_dispatch_record import read_refused_dispatches
+
+    lock_dir = getattr(getattr(config, "deployment", None), "lock_dir", None)
+    if not lock_dir:
+        return CheckResult(name, "skip", "no deployment.lock_dir configured")
+
+    entries = read_refused_dispatches(Path(lock_dir))
+    if not entries:
+        return CheckResult(name, "pass", "no deploy was dropped by a self-upgrade")
+
+    detail = "; ".join(
+        f"{e.fraise}/{e.environment} at {e.branch}"
+        f"{'@' + e.commit_sha[:7] if e.commit_sha else ''}"
+        f"{' on ' + e.refused_at if e.refused_at else ''}"
+        for e in entries
+    )
+
+    # Tells "still draining, wait" from "long over, re-fire now". Re-firing
+    # by hand is what the reporter did, and it worked.
+    age = draining_flag_age_s(Path(lock_dir))
+    flag_note = (
+        ""
+        if age is None
+        else (
+            f"\nThe .draining flag is still up ({age:.0f}s). If that is a live "
+            "upgrade, wait for it; if it is a corpse, the deploys below are "
+            "what it swallowed.\n"
+        )
+    )
+    # shlex.quote, because every field here came off a webhook payload and this
+    # hint is written to be copy-pasted into a shell. Git permits `;`, `&` and
+    # `$` in a ref name, so an unquoted branch is a second command waiting for
+    # an operator to paste it.
+    commands = "\n".join(
+        "  fraisier trigger-deploy "
+        + " ".join(
+            shlex.quote(part)
+            for part in (e.fraise, e.environment, "--branch", e.branch)
+        )
+        for e in entries
+    )
+    return CheckResult(
+        name,
+        "warn",
+        f"a deploy was requested and never ran: {detail}",
+        fix_hint=(
+            f"{flag_note}re-fire the dropped deploy(s):\n{commands}\n"
+            "Each entry clears itself when a deploy for that target succeeds."
         ),
     )
 

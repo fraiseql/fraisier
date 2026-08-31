@@ -8,7 +8,10 @@ and the self-upgrade worker's drain loop) and the draining-flag primitives
 from __future__ import annotations
 
 import fcntl
+import logging
 import multiprocessing
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -17,6 +20,7 @@ from fraisier.locking import (
     DRAINING_FLAG_NAME,
     clear_draining_flag,
     count_held_deployment_locks,
+    draining_flag_age_s,
     file_deployment_lock,
     is_draining,
 )
@@ -135,3 +139,67 @@ class TestDrainingFlag:
 
     def test_is_draining_false_when_lock_dir_missing(self, tmp_path):
         assert is_draining(tmp_path / "nope") is False
+
+
+class TestDrainingFlagAgeGuard:
+    """The flag's authority expires; the flag itself does not (#365).
+
+    A worker killed by SIGKILL or an OOM leaves ``.draining`` on disk with no
+    webhook restart to clear it, and every subsequent dispatch on that host is
+    refused indefinitely with one WARNING line as the only evidence. Past the
+    budget the flag stops being believed — but it stays on disk, because it is
+    the evidence an operator needs afterwards.
+    """
+
+    def _age_flag(self, tmp_path: Path, seconds: float) -> Path:
+        flag = tmp_path / DRAINING_FLAG_NAME
+        flag.touch()
+        past = time.time() - seconds
+        os.utime(flag, (past, past))
+        return flag
+
+    def test_fresh_flag_is_still_draining(self, tmp_path):
+        self._age_flag(tmp_path, 30)
+        assert is_draining(tmp_path, max_age_s=3600) is True
+
+    def test_flag_past_budget_loses_authority(self, tmp_path):
+        self._age_flag(tmp_path, 7200)
+        assert is_draining(tmp_path, max_age_s=3600) is False
+
+    def test_flag_past_budget_survives_on_disk(self, tmp_path):
+        flag = self._age_flag(tmp_path, 7200)
+        is_draining(tmp_path, max_age_s=3600)
+        assert flag.exists(), "the flag is evidence; only its authority expires"
+
+    def test_flag_past_budget_warns_with_its_age(self, tmp_path, caplog):
+        self._age_flag(tmp_path, 7200)
+        with caplog.at_level(logging.WARNING, logger="fraisier.locking"):
+            is_draining(tmp_path, max_age_s=3600)
+        assert "7200" in caplog.text
+        assert "self-upgrade" in caplog.text.lower()
+
+    def test_no_budget_ignores_age_entirely(self, tmp_path):
+        self._age_flag(tmp_path, 999_999)
+        assert is_draining(tmp_path) is True
+
+    def test_unreadable_flag_is_present_and_unaged(self, tmp_path, monkeypatch):
+        """Fail closed: a flag we cannot stat must never authorise a deploy."""
+        self._age_flag(tmp_path, 7200)
+        real_stat = Path.stat
+
+        def boom(self, *a, **kw):
+            if self.name == DRAINING_FLAG_NAME:
+                raise PermissionError(13, "nope")
+            return real_stat(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "stat", boom)
+        assert is_draining(tmp_path, max_age_s=1) is True
+
+    def test_age_is_none_without_a_flag(self, tmp_path):
+        assert draining_flag_age_s(tmp_path) is None
+
+    def test_age_reports_seconds_since_the_flag_was_raised(self, tmp_path):
+        self._age_flag(tmp_path, 120)
+        age = draining_flag_age_s(tmp_path)
+        assert age is not None
+        assert 119 <= age <= 130

@@ -23,16 +23,21 @@ from __future__ import annotations
 import logging
 import subprocess
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:  # pragma: no cover
-    from pathlib import Path
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 #: The format the four socket helpers already emitted. Kept byte-identical so
 #: adopting this seam does not change how any existing unit reads in the journal.
 WORKER_LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
+
+#: Where the detached self-upgrade worker writes its output. Webhook units run
+#: with ``ProtectSystem=strict`` and have ``/var/lib/fraisier`` in
+#: ``ReadWritePaths``, so a sibling directory is writable by the deploy user.
+#: Named here rather than in the worker because a *refusal* has to point at it:
+#: everything after the spawn runs in that worker and lands in this directory,
+#: never in the journal.
+SELF_UPGRADE_LOG_DIR = Path("/var/lib/fraisier/self-upgrade")
 
 
 def configure_worker_logging(level: int = logging.INFO) -> None:
