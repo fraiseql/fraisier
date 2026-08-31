@@ -155,19 +155,22 @@ class TestTriggerDeployWait:
             obj={"skip_health": False},
         )
 
-    @patch("os.execvp")
+    @patch("fraisier.cli._deploy.subprocess.run")
     @patch("socket.socket")
     @patch("fraisier.cli._deploy.Path")
     @patch("fraisier.cli.main.get_config")
-    def test_trigger_deploy_follow_execs_journalctl(
-        self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
+    def test_trigger_deploy_follow_shows_the_journal(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
     ):
-        """Test trigger-deploy --follow execs into journalctl.
+        """Test trigger-deploy --follow prints the deploy's journal window.
 
         The result is supplied because `--follow` implies `--wait`: since #356
-        the logs are followed only once a real success has been reported. The
+        the logs are shown only once a real outcome has been reported. The
         empty-response case is covered by
         `TestFollowIsBoundByTheSameInvariant`, where it exits 1 instead.
+
+        It used to `os.execvp` into `journalctl -f`, which by then had nothing
+        left to follow and handed the caller journalctl's exit status (#357).
         """
         runner = CliRunner()
 
@@ -203,12 +206,180 @@ class TestTriggerDeployWait:
             obj={"skip_health": False},
         )
 
-        # Should exec into journalctl
-        mock_execvp.assert_called_once()
-        args, _kwargs = mock_execvp.call_args
-        assert args[0] == "journalctl"
-        assert "-f" in args[1]  # follow flag
-        assert "fraisier-api-prod@*.service" in args[1]
+        # Should show this deploy's own window, in-process
+        mock_run.assert_called_once()
+        argv = mock_run.call_args[0][0]
+        assert argv[0] == "journalctl"
+        assert "-f" not in argv
+        assert "fraisier-api-prod@*.service" in argv
+
+
+class TestFollowShowsTheDeploysOwnWindow:
+    """``--follow`` shows the caller their deployment, and exits with its status.
+
+    Neither was true. ``--follow`` implies ``--wait``, ``--wait`` drains the
+    socket to EOF, and the daemon closes that connection only when the
+    deployment is over — so by the time ``journalctl -f`` started there was
+    nothing left to follow, and ``-f`` implies ``-n 10``, making the window
+    the last ten lines of an exited unit chosen by wherever the buffer
+    happened to end. On a 33-minute restore that is ten lines and an idle
+    terminal.
+
+    And ``execvp`` **replaces the process**, so on success the caller received
+    journalctl's exit status, not the deployment's: a missing or unreadable
+    journalctl turned a successful deploy into a non-zero exit. v0.64.0 fixed
+    the failure direction and could not fix this one, because with an exec
+    there is no "after".
+    """
+
+    def _wire(self, mock_get_config, mock_path_class, mock_socket_class):
+        config = MagicMock()
+        config.project_name = "myproject"
+        config.get_fraise_environment.return_value = {"type": "api"}
+        mock_get_config.return_value = config
+
+        mock_path = MagicMock()
+        mock_path_class.return_value = mock_path
+        mock_socket_path = MagicMock()
+        mock_path.__truediv__.return_value = mock_socket_path
+        mock_socket_path.__str__.return_value = (
+            "/run/fraisier/myproject-prod/deploy.sock"
+        )
+
+        mock_sock = MagicMock()
+        mock_socket_class.return_value = mock_sock
+        mock_sock.connect.return_value = None
+        mock_sock.sendall.return_value = None
+        mock_sock.shutdown.return_value = None
+        return mock_sock
+
+    def _invoke(self, mock_sock, *, success: bool):
+        payload = json.dumps(
+            {"success": True, "message": "done"}
+            if success
+            else {"success": False, "error": "migrations failed"}
+        ).encode()
+        mock_sock.recv.side_effect = [payload, b""]
+        return CliRunner().invoke(
+            main,
+            ["trigger-deploy", "api", "prod", "--follow"],
+            obj={"skip_health": False},
+        )
+
+    @patch("fraisier.cli._deploy.subprocess.run")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_a_failing_journalctl_does_not_fail_a_successful_deploy(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
+    ):
+        """The exec made this inexpressible: it never returns."""
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        mock_run.return_value = MagicMock(returncode=127)
+
+        result = self._invoke(mock_sock, success=True)
+
+        assert result.exit_code == 0, result.output
+        assert "Deployment successful" in result.output
+
+    @patch("fraisier.cli._deploy.subprocess.run")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_a_missing_journalctl_does_not_fail_a_successful_deploy(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
+    ):
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        mock_run.side_effect = FileNotFoundError("journalctl")
+
+        result = self._invoke(mock_sock, success=True)
+
+        assert result.exit_code == 0, result.output
+
+    @patch("fraisier.cli._deploy.subprocess.run")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_a_failed_deploy_still_exits_one(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
+    ):
+        """v0.64.0's guarantee, pinned directly rather than by forbidding the call.
+
+        It used to be enforced as ``execvp.assert_not_called()``; what that was
+        protecting was the exit code, which is asserted here on both outcomes.
+        """
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = self._invoke(mock_sock, success=False)
+
+        assert result.exit_code == 1, result.output
+        assert "migrations failed" in result.output
+
+    @patch("fraisier.cli._deploy.subprocess.run")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_a_failed_deploy_shows_the_logs_too(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
+    ):
+        """A failure is when the logs are most wanted, and it showed none."""
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        mock_run.return_value = MagicMock(returncode=0)
+
+        self._invoke(mock_sock, success=False)
+
+        assert mock_run.called
+        assert mock_run.call_args[0][0][0] == "journalctl"
+
+    @patch("fraisier.cli._deploy.time.time", return_value=1_756_000_000.7)
+    @patch("fraisier.cli._deploy.subprocess.run")
+    @patch("socket.socket")
+    @patch("fraisier.cli._deploy.Path")
+    @patch("fraisier.cli.main.get_config")
+    def test_the_window_starts_at_this_deploys_dispatch(
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run, _mock_time
+    ):
+        """Not "ten lines ago" — the caller sees their run and no other."""
+        mock_sock = self._wire(mock_get_config, mock_path_class, mock_socket_class)
+        mock_run.return_value = MagicMock(returncode=0)
+
+        self._invoke(mock_sock, success=True)
+
+        argv = mock_run.call_args[0][0]
+        assert argv[:3] == ["journalctl", "-u", "fraisier-api-prod@*.service"]
+        assert "--since" in argv
+        assert argv[argv.index("--since") + 1] == "@1756000000"
+        assert "--no-pager" in argv
+        assert "-f" not in argv, "the flag no longer promises a live stream"
+
+    def test_nothing_in_the_module_execs(self):
+        """The exec is the defect, not a detail of it.
+
+        Asserted structurally rather than by grepping the source, so the
+        docstring that explains why it went can stay.
+        """
+        import ast
+        import pathlib
+
+        import fraisier.cli._deploy as mod
+
+        tree = ast.parse(pathlib.Path(mod.__file__).read_text())
+        execs = [
+            ast.unparse(n)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr.startswith("exec")
+        ]
+        assert execs == []
+
+    def test_help_no_longer_promises_a_live_stream(self):
+        result = CliRunner().invoke(main, ["trigger-deploy", "--help"])
+        text = " ".join(result.output.split())
+        assert "stream live" not in text
+        assert "print the deploy's own log window from journalctl" in text
+        assert "exits with the deployment's status" in text
 
 
 class TestTriggerDeployEstimate:
@@ -526,12 +697,12 @@ class TestFollowIsBoundByTheSameInvariant:
             mock_get_config, mock_path_class, mock_socket_class
         )
 
-    @patch("fraisier.cli._deploy.os.execvp")
+    @patch("fraisier.cli._deploy.subprocess.run")
     @patch("socket.socket")
     @patch("fraisier.cli._deploy.Path")
     @patch("fraisier.cli.main.get_config")
     def test_follow_does_not_tail_logs_for_a_failed_deployment(
-        self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
     ):
         """A failed deploy exits 1 rather than handing the shell to journalctl."""
         runner = CliRunner()
@@ -547,14 +718,13 @@ class TestFollowIsBoundByTheSameInvariant:
 
         assert result.exit_code == 1, result.output
         assert "migrations failed" in result.output
-        mock_execvp.assert_not_called()
 
-    @patch("fraisier.cli._deploy.os.execvp")
+    @patch("fraisier.cli._deploy.subprocess.run")
     @patch("socket.socket")
     @patch("fraisier.cli._deploy.Path")
     @patch("fraisier.cli.main.get_config")
     def test_follow_does_not_tail_logs_when_no_result_arrives(
-        self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
     ):
         """An unknown outcome under --follow is still an unknown outcome."""
         runner = CliRunner()
@@ -569,14 +739,14 @@ class TestFollowIsBoundByTheSameInvariant:
 
         assert result.exit_code == 1, result.output
         assert "triggered successfully" not in result.output
-        mock_execvp.assert_not_called()
+        mock_run.assert_not_called()
 
-    @patch("fraisier.cli._deploy.os.execvp")
+    @patch("fraisier.cli._deploy.subprocess.run")
     @patch("socket.socket")
     @patch("fraisier.cli._deploy.Path")
     @patch("fraisier.cli.main.get_config")
     def test_follow_reports_the_outcome_then_tails_the_logs(
-        self, mock_get_config, mock_path_class, mock_socket_class, mock_execvp
+        self, mock_get_config, mock_path_class, mock_socket_class, mock_run
     ):
         """On success the summary is printed first — exec would erase it."""
         runner = CliRunner()
@@ -593,8 +763,8 @@ class TestFollowIsBoundByTheSameInvariant:
         )
 
         assert "Deployment successful" in result.output
-        mock_execvp.assert_called_once()
-        argv = mock_execvp.call_args[0][1]
-        assert argv[:2] == ["journalctl", "-u"]
-        assert argv[2] == "fraisier-api-prod@*.service"
-        assert argv[3] == "-f"
+        mock_run.assert_called_once()
+        argv = mock_run.call_args[0][0]
+        assert argv[:3] == ["journalctl", "-u", "fraisier-api-prod@*.service"]
+        assert "--since" in argv
+        assert "--no-pager" in argv
