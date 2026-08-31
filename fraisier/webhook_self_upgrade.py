@@ -65,16 +65,21 @@ from fraisier.self_upgrade_record import (
 )
 from fraisier.service_managers.systemd import _call_via_socket
 from fraisier.versioning import detect_required_fraisier_version
-from fraisier.worker_logging import configure_worker_logging, open_worker_log
+from fraisier.worker_logging import (
+    SELF_UPGRADE_LOG_DIR,
+    configure_worker_logging,
+    open_worker_log,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 
-# Webhook units run with ProtectSystem=strict and have /var/lib/fraisier in
-# ReadWritePaths, so a sibling directory is writable by the deploy user.
-_LOG_DIR = Path("/var/lib/fraisier/self-upgrade")
+#: Rebindable alias of :data:`~fraisier.worker_logging.SELF_UPGRADE_LOG_DIR`,
+#: kept so tests can point the worker at a temporary tree without moving the
+#: directory the refusal message names.
+_LOG_DIR = SELF_UPGRADE_LOG_DIR
 
 #: Where the worker resolves its own unit's ``ExecStart=``. A module constant so
 #: tests can point it at a temporary tree.
@@ -428,6 +433,35 @@ def _refuse_restart_for_broken_entrypoint(
     )
 
 
+def _restart_outcome(socket_path: str, service: str) -> tuple[str, int]:
+    """Request the restart and name the result, which used to be swallowed.
+
+    ``_send_restart``'s rc was returned to a caller that discards it and never
+    logged, so the last thing written was "requesting restart" whether or not
+    the request landed.
+    """
+    rc = _send_restart(socket_path, service)
+    return ("restart requested" if rc == 0 else "restart request failed", rc)
+
+
+def _finish(outcome: str, rc: int, started_at: float) -> int:
+    """Log a terminal outcome and hand back its rc.
+
+    Every exit from :func:`_run_upgrade` goes through here. Before it existed
+    the last line written was an *intention* — "requesting restart" — and the
+    other exits said nothing about having ended at all, so an operator holding
+    a 503 could not tell a running upgrade from a dead one. The elapsed time
+    is the other half of that question: how long should I wait.
+    """
+    log.info(
+        "self-upgrade: finished — %s (rc=%d) after %.1fs",
+        outcome,
+        rc,
+        time.monotonic() - started_at,
+    )
+    return rc
+
+
 def _run_upgrade(
     required: str,
     service: str,
@@ -443,7 +477,21 @@ def _run_upgrade(
     With ``lock_dir=None`` (operator-invoked ``_main`` or a config edge case)
     the worker falls back to today's behaviour: install, then immediate
     restart, with a loud WARNING so the missing coordination is visible.
+
+    Entry and every exit are logged. These lines land in the worker log under
+    :data:`_LOG_DIR`, not in the journal — that is correct and stays, since
+    the worker log is the right place for install output. What changed is that
+    the refusal message now names that directory, so the operator is told
+    where to look.
     """
+    started_at = time.monotonic()
+    log.info(
+        "self-upgrade: starting — install fraisier %s, then restart %s "
+        "(this worker's output lands in %s)",
+        required,
+        service,
+        _LOG_DIR,
+    )
     if lock_dir is None:
         log.warning(
             "self-upgrade: lock_dir unresolved; running install + restart "
@@ -455,17 +503,21 @@ def _run_upgrade(
             _refuse_restart_for_broken_entrypoint(
                 service, broken, required=required, lock_dir=lock_dir, rc=rc
             )
-            return rc or ENTRYPOINT_BROKEN_RC
+            return _finish(
+                "entrypoint broken; restart refused",
+                rc or ENTRYPOINT_BROKEN_RC,
+                started_at,
+            )
         if rc != 0:
-            return rc
+            return _finish("install failed", rc, started_at)
         if not socket_path:
             log.warning(
                 "self-upgrade: FRAISIER_SYSTEMCTL_SOCKET not set; "
                 "skipping restart of %s",
                 service,
             )
-            return 0
-        return _send_restart(socket_path, service)
+            return _finish("no restart socket; install only", 0, started_at)
+        return _finish(*_restart_outcome(socket_path, service), started_at)
 
     # Flag covers install + drain so dispatch refuses new deploys for the
     # entire upgrade window, not just the drain tail.
@@ -478,16 +530,20 @@ def _run_upgrade(
             _refuse_restart_for_broken_entrypoint(
                 service, broken, required=required, lock_dir=lock_dir, rc=rc
             )
-            return rc or ENTRYPOINT_BROKEN_RC
+            return _finish(
+                "entrypoint broken; restart refused",
+                rc or ENTRYPOINT_BROKEN_RC,
+                started_at,
+            )
         if rc != 0:
-            return rc
+            return _finish("install failed", rc, started_at)
         if not socket_path:
             log.warning(
                 "self-upgrade: FRAISIER_SYSTEMCTL_SOCKET not set; "
                 "skipping restart of %s",
                 service,
             )
-            return 0
+            return _finish("no restart socket; install only", 0, started_at)
         # Brief settle so any deploy accepted in the dispatch→lock window
         # reaches `with deployment_lock(...)` before we count.
         time.sleep(drain_settle_s)
@@ -500,10 +556,12 @@ def _run_upgrade(
                 ", ".join(result.held),
                 service,
             )
-            return _DRAIN_TIMEOUT_RC
+            return _finish(
+                "drain timeout; restart skipped", _DRAIN_TIMEOUT_RC, started_at
+            )
 
     log.info("self-upgrade: deploys drained; requesting restart of %s", service)
-    return _send_restart(socket_path, service)
+    return _finish(*_restart_outcome(socket_path, service), started_at)
 
 
 def _main() -> None:

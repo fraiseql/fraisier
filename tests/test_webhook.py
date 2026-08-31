@@ -3,6 +3,7 @@
 import json
 import os
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1275,6 +1276,393 @@ class TestEndpointDrainingTo503:
         assert body["error_type"] == "service_unavailable"
         assert body["deployments"][0]["status"] == "draining"
         assert body["deployments"][0]["retry_after_s"] == 60
+
+    def test_503_body_carries_the_flag_age(self, webhook_client, test_db, tmp_path):
+        """How long the upgrade has been running is the diagnostic number.
+
+        40 seconds is a healthy upgrade; six hours is a corpse. A caller that
+        logs the response body should be able to tell them apart without
+        shell access to the host.
+        """
+        import os
+        import time as _time
+
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        flag = tmp_path / DRAINING_FLAG_NAME
+        flag.touch()
+        past = _time.time() - 300
+        os.utime(flag, (past, past))
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            response = webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-draining-age-001",
+                },
+            )
+
+        assert response.status_code == 503
+        age = response.json()["deployments"][0]["draining_age_s"]
+        assert 299 <= age <= 330
+
+    def test_503_body_leaks_no_host_detail(self, webhook_client, test_db, tmp_path):
+        """It goes to an unauthenticated caller: an age, and nothing else."""
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        (tmp_path / DRAINING_FLAG_NAME).touch()
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            response = webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-draining-noleak-001",
+                },
+            )
+
+        assert str(tmp_path) not in response.text
+        assert "/var/lib/fraisier" not in response.text
+
+    def test_refusal_warning_names_the_age_and_the_worker_log(
+        self, webhook_client, test_db, tmp_path, caplog
+    ):
+        """The operator holding a 503 needs to know where the rest of it went.
+
+        Everything after the spawn runs in a detached worker whose output
+        never reaches the journal, so the WARNING has to say so.
+        """
+        import logging as _logging
+        import os
+        import time as _time
+
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        flag = tmp_path / DRAINING_FLAG_NAME
+        flag.touch()
+        past = _time.time() - 420
+        os.utime(flag, (past, past))
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+            caplog.at_level(_logging.WARNING, logger="fraisier.webhook"),
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-draining-warn-001",
+                },
+            )
+
+        assert "420s ago" in caplog.text
+        assert "/var/lib/fraisier/self-upgrade" in caplog.text
+
+    def test_draining_predicate_still_elevates_the_enriched_payload(self):
+        """The single integration point that turns the dict into a 503.
+
+        Its docstring says any new caller must call it; adding a field must
+        not slip past it either.
+        """
+        from fraisier.webhook import _is_draining_response
+
+        assert (
+            _is_draining_response(
+                {
+                    "status": "draining",
+                    "retry_after_s": 60,
+                    "draining_age_s": 300,
+                }
+            )
+            is True
+        )
+        assert (
+            _is_draining_response(
+                {
+                    "status": "deployments_triggered",
+                    "deployments": [
+                        {"status": "draining", "draining_age_s": 300},
+                    ],
+                }
+            )
+            is True
+        )
+
+    def test_stale_flag_past_the_budget_lets_the_deploy_through(
+        self, webhook_client, test_db, tmp_path
+    ):
+        """The reported failure was a host refusing everything, forever.
+
+        A worker killed without a webhook restart leaves the flag up and no
+        lifespan hook ever fires. Past the budget the flag is ignored — a
+        wrongly permitted deploy is loud and recoverable, a wrongly refused
+        one is neither.
+        """
+        import os
+        import time as _time
+
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        flag = tmp_path / DRAINING_FLAG_NAME
+        flag.touch()
+        past = _time.time() - 7200
+        os.utime(flag, (past, past))
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch("fraisier.webhook.execute_deployment"),
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            response = webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-stale-flag-through-001",
+                },
+            )
+
+        assert response.status_code != 503
+        assert flag.exists(), "the flag is evidence; only its authority expires"
+
+    def test_flag_budget_reads_config(self, tmp_path):
+        from fraisier.webhook import _self_upgrade_flag_max_age_s
+
+        cfg = MagicMock()
+        cfg.webhook = {"self_upgrade_flag_max_age_s": 120}
+        with patch("fraisier.webhook.get_config", return_value=cfg):
+            assert _self_upgrade_flag_max_age_s() == 120
+
+    def test_flag_budget_defaults_to_an_hour(self, tmp_path):
+        from fraisier.webhook import _self_upgrade_flag_max_age_s
+
+        cfg = MagicMock()
+        cfg.webhook = {}
+        with patch("fraisier.webhook.get_config", return_value=cfg):
+            assert _self_upgrade_flag_max_age_s() == 3600
+
+    def test_flag_budget_falls_back_on_garbage(self, tmp_path):
+        """Same tolerance ``_retry_after_seconds`` already has.
+
+        A host that cannot read its own config must make the call the default
+        makes, not raise inside a request.
+        """
+        from fraisier.webhook import _self_upgrade_flag_max_age_s
+
+        cfg = MagicMock()
+        cfg.webhook = {"self_upgrade_flag_max_age_s": "soon"}
+        with patch("fraisier.webhook.get_config", return_value=cfg):
+            assert _self_upgrade_flag_max_age_s() == 3600
+
+        with patch("fraisier.webhook.get_config", side_effect=FileNotFoundError):
+            assert _self_upgrade_flag_max_age_s() == 3600
+
+    def test_a_refusal_is_recorded_per_matched_target(
+        self, webhook_client, test_db, tmp_path
+    ):
+        """503 is right; the request vanishing afterwards is not.
+
+        ``_dispatch_deployment`` has already resolved ``fraise_configs``
+        before the draining check, so every target the push would have
+        deployed is known at the moment it is refused.
+        """
+        from fraisier.locking import DRAINING_FLAG_NAME
+        from fraisier.refused_dispatch_record import read_refused_dispatches
+
+        (tmp_path / DRAINING_FLAG_NAME).touch()
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+        ):
+            self._stub_provider(mock_get_provider)
+            cfg = self._stub_config(mock_config, tmp_path)
+            cfg.get_fraises_for_branch.return_value = [
+                {"fraise_name": "my_api", "environment": "staging", "type": "api"},
+                {"fraise_name": "my_api", "environment": "production", "type": "api"},
+            ]
+
+            webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-refusal-recorded-001",
+                },
+            )
+
+        entries = read_refused_dispatches(tmp_path)
+        assert {(e.fraise, e.environment) for e in entries} == {
+            ("my_api", "staging"),
+            ("my_api", "production"),
+        }
+        assert all(e.branch == "main" for e in entries)
+
+    def test_a_failing_ledger_write_still_answers_503(
+        self, webhook_client, test_db, tmp_path
+    ):
+        """The webhook's job at that moment is to answer.
+
+        The ledger is best-effort underneath it, never in front of it.
+        """
+        from fraisier.locking import DRAINING_FLAG_NAME
+
+        (tmp_path / DRAINING_FLAG_NAME).touch()
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch(
+                "fraisier.webhook.record_refused_dispatch",
+                side_effect=OSError("disk full"),
+            ),
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            response = webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-refusal-ledger-oserror-001",
+                },
+            )
+
+        assert response.status_code == 503
+        assert response.json()["deployments"][0]["status"] == "draining"
+
+    def _entries(self, tmp_path):
+        from fraisier.refused_dispatch_record import read_refused_dispatches
+
+        return {(e.fraise, e.environment) for e in read_refused_dispatches(tmp_path)}
+
+    def _seed(self, tmp_path):
+        from fraisier.refused_dispatch_record import record_refused_dispatch
+
+        for env in ("staging", "production"):
+            record_refused_dispatch(
+                tmp_path,
+                fraise="my_api",
+                environment=env,
+                branch="main",
+                commit_sha="abc",
+                webhook_id=1,
+            )
+
+    async def _deploy(self, tmp_path, *, success: bool):
+        from fraisier.webhook import _run_deployment
+
+        cfg = MagicMock()
+        cfg.deployment.lock_dir = str(tmp_path)
+        cfg.webhook = {"self_upgrade": False}
+        cfg.project_name = "proj"
+
+        deployer = MagicMock()
+        deployer.execute.return_value = SimpleNamespace(
+            success=success,
+            new_version="1.1.0",
+            old_version="1.0.0",
+            error_message="boom",
+        )
+        db = MagicMock()
+        db.get_recent_deployments.return_value = []
+
+        with (
+            patch("fraisier.webhook.get_config", return_value=cfg),
+            patch("fraisier.deployers.api.APIDeployer", return_value=deployer),
+            patch("fraisier.webhook.maybe_apply_deferred_restarts"),
+        ):
+            await _run_deployment(
+                "my_api",
+                "staging",
+                {"fraise_name": "my_api", "type": "api"},
+                None,
+                "main",
+                None,
+                db,
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_successful_deploy_discharges_only_its_own_target(
+        self, tmp_path, test_db
+    ):
+        """The rule that makes the ledger worth having.
+
+        Clearing on a restart would mean the upgrade's own restart erases the
+        record of what it displaced — the exact shape of the bug this closes.
+        """
+        self._seed(tmp_path)
+        await self._deploy(tmp_path, success=True)
+        assert self._entries(tmp_path) == {("my_api", "production")}
+
+    @pytest.mark.asyncio
+    async def test_a_failed_deploy_discharges_nothing(self, tmp_path, test_db):
+        """A deploy that ran and failed is a different fact, recorded
+        elsewhere. It does not settle "a request was dropped"."""
+        self._seed(tmp_path)
+        await self._deploy(tmp_path, success=False)
+        assert self._entries(tmp_path) == {
+            ("my_api", "staging"),
+            ("my_api", "production"),
+        }
+
+    def test_a_stale_flag_that_lets_the_deploy_through_records_nothing(
+        self, webhook_client, test_db, tmp_path
+    ):
+        """Nothing was refused, so nothing is owed."""
+        import os
+        import time as _time
+
+        from fraisier.locking import DRAINING_FLAG_NAME
+        from fraisier.refused_dispatch_record import read_refused_dispatches
+
+        flag = tmp_path / DRAINING_FLAG_NAME
+        flag.touch()
+        past = _time.time() - 7200
+        os.utime(flag, (past, past))
+
+        with (
+            patch("fraisier.webhook.get_provider") as mock_get_provider,
+            patch("fraisier.webhook.get_config") as mock_config,
+            patch("fraisier.webhook.execute_deployment"),
+        ):
+            self._stub_provider(mock_get_provider)
+            self._stub_config(mock_config, tmp_path)
+
+            webhook_client.post(
+                "/webhook",
+                json={"ref": "refs/heads/main"},
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "test-stale-flag-no-record-001",
+                },
+            )
+
+        assert read_refused_dispatches(tmp_path) == []
 
     def test_legacy_github_endpoint_returns_503_when_draining(
         self, webhook_client, test_db, tmp_path

@@ -393,6 +393,27 @@ branch_mapping:
 #   # v0.18.0+ to pick it up. Until then the install succeeds but the
 #   # restart RPC fails (and is logged).
 #   self_upgrade: true
+#
+#   # While a self-upgrade is installing and draining, the webhook raises a
+#   # `.draining` flag in lock_dir and refuses new deploys with HTTP 503 plus
+#   # this Retry-After. Default 60.
+#   self_upgrade_retry_after_s: 60
+#
+#   # How long that flag is believed, in seconds. Default 3600 — six times the
+#   # 600s drain timeout, plus room for the install.
+#   #
+#   # The flag is unlinked in a `finally`, which covers a clean exit and an
+#   # exception but NOT a SIGKILL or an OOM kill, and the startup hook that
+#   # clears a stale one only fires when the webhook itself restarts. A worker
+#   # lost without one would otherwise leave this host refusing every dispatch
+#   # indefinitely (#365). Past this age the flag is IGNORED and deploys
+#   # resume: a wrongly permitted deploy is loud and recoverable, a wrongly
+#   # refused one is neither. The flag file itself is left in place as
+#   # evidence.
+#   #
+#   # Raise it on a host whose installs legitimately run longer; do not lower
+#   # it below the drain timeout, or a healthy upgrade loses its own flag.
+#   self_upgrade_flag_max_age_s: 3600
 
 # ============================================================
 # BACKUP RETENTION FOR A CORPUS THIS HOST *RECEIVES*

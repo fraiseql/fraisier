@@ -468,6 +468,157 @@ class TestSendRestart:
         assert rc == 1
 
 
+class TestRunUpgradeSaysWhatItDid:
+    """Every exit from ``_run_upgrade`` names its outcome (#365).
+
+    The spawn line is logged in the webhook process, so it reaches the
+    journal. Everything after it runs in a detached worker whose output goes
+    to the worker log — and until this existed, the last thing written there
+    was an *intention* ("requesting restart") while the other exits said
+    nothing about having ended at all. An operator holding a 503 could not
+    tell a running upgrade from a dead one.
+    """
+
+    SERVICE = "fraisier-foo-webhook.service"
+
+    def _run(self, tmp_path, caplog, **seams):
+        import logging
+
+        from fraisier.webhook_self_upgrade import _DrainResult
+
+        defaults = {
+            "_run_install": 0,
+            "_entrypoint_is_broken": None,
+            "_wait_for_deploys_to_drain": _DrainResult(drained=True, held=[]),
+            "_send_restart": 0,
+        }
+        defaults.update(seams)
+        with (
+            caplog.at_level(logging.INFO, logger="fraisier.webhook_self_upgrade"),
+            patch("fraisier.webhook_self_upgrade.time.sleep"),
+            patch(
+                "fraisier.webhook_self_upgrade._run_install",
+                return_value=defaults["_run_install"],
+            ),
+            patch(
+                "fraisier.webhook_self_upgrade._entrypoint_is_broken",
+                return_value=defaults["_entrypoint_is_broken"],
+            ),
+            patch(
+                "fraisier.webhook_self_upgrade._wait_for_deploys_to_drain",
+                return_value=defaults["_wait_for_deploys_to_drain"],
+            ),
+            patch(
+                "fraisier.webhook_self_upgrade._send_restart",
+                return_value=defaults["_send_restart"],
+            ),
+            patch(
+                "fraisier.webhook_self_upgrade._refuse_restart_for_broken_entrypoint"
+            ),
+        ):
+            rc = _run_upgrade(
+                "0.66.0",
+                self.SERVICE,
+                seams.pop("socket_path", "/run/x.sock"),
+                lock_dir=seams.pop("lock_dir", tmp_path),
+                drain_timeout_s=10,
+                drain_poll_s=0.01,
+                drain_settle_s=0.0,
+            )
+        return rc, caplog.text
+
+    def test_entry_is_logged_with_what_it_will_do(self, tmp_path, caplog):
+        _, text = self._run(tmp_path, caplog)
+        assert "self-upgrade: starting" in text
+        assert "0.66.0" in text
+        assert self.SERVICE in text
+
+    def test_success_says_it_finished(self, tmp_path, caplog):
+        rc, text = self._run(tmp_path, caplog)
+        assert rc == 0
+        assert "self-upgrade: finished" in text
+        assert "restart requested" in text
+
+    def test_a_failed_restart_request_is_logged_not_just_returned(
+        self, tmp_path, caplog
+    ):
+        """``_send_restart``'s outcome used to be returned and never logged."""
+        rc, text = self._run(tmp_path, caplog, _send_restart=7)
+        assert rc == 7
+        assert "restart request failed" in text
+
+    def test_install_failure_says_it_finished(self, tmp_path, caplog):
+        rc, text = self._run(tmp_path, caplog, _run_install=3)
+        assert rc == 3
+        assert "self-upgrade: finished" in text
+        assert "install failed" in text
+
+    def test_broken_entrypoint_says_it_finished(self, tmp_path, caplog):
+        rc, text = self._run(tmp_path, caplog, _entrypoint_is_broken="no such file")
+        assert rc != 0
+        assert "self-upgrade: finished" in text
+        assert "entrypoint broken" in text
+
+    def test_missing_socket_says_it_finished(self, tmp_path, caplog):
+        rc, text = self._run(tmp_path, caplog, socket_path="")
+        assert rc == 0
+        assert "self-upgrade: finished" in text
+        assert "no restart socket" in text
+
+    def test_drain_timeout_says_it_finished(self, tmp_path, caplog):
+        from fraisier.webhook_self_upgrade import _DRAIN_TIMEOUT_RC, _DrainResult
+
+        rc, text = self._run(
+            tmp_path,
+            caplog,
+            _wait_for_deploys_to_drain=_DrainResult(drained=False, held=["api.lock"]),
+        )
+        assert rc == _DRAIN_TIMEOUT_RC
+        assert "self-upgrade: finished" in text
+        assert "drain timeout" in text
+
+    def test_uncoordinated_fallback_says_it_finished(self, tmp_path, caplog):
+        """The ``lock_dir=None`` path is an exit too, and was equally silent."""
+        rc, text = self._run(tmp_path, caplog, lock_dir=None)
+        assert rc == 0
+        assert "self-upgrade: finished" in text
+
+    def test_no_exit_can_be_added_without_logging_one(self):
+        """Structural, because the drift is silent.
+
+        A seventh exit added later would return without a word and nothing in
+        the suite above would notice — the tests here each drive one known
+        path. This one reads the function instead.
+        """
+        import ast
+        import pathlib
+
+        import fraisier.webhook_self_upgrade as mod
+
+        tree = ast.parse(pathlib.Path(mod.__file__).read_text())
+        fn = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_run_upgrade"
+        )
+        returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+        assert returns, "expected _run_upgrade to have exits"
+        for node in returns:
+            call = node.value
+            assert (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "_finish"
+            ), f"_run_upgrade exits at line {node.lineno} without logging an outcome"
+
+    def test_every_exit_reports_elapsed_time(self, tmp_path, caplog):
+        """How long should I wait? is unanswerable without it."""
+        import re
+
+        _, text = self._run(tmp_path, caplog)
+        assert re.search(r"after \d+\.\ds", text), text
+
+
 class TestRunUpgradeDrainCoordination:
     """``_run_upgrade`` orchestrates flag → install → settle → drain → restart."""
 

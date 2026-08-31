@@ -18,8 +18,10 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 from fraisier.errors import DeploymentLockError
+from fraisier.worker_logging import SELF_UPGRADE_LOG_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -149,14 +151,80 @@ def _probe_lock_held(path: Path) -> int:
         return 0
 
 
-def is_draining(lock_dir: Path) -> bool:
-    """Return True iff the ``.draining`` flag exists under ``lock_dir``.
+class _DrainingFlag(NamedTuple):
+    """One ``stat()`` of the flag, so presence and age cannot disagree."""
+
+    present: bool
+    #: Seconds since the flag was raised. ``None`` means the flag is there
+    #: but its mtime could not be read — never that it is absent.
+    age_s: float | None
+
+
+def _read_draining_flag(lock_dir: Path) -> _DrainingFlag:
+    try:
+        mtime = (lock_dir / DRAINING_FLAG_NAME).stat().st_mtime
+    except FileNotFoundError:
+        return _DrainingFlag(present=False, age_s=None)
+    except OSError:
+        # Present but unreadable. Fail closed — see ``is_draining``.
+        return _DrainingFlag(present=True, age_s=None)
+    return _DrainingFlag(present=True, age_s=max(0.0, time.time() - mtime))
+
+
+def draining_flag_age_s(lock_dir: Path) -> float | None:
+    """Seconds since the ``.draining`` flag was raised, or ``None``.
+
+    ``None`` covers both "no flag" and "flag present, mtime unreadable".
+    Callers that must tell those apart ask :func:`is_draining` first, which
+    answers presence on its own — after which ``None`` can only mean the age
+    is unknown.
+
+    It is the single most diagnostic number available while a dispatch is
+    being refused: 40 seconds is a healthy upgrade, six hours is a corpse.
+    """
+    return _read_draining_flag(lock_dir).age_s
+
+
+def is_draining(lock_dir: Path, *, max_age_s: float | None = None) -> bool:
+    """Return True iff the ``.draining`` flag under ``lock_dir`` still counts.
 
     The flag is set by :mod:`fraisier.webhook_self_upgrade` while a worker
     is installing + draining; the webhook consults it to refuse new deploys
     with HTTP 503 + ``Retry-After`` (see :mod:`fraisier.webhook`).
+
+    With ``max_age_s``, a flag older than that **loses its authority** and
+    this returns False. That direction is deliberate (#365). ``draining_flag``
+    unlinks in a ``finally``, which covers a clean exit and an exception but
+    not a ``SIGKILL`` or an OOM kill; the lifespan hook that clears a stale
+    flag only fires on a webhook restart. A worker lost without one therefore
+    leaves this host refusing **every** dispatch indefinitely. A wrongly
+    permitted deploy is loud and recoverable; a wrongly refused one is
+    neither, and is the failure that was actually reported.
+
+    The flag file is **not** removed here. Its authority expires; it stays on
+    disk as the evidence an operator needs afterwards, and clearing it remains
+    the lifespan hook's job.
+
+    Without ``max_age_s`` the age is ignored entirely, so callers other than
+    the webhook keep today's behaviour. A flag whose mtime cannot be read is
+    treated as present and un-aged: fail closed, never authorise a deploy on
+    the strength of a file we could not read.
     """
-    return (lock_dir / DRAINING_FLAG_NAME).exists()
+    flag = _read_draining_flag(lock_dir)
+    if not flag.present:
+        return False
+    if max_age_s is None or flag.age_s is None or flag.age_s <= max_age_s:
+        return True
+    logger.warning(
+        "Ignoring a .draining flag raised %.0fs ago (budget %.0fs) in %s — "
+        "the self-upgrade worker that raised it is gone. Deploys resume; the "
+        "flag is left in place as evidence. Worker logs: %s",
+        flag.age_s,
+        max_age_s,
+        lock_dir,
+        SELF_UPGRADE_LOG_DIR,
+    )
+    return False
 
 
 def clear_draining_flag(lock_dir: Path) -> None:

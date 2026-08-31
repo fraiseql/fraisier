@@ -47,6 +47,7 @@ passed.
 | `deferred_restarts` | no unit is installed-and-daemon-reloaded while still running its previous version | no | `sudo systemctl restart <unit>` once no deploy is in flight — see [restarts a deploy defers](#restarts-a-deploy-defers) |
 | `sandbox_write_probe` | actually writes into the rendered unit's sandbox under `ProtectSystem=strict` | no | opt-in via `--probe-sandbox`; needs root, else `skip` |
 | `deploy_result_channel` | every installed deploy service runs a fraisier new enough to return a result to `--wait` | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` — see [a deploy socket that cannot answer](#a-deploy-socket-that-cannot-answer) |
+| `refused_dispatch` | no deploy was requested and then dropped by a self-upgrade's 503 | no | `fraisier trigger-deploy <fraise> <env> --branch <branch>` — see [a deploy the self-upgrade swallowed](#a-deploy-the-self-upgrade-swallowed) |
 
 The catalog above is **complete**, and a test asserts it: every name in
 `DOCTOR_CHECKS` appears here and vice versa. It had silently fallen six checks
@@ -156,6 +157,44 @@ a missing file executable.
 If no unit names a fraisier binary, the check reports `skip` and says so, rather
 than `pass`. A scan that matched nothing must not read as a clean bill of
 health.
+
+## A deploy the self-upgrade swallowed
+
+While that worker installs and drains, the webhook raises a `.draining` flag in
+`deployment.lock_dir` and answers new dispatches with HTTP 503 plus a
+`Retry-After`. The back-pressure is correct — a deploy must not start while the
+binary that would run it is being replaced.
+
+What was not correct is that the request then had nowhere to go. No file, no
+row, nothing in `fraisier health` or `deployment-status`; the branch simply
+stayed undeployed and looked like one nobody had pushed. A caller that does not
+special-case 503 records a generic failure, indistinguishable from a deploy that
+started and failed.
+
+`refused_dispatch` reads `<deployment.lock_dir>/.refused-dispatches`, written at
+the moment of the refusal with one entry per `(fraise, environment)` the push
+would have deployed. It is **cleared only when a later deploy for that target
+succeeds** — never on read, never at startup, never by the `Retry-After`
+expiring. Clearing on a restart would mean the upgrade's own restart erased the
+record of what it displaced.
+
+The fix hint is the command that re-fires it, and it says whether the
+`.draining` flag is still up, so you can tell "wait, that is a live upgrade"
+from "that flag is a corpse and these are what it swallowed":
+
+```bash
+fraisier trigger-deploy my_api staging --branch main
+```
+
+A flag left by a killed worker no longer refuses forever. Past
+`webhook.self_upgrade_flag_max_age_s` (default 3600, six times the drain
+timeout) it is **ignored** and deploys resume — the flag file itself is left in
+place as evidence. A wrongly permitted deploy is loud and recoverable; a
+wrongly refused one is neither.
+
+Replaying a dropped dispatch automatically is deliberately not done: it needs
+dedup by ref, a staleness rule, and ordering across environments. This check
+makes the loss visible; re-firing stays a decision.
 
 ## A deploy socket that cannot answer
 

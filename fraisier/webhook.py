@@ -30,12 +30,18 @@ from .git import GitProvider, WebhookEvent, get_provider
 from .locking import (
     clear_draining_flag,
     deployment_lock,
+    draining_flag_age_s,
     is_deployment_locked,
     is_draining,
+)
+from .refused_dispatch_record import (
+    clear_refused_dispatch,
+    record_refused_dispatch,
 )
 from .status import FAILURE_STATES, read_status, reconcile_orphaned_deploys
 from .webhook_rate_limit import check_rate_limit
 from .webhook_self_upgrade import maybe_self_upgrade
+from .worker_logging import SELF_UPGRADE_LOG_DIR
 
 # Configure logging
 logging.basicConfig(
@@ -186,6 +192,29 @@ _RECOVERY_HINTS: dict[str, str] = {
 
 _RETRY_AFTER_DEFAULT_S = 60
 
+#: How long a ``.draining`` flag is believed. Six times the 600s drain timeout,
+#: plus room for the install — generous on purpose, because past it the flag is
+#: *ignored* and a deploy is allowed to start (#365).
+_FLAG_MAX_AGE_DEFAULT_S = 3600
+
+
+def _self_upgrade_flag_max_age_s() -> float:
+    """Single source of truth for how long a ``.draining`` flag counts.
+
+    Reads ``webhook.self_upgrade_flag_max_age_s``. Falls back to the default
+    on any read failure, matching :func:`_retry_after_seconds` — a host that
+    cannot read its own config must still make the call the default makes,
+    not raise inside a request.
+    """
+    try:
+        return float(
+            get_config().webhook.get(
+                "self_upgrade_flag_max_age_s", _FLAG_MAX_AGE_DEFAULT_S
+            )
+        )
+    except (FileNotFoundError, AttributeError, ValueError, TypeError):
+        return _FLAG_MAX_AGE_DEFAULT_S
+
 
 def _retry_after_seconds() -> int:
     """Single source of truth for the draining ``Retry-After`` value.
@@ -251,6 +280,58 @@ def _unavailable(
         content=body,
         headers={"Retry-After": str(retry_after_s)},
     )
+
+
+def _record_refusals(
+    lock_dir: Path,
+    event: WebhookEvent,
+    fraise_configs: list[dict[str, Any]],
+    webhook_id: int,
+) -> None:
+    """Leave a record of every target this refusal dropped (#365).
+
+    Best-effort, and wrapped rather than trusted: ``record_refused_dispatch``
+    already swallows ``OSError`` on the write, but this sits in front of the
+    503 the webhook still has to send, and nothing here may be able to stop
+    it.
+    """
+    try:
+        for fc in fraise_configs:
+            record_refused_dispatch(
+                lock_dir,
+                fraise=fc["fraise_name"],
+                environment=fc["environment"],
+                branch=event.branch or "",
+                commit_sha=event.commit_sha or "",
+                webhook_id=webhook_id,
+            )
+    except Exception:
+        logger.warning("could not record the refused dispatch", exc_info=True)
+
+
+def _discharge_refusal(
+    config: "FraisierConfig", fraise_name: str, environment: str
+) -> None:
+    """Clear this target's refused-dispatch entry after a deploy that landed.
+
+    Only a success calls this. A deploy that ran and failed is a different
+    fact, recorded elsewhere, and does not settle "a request was dropped".
+
+    Best-effort, like its neighbours in that branch: it runs inside a
+    ``BackgroundTask`` where nothing may raise.
+    """
+    lock_dir = _get_lock_dir(config)
+    if lock_dir is None:
+        return
+    try:
+        clear_refused_dispatch(lock_dir, fraise=fraise_name, environment=environment)
+    except Exception:
+        logger.warning(
+            "could not clear the refused dispatch for %s/%s",
+            fraise_name,
+            environment,
+            exc_info=True,
+        )
 
 
 def _is_draining_response(payload: dict[str, Any]) -> bool:
@@ -431,6 +512,7 @@ async def _run_deployment(
                 f"Deployment successful: {fraise_name}/{environment} "
                 f"({result.old_version} -> {result.new_version})"
             )
+            _discharge_refusal(config, fraise_name, environment)
             app_path = fraise_config.get("app_path")
             if app_path:
                 webhook_cfg = config.webhook
@@ -513,6 +595,8 @@ def _draining_response(
     event: WebhookEvent,
     fraise_configs: list[dict[str, Any]],
     webhook_id: int,
+    *,
+    flag_age_s: float | None = None,
 ) -> dict[str, Any]:
     """Build the dispatch response when the host is draining for self-upgrade.
 
@@ -520,6 +604,12 @@ def _draining_response(
     ``generic_webhook`` via ``_is_draining_response``) elevate this to HTTP
     503 + ``Retry-After``. The per-fraise ``retry_after_s`` and the HTTP
     header both read from :func:`_retry_after_seconds`.
+
+    ``flag_age_s`` rides along as ``draining_age_s`` so a caller that logs the
+    body can tell a healthy upgrade from a stuck one. It is the *only* thing
+    this body gained: the response goes to an unauthenticated caller, so no
+    path, version or host detail belongs in it. Omitted when the age is
+    unknown rather than reported as zero.
     """
     retry_after = _retry_after_seconds()
     deployments = [
@@ -529,6 +619,7 @@ def _draining_response(
             "fraise": fc["fraise_name"],
             "environment": fc["environment"],
             "retry_after_s": retry_after,
+            **({} if flag_age_s is None else {"draining_age_s": int(flag_age_s)}),
         }
         for fc in fraise_configs
     ]
@@ -575,12 +666,24 @@ def _dispatch_deployment(
         }
 
     lock_dir = _get_lock_dir(config)
-    if lock_dir is not None and is_draining(lock_dir):
+    if lock_dir is not None and is_draining(
+        lock_dir, max_age_s=_self_upgrade_flag_max_age_s()
+    ):
+        flag_age_s = draining_flag_age_s(lock_dir)
         logger.warning(
-            "Self-upgrade in progress; refusing dispatch for branch %s",
+            "Self-upgrade in progress (flag raised %s ago); refusing dispatch "
+            "for branch %s. Everything after the spawn runs in a detached "
+            "worker whose output goes to %s, not to this journal.",
+            "an unknown time" if flag_age_s is None else f"{flag_age_s:.0f}s",
             event.branch,
+            SELF_UPGRADE_LOG_DIR,
         )
-        return _draining_response(event, fraise_configs, webhook_id)
+        # After the log line, not before: recording touches the filesystem and
+        # the journal should carry the refusal even if that write is what hangs.
+        _record_refusals(lock_dir, event, fraise_configs, webhook_id)
+        return _draining_response(
+            event, fraise_configs, webhook_id, flag_age_s=flag_age_s
+        )
 
     deployments: list[dict[str, Any]] = []
 
