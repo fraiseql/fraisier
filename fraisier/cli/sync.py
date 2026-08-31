@@ -6,7 +6,7 @@ import json
 import os
 import re
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import click
 
@@ -25,6 +25,94 @@ _AUTO_RESOLVED = (
     "fraises.yaml",
     "scripts/generated",
 )
+
+
+class _Resolution(NamedTuple):
+    """One auto-resolution tier: how it prints a file, how it counts a run.
+
+    Every ``message`` names the *outcome* — which branch's content is in the
+    tree now — and only then its reason. A tier that stated its justification
+    in that slot (#364) read, on a 27-file promote, as "your outgoing changes
+    were discarded" and cost a full audit mid-release. A new tier belongs in
+    this block, in this shape.
+    """
+
+    message: str
+    singular: str
+    plural: str
+
+
+_SOURCE_DELETION = _Resolution(
+    "  Auto-resolved (source deletion): {path}",
+    "source deletion",
+    "source deletions",
+)
+_SOURCE_REVERT = _Resolution(
+    "  Auto-resolved (source revert): {path}",
+    "source revert",
+    "source reverts",
+)
+_FRAISIER_OWNED = _Resolution(
+    "  Auto-resolved (took {source}; fraisier-owned): {path}",
+    "fraisier-owned file",
+    "fraisier-owned files",
+)
+_STALE_TARGET = _Resolution(
+    "  Auto-resolved (took {source}; {target} held a stale copy of it): {path}",
+    "stale target copy",
+    "stale target copies",
+)
+_PREFER_SOURCE = _Resolution(
+    "  Auto-resolved (prefer-source): {path}",
+    "by --prefer-source",
+    "by --prefer-source",
+)
+
+#: Summary order. Fixed rather than by count, so two runs of the same promote
+#: read the same way.
+_RESOLUTION_ORDER = (
+    _STALE_TARGET,
+    _FRAISIER_OWNED,
+    _SOURCE_DELETION,
+    _SOURCE_REVERT,
+    _PREFER_SOURCE,
+)
+
+
+class _AutoResolutions:
+    """Per-file lines under --verbose, one counted line by default.
+
+    Tier 1 is recorded here even though it printed nothing before this
+    existed: a count that silently omits a tier is the same class of
+    misleading output as a line that names the wrong side.
+    """
+
+    def __init__(self, *, verbose: bool, source: str, target: str) -> None:
+        self._verbose = verbose
+        self._source = source
+        self._target = target
+        self._counts: dict[_Resolution, int] = {}
+
+    def record(self, kind: _Resolution, path: str) -> None:
+        self._counts[kind] = self._counts.get(kind, 0) + 1
+        if self._verbose:
+            console.print(
+                kind.message.format(source=self._source, target=self._target, path=path)
+            )
+
+    def summarise(self) -> None:
+        total = sum(self._counts.values())
+        if not total or self._verbose:
+            return
+        parts = [
+            f"{n} {kind.singular if n == 1 else kind.plural}"
+            for kind in _RESOLUTION_ORDER
+            if (n := self._counts.get(kind, 0))
+        ]
+        console.print(
+            f"  Auto-resolved {total} file(s): {', '.join(parts)}"
+            "  [dim](--verbose lists them)[/dim]"
+        )
 
 
 def _is_auto_resolved(path: str) -> bool:
@@ -796,6 +884,12 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
 @click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="List every auto-resolved file instead of counting them by category.",
+)
+@click.option(
     "--prefer-source",
     is_flag=True,
     help=(
@@ -812,6 +906,7 @@ def sync_cmd(
     check: bool,
     dry_run: bool,
     yes: bool,
+    verbose: bool,
     prefer_source: bool,
 ) -> None:
     """Promote source → target via an auto-merged sync PR.
@@ -828,6 +923,7 @@ def sync_cmd(
         fraisier sync staging --check      # version diff only, no git ops
         fraisier sync staging --dry-run    # print commands, make no changes
         fraisier sync staging --yes        # skip confirmation prompt
+        fraisier sync staging --verbose    # name every auto-resolved file
         fraisier sync staging --prefer-source  # auto-resolve conflicts from source
     """
     config = require_config(ctx)
@@ -905,19 +1001,21 @@ def sync_cmd(
             check=False,
         )
 
+        resolutions = _AutoResolutions(verbose=verbose, source=source, target=tgt)
+
         # Runs unconditionally because source-side deletions don't show up
         # as `UU` conflicts — `git merge` silently keeps target's copy
         # whether the merge as a whole was clean or had unrelated conflicts.
         # See #235. By running before the conflict loop, surviving
         # source-deleted-target-modified files still flow through tier 1.
         for deleted in _propagate_source_deletions(source, tgt):
-            console.print(f"  Auto-resolved (source deletion): {deleted}")
+            resolutions.record(_SOURCE_DELETION, deleted)
 
         # The other half of #290, and unconditional for the same reason: a
         # source-side revert to base content merges *cleanly* and takes
         # target's stale copy, so it never reaches the conflict loop below.
         for restored in _propagate_source_reverts(source, tgt):
-            console.print(f"  Auto-resolved (source revert): {restored}")
+            resolutions.record(_SOURCE_REVERT, restored)
 
         if merge_result.returncode != 0:
             conflicted = _capture(
@@ -944,7 +1042,7 @@ def sync_cmd(
                 )
                 if not exists_in_source:
                     subprocess.run(["git", "rm", f], capture_output=True, check=False)
-                    console.print(f"  Auto-resolved source deletion: {f}")
+                    resolutions.record(_SOURCE_DELETION, f)
                 elif _is_auto_resolved(f):
                     # Tier 1: fraisier-owned
                     subprocess.run(
@@ -953,6 +1051,7 @@ def sync_cmd(
                         check=False,
                     )
                     subprocess.run(["git", "add", f], capture_output=True, check=False)
+                    resolutions.record(_FRAISIER_OWNED, f)
                 elif _target_blob_is_source_derived(source, tgt, f):
                     # Tier 3: target is holding a stale copy of source's own
                     # content, so taking source's side loses nothing. Asked as
@@ -966,9 +1065,7 @@ def sync_cmd(
                         check=False,
                     )
                     subprocess.run(["git", "add", f], capture_output=True, check=False)
-                    console.print(
-                        f"  Auto-resolved ({tgt} holds source-derived content): {f}"
-                    )
+                    resolutions.record(_STALE_TARGET, f)
                 elif prefer_source or pair.prefer_source:
                     # Tier 4: explicit preference — source wins
                     subprocess.run(
@@ -977,7 +1074,9 @@ def sync_cmd(
                         check=False,
                     )
                     subprocess.run(["git", "add", f], capture_output=True, check=False)
-                    console.print(f"  Auto-resolved (prefer-source): {f}")
+                    resolutions.record(_PREFER_SOURCE, f)
+
+            resolutions.summarise()
 
             remaining = _capture(
                 ["git", "diff", "--name-only", "--diff-filter=U"]
@@ -998,6 +1097,7 @@ def sync_cmd(
                 f"Pre-merge {tgt} into sync branch (auto-resolved fraisier files)"
             )
         else:
+            resolutions.summarise()
             _commit_merge_or_staged(f"Pre-merge {tgt} into sync branch")
 
         _assert_merge_finalized(tgt)
