@@ -7,6 +7,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-08-31
+
+**The behaviour was right in all three; the account of it was not.**
+
+Three open issues, traced to code. In each one fraisier did the correct thing
+and then described it badly enough that the description was the defect:
+[#364](https://github.com/fraiseql/fraisier/issues/364) took the right side of a
+conflict and named the wrong one; [#365](https://github.com/fraiseql/fraisier/issues/365)
+refused a deploy for a genuinely good reason and then dropped the request
+without a trace; [#357](https://github.com/fraiseql/fraisier/issues/357) waited
+for a deploy exactly as asked and then promised a live log stream it had already
+made impossible.
+
+Tracing two of them turned up a further defect each, neither reported.
+
+### Fixed
+
+- **`sync` names which branch's content is in the tree** (#364). Tier 3 printed
+  `Auto-resolved ({target} holds source-derived content)` and then ran
+  `git checkout origin/{source}`. Both halves are true — the target *is* holding
+  a stale copy of source's content, which is exactly what makes taking source
+  safe — but every sibling line in that loop names an outcome (`(source
+  deletion)`, `(source revert)`, `(prefer-source)`) and this one named its
+  justification. On a 27-file promote it read as "27 files of your outgoing
+  changes were discarded" and cost a full audit mid-release.
+
+  It now reads `Auto-resolved (took {source}; {target} held a stale copy of
+  it)`: the outcome first, the evidence as the subordinate clause it always
+  was. `_target_blob_is_source_derived` is **untouched** — same signature, same
+  fail-closed returns, same call sites. The predicate was correct; only the
+  sentence misled.
+
+  Declined on purpose, so it does not look missed: #364's second suggestion asks
+  to reserve "source-derived" for generated artefacts. The predicate does not
+  mean that. It asks whether target's blob appears anywhere in source's history
+  of that path — provenance, not generatedness — and hand-written files matching
+  is the expected case and the safe one.
+
+- **`--follow` shows the deploy's own log window** (#357). `--follow` implies
+  `--wait`; `--wait` drains the socket to EOF; the daemon closes that connection
+  only when the deployment is over. The `os.execvp` into `journalctl -f` sat
+  *after* that EOF, so there was nothing left to follow — and `-f` implies
+  `-n 10`, making the window the last ten lines of an already-exited unit,
+  chosen by wherever the buffer happened to end. On the ~33-minute restore in
+  #356 that is ten lines and then an idle terminal.
+
+  It now runs `journalctl --since @<dispatch timestamp> --no-pager` after
+  reporting the outcome, and on **both** outcomes: a failure is when the logs
+  are most wanted and it showed none. What this gives up is stated in `--help`
+  rather than papered over — it is not live, and the flag now means "show me
+  what just happened". Forking a live follower is the only option that delivers
+  a stream, and it costs two writers on one terminal plus a reap on five exit
+  paths; that is its own design, not a line change.
+
+- **A successful deploy under `--follow` exits 0** (#357, not reported).
+  `execvp` **replaces the process**, so the status the caller received on the
+  success path was journalctl's, not the deployment's — a host without
+  journalctl, or a user who cannot read that unit's journal, turned a successful
+  deploy into a non-zero exit. v0.64.0 fixed the failure direction and could not
+  fix this one, because with an exec there is no "after". Dropping the exec
+  fixes it for free.
+
+### Added
+
+- **A refused dispatch leaves a record** (#365). While a self-upgrade installs
+  and drains, the webhook answers new dispatches with 503 + `Retry-After`. The
+  back-pressure is right. The request being *gone* afterwards was not: no file,
+  no row, nothing in `fraisier health` or `deployment-status` — the branch
+  simply stayed undeployed and looked like one nobody had pushed, and a caller
+  that does not special-case 503 records a generic failure indistinguishable
+  from a deploy that started and failed.
+
+  `<lock_dir>/.refused-dispatches` now holds one entry per
+  `(fraise, environment)` the push would have deployed, and `fraisier doctor`
+  gains a `refused_dispatch` check that warns while any entry stands and names
+  the command that re-fires it. Shaped like `self_upgrade_record` because the
+  requirement is the one #351 settled: **an entry is cleared only when a later
+  deploy for that target succeeds** — never on read, never at startup, never by
+  the `Retry-After` expiring. Clearing on a restart would mean the upgrade's own
+  restart erased the record of what it displaced.
+
+  Not cleared by a *failed* deploy, either: a deploy that ran and failed is a
+  different fact, recorded elsewhere, and does not discharge "a request was
+  dropped".
+
+  Replaying the dropped dispatch automatically is deliberately deferred — it
+  needs dedup by ref, a staleness rule, ordering across environments and a
+  trigger point. The ledger is the input that work would need.
+
+- **The self-upgrade says when it starts and when it ends** (#365). The spawn
+  line is logged in the webhook process, so it reaches the journal; everything
+  after it runs in a detached worker whose output goes to
+  `/var/lib/fraisier/self-upgrade/` and never to the journal. And there was no
+  completion line in *either* sink: `_run_upgrade` logged "requesting restart"
+  and returned, so the last thing anyone saw was an intention, and its other
+  exits said nothing about having ended at all.
+
+  Every one of its nine exits now logs its outcome and elapsed time — pinned
+  structurally, by a test that reads the function, because a tenth exit added
+  later would otherwise return in silence and nothing would notice.
+  `_send_restart`'s result is logged rather than only returned.
+
+  The refusal WARNING carries the flag's age and points at that directory, and
+  the 503 body gains `draining_age_s` beside `retry_after_s`. That age is the
+  single most diagnostic number available at that moment: 40 seconds is a
+  healthy upgrade, six hours is a corpse. It is the *only* thing that body
+  gained — it goes to an unauthenticated caller, so no path, version or host
+  detail belongs in it.
+
+- **`sync --verbose`**, with counts by default. The five auto-resolve lines
+  became one summary — `Auto-resolved 27 file(s): 24 stale target copies, 2
+  fraisier-owned, 1 by --prefer-source` — and the per-file lines moved behind
+  the flag. Tier 1 (fraisier-owned) is counted even though it printed nothing
+  before: a total that silently omits a tier is the same class of misleading
+  output as a line that names the wrong side.
+
+### Changed
+
+- **A `.draining` flag past its budget is ignored** (#365, not reported).
+  `is_draining` was a bare `.exists()` with no age, owner or pid. The context
+  manager unlinks in a `finally`, which covers a clean exit and an exception but
+  not a `SIGKILL` or an OOM kill, and `_clear_stale_drain_flag` only fires when
+  the webhook itself restarts. A worker lost *without* one left that host
+  refusing **every** dispatch indefinitely, with one WARNING line — the same
+  line a healthy refusal produces — as the only evidence.
+
+  Past `webhook.self_upgrade_flag_max_age_s` (new, default **3600**: six times
+  the 600s drain timeout, plus room for the install) the flag loses its
+  authority and deploys resume. The guard is opt-in at the call site, so
+  `drain_restart` and every other caller are unaffected.
+
+  **Failing open here is the deliberate call.** If the budget is wrong, a deploy
+  starts while an upgrade is mid-install — loud and recoverable. The alternative
+  is a host that silently drops every deploy forever, which is neither, and is
+  the failure that was actually reported. The flag file itself is left on disk:
+  only its authority expires, the evidence stays, and clearing it remains the
+  lifespan hook's job. A flag whose `stat()` raises is treated as present and
+  un-aged — fail closed, never authorise a deploy on the strength of a file we
+  could not read.
+
+  Worth recording, because it decides which fix was right: the reporter's own
+  timeline **rules a stuck flag out** for their incident. Environment A finished
+  at `10:28:21`; the refusal for B came at `10:28:50`. That is the spawn, 29
+  seconds earlier, doing exactly what it is supposed to. An upgrade genuinely
+  was in flight and the refusal was correct — only the dropping of the request
+  was not. Finding 3 came out of tracing that, not out of the report.
+
+
 ## [0.65.1] - 2026-08-30
 
 **A cap is a pin, and this one was pinning somebody else.**
