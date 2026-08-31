@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -154,6 +155,41 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
         raise SystemExit(1)
 
 
+def _show_deploy_window(unit_pattern: str, since_ts: float) -> None:
+    """Print the log lines this deployment produced, and only those.
+
+    Not a live stream, and ``--help`` no longer says otherwise. ``--follow``
+    implies ``--wait``, ``--wait`` drains the socket to EOF, and the daemon
+    closes that connection only when the deployment is over — so by the time
+    anything could follow, there is nothing left to follow. What the old
+    ``journalctl -f`` gave instead was ``-n 10``'s default window: the last ten
+    lines of an already-exited unit, chosen by wherever the buffer happened to
+    end. Bounding to ``--since`` the dispatch timestamp is strictly more
+    useful, and honest about being a window.
+
+    Never changes the caller's exit status. That was the second defect on these
+    lines: ``os.execvp`` **replaced the process**, so on success the status the
+    caller received was journalctl's, and a host without journalctl — or a user
+    who cannot read that unit's journal — turned a successful deploy into a
+    non-zero exit. v0.64.0 fixed the failure direction and could not fix this
+    one, because with an exec there is no "after".
+    """
+    try:
+        subprocess.run(
+            [
+                "journalctl",
+                "-u",
+                unit_pattern,
+                "--since",
+                f"@{int(since_ts)}",
+                "--no-pager",
+            ],
+            check=False,
+        )
+    except OSError as exc:
+        console.print(f"[yellow]Note:[/yellow] could not read the deploy's logs: {exc}")
+
+
 @main.command()
 @click.argument("fraise")
 @click.argument("environment")
@@ -174,9 +210,8 @@ def deploy_daemon(ctx: click.Context, project: str) -> None:  # noqa: ARG001
     "--follow",
     is_flag=True,
     help=(
-        "Wait, report the outcome, then stream live service logs via "
-        "journalctl (implies --wait; a failed deploy exits non-zero instead "
-        "of tailing)"
+        "Wait, report the outcome, then print the deploy's own log window "
+        "from journalctl (implies --wait; exits with the deployment's status)"
     ),
 )
 @click.option(
@@ -347,9 +382,8 @@ def trigger_deploy(
                     sock.close()
                     if follow:
                         # socket_stem was derived from deploy_socket_name().
-                        unit_pattern = f"{socket_stem}@*.service"
-                        os.execvp(
-                            "journalctl", ["journalctl", "-u", unit_pattern, "-f"]
+                        _show_deploy_window(
+                            f"{socket_stem}@*.service", request["timestamp"]
                         )
                     raise SystemExit(0)
                 else:
@@ -357,6 +391,12 @@ def trigger_deploy(
                         f"[red]✗[/red] Deployment failed - {result.get('error', '')}"
                     )
                     sock.close()
+                    # Shown on failure too: it is when the logs are most wanted,
+                    # and the exec could never reach here.
+                    if follow:
+                        _show_deploy_window(
+                            f"{socket_stem}@*.service", request["timestamp"]
+                        )
                     raise SystemExit(1)
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 console.print(
