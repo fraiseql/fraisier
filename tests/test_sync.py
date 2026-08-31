@@ -995,9 +995,9 @@ class TestSyncConflicts:
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
             ]
-            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", "--verbose"])
         assert result.exit_code == 0, result.output
-        assert "Auto-resolved source deletion: old_script.py" in result.output
+        assert "Auto-resolved (source deletion): old_script.py" in result.output
 
     def test_non_owned_conflicts_exit_1(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -1062,49 +1062,94 @@ class TestSyncConflicts:
         assert len(deletes) == 1
         assert "fraisier/sync/staging-from-dev" in deletes[0]
 
+    def _tier3_calls(self):
+        """One conflicted file that tier 3 resolves, start to merged PR.
+
+        Extracted because the verbose and default renderings of this same run
+        are two tests, and the ordered ``side_effect`` list below is the kind
+        of fixture that must not be maintained twice.
+        """
+        return [
+            _mk(stdout=""),  # status --porcelain: clean worktree (#268)
+            _mk(stdout="main\n"),
+            _mk(),
+            _mk(stdout=self.SHA + "\n"),
+            _mk(stdout=self.MERGE_BASE + "\n"),
+            _mk(returncode=0, stdout='{"version": "1.1.0"}'),
+            _mk(returncode=0, stdout='{"version": "1.0.0"}'),
+            _mk(),  # git checkout -b
+            _mk(returncode=1),  # git merge (conflict)
+            _no_source_deletions(),  # diff --filter=D pre-pass
+            _no_source_reverts(),  # diff --filter=M pre-pass
+            _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
+            _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
+            # Tier 3 now asks "is staging's blob source-derived?" instead
+            # of "unchanged since merge-base" — the merge-base is
+            # permanently stale under squash promotion (#290).
+            _mk(stdout="blob1\n"),  # rev-parse origin/staging:src/routes.py
+            _mk(stdout="shaA\n"),  # rev-list dev history for the path
+            _mk(stdout="blob1\n"),  # rev-parse shaA:src/routes.py — match
+            _mk(),  # checkout origin/dev -- src/routes.py
+            _mk(),  # git add src/routes.py
+            _mk(stdout=""),  # diff --filter=U (remaining: clean)
+            _in_merge(),  # MERGE_HEAD set
+            _mk(),  # git commit
+            *_merge_finalize_tail(),
+            _mk(returncode=2),  # ls-remote: orphan branch absent
+            _mk(),  # git push
+            _mk(returncode=1),  # gh pr view (no existing PR)
+            _mk(stdout=self.PR_URL + "\n"),  # gh pr create
+            _mk(),  # gh pr merge
+            _mk(),  # git checkout main
+        ]
+
     def test_auto_resolves_target_behind_source(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
         with patch(_PATCH) as m:
-            m.side_effect = [
-                _mk(stdout=""),  # status --porcelain: clean worktree (#268)
-                _mk(stdout="main\n"),
-                _mk(),
-                _mk(stdout=self.SHA + "\n"),
-                _mk(stdout=self.MERGE_BASE + "\n"),
-                _mk(returncode=0, stdout='{"version": "1.1.0"}'),
-                _mk(returncode=0, stdout='{"version": "1.0.0"}'),
-                _mk(),  # git checkout -b
-                _mk(returncode=1),  # git merge (conflict)
-                _no_source_deletions(),  # diff --filter=D pre-pass
-                _no_source_reverts(),  # diff --filter=M pre-pass
-                _mk(stdout="src/routes.py\n"),  # diff --filter=U (first)
-                _mk(returncode=0),  # cat-file origin/dev:src/routes.py (exists)
-                # Tier 3 now asks "is staging's blob source-derived?" instead
-                # of "unchanged since merge-base" — the merge-base is
-                # permanently stale under squash promotion (#290).
-                _mk(stdout="blob1\n"),  # rev-parse origin/staging:src/routes.py
-                _mk(stdout="shaA\n"),  # rev-list dev history for the path
-                _mk(stdout="blob1\n"),  # rev-parse shaA:src/routes.py — match
-                _mk(),  # checkout origin/dev -- src/routes.py
-                _mk(),  # git add src/routes.py
-                _mk(stdout=""),  # diff --filter=U (remaining: clean)
-                _in_merge(),  # MERGE_HEAD set
-                _mk(),  # git commit
-                *_merge_finalize_tail(),
-                _mk(returncode=2),  # ls-remote: orphan branch absent
-                _mk(),  # git push
-                _mk(returncode=1),  # gh pr view (no existing PR)
-                _mk(stdout=self.PR_URL + "\n"),  # gh pr create
-                _mk(),  # gh pr merge
-                _mk(),  # git checkout main
-            ]
-            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+            m.side_effect = self._tier3_calls()
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", "-v"])
         assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
+        # The line must name the branch whose content is now in the tree.
+        # Saying "staging holds source-derived content" was true but answered
+        # a question nobody asked at the moment they read for which side won.
         assert (
-            "Auto-resolved (staging holds source-derived content): src/routes.py"
-            in result.output
+            "Auto-resolved (took dev; staging held a stale copy of it): "
+            "src/routes.py" in result.output
         )
+        assert "staging holds source-derived content" not in result.output
+        # And pin the direction itself, not only how it is described. Without
+        # this the next reword can silently invert the pair and the message
+        # test above would still pass.
+        checkouts = [
+            c[0][0]
+            for c in m.call_args_list
+            if c[0][0][:2] == ["git", "checkout"] and "--" in c[0][0]
+        ]
+        assert checkouts == [["git", "checkout", "origin/dev", "--", "src/routes.py"]]
+
+    def test_default_output_counts_instead_of_listing(self, tmp_path):
+        """Without --verbose the operator gets one counted line, not N lines.
+
+        The per-file lines are the diagnostic; the count is what a 27-file
+        promote actually needs at the top of a release.
+        """
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = self._tier3_calls()
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "Auto-resolved 1 file(s): 1 stale target copy" in result.output
+        assert "src/routes.py" not in result.output
+
+    def test_nothing_auto_resolved_prints_no_summary(self, tmp_path):
+        """A clean promote says nothing, exactly as it does today."""
+        cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
+        with patch(_PATCH) as m:
+            m.side_effect = TestSyncHappyPath()._side_effects()
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "Auto-resolved" not in result.output
 
     def test_prefer_source_flag_resolves_diverged_file(self, tmp_path):
         cfg = _setup(tmp_path, [{"source": "dev", "target": "staging"}])
@@ -1140,7 +1185,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(
-                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+                main, ["-c", cfg, "sync", "--yes", "--verbose", "--prefer-source"]
             )
         assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
@@ -1181,7 +1226,7 @@ class TestSyncConflicts:
                 _mk(),  # gh pr merge
                 _mk(),  # git checkout main
             ]
-            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", "--verbose"])
         assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
         assert "Auto-resolved (prefer-source): src/routes.py" in result.output
@@ -1222,7 +1267,7 @@ class TestSyncConflicts:
                 _mk(),  # git checkout main
             ]
             result = CliRunner().invoke(
-                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+                main, ["-c", cfg, "sync", "--yes", "--verbose", "--prefer-source"]
             )
         assert result.exit_code == 0, result.output
         assert self.PR_URL in result.output
@@ -1724,7 +1769,7 @@ class TestSyncPropagatesSourceDeletions:
         )
         with patch(_PATCH, side_effect=mg):
             result = CliRunner().invoke(
-                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+                main, ["-c", cfg, "sync", "--yes", "--verbose", "--prefer-source"]
             )
         assert result.exit_code == 0, result.output
         assert "Auto-resolved (source deletion): db/legacy.sql" in result.output
@@ -1773,7 +1818,7 @@ class TestSyncPropagatesSourceDeletions:
         )
         with patch(_PATCH, side_effect=mg):
             result = CliRunner().invoke(
-                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+                main, ["-c", cfg, "sync", "--yes", "--verbose", "--prefer-source"]
             )
         assert result.exit_code == 0, result.output
         assert "Auto-resolved (source deletion): db/old.sql" in result.output
@@ -1828,7 +1873,7 @@ class TestSyncPropagatesSourceDeletions:
         )
         with patch(_PATCH, side_effect=mg):
             result = CliRunner().invoke(
-                main, ["-c", cfg, "sync", "--yes", "--prefer-source"]
+                main, ["-c", cfg, "sync", "--yes", "--verbose", "--prefer-source"]
             )
         assert result.exit_code == 0, result.output
         assert (
@@ -1882,7 +1927,7 @@ class TestSyncPropagatesSourceReverts:
             .queue("git", "ls-remote", returncode=2)  # orphan absent
         )
         with patch(_PATCH, side_effect=mg):
-            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", "--verbose"])
         assert result.exit_code == 0, result.output
         assert "Auto-resolved (source revert): app/shared.py" in result.output
         assert mg.was_called(["git", "checkout", "origin/dev", "--", "app/shared.py"])
@@ -1911,7 +1956,7 @@ class TestSyncPropagatesSourceReverts:
             .queue("git", "ls-remote", returncode=2)
         )
         with patch(_PATCH, side_effect=mg):
-            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes"])
+            result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", "--verbose"])
         assert result.exit_code == 0, result.output
         assert "Auto-resolved (source revert): app/hotfix.py" not in result.output
         assert not mg.was_called(
@@ -2564,7 +2609,9 @@ class TestSync268EndToEnd:
         os.chdir(work)
         try:
             with patch(_PATCH, side_effect=gh):
-                result = CliRunner().invoke(main, ["-c", cfg, "sync", "--yes", *flags])
+                result = CliRunner().invoke(
+                    main, ["-c", cfg, "sync", "--yes", "--verbose", *flags]
+                )
         finally:
             os.chdir(cwd)
         return result, gh
