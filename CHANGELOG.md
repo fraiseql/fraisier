@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.66.1] - 2026-09-02
+
+**A cap of ours was holding somebody else's fix.** A dependency ceiling only —
+no fraisier source changes.
+
+### Changed
+
+- **`fraiseql-confiture` `>=0.38.0,<0.46` → `>=0.38.0,<0.47`**, lock at 0.46.0
+  ([#368](https://github.com/fraiseql/fraisier/issues/368)). Third time a
+  fraisier cap has held a downstream project on an old confiture after that
+  project had already raised its own floor: the transitive cap wins, and says
+  nothing while it does. "This project cannot install confiture X" is a
+  fraisier symptom before it is anything else.
+
+  What confiture 0.46.0 changes for us, and what it does not:
+
+  - **Inert here.** The release headline — `migrate validate --idempotent` now
+    reads SQL held in module constants, computed paths and reader helpers, and
+    reports the new `status: "unverified"` instead of a green line for a call it
+    could not read — reaches no fraisier code path, because fraisier never
+    invokes that command. `confiture/core/error_codes.py` is byte-identical to
+    0.45.0, so `EXIT_CODE_SEMANTIC_CLASS` (which `dbops/confiture_contract.py`
+    imports live) and every exit-code classification are unchanged. No preflight
+    file is in the 0.45.0→0.46.0 diff, so the `--against`
+    `{ok,summary,issues[]}` parser and its 0/7 contract still hold.
+    `confiture/exceptions.py` is unchanged, so the v0.65.1 audit of
+    `str(ConfitureError)` propagation stands as written.
+  - **Not inert.** `Migration.execute_file` used to resolve a relative path
+    against the working directory alone; it now tries the migration's own
+    project root first, then the migration's directory, then the cwd. fraisier
+    drives confiture's `Migrator` **in-process and never chdirs**
+    (`strategies/_confiture.py` and `strategies/_core.py` →
+    `dbops/confiture.py`), and the deploy worker unit sets
+    `WorkingDirectory=/home/<deploy_user>`, not the app path. So a consumer
+    migration writing `self.execute_file("db/schema/fn.sql")` raised
+    `FileNotFoundError` on the webhook deploy path and took the deploy down with
+    it, while the scaffolded shell path — `db_deploy.sh` does
+    `cd "${PROJECT_DIR}"` first — ran that same migration without complaint.
+    Under 0.46.0 both paths name the same file. fraisier's own tree has no
+    `execute_file` call, so nothing in this repository's behaviour or suite
+    moves; the fix lands for consumers.
+
+  The cap stays one minor wide rather than moving to `<1.0`. A wide cap is
+  precisely what produced [#262](https://github.com/fraiseql/fraisier/issues/262),
+  and the surfaces that have actually broken us — `Migrator`/`MigratorSession`,
+  the preflight `--against` schema, `DatabaseRestorer`/`RestoreOptions`,
+  `SchemaBuilder`, `Environment` — still carry no fraisier-side contract test.
+  Only the exit-code table does. Widening belongs behind those tests.
+
 ## [0.66.0] - 2026-08-31
 
 **The behaviour was right in all three; the account of it was not.**
