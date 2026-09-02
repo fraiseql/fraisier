@@ -772,14 +772,18 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         admin_url = self.database_config.get("admin_url")
         if admin_url:
             kwargs["admin_url"] = admin_url
+        # The app is the project every strategy migrates in, not just rebuild's.
+        # `_run_strategy` chdirs here too, but `_rollback_database` builds its
+        # own strategy and never did — which is how one deploy's `up()` and
+        # `down()` came to resolve the same relative path differently (#371).
+        if self.app_path:
+            kwargs["project_dir"] = Path(self.app_path)
         if resolved == "rebuild":
             kwargs["required_roles"] = self.database_config.get("required_roles", [])
             kwargs["create_template"] = bool(
                 self.database_config.get("create_template", False)
             )
             kwargs["template_name"] = self.database_config.get("template_name")
-            if self.app_path:
-                kwargs["project_dir"] = Path(self.app_path)
             if self.database_config.get("app_version"):
                 kwargs["app_version"] = self.database_config["app_version"]
         if resolved == "migrate" and self.database_config.get("pre_migrate_dump"):

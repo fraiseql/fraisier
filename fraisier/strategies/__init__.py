@@ -57,6 +57,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         return MigrateStrategy(
             pre_migrate_dump=kwargs.get("pre_migrate_dump"),
             db_name=kwargs.get("db_name", ""),
+            project_dir=kwargs.get("project_dir"),
         )
     if name == "rebuild":
         roles = kwargs.get("required_roles") or []
@@ -103,6 +104,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             admin_url=admin_url,
             service_manager=service_manager,
             service_name=service_name,
+            project_dir=kwargs.get("project_dir"),
         )
     valid = "migrate, rebuild, restore_migrate"
     raise ValueError(f"Unknown strategy '{name}'. Valid: {valid}")

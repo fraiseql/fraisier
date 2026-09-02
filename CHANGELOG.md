@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-09-03
+
+**The migration and its rollback ran in different directories.**
+
+### Fixed
+
+- **Every in-process migration runs in the project it belongs to**
+  ([#371](https://github.com/fraiseql/fraisier/issues/371)). fraisier has two
+  routes that run confiture migrations. The scaffolded shell one does
+  `cd "${PROJECT_DIR}"` first (`db_deploy.sh.j2`). The in-process one held that
+  invariant at exactly one caller, and the callers it missed included the half
+  that runs when a deploy has already gone wrong.
+
+  | in-process path | ran in the project? |
+  |---|---|
+  | `APIDeployer._run_strategy` → `MigrateStrategy.execute` | yes — since #10, when `app_path` is set |
+  | `APIDeployer._rollback_database` → `MigrateStrategy.rollback` | **no** |
+  | `cli/db.py` `db restore` → `RestoreMigrateStrategy.execute` | **no** |
+  | `ConfitureMigrateStrategy.migrate_up` / `.migrate_down` | **no** — it received `project_dir` and ignored it |
+
+  So a migration's `up()` resolved `db/schema/fn.sql` against the app, and the
+  `down()` reversing that same failed deploy resolved it against
+  `/home/<deploy_user>` — the `WorkingDirectory` the deploy unit happens to
+  start in, which is not a decision anyone made about migrations. Same process,
+  same file, two answers.
+
+  The chdir now lives in `dbops/confiture.py`, below every caller, behind an
+  explicit `project_dir` on `migrate_up`, `migrate_down` and `dry_run_execute`.
+  `MigrateStrategy`, `RestoreMigrateStrategy` and `ConfitureMigrateStrategy` all
+  carry it, fed from `app_path`. The invariant holds by construction instead of
+  by a caller remembering.
+
+  **`project_dir` is authoritative** — the directory the shell path changes into,
+  passed by the caller. It is never derived from the config file's parent or the
+  migrations directory's root: a derived anchor is a second source of truth that
+  can disagree with the one the deployer already uses. A caller that names no
+  project changes no directory; nothing is guessed.
+
+  **On concurrency.** `os.chdir` is process-global, so the window takes a
+  reentrant lock — reentrant because `migrate_up(pre_migrate_verify=True)`
+  re-enters through `dry_run_execute`, and a plain `Lock` would deadlock that
+  deploy. The lock serialises fraisier's *own* migrate windows; it cannot make
+  the process cwd safe for unrelated concurrent code, and nothing short of a
+  subprocess could. That is acceptable because nothing runs concurrently with an
+  in-process migrate today — the webhook dispatches deploys as background tasks
+  whose body blocks the event loop for the whole deploy, the deploy daemon's
+  socket unit is `Accept=yes` (one process per connection), the CLI is
+  single-threaded, and the one `ThreadPoolExecutor` in the tree runs subprocesses
+  with an explicit `cwd=`. Each of those is a property a refactor could undo in
+  silence, which is why the window relies on none of them.
+
+### Corrected
+
+- **v0.66.1's changelog said fraisier "drives confiture's `Migrator` in-process
+  and never chdirs".** Traced for this issue, that is not so:
+  `APIDeployer._run_strategy` (`deployers/api.py`) has chdir'd to `app_path`
+  since #10, with a `finally` restore. The webhook deploy's *forward* migrate
+  already ran in the app, and the `execute_file` failure described there could
+  not have occurred on that path with `app_path` configured. The reported symptom
+  was real; the account of which paths produced it was wrong, and the asymmetry
+  it obscured is the more serious defect — a rollback resolving paths differently
+  from the migration it reverses.
+
+### Tests
+
+- `tests/integration/test_migrate_cwd_integration.py` runs a real migration from
+  a foreign working directory, up and down, with negative controls that fail
+  without the fix. The migration reads its SQL with `Path(...).read_text()`,
+  deliberately **not** `Migration.execute_file`: confiture 0.46 resolves
+  `execute_file` against the migration's own project root, so a test written on
+  it would pass whether or not fraisier held the invariant, and would keep
+  passing after a regression. fraisier's own tree has no migration, which is why
+  nothing pinned this before.
 ## [0.66.2] - 2026-09-03
 
 **The ten tests that guard the preflight had never run.** Test and CI plumbing
@@ -1706,7 +1779,6 @@ render time instead of on a production host.
 
   Also: `--server` naming a server no environment declares is now an error
   instead of silently widening to every environment.
-||||||| parent of 0403ec0 (fix(scaffold): give deploy-daemon units the webhook's install-helper routing (#324))
 - **Deploy-daemon units now carry the install-helper socket routing** (#324).
   The scaffolded webhook unit baked in
   `Environment=FRAISIER_INSTALL_SOCKET_<FRAISE>_<ENV>=…`; the deploy-daemon

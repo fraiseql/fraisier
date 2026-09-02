@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,12 +35,69 @@ from fraisier.dbops.confiture_contract import (
 from fraisier.errors import MigrationError as FraisierMigrationError
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Iterator
+
     from confiture import MigrateDownResult, MigrateUpResult
     from confiture.config.environment import Environment
 
 log = logging.getLogger(__name__)
 
 MAX_LOCK_RETRIES = 3
+
+#: Serialises the ``os.chdir`` window below. Reentrant because
+#: ``migrate_up(pre_migrate_verify=True)`` re-enters it through
+#: ``dry_run_execute``; a plain ``Lock`` would deadlock that deploy.
+_PROJECT_CWD_LOCK = threading.RLock()
+
+
+@contextmanager
+def _project_cwd(project_dir: Path | str | None) -> Iterator[None]:
+    """Run the body with *project_dir* as the working directory.
+
+    This is what makes the in-process migrate agree with the scaffolded shell
+    one, which does ``cd "${PROJECT_DIR}"`` before ``confiture migrate``
+    (``db_deploy.sh.j2``). Without it a migration that resolves a path against
+    the cwd — ``Path("db/schema/fn.sql").read_text()``, ``open(...)``, a
+    ``subprocess`` with a relative argument — behaves differently depending on
+    which deploy route ran it. confiture 0.46 resolves ``Migration.execute_file``
+    against the migration's own project root, but that is one construct, and
+    borrowing an upstream resolver is not the same as holding the invariant.
+
+    *project_dir* is the authoritative anchor: the directory the shell path
+    changes into, passed by the caller. It is never derived from the config file
+    or the migrations directory — a derived anchor is a second source of truth
+    that can disagree with the one the deployer already uses. ``None`` means the
+    caller cannot name a project, and then nothing is guessed and nothing moves.
+
+    **On concurrency.** ``os.chdir`` is process-global, so the lock keeps two of
+    fraisier's own migrate windows from interleaving. That is a guarantee about
+    *these* windows, not about the process: unrelated code running concurrently
+    in another thread still sees the changed directory, and no lock can fix that
+    — only running the migration in a subprocess could.
+
+    It is acceptable today because nothing runs concurrently with an in-process
+    migrate: the webhook dispatches deploys as FastAPI background tasks whose
+    body blocks the event loop for the whole deploy, the deploy daemon's socket
+    unit is ``Accept=yes`` (one process per connection), the CLI is
+    single-threaded, and the one ``ThreadPoolExecutor`` in the tree
+    (``ship/pipeline.py``) runs subprocesses with an explicit ``cwd=``. Each of
+    those is a property a refactor could undo without noticing, which is why the
+    window does not rely on any of them.
+    """
+    if project_dir is None:
+        yield
+        return
+
+    with _PROJECT_CWD_LOCK:
+        previous = Path.cwd()
+        # A project directory that does not exist raises here rather than
+        # quietly leaving the cwd alone: a silent no-op is how the two paths
+        # came to disagree in the first place (#371).
+        os.chdir(project_dir)
+        try:
+            yield
+        finally:
+            os.chdir(previous)
 
 
 # ---------------------------------------------------------------------------
@@ -234,18 +294,25 @@ def dry_run_execute(
     *,
     migrations_dir: Path | str = "db/migrations",
     database_url: str | None = None,
+    project_dir: Path | str | None = None,
 ) -> MigrationResult:
     """Run migrations inside a SAVEPOINT, then rollback.
 
     Uses confiture's native ``dry_run_execute`` parameter (v0.8.11+)
     to catch real SQL errors without making permanent changes.
+
+    Runs in *project_dir* when given: a verification that resolved paths
+    differently from the migration it verifies would be worth nothing.
     """
     start = time.monotonic()
 
     try:
         mdir = Path(migrations_dir)
         env = _load_env(config_path, database_url=database_url)
-        with Migrator.from_config(env, migrations_dir=mdir) as m:
+        with (
+            _project_cwd(project_dir),
+            Migrator.from_config(env, migrations_dir=mdir) as m,
+        ):
             if env.migration.view_helpers == "auto":
                 from confiture.core.view_manager import ViewManager
 
@@ -294,6 +361,7 @@ def migrate_up(
     require_reversible: bool = False,
     database_url: str | None = None,
     hooks_config: dict[str, Any] | None = None,
+    project_dir: Path | str | None = None,
 ) -> MigrationResult:
     """Apply pending migrations with lock retry.
 
@@ -305,10 +373,17 @@ def migrate_up(
             catch SQL errors before applying for real.
         require_reversible: When True, abort if any pending migration
             lacks a .down.sql file (confiture v0.8.11+).
+        project_dir: Directory to run the migration in — the same one the
+            scaffolded ``db_deploy.sh`` changes into. Migrations that resolve a
+            path against the working directory then behave identically on both
+            deploy routes (#371). ``None`` leaves the cwd untouched.
     """
     if pre_migrate_verify:  # pragma: no cover
         verify_result = dry_run_execute(
-            config_path, migrations_dir=migrations_dir, database_url=database_url
+            config_path,
+            migrations_dir=migrations_dir,
+            database_url=database_url,
+            project_dir=project_dir,
         )
         if not verify_result.success:
             error_msg = "; ".join(verify_result.errors)
@@ -323,7 +398,10 @@ def migrate_up(
     start = time.monotonic()
     env = _load_env(config_path, database_url=database_url)
 
-    with Migrator.from_config(env, migrations_dir=Path(migrations_dir)) as m:
+    with (
+        _project_cwd(project_dir),
+        Migrator.from_config(env, migrations_dir=Path(migrations_dir)) as m,
+    ):
         # Auto-install view helpers if configured (mirrors confiture CLI behavior).
         if env.migration.view_helpers == "auto":
             from confiture.core.view_manager import ViewManager
@@ -386,12 +464,21 @@ def migrate_down(
     steps: int,
     database_url: str | None = None,
     hooks_config: dict[str, Any] | None = None,
+    project_dir: Path | str | None = None,
 ) -> MigrationResult:
-    """Reverse exactly *steps* migrations.  Best-effort — logs errors."""
+    """Reverse exactly *steps* migrations.  Best-effort — logs errors.
+
+    *project_dir* is the directory to run in, and matters more here than on the
+    way up: the rollback runs when a deploy has already gone wrong, and it used
+    to run from a different directory than the migration it is reversing (#371).
+    """
     start = time.monotonic()
     config = _resolve_config(config_path, database_url)
 
-    with Migrator.from_config(config, migrations_dir=Path(migrations_dir)) as m:
+    with (
+        _project_cwd(project_dir),
+        Migrator.from_config(config, migrations_dir=Path(migrations_dir)) as m,
+    ):
         # Register migration hooks if configured (for rollback operations)
         _register_migration_hooks(m, hooks_config)
         result: MigrateDownResult = m.down(steps=steps)
