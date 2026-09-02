@@ -1,8 +1,10 @@
 """Integration tests for the full migration preflight flow.
 
 Requires:
-  - A local PostgreSQL instance accessible at FRAISIER_TEST_ADMIN_URL
-    (default: postgresql://postgres@localhost/postgres)
+  - A PostgreSQL instance whose role may CREATE/DROP databases, found by the
+    shared harness in ``tests/integration/conftest.py`` (``FRAISIER_TEST_PG_URL``
+    over TCP, or a local unix socket), or named outright by
+    ``FRAISIER_TEST_ADMIN_URL``
   - fraiseql-confiture >= 0.9.4 with `confiture migrate preflight --against` support
   - pg_dump / pg_restore binaries
 
@@ -19,18 +21,38 @@ from pathlib import Path
 import pytest
 
 from fraisier.dbops.preflight import run_migration_preflight
+from tests.integration.conftest import _discover_target, unavailable
 
 # ---------------------------------------------------------------------------
 # Constants and helpers
 # ---------------------------------------------------------------------------
 
-_DEFAULT_ADMIN_URL = "postgresql://postgres@localhost/postgres"
+#: These tests ``CREATE``/``DROP`` a database per fixture, so they connect to
+#: the maintenance database — never to the application database a
+#: ``FRAISIER_TEST_PG_URL`` happens to name.
+_MAINTENANCE_DB = "postgres"
 
 
-def _get_admin_url() -> str:
+def _get_admin_url() -> str | None:
+    """The server these tests may create and drop databases on, or None.
+
+    ``FRAISIER_TEST_ADMIN_URL`` wins when it is set. Otherwise the shared
+    integration harness decides, which is what makes this module reach CI's
+    postgres service over TCP from the ``FRAISIER_TEST_PG_URL`` every workflow
+    already sets.
+
+    This used to default to a passwordless ``postgres@localhost``. No workflow
+    set the variable, the CI container runs as ``fraisier`` with a password, and
+    so every one of the ten tests below skipped on every CI run — quietly —
+    from the day they were written until #370.
+    """
     import os
 
-    return os.environ.get("FRAISIER_TEST_ADMIN_URL", _DEFAULT_ADMIN_URL)
+    explicit = os.environ.get("FRAISIER_TEST_ADMIN_URL")
+    if explicit:
+        return explicit
+    target = _discover_target()
+    return target.dsn(_MAINTENANCE_DB) if target is not None else None
 
 
 def _pg_available(admin_url: str) -> bool:
@@ -81,8 +103,10 @@ def _count_preflight_dbs(admin_url: str) -> int:
 @pytest.fixture(scope="module")
 def admin_url():
     url = _get_admin_url()
+    if url is None:
+        unavailable("no PostgreSQL with createdb privilege is reachable")
     if not _pg_available(url):
-        pytest.skip(f"PostgreSQL not reachable at {url}")  # ty: ignore[too-many-positional-arguments]
+        unavailable(f"PostgreSQL not reachable at {url}")
     return url
 
 
