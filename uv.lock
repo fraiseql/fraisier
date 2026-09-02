@@ -520,7 +520,7 @@ wheels = [
 
 [[package]]
 name = "fraiseql-confiture"
-version = "0.45.0"
+version = "0.46.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -532,23 +532,23 @@ dependencies = [
     { name = "sqlparse" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/9d/f36e79ee7402b8dbf3b337492f2853c7c09c986333b0878f5d46c937360e/fraiseql_confiture-0.45.0.tar.gz", hash = "sha256:8ebb36bc272fa74abbf0e6372f706758830ea20a34c7518c199cbb487a75df49", size = 2390825, upload-time = "2026-08-30T10:24:05.183Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/be/82843d82f503ecb3632adff10f24029d05aa1643e3383ec583b75c99005b/fraiseql_confiture-0.46.0.tar.gz", hash = "sha256:ed7512e5eb9e77916e0939b9013aa31e2df80bf9ed0e6b0cbb64f9b60f0b019b", size = 2438515, upload-time = "2026-09-02T09:43:40.616Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/fe/2550cea52faaaf135f8aecbd7a232d36a677a0e6e404a79a44328fe9080b/fraiseql_confiture-0.45.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:713c09b54834ddfa277e54390a9ba1c4945b99fd7f5e7b3239ffe41f32c20cb9", size = 1135360, upload-time = "2026-08-30T10:23:52.293Z" },
-    { url = "https://files.pythonhosted.org/packages/8e/9a/0bc4aad6a1ae8bec50ad828695a4a3b1b1ed4cbea909ab382c9282754532/fraiseql_confiture-0.45.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:4c00ac2853fe117709ebc6bd02b56be4c90bfdc2fb418b5db5968c2da2def880", size = 1181483, upload-time = "2026-08-30T10:23:53.782Z" },
-    { url = "https://files.pythonhosted.org/packages/22/47/07f1e73cafdae5f1e1501d12e2ea583b2e8df1eb92515451f9483cea8a46/fraiseql_confiture-0.45.0-cp311-cp311-win_amd64.whl", hash = "sha256:d7d67da4d3d59ec341d11a02e87df428e4b228baead3963ec7fe806a9dc74795", size = 1090094, upload-time = "2026-08-30T10:23:54.835Z" },
-    { url = "https://files.pythonhosted.org/packages/49/67/ade0304fb0b6f9c08204a089cb75178488c955e44915a5c5af7600b8515e/fraiseql_confiture-0.45.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c4e3dfa0a578a1a18be55d47a6982d03cfa2b79b842fafcd0fad21ce67c31116", size = 1135035, upload-time = "2026-08-30T10:23:56.162Z" },
-    { url = "https://files.pythonhosted.org/packages/e8/73/442255fb1d8ee33486c471920573869bc69c3243693fd321b613665bfc07/fraiseql_confiture-0.45.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:756bb82b99ba608faceb479379490b23e0c781e03a2313e25f6d79a30334e9f2", size = 1180122, upload-time = "2026-08-30T10:23:57.767Z" },
-    { url = "https://files.pythonhosted.org/packages/ca/ae/cd5830ce5f5bd04ad3e4e7d37f3a5b2672166d6325c6bfc135765ad44b52/fraiseql_confiture-0.45.0-cp312-cp312-win_amd64.whl", hash = "sha256:e9385ba6211df50d5c9621e09f373b79784b74924b823dba990f906d25101366", size = 1090412, upload-time = "2026-08-30T10:23:59.096Z" },
-    { url = "https://files.pythonhosted.org/packages/de/1d/56a69cb108e302b35d5b9cb4ca668c17e869b2a471d28794288591d0fe77/fraiseql_confiture-0.45.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:ede2e17625e90723d6f3cca568b8914d02cee5c4a0c1f56601bfbc1733e91341", size = 1135102, upload-time = "2026-08-30T10:24:00.54Z" },
-    { url = "https://files.pythonhosted.org/packages/ce/c9/e913f266ebb1b48961655a463498970e1dc7f51826f49226bf92ca4ce09d/fraiseql_confiture-0.45.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:476d05d0164a27ea062a8a70d654408fbdc457f012dae1caeb4550931300a907", size = 1179992, upload-time = "2026-08-30T10:24:01.655Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/8c/938f39fb80ba4ec92656718a15150fbe98a1b4c0714e64c91039e185a5e9/fraiseql_confiture-0.45.0-cp313-cp313-win_amd64.whl", hash = "sha256:1a8ba2c570353d2ab7c77306ac9385be8bef8b47aac1c4e32c896a59407c819b", size = 1090365, upload-time = "2026-08-30T10:24:02.765Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/65/e60bf385e000ebc80394d40f17bcfbacbed3dc6658d08614d260fa5ee04b/fraiseql_confiture-0.45.0-cp314-cp314-win_amd64.whl", hash = "sha256:3f37d28ba12e2027c51147a928aaf94fbf4b4ba57ca8e30861e1e8456ed338dd", size = 1090365, upload-time = "2026-08-30T10:24:03.992Z" },
+    { url = "https://files.pythonhosted.org/packages/02/85/29a707bc69e76ea30d10ea3f0def279b5694dc728f08401a5a2bd015f52a/fraiseql_confiture-0.46.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:f85b25d553b9b22ff0e9bf6684ea9a473253f9bcf3422019bf18860888e29b4f", size = 1155224, upload-time = "2026-09-02T09:43:28.445Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/bc/8b13eb367848518c077c7a6f74c7aba9a5d723c7d5e010726bc3b9572768/fraiseql_confiture-0.46.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:726c5d00be7b208d908e7d2993fed0471d09ef78babb9ca2d319c77447fedaba", size = 1201386, upload-time = "2026-09-02T09:43:29.833Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/00/59f8e000563bf53a623cbf750b8ed78aa281a6742cfde579dce54f685d98/fraiseql_confiture-0.46.0-cp311-cp311-win_amd64.whl", hash = "sha256:9c7ae1ad378db3f3b30018dba414539b330abe09d05a9d124e796c5315d99573", size = 1110097, upload-time = "2026-09-02T09:43:30.923Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/5b/a9faf79b84fe5a0c66293652b87c15535c43650c3918adac98f48fc5aef7/fraiseql_confiture-0.46.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:00fb07b23127787c92e5d725367d56917ac697c46002c29449633b8de03a2f55", size = 1154899, upload-time = "2026-09-02T09:43:32.269Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/f3/4c0e0a8f90d93c39655e492618ef418d2e01d23ad1d01949bd766b84300c/fraiseql_confiture-0.46.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:87cf95306a141fe057f58485da60a6b156b1b37837c2102b0df369639f94d3bd", size = 1200028, upload-time = "2026-09-02T09:43:33.374Z" },
+    { url = "https://files.pythonhosted.org/packages/75/28/ee6cf2e85b070ff489737cb409ad806c9fd519ba1c5dc883874d4a7e6efe/fraiseql_confiture-0.46.0-cp312-cp312-win_amd64.whl", hash = "sha256:565f83fb89fb069ff36409a9926e22711448a7243017bed8359327ac40b5f694", size = 1110415, upload-time = "2026-09-02T09:43:34.555Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/48/b107f0d66cce529f06e10f3b7c45f55447a6092488277588173cf8d747c1/fraiseql_confiture-0.46.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:ad17c7da1101085f90dc0d92e273382aeed310c202b9a6efcab8f072c993dafa", size = 1154966, upload-time = "2026-09-02T09:43:35.729Z" },
+    { url = "https://files.pythonhosted.org/packages/83/f6/2dfd003f4fba1df3c6bb426e7a28c646d16ca9a32685bd1992abf05d8c35/fraiseql_confiture-0.46.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:af3b82ba0d27595847363ca0baf024d263d0bb25fb26d5d496197288a388e717", size = 1199896, upload-time = "2026-09-02T09:43:36.851Z" },
+    { url = "https://files.pythonhosted.org/packages/36/55/6027abcfa1d44fa59757c8f697b3a3d9c04877e2b431f1f77804464f78e6/fraiseql_confiture-0.46.0-cp313-cp313-win_amd64.whl", hash = "sha256:a8f63e45905fe355ea1ccfc55e6c63fdac0198711303bf83f9e18dbb2eda6db1", size = 1110369, upload-time = "2026-09-02T09:43:38.061Z" },
+    { url = "https://files.pythonhosted.org/packages/05/09/fb6274a89c8a73913562d4c2a43520384a2132bf58bb26eb237facd01124/fraiseql_confiture-0.46.0-cp314-cp314-win_amd64.whl", hash = "sha256:8a1e17138cba80a8c0d68779779231fe6cf85a72001532844b61ffe76ac25b36", size = 1110367, upload-time = "2026-09-02T09:43:39.354Z" },
 ]
 
 [[package]]
 name = "fraisier"
-version = "0.66.0"
+version = "0.66.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -607,7 +607,7 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'all-databases'", specifier = ">=0.19.0,<1.0" },
     { name = "click", specifier = ">=8.1.0,<9.0" },
     { name = "fastapi", specifier = ">=0.109.0,<1.0" },
-    { name = "fraiseql-confiture", specifier = ">=0.38.0,<0.46" },
+    { name = "fraiseql-confiture", specifier = ">=0.38.0,<0.47" },
     { name = "httpx", specifier = ">=0.27.0,<1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0,<1.0" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0" },
