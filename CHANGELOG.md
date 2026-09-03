@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-09-03
+
+**A half-restored schema was being accepted as a good one.**
+
+### Fixed
+
+- **The migration preflight no longer predicts against a schema that failed to
+  restore** ([#373](https://github.com/fraiseql/fraisier/issues/373)).
+  `PreflightDatabase.restore_schema` ran `psql -f` and trusted the exit code.
+  Measured against a live PostgreSQL: that form **exits 0 when a statement in
+  the file fails**, and carries on executing the rest of the file. So the
+  return-code check passed on a partially restored schema, and the preflight
+  went on to test pending migrations against a database missing objects the
+  real target has.
+
+  Both outcomes were wrong, in opposite directions, and neither said so:
+
+  - a migration that would collide with an object the restore dropped on the
+    floor **passed** preflight, and then failed on the real database after the
+    deploy had already committed to it;
+  - a migration depending on such an object **failed** preflight with an error
+    that read like a migration bug, refusing the deploy for a reason that was
+    not the real one.
+
+  `restore_schema` now reads psql's errors instead of its exit code, and raises
+  when any statement that could have changed the schema failed. The message
+  names the failing line, its SQLSTATE and the server's text.
+
+### Changed
+
+- **A failed statement in the schema restore is now a hard abort, not a
+  degraded result.** This is a deliberate behaviour change and it can bite: a
+  deploy whose backup previously limped through a broken restore will now stop
+  at the preflight instead of proceeding on a wrong prediction. The most likely
+  trigger is a `CREATE EXTENSION` for an extension the preflight server does
+  not have installed.
+
+  Why abort rather than report `unverified`: a preflight's only product is a
+  prediction, and a prediction made against a database that is not the backup
+  is worse than no prediction — it is wrong in both directions and reads as
+  authoritative. `_guard_against_empty_ledger` already refuses rather than
+  degrades for exactly this reason, and the bypass already exists. A new
+  `unverified` state would need every consumer to learn to read it before it
+  protected anyone; a refusal that names the failing statement and points at
+  `--skip-preflight` protects them today.
+
+  To bypass: `fraisier db restore <fraise> <env> --skip-preflight`.
+
+- **Dump-header `SET` statements are exempt, and that is not the same as
+  `ON_ERROR_STOP=1`.** The obvious fix — adding `-v ON_ERROR_STOP=1` — aborts
+  on the *first* error, which would include a header GUC the server does not
+  recognise: `pg_dump` 18 emits `SET transaction_timeout`, which a PostgreSQL
+  16 server rejects, and that is a newer client rather than a broken backup.
+  Refusing those deploys would have been a regression. A session GUC creates,
+  alters and drops nothing, and any consequence of one not taking effect (an
+  unset `search_path`, an unset `check_function_bodies`) surfaces as its own
+  statement failure further down — which is *not* exempt. Nothing else is
+  tolerated. Both halves are pinned by tests against a live server.
+
+- **Schema extraction now passes `--no-comments`.** `COMMENT ON EXTENSION`
+  requires extension ownership and fails for a non-superuser. Comments cannot
+  affect whether a migration applies, so the statements are dropped at
+  extraction rather than allowed to abort a restore. Ownership and grants were
+  already excluded by the existing `--no-owner --no-acl`.
+
+- **The restore asks psql for `VERBOSITY=verbose` and pins messages to C**
+  (`LC_MESSAGES`, `PGOPTIONS=-c lc_messages=C`). Verbose gives every error a
+  SQLSTATE; the severity prefix the scan keys on is emitted in the *server's*
+  `lc_messages`, so without pinning it a non-English server would have made
+  every failure invisible again — the same bug, one layer down.
+
+- **`tests/test_preflight_e2e.py` re-derived a URL helper, and got it wrong.**
+  Its local `_replace_db_in_url` rebuilt the connection URL with `urlunparse`,
+  which collapses `postgresql:///db?host=/run/postgresql` (empty netloc — a
+  Unix socket URL) into `postgresql:/db?…`, which psql rejects. All ten tests
+  errored on a socket-connected local run while passing in CI over TCP —
+  another divergence of the kind [#370](https://github.com/fraiseql/fraisier/issues/370)
+  set out to remove, hidden because CI only ever exercised the TCP path. It now
+  calls `fraisier.dbops._url.replace_db_name`, which production already uses and
+  which repairs the prefix. The duplication *was* the bug, again.
+
+- Removed a stray `|||||||` merge marker left in the v0.56.0 section of this
+  changelog.
+
+### Verified
+
+`FRAISIER_INTEGRATION=1` full suite against a live PostgreSQL: **5466 passed, 1
+skipped** (baseline on `main` before this change: 5445 passed, 1 skipped, **10
+errors** — the socket-URL defect above). The one skip is the deliberate
+deploy-daemon epilog exemption, matching CI. `ruff check`, `ruff format
+--check` and `ty check` all exit 0.
+
+The defect and the fix are both pinned end-to-end against a real server: a
+schema file whose middle statement fails now raises (it did not before — the
+new test fails with `DID NOT RAISE` against the old code), a genuine
+`pg_dump`/`pg_restore` round trip still restores clean, and an unrecognised
+header GUC still does not abort.
+
+
 ## [0.67.0] - 2026-09-03
 
 **The migration and its rollback ran in different directories.**

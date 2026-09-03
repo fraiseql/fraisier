@@ -81,10 +81,17 @@ def _run_psql(url: str, sql: str) -> str:
 
 
 def _replace_db_in_url(admin_url: str, db_name: str) -> str:
-    from urllib.parse import urlparse, urlunparse
+    """Swap the database name, via the same helper production uses.
 
-    parsed = urlparse(admin_url)
-    return urlunparse(parsed._replace(path=f"/{db_name}"))
+    Re-deriving this from ``urlunparse`` is what broke it: that call collapses
+    ``postgresql:///db?host=/run/postgresql`` (empty netloc — a Unix socket URL)
+    into ``postgresql:/db?…``, which psql rejects. ``replace_db_name`` already
+    repairs the prefix, so the socket-connected local run and the TCP CI run
+    take the same path.
+    """
+    from fraisier.dbops._url import replace_db_name
+
+    return replace_db_name(admin_url, db_name)
 
 
 def _count_preflight_dbs(admin_url: str) -> int:
@@ -605,3 +612,95 @@ class TestPreflightE2ECleanup:
 
         after = _count_preflight_dbs(admin_url)
         assert after == before
+
+
+# ---------------------------------------------------------------------------
+# Schema restore fidelity (issue #373)
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaRestoreSurfacesStatementFailures:
+    """A statement failure inside the schema file must not pass as success.
+
+    ``psql -f`` exits 0 when a statement in the file fails and keeps executing
+    the rest, so the preflight used to accept a half-restored schema.
+    """
+
+    def test_failing_middle_statement_is_surfaced(self, admin_url, tmp_path):
+        from fraisier.dbops.preflight import PreflightDatabase
+        from fraisier.errors import DatabaseError
+
+        schema = tmp_path / "half.sql"
+        schema.write_text(
+            "CREATE TABLE before_failure (id int);\n"
+            "CREATE TABLE broken (id int, bad no_such_type_at_all);\n"
+            "CREATE TABLE after_failure (id int);\n"
+        )
+
+        with PreflightDatabase(admin_url=admin_url) as db:
+            with pytest.raises(DatabaseError) as exc:
+                db.restore_schema(schema)
+
+            message = str(exc.value)
+            assert "no_such_type_at_all" in message
+            assert "--skip-preflight" in message
+            # The point of the issue: psql really did report success.
+            assert db.has_table("before_failure")
+            assert not db.has_table("broken")
+
+    def test_a_real_dump_still_restores_clean(self, admin_url, tmp_path):
+        """The guard must not refuse a schema that restores correctly.
+
+        Uses a genuine ``pg_dump``/``pg_restore`` round trip so the dump header
+        (``SET`` GUCs, extensions, comments) is exactly what production feeds
+        the preflight, not a hand-written approximation.
+        """
+        from fraisier.dbops.preflight import PreflightDatabase, extract_schema_only
+
+        db_name = f"fraisier_test_373_{uuid.uuid4().hex[:8]}"
+        _run_psql(admin_url, f"CREATE DATABASE {db_name}")
+        source_url = _replace_db_in_url(admin_url, db_name)
+        try:
+            _run_psql(
+                source_url,
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL);"
+                " CREATE TYPE mood AS ENUM ('ok', 'bad');"
+                " CREATE TABLE notes (id INT, m mood);"
+                " CREATE VIEW v_users AS SELECT id FROM users;"
+                " COMMENT ON TABLE users IS 'commented on purpose';",
+            )
+            backup = tmp_path / "source.dump"
+            subprocess.run(
+                ["pg_dump", source_url, "-Fc", "-f", str(backup)],
+                check=True,
+                capture_output=True,
+            )
+            schema = extract_schema_only(backup, output_dir=tmp_path)
+
+            with PreflightDatabase(admin_url=admin_url) as db:
+                db.restore_schema(schema)  # must not raise
+                assert db.has_table("users")
+                assert db.has_table("notes")
+        finally:
+            _run_psql(admin_url, f"DROP DATABASE IF EXISTS {db_name}")
+
+    def test_unknown_header_guc_does_not_abort(self, admin_url, tmp_path):
+        """Client/server skew in the dump header must not refuse a deploy.
+
+        ``pg_dump`` 18 emits ``SET transaction_timeout`` in every header, which
+        a PostgreSQL 16 server rejects. That is a newer client, not a broken
+        backup — and a plain ``ON_ERROR_STOP=1`` would abort the whole restore
+        on it. Proven live with a GUC no server version knows.
+        """
+        from fraisier.dbops.preflight import PreflightDatabase
+
+        schema = tmp_path / "skewed.sql"
+        schema.write_text(
+            "SET statement_timeout = 0;\n"
+            "SET no_such_guc_any_version = 0;\n"
+            "CREATE TABLE survives (id int);\n"
+        )
+
+        with PreflightDatabase(admin_url=admin_url) as db:
+            db.restore_schema(schema)  # must not raise
+            assert db.has_table("survives")
