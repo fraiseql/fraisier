@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.66.2] - 2026-09-03
+
+**The ten tests that guard the preflight had never run.** Test and CI plumbing
+only — no fraisier source changes.
+
+### Fixed
+
+- **`tests/test_preflight_e2e.py` now executes in CI**
+  ([#370](https://github.com/fraiseql/fraisier/issues/370)). All ten of its tests
+  skipped on every CI run since they were written, including every `publish.yml`
+  run that gated a PyPI upload. They cover the confiture preflight `--against`
+  path — the surface [#262](https://github.com/fraiseql/fraisier/issues/262)
+  broke on, and the one the `fraiseql-confiture` cap exists to protect.
+
+  The module resolved its admin connection from `FRAISIER_TEST_ADMIN_URL`,
+  defaulting to a passwordless `postgres@localhost`. No workflow set that
+  variable, and the CI service container runs as `fraisier` with a password, so
+  the default was refused, `_pg_available()` returned False, and the
+  module-scoped fixture skipped all ten — quietly, under a green check and a
+  healthy-looking passed count.
+
+  Resolution now goes through the shared harness in
+  `tests/integration/conftest.py`, which already answers "is a PostgreSQL with
+  createdb reachable, over socket or TCP" and reads the `FRAISIER_TEST_PG_URL`
+  every workflow already sets. That is one discovery path for the whole
+  integration suite instead of three, and it adds no new workflow variable to
+  forget: the duplication *was* the bug. `FRAISIER_TEST_ADMIN_URL` still
+  overrides when set.
+
+### Changed
+
+- **`FRAISIER_INTEGRATION=1` makes an unreachable database a failure, not a
+  skip.** The variable is a caller saying a database is supposed to be here; a
+  skip then means the harness failed to find what was provided, and it has to be
+  loud. `pg_target` and the preflight `admin_url` fixture both route through the
+  new `unavailable()` helper. Set in all three workflows, which also un-skips the
+  two `test_rebuild_stamp_integration.py` tests that skipped everywhere.
+
+- **The workflows are pinned by a test.** `TestWorkflowsCarryTheHarnessEnv` reads
+  `.github/workflows/*.yml` and fails if a step that runs pytest drops
+  `FRAISIER_TEST_PG_URL` or declares `FRAISIER_INTEGRATION` as anything but `1`.
+  Nothing tied the suite's requirements to the workflows before, which is how a
+  variable the tests read stayed unset in all three at once for months.
+
+  Skip counts, v0.66.1 → here: CI **13 → 1**, the one being the deliberate
+  deploy-daemon epilog exemption. Local and CI skip sets were disjoint, so no
+  single automated run covered everything; now both cover the same set.
+
+### Verified
+
+Full suite against a `postgres:16-alpine` container mirroring CI exactly (TCP
+only, `fraisier` superuser, password auth): **5423 passed, 1 skipped**. The ten
+preflight tests pass there on their first-ever run. Two
+`test_restore_matview_deferral.py` failures seen on that mirror were the local
+host's PostgreSQL 18 client tools against a 16 server — `pg_dump` 18 emits `SET
+transaction_timeout`, which a 16 server rejects — and not a code defect: a
+matched client/server pair passes, and a runner ships 16 clients against the
+16-alpine service.
+
 ## [0.66.1] - 2026-09-02
 
 **A cap of ours was holding somebody else's fix.** A dependency ceiling only —

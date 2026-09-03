@@ -26,7 +26,7 @@ import multiprocessing
 import os
 import shutil
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import quote, unquote, urlparse
 
 import pytest
@@ -144,12 +144,31 @@ def _discover_target() -> PgTarget | None:
     return None
 
 
+def unavailable(reason: str) -> NoReturn:
+    """Skip for *reason* — unless this run declared integration mandatory.
+
+    ``FRAISIER_INTEGRATION=1`` is a caller saying a database is supposed to be
+    here. A skip then does not mean "inapplicable"; it means the harness failed
+    to find what was provided, and that has to be loud. #370 is what a quiet one
+    costs: ten preflight tests skipped on every CI run for months — including
+    the ``publish.yml`` run that gates the PyPI upload — while the checkmark
+    reported a healthy passed count.
+    """
+    if os.getenv("FRAISIER_INTEGRATION") == "1":
+        # ty resolves `pytest.fail` to its deprecated ``(msg, pytrace)``
+        # signature and reads the message as the bool, the same mismatch
+        # `pytest.skip` hits below.
+        loud = f"FRAISIER_INTEGRATION=1 declares a database, but {reason}"
+        pytest.fail(loud)  # ty: ignore[invalid-argument-type]
+    pytest.skip(reason)  # ty: ignore[too-many-positional-arguments]
+
+
 @pytest.fixture
 def pg_target() -> PgTarget:
     """A PostgreSQL server with createdb privilege, or skip."""
     resolved = _discover_target()
     if resolved is None:
-        pytest.skip("no PostgreSQL with createdb privilege is reachable")  # ty: ignore[too-many-positional-arguments]
+        unavailable("no PostgreSQL with createdb privilege is reachable")
     return resolved
 
 

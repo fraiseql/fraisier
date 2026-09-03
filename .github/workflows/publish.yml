@@ -49,7 +49,13 @@ jobs:
 
     - name: Run tests
       env:
+        # The suite skips itself into a green report without this: the ten
+        # preflight e2e tests and the rebuild-stamp integration tests both gate
+        # on a reachable database, and a skip counts as not-a-failure. Setting
+        # it declares one is here, which also turns a harness that cannot find
+        # it into a failure rather than a silent skip (#370).
         FRAISIER_TEST_PG_URL: postgresql://fraisier:fraisier@localhost:5432/fraisier_test
+        FRAISIER_INTEGRATION: '1'
       run: |
         uv run pytest tests/ \
           --cov=fraisier \
