@@ -61,6 +61,9 @@ class TestExtractSchemaOnly:
         assert "--schema-only" in cmd
         assert "--no-owner" in cmd
         assert "--no-acl" in cmd
+        # COMMENT ON EXTENSION needs extension ownership; without this flag a
+        # non-superuser restore fails on it, which is now a hard abort (#373).
+        assert "--no-comments" in cmd
 
     def test_raises_database_error_on_failure(self, tmp_path):
         backup = tmp_path / "bad.dump"
@@ -479,3 +482,173 @@ class TestSuspectedFalsePositive:
         )
         assert result.suspected_false_positive_failures == []
         assert result.false_positive_note is None
+
+
+# ---------------------------------------------------------------------------
+# restore_schema: a failed statement must not pass as success (issue #373)
+# ---------------------------------------------------------------------------
+
+
+class TestRestoreSchemaSurfacesStatementFailures:
+    """``psql -f`` exits 0 when a statement in the file fails.
+
+    Measured against PostgreSQL 18.4 and reported on 16: the process keeps
+    executing the rest of the file and still returns 0, so the return-code
+    check accepts a half-restored schema. The preflight then predicts against
+    a database that does not represent the backup.
+    """
+
+    def _make_db(self) -> PreflightDatabase:
+        db = PreflightDatabase(admin_url="postgresql://admin@localhost/postgres")
+        db.url = "postgresql://admin@localhost/fraisier_preflight_abc"
+        return db
+
+    def _exit_zero_with(self, stderr: str) -> subprocess.CompletedProcess[str]:
+        """psql's real shape for a failed statement: stderr set, exit 0."""
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=stderr
+        )
+
+    def test_failed_statement_raises_despite_exit_zero(self, tmp_path):
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(
+            "CREATE TABLE first_ok (id int);\n"
+            "CREATE TABLE broken (id int, bad no_such_type);\n"
+            "CREATE TABLE after_failure (id int);\n"
+        )
+        stderr = (
+            'psql:schema.sql:2: ERROR:  42704: type "no_such_type" does not exist\n'
+            "LOCATION:  typenameType, parse_type.c:270\n"
+        )
+
+        db = self._make_db()
+        with (
+            patch("subprocess.run", return_value=self._exit_zero_with(stderr)),
+            pytest.raises(DatabaseError, match="Schema restore"),
+        ):
+            db.restore_schema(schema_path)
+
+    def test_error_message_names_the_failing_statement(self, tmp_path):
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text("CREATE TABLE broken (id int, bad no_such_type);\n")
+        stderr = (
+            'psql:schema.sql:1: ERROR:  42704: type "no_such_type" does not exist\n'
+        )
+
+        db = self._make_db()
+        with (
+            patch("subprocess.run", return_value=self._exit_zero_with(stderr)),
+            pytest.raises(DatabaseError) as exc,
+        ):
+            db.restore_schema(schema_path)
+
+        message = str(exc.value)
+        assert "no_such_type" in message
+        assert "--skip-preflight" in message
+
+    def test_inert_header_set_does_not_abort(self, tmp_path):
+        """A dump-header ``SET`` that the server does not know is tolerated.
+
+        ``pg_dump`` 18 emits ``SET transaction_timeout``, which a 16 server
+        rejects. A session GUC creates, alters and drops nothing, and any
+        consequence of one not taking effect surfaces as its own statement
+        failure later — so refusing the deploy over it would be wrong.
+        """
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(
+            "SET statement_timeout = 0;\n"
+            "SET transaction_timeout = 0;\n"
+            "CREATE TABLE fine (id int);\n"
+        )
+        stderr = (
+            "psql:schema.sql:2: ERROR:  42704: unrecognized configuration "
+            'parameter "transaction_timeout"\n'
+        )
+
+        db = self._make_db()
+        with patch("subprocess.run", return_value=self._exit_zero_with(stderr)):
+            db.restore_schema(schema_path)  # must not raise
+
+    def test_inert_set_config_call_does_not_abort(self, tmp_path):
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(
+            "SELECT pg_catalog.set_config('search_path', '', false);\n"
+            "CREATE TABLE fine (id int);\n"
+        )
+        stderr = "psql:schema.sql:1: ERROR:  42704: whatever\n"
+
+        db = self._make_db()
+        with patch("subprocess.run", return_value=self._exit_zero_with(stderr)):
+            db.restore_schema(schema_path)  # must not raise
+
+    def test_one_inert_error_does_not_excuse_a_real_one(self, tmp_path):
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(
+            "SET transaction_timeout = 0;\n"
+            "CREATE TABLE broken (id int, bad no_such_type);\n"
+        )
+        stderr = (
+            "psql:schema.sql:1: ERROR:  42704: unrecognized configuration "
+            'parameter "transaction_timeout"\n'
+            'psql:schema.sql:2: ERROR:  42704: type "no_such_type" does not exist\n'
+        )
+
+        db = self._make_db()
+        with (
+            patch("subprocess.run", return_value=self._exit_zero_with(stderr)),
+            pytest.raises(DatabaseError, match="no_such_type"),
+        ):
+            db.restore_schema(schema_path)
+
+    def test_multi_line_statement_ending_on_the_error_line_is_not_inert(self, tmp_path):
+        """psql reports the line a statement *ends* on, not the one it starts on.
+
+        The tolerated set is recognised by the reported line being a complete,
+        self-contained ``SET``/``set_config`` one-liner. The last line of a
+        multi-line ``CREATE TABLE`` never is, so it stays a hard failure.
+        """
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(
+            "CREATE TABLE spread (\n    id int,\n    bad no_such_type\n);\n"
+        )
+        stderr = (
+            'psql:schema.sql:4: ERROR:  42704: type "no_such_type" does not exist\n'
+        )
+
+        db = self._make_db()
+        with (
+            patch("subprocess.run", return_value=self._exit_zero_with(stderr)),
+            pytest.raises(DatabaseError),
+        ):
+            db.restore_schema(schema_path)
+
+    def test_clean_restore_still_passes(self, tmp_path):
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text("CREATE TABLE fine (id int);\n")
+
+        db = self._make_db()
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=ok):
+            db.restore_schema(schema_path)  # must not raise
+
+    def test_psql_is_invoked_so_errors_are_machine_readable(self, tmp_path):
+        """Verbose gives every error a SQLSTATE; C messages keep the parse valid.
+
+        The severity prefix this parse keys on (``ERROR:``) is localised by the
+        server, so a non-English ``lc_messages`` would otherwise make every
+        failure invisible again — the exact bug, one layer down.
+        """
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text("CREATE TABLE fine (id int);\n")
+
+        db = self._make_db()
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=ok) as mock_run:
+            db.restore_schema(schema_path)
+
+        cmd = mock_run.call_args[0][0]
+        assert "VERBOSITY=verbose" in cmd
+        env = mock_run.call_args.kwargs["env"]
+        assert env is not None
+        assert env["LC_MESSAGES"] == "C"
+        assert "lc_messages=C" in env["PGOPTIONS"]

@@ -69,6 +69,10 @@ def extract_schema_only(
             "--schema-only",
             "--no-owner",
             "--no-acl",
+            # A dump's COMMENT ON EXTENSION needs extension ownership and fails
+            # for a non-superuser. Comments cannot affect whether a migration
+            # applies, so drop them rather than let one abort the restore.
+            "--no-comments",
             "--file",
             str(schema_file),
             str(backup_path),
@@ -122,6 +126,74 @@ def _terminate_preflight_connections(admin_url: str, db_name: str) -> None:
         f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
     )
     _run_admin_sql(admin_url, sql)
+
+
+# ``psql -f`` reports every statement error on stderr as
+# ``psql:<file>:<line>: ERROR:  <sqlstate>: <message>`` (the SQLSTATE is present
+# because the restore asks for ``VERBOSITY=verbose``). The line number is the
+# line the failing statement *ends* on, not the one it starts on.
+_PSQL_ERROR_LINE = re.compile(r"^psql:.+:(?P<line>\d+): ERROR:\s*(?P<detail>.*)$")
+
+# Statements whose failure provably cannot change the restored schema: session
+# GUCs from the dump header. ``pg_dump`` emits each on its own line, so a
+# reported line that is a complete one of these identifies the statement
+# unambiguously — the closing line of a multi-line CREATE never matches.
+_INERT_STATEMENT = re.compile(
+    r"^\s*(?:SET\s|SELECT\s+pg_catalog\.set_config\s*\()", re.IGNORECASE
+)
+
+_RESTORE_SKIP_HINT = (
+    "The preflight database therefore does not represent the backup, and a "
+    "prediction made against it would be wrong in both directions. Fix the "
+    "schema restore, or re-run with --skip-preflight to deploy without the "
+    "check."
+)
+
+
+def _statement_is_inert(schema_lines: list[str], line_number: int) -> bool:
+    """Return ``True`` when the statement reported at *line_number* cannot
+    have changed the schema.
+
+    Tolerated: a dump-header ``SET``/``set_config`` one-liner. A ``pg_dump``
+    18 header carries ``SET transaction_timeout``, which a PostgreSQL 16
+    server rejects; that is client/server skew, not a broken backup. A session
+    GUC creates, alters and drops nothing, and any *consequence* of one not
+    taking effect (an unset ``search_path``, an unset
+    ``check_function_bodies``) surfaces as its own statement failure further
+    down, which is not tolerated.
+
+    The statement is identified by requiring the reported line to be a
+    complete, self-contained statement — ``psql`` reports the line a statement
+    *ends* on, so the final line of a multi-line ``CREATE`` is a fragment
+    (``);``) and never matches.
+    """
+    if not 1 <= line_number <= len(schema_lines):
+        return False
+    line = schema_lines[line_number - 1].strip()
+    return line.endswith(";") and bool(_INERT_STATEMENT.match(line))
+
+
+def _consequential_restore_errors(stderr: str, schema_path: Path) -> list[str]:
+    """Statement errors from a schema restore that leave the schema incomplete.
+
+    ``psql -f`` exits 0 when a statement in the file fails and carries on with
+    the rest, so the return code cannot answer "did the schema restore".  Read
+    the errors instead, and drop the ones proven inert by
+    :func:`_statement_is_inert` (issue #373).
+    """
+    hits = [
+        match
+        for line in stderr.splitlines()
+        if (match := _PSQL_ERROR_LINE.match(line)) is not None
+    ]
+    if not hits:
+        return []
+    schema_lines = schema_path.read_text(errors="replace").splitlines()
+    return [
+        f"line {m['line']}: {m['detail']}"
+        for m in hits
+        if not _statement_is_inert(schema_lines, int(m["line"]))
+    ]
 
 
 @dataclass
@@ -191,35 +263,55 @@ class PreflightDatabase:
     def restore_schema(self, schema_path: Path) -> None:
         """Restore a schema-only SQL file into this preflight database.
 
-        Runs ``psql -f schema_path`` against ``self.url``.
+        Runs ``psql -f schema_path`` against ``self.url`` and then checks that
+        every statement in the file actually applied. ``psql -f`` exits 0 when
+        a statement fails — it carries on with the rest of the file — so the
+        return code alone would accept a half-restored schema and let the
+        preflight predict against a database that is not the backup's.
 
         Args:
             schema_path: Path to the schema SQL file produced by
                 ``extract_schema_only()``.
 
         Raises:
-            DatabaseError: If ``psql`` exits with a non-zero return code.
+            DatabaseError: If ``psql`` cannot run, or if any statement in the
+                file failed (issue #373).
         """
-        from fraisier.dbops.operations import _parse_connection_flags
         from fraisier.errors import DatabaseError
 
-        conn_flags, extra_env = _parse_connection_flags(self.url)
-        parsed = urlparse(self.url)
-        db = parsed.path.lstrip("/")
-        if db:
-            conn_flags = [*conn_flags, "-d", db]
-        run_env = {**os.environ, **extra_env} if extra_env else None
+        conn_flags, run_env = self._conn_flags()
+        env = {**(run_env or os.environ)}
+        # The severity prefix the error scan keys on is emitted in the server's
+        # ``lc_messages``, and psql localises its own; pin both to C so a
+        # French-locale server cannot make every failure invisible again.
+        env["LC_MESSAGES"] = "C"
+        env["LANGUAGE"] = ""
+        env["PGOPTIONS"] = f"{env.get('PGOPTIONS', '')} -c lc_messages=C".strip()
 
         result = subprocess.run(
-            ["psql", *conn_flags, "-f", str(schema_path)],
+            ["psql", *conn_flags, "-v", "VERBOSITY=verbose", "-f", str(schema_path)],
             check=False,
             capture_output=True,
             text=True,
-            env=run_env,
+            env=env,
         )
         if result.returncode != 0:
             raise DatabaseError(
                 f"Schema restore into {self.db_name} failed: {result.stderr}"
+            )
+
+        # psql -f exits 0 even when statements in the file failed, having run
+        # the rest of the file regardless. Without this the preflight accepts a
+        # half-restored schema and predicts against it (issue #373).
+        errors = _consequential_restore_errors(result.stderr, schema_path)
+        if errors:
+            listed = "\n".join(f"  - {e}" for e in errors[:5])
+            more = f"\n  … and {len(errors) - 5} more" if len(errors) > 5 else ""
+            raise DatabaseError(
+                f"Schema restore into {self.db_name} did not complete: "
+                f"{len(errors)} statement(s) failed (psql still exited 0 — it "
+                f"does not stop on statement errors).\n{listed}{more}\n"
+                f"{_RESTORE_SKIP_HINT}"
             )
 
     def _conn_flags(self) -> tuple[list[str], dict[str, str] | None]:
