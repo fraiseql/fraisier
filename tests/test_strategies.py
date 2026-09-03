@@ -65,6 +65,7 @@ class TestMigrateStrategy:
             require_reversible=True,
             database_url=None,
             hooks_config=None,
+            project_dir=None,
         )
 
     @patch("fraisier.strategies._core.preflight")
@@ -110,7 +111,12 @@ class TestMigrateStrategy:
         assert result.success
         assert result.migrations_applied == 2
         mock_down.assert_called_once_with(
-            CONFIG, migrations_dir=MDIR, steps=2, database_url=None, hooks_config=None
+            CONFIG,
+            migrations_dir=MDIR,
+            steps=2,
+            database_url=None,
+            hooks_config=None,
+            project_dir=None,
         )
 
     @patch("fraisier.strategies._core.migrate_down")
@@ -148,6 +154,7 @@ class TestMigrateStrategy:
             require_reversible=True,
             database_url=url,
             hooks_config=None,
+            project_dir=None,
         )
 
     @patch("fraisier.strategies._core.migrate_down")
@@ -162,7 +169,12 @@ class TestMigrateStrategy:
 
         assert result.success
         mock_down.assert_called_once_with(
-            CONFIG, migrations_dir=MDIR, steps=1, database_url=url, hooks_config=None
+            CONFIG,
+            migrations_dir=MDIR,
+            steps=1,
+            database_url=url,
+            hooks_config=None,
+            project_dir=None,
         )
 
     @patch("fraisier.strategies._core.migrate_up")
@@ -181,6 +193,7 @@ class TestMigrateStrategy:
             require_reversible=True,
             database_url=None,
             hooks_config=None,
+            project_dir=None,
         )
 
 
@@ -973,7 +986,11 @@ class TestRestoreMigrateStrategy:
 
         assert result.success
         mock_up.assert_called_once_with(
-            CONFIG, migrations_dir=MDIR, database_url=url, hooks_config=None
+            CONFIG,
+            migrations_dir=MDIR,
+            database_url=url,
+            hooks_config=None,
+            project_dir=None,
         )
 
     @patch("fraisier.strategies._restore.migrate_up")
@@ -1059,7 +1076,12 @@ class TestRestoreMigrateStrategy:
 
         assert result.success
         mock_down.assert_called_once_with(
-            CONFIG, migrations_dir=MDIR, steps=1, database_url=url, hooks_config=None
+            CONFIG,
+            migrations_dir=MDIR,
+            steps=1,
+            database_url=url,
+            hooks_config=None,
+            project_dir=None,
         )
 
     @patch("fraisier.strategies._restore.migrate_down")

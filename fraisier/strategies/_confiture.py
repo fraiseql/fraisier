@@ -136,7 +136,10 @@ class ConfitureMigrateStrategy(MigrationStrategy):
 
             # Run migration
             result = migrate_up(
-                config_path, migrations_dir=migrations_dir, database_url=database_url
+                config_path,
+                migrations_dir=migrations_dir,
+                database_url=database_url,
+                project_dir=project_dir,
             )
 
             return MigrationResult(
@@ -171,6 +174,7 @@ class ConfitureMigrateStrategy(MigrationStrategy):
                 migrations_dir=migrations_dir,
                 steps=steps,
                 database_url=database_url,
+                project_dir=project_dir,
             )
 
             return MigrationResult(

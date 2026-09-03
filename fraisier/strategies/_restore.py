@@ -65,6 +65,7 @@ class RestoreMigrateStrategy(Strategy):
         admin_url: str,
         service_manager=None,
         service_name: str | None = None,
+        project_dir: Path | None = None,
     ) -> None:
         from fraisier.dbops._validation import validate_pg_identifier
 
@@ -77,6 +78,9 @@ class RestoreMigrateStrategy(Strategy):
         self._admin_url = admin_url
         self._service_manager = service_manager
         self._service_name = service_name
+        # The directory the migrate step runs in (#371). ``fraisier db restore``
+        # runs from wherever the operator invoked it, which is not the project.
+        self._project_dir = project_dir
 
     @property
     def _resolved_template_name(self) -> str:
@@ -425,6 +429,7 @@ class RestoreMigrateStrategy(Strategy):
             migrations_dir=migrations_dir,
             database_url=database_url,
             hooks_config=hooks_config,
+            project_dir=self._project_dir,
         )
         migration_secs = time.monotonic() - t_migrate
         log.info(
@@ -587,6 +592,7 @@ class RestoreMigrateStrategy(Strategy):
             steps=steps,
             database_url=database_url,
             hooks_config=hooks_config,
+            project_dir=self._project_dir,
         )
         return StrategyResult(
             success=result.success,

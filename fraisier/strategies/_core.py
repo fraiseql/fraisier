@@ -67,9 +67,14 @@ class MigrateStrategy(Strategy):
         *,
         pre_migrate_dump: dict[str, Any] | None = None,
         db_name: str = "",
+        project_dir: Path | None = None,
     ) -> None:
         self._dump_config = pre_migrate_dump or {}
         self._db_name = db_name
+        # The directory migrations run in — the same one ``db_deploy.sh`` does
+        # ``cd "${PROJECT_DIR}"`` into. Held on the strategy rather than at the
+        # call site so ``execute`` and ``rollback`` cannot drift apart (#371).
+        self._project_dir = project_dir
         if self._dump_enabled:
             if not self._dump_config.get("output_dir"):
                 msg = "pre_migrate_dump.enabled requires pre_migrate_dump.output_dir"
@@ -180,6 +185,7 @@ class MigrateStrategy(Strategy):
             require_reversible=not allow_irreversible,
             database_url=db_url,
             hooks_config=hooks_config,
+            project_dir=self._project_dir,
         )
         return StrategyResult(success=True, migrations_applied=result.steps_applied)
 
@@ -199,6 +205,7 @@ class MigrateStrategy(Strategy):
             steps=steps,
             database_url=db_url,
             hooks_config=hooks_config,
+            project_dir=self._project_dir,
         )
         return StrategyResult(
             success=result.success,

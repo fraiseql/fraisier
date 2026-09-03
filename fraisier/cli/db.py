@@ -712,6 +712,10 @@ def db_restore(
                 admin_url=admin_url,
                 service_manager=svc_mgr,
                 service_name=systemd_service,
+                # This command runs from wherever the operator invoked it, not
+                # from the app. Naming the project makes its migrate step
+                # resolve relative paths the way the deploy path does (#371).
+                project_dir=app_path,
             )
 
             try:
