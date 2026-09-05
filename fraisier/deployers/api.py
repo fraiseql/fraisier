@@ -22,6 +22,35 @@ from .mixins import GitDeployMixin
 
 logger = logging.getLogger("fraisier")
 
+#: Config keys that describe *this deploy run*, not the deployed commit.
+#:
+#: Everything else is re-read from the synced ``fraises.yaml`` once the
+#: checkout has landed (#376); these are held back deliberately:
+#:
+#: * ``fraise_name`` / ``environment`` — the identity the fresh config is
+#:   looked *up* by, so refreshing them would be circular.
+#: * ``app_path`` / ``git_repo`` / ``clone_url`` / ``repos_base`` / ``branch``
+#:   / ``git_commit`` — they describe a checkout that has already happened.
+#:   Moving them mid-deploy would migrate a tree this run never checked out.
+#: * ``deploy_user`` — the identity the unit is already running as; it cannot
+#:   change until the next deploy starts under the regenerated unit.
+#: * ``status_dir`` — this run's status file already lives there, and splitting
+#:   a deploy's status writes across two directories loses the trail.
+RUN_ANCHORED_CONFIG_KEYS = frozenset(
+    {
+        "fraise_name",
+        "environment",
+        "app_path",
+        "git_repo",
+        "clone_url",
+        "repos_base",
+        "branch",
+        "git_commit",
+        "deploy_user",
+        "status_dir",
+    }
+)
+
 
 @dataclass(frozen=True)
 class RestoreOutcome:
@@ -67,6 +96,38 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         super().__init__(config, runner=runner, config_object=config_object)
         self._init_git_deploy(config)
         self.git_repo = config.get("git_repo")
+        self._bind_deploy_settings(config)
+        self._migrations_applied: int = 0
+        self._version_json_snapshotted = False
+        self._version_json_existed = False
+        self._version_json_snapshot: bytes | None = None
+
+    def _bind_deploy_settings(self, config: dict[str, Any]) -> None:
+        """Derive the settings this deploy acts on from *config*.
+
+        Called once at construction and again after the post-checkout sync
+        (#376), so there is one list of what a deploy reads from its config
+        rather than two that can drift apart.
+
+        Deliberately does **not** call :meth:`_init_git_deploy`: that resets
+        ``_previous_sha`` (``mixins.py``), which ``_git_pull`` has already set
+        by the time the refresh runs. Re-running it would destroy the only
+        record of what to roll back to. The git fields it owns are anchored to
+        the run anyway — see :data:`RUN_ANCHORED_CONFIG_KEYS`. ``install`` and
+        ``lock_timeout`` are the exception: ``_init_git_deploy`` also derives
+        them, but they are read *after* the sync, so they are re-derived here.
+
+        Two things a refresh does **not** currently reach, named so the gap is
+        not mistaken for coverage:
+
+        * ``self._dispatcher`` and ``self._hook_runner``, built once from the
+          pre-checkout config by ``_init_notifications``. A deploy that changes
+          its own ``notifications`` or ``hooks`` block still dispatches through
+          the previous one — while ``_run_hooks`` now hands those hooks the
+          refreshed config.
+        * ``timeout``, read at the top of :meth:`execute` because the timeout
+          window has to open before the sync it would be refreshed by.
+        """
         self.systemd_service = config.get("systemd_service")
         hc = config.get("health_check", {})
         self.health_check_url = hc.get("url")
@@ -76,10 +137,79 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.smoke_tests_config = config.get("smoke_tests")
         self.allow_irreversible = config.get("allow_irreversible", False)
         self.lock_timeout = config.get("lock_timeout", 300)
-        self._migrations_applied: int = 0
-        self._version_json_snapshotted = False
-        self._version_json_existed = False
-        self._version_json_snapshot: bytes | None = None
+        install_config = config.get("install", {})
+        self.install_command = install_config.get("command")
+        self.install_user = install_config.get("user")
+
+    def _refresh_config_from_synced_file(self) -> None:
+        """Re-read this deploy's settings from the file the scaffold rendered from.
+
+        Callers build a deployer from a config dict captured *before* the
+        checkout — the webhook reads it when the push arrives, minutes and one
+        commit earlier. ``execute()`` then syncs the deployed commit's
+        ``fraises.yaml`` to :meth:`_opt_config_path` and regenerates the units
+        **from that file**. Without this refresh the units describe the new
+        configuration while the rest of the deploy runs the old one: the
+        reported case installed a new ``pre_migrate_dump.output_dir`` into the
+        unit and wrote the dump to the previous one, in the same run (#376).
+
+        Reading the same path ``_regenerate_scaffold`` renders from is what
+        makes the invariant provable rather than incidental — one file, read by
+        both. ``get_config`` with an explicit path rebuilds the singleton, which
+        is already what ``_scaffold_state_dir`` does during a deploy.
+
+        A refresh that finds nothing keeps the values already held and warns.
+        The pair may legitimately be absent — a CLI run against a config
+        elsewhere, or a test — and today's behaviour *is* the stale read, so
+        keeping it while naming the risk is never worse than not refreshing.
+        """
+        from fraisier.config import get_config
+
+        opt_config = self._opt_config_path()
+        try:
+            fresh = (
+                get_config(opt_config).get_fraise_environment(
+                    self.fraise_name, self.environment
+                )
+                if opt_config.exists()
+                else None
+            )
+        except Exception as e:
+            fresh = None
+            logger.warning(
+                "Could not re-read %s/%s from %s (%s); this deploy continues "
+                "with the configuration captured before the checkout, which "
+                "may not be the one the regenerated units describe.",
+                self.fraise_name,
+                self.environment,
+                opt_config,
+                e,
+            )
+
+        if not fresh:
+            if opt_config.exists():
+                logger.warning(
+                    "%s does not define %s/%s; this deploy continues with the "
+                    "configuration captured before the checkout.",
+                    opt_config,
+                    self.fraise_name,
+                    self.environment,
+                )
+            return
+
+        anchored = {
+            key: value
+            for key, value in self.config.items()
+            if key in RUN_ANCHORED_CONFIG_KEYS
+        }
+        self.config = {**fresh, **anchored}
+        self._bind_deploy_settings(self.config)
+        logger.debug(
+            "Deploy settings re-read from %s for %s/%s",
+            opt_config,
+            self.fraise_name,
+            self.environment,
+        )
 
     def _validate_sandbox_writes(self) -> None:
         """Prove this deploy can write to the trees it is about to change (#325).
@@ -253,7 +383,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         return Path(os.environ.get("FRAISIER_CONFIG") or "/opt/fraisier/fraises.yaml")
 
     def _sync_config_if_needed(self) -> None:
-        """Sync fraises.yaml from git checkout and regenerate scaffold if changed."""
+        """Sync fraises.yaml from git checkout and regenerate scaffold if changed.
+
+        Ends by re-reading this deploy's settings from the file it just synced
+        (#376), so that from here on the deploy and the regenerated units are
+        working from one snapshot rather than two.
+        """
         if not self.app_path:
             return
         opt_config = self._opt_config_path()
@@ -278,6 +413,13 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 logger.info("Scaffold regenerated — config hash updated")
                 self._install_scaffold(config_path=opt_config)
                 logger.info("Scaffold regenerated and installed")
+
+            # Unconditional, and after the regeneration: the units on disk now
+            # describe this file, and so must everything the deploy does next.
+            # Not gated on `_detect_config_changes` — when nothing changed the
+            # rebind is a no-op, and the invariant should not rest on the
+            # change detection being right (#376).
+            self._refresh_config_from_synced_file()
 
     def _version_json_path(self) -> Path | None:
         """Path to the deployed ``version.json``, or None when app_path is unset."""

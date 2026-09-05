@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-09-05
+
+**One deploy was reading two versions of its own config.**
+
+### Fixed
+
+- **A deploy now acts on the same `fraises.yaml` it renders its units from**
+  ([#376](https://github.com/fraiseql/fraisier/issues/376)). `APIDeployer`
+  derived everything in `__init__` from a config dict its caller had captured
+  **before** the checkout — the webhook reads it when the push arrives
+  (`webhook.py`), a commit and minutes earlier. `execute()` then syncs the
+  deployed commit's `fraises.yaml` to the server-side config path and
+  regenerates *and installs* the units from that file (Step 1.5), and carried
+  on reading the pre-checkout dict anyway.
+
+  So the units on disk described the new configuration while the deploy ran the
+  old one. Nothing errored, nothing warned, and `doctor` could not see it: its
+  `pre_migrate_dump_writable` check (#317) compares the on-disk config against
+  the *installed* unit, and by then both hold the new value. The divergence
+  lived in a third place — the dict the deployer was still holding.
+
+  Reported instance, production, in a single deploy: `pre_migrate_dump.output_dir`
+  moved from a 15 GB-free filesystem to one with 81 GB, the installed unit got
+  the new path, and the ~3.5 GB dump went to the old one. The deploy made
+  *because* the old directory was filling `/` filled it once more. This fires
+  exactly once per `output_dir` change — on the first deploy carrying it.
+
+  Two more instances of the same shape, found while tracing rather than
+  reported:
+
+  - **`install.command`.** #279 deliberately re-bakes the install-helper
+    allowlist from the synced file in that same Step 1.5, but the command
+    actually executed (`mixins.py`, Step 2) was still the pre-checkout one.
+  - **The migrations gate.** `execute()` runs migrations `if self.database_config`.
+    A deploy that *added* a `database` block read `{}` and skipped the entire
+    step in silence.
+
+  The deploy now re-reads its settings from the synced file at the end of every
+  config sync, which is the point where the units have just been rendered from
+  it. That is what makes the invariant provable rather than incidental: one
+  file, read by both. It is deliberately not gated on the change detection —
+  when nothing changed the rebind is a no-op, and the guarantee should not rest
+  on `_detect_config_changes` being right.
+
+### Changed
+
+- **Config keys that describe the *run* are held back from the refresh**
+  (`RUN_ANCHORED_CONFIG_KEYS`). `fraise_name`/`environment` are what the fresh
+  config is looked *up* by, so refreshing them would be circular;
+  `app_path`, `git_repo`, `clone_url`, `repos_base`, `branch` and `git_commit`
+  describe a checkout that has already happened, and moving them mid-deploy
+  would migrate a tree this run never checked out; `deploy_user` is the identity
+  the unit is already running as; `status_dir` already holds this run's status
+  file.
+
+  Relatedly, the refresh does **not** re-run `_init_git_deploy`, which resets
+  `_previous_sha` — by then `_git_pull` has set it, and re-running that
+  initializer would destroy the only record of what to roll back to. A test
+  pins this specifically.
+
+- **A refresh that finds nothing keeps the values already held, and warns.**
+  The `(fraise, environment)` pair may legitimately be absent from the file on
+  disk — a CLI run against a config elsewhere, or a test. Aborting would break
+  those, and the stale read is exactly today's behaviour, so keeping it while
+  naming the risk is never worse than not refreshing at all.
+
+- **The pre-migration dump gate names its directory before writing to it.**
+  The effective `output_dir` previously appeared only in the success line —
+  after the dump, which on the reported database meant fifteen minutes and
+  3.5 GB later. An operator watching a deploy that moves the dump directory can
+  now see which one it resolved before the disk takes the hit.
+
+### Known gaps
+
+Named rather than implied, since a refresh that looks total but is not is worse
+than one with a stated edge:
+
+- `notifications` and `hooks` dispatchers are built once from the pre-checkout
+  config, so a deploy that changes its *own* notification or hook configuration
+  still dispatches through the previous one — while the hooks themselves now
+  receive the refreshed config.
+- `timeout` is read at the top of `execute()`, because the timeout window has to
+  open before the sync that would refresh it.
+
+### Removed
+
+- A stray `MagicMock/…` directory, committed in April 2026 by a test that built
+  a lock path out of a mock's `repr` and wrote it into the working tree, along
+  with the `[tool.ty.src]` exclude that existed to hide it. The test that
+  created it has since been fixed; only the artifact remained.
+
 ## [0.68.0] - 2026-09-03
 
 **A half-restored schema was being accepted as a good one.**

@@ -58,7 +58,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.68.0"
+version = "0.69.0"
 
 [project.optional-dependencies]
 all-databases = [
@@ -194,4 +194,4 @@ dev = [
 unresolved-import = "warn"
 
 [tool.ty.src]
-exclude = ["examples/", "MagicMock/"]
+exclude = ["examples/"]
