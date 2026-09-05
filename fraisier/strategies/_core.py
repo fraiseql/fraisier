@@ -111,6 +111,11 @@ class MigrateStrategy(Strategy):
             return None
 
         output_dir = self._dump_config["output_dir"]
+        # Named before the dump, not only in the success line below: that one
+        # arrives after the bytes have landed — fifteen minutes and several GB
+        # later on a large database — which is too late to notice the gate
+        # resolved a directory you did not expect (#376).
+        log.info("pre_migrate_dump: dumping to %s", output_dir)
         min_free_gb = self._dump_config.get("min_free_gb")
         if min_free_gb is not None and not check_disk_space(
             output_dir, required_gb=int(min_free_gb)
