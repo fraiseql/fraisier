@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from fraisier.timeout import (
     DeploymentTimeoutExpired,
-    _interrupt_main_thread,
+    _interrupt_thread,
     deployment_timeout,
 )
 
@@ -80,8 +80,13 @@ class TestDeploymentTimeout:
         assert result == 42
 
 
-class TestInterruptMainThread:
-    """Tests for _interrupt_main_thread return value handling."""
+class TestInterruptThread:
+    """Tests for _interrupt_thread return value handling.
+
+    It targets the thread that entered the timer, not `main_thread()`: a deploy
+    dispatched through the webhook's BackgroundTasks does not run on the main
+    thread, and the exception used to land in uvicorn's event loop (#388).
+    """
 
     def test_logs_warning_when_thread_not_found(self, caplog):
         """Return value 0 means thread not found — should log warning."""
@@ -90,7 +95,7 @@ class TestInterruptMainThread:
             return_value=0,
         ):
             with caplog.at_level(logging.WARNING, logger="fraisier.timeout"):
-                _interrupt_main_thread(None)
+                _interrupt_thread(threading.get_ident(), None)
 
             assert any("thread not found" in r.message.lower() for r in caplog.records)
 
@@ -100,7 +105,7 @@ class TestInterruptMainThread:
             "fraisier.timeout.ctypes.pythonapi.PyThreadState_SetAsyncExc",
         ) as mock_exc:
             mock_exc.return_value = 2
-            _interrupt_main_thread(None)
+            _interrupt_thread(threading.get_ident(), None)
 
             # Second call should undo (pass None as exception type)
             assert mock_exc.call_count == 2

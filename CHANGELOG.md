@@ -48,6 +48,31 @@ self-upgrade dropped.**
 
 ### Fixed
 
+- **`timeout:` reached the wrong thread, and could not end a blocked migration**
+  ([#388](https://github.com/fraiseql/fraisier/issues/388)). Two things #384
+  left standing.
+
+  `deployment_timeout` injected its exception into
+  `threading.main_thread()`. A deploy dispatched through the webhook's
+  `BackgroundTasks` does not run there — so the timeout landed in uvicorn's
+  event loop while the deploy carried on unbounded. The timer now targets the
+  thread that entered the context manager, captured on entry.
+
+  A migration waiting on the database was the one hang the timer could not
+  reach: the wait is inside libpq, and `PyThreadState_SetAsyncExc` raises at the
+  next bytecode boundary. The server can end it instead, and libpq accepts the
+  GUC through the connection string — so the URL fraisier hands confiture now
+  carries `statement_timeout` set to whatever is left of the deploy's budget.
+  A stuck migration is cancelled, its transaction rolls back, and the deploy
+  fails and releases the per-fraise lock instead of holding it indefinitely.
+  `database.statement_timeout` overrides: `false` leaves the connection alone, a
+  number pins that many seconds. Only applies when fraisier supplies the URL,
+  and never outside a deploy, so a CLI migration is unaffected.
+
+  Subprocess steps needed nothing: `LocalRunner.run` has always defaulted to
+  `DEFAULT_EXEC_TIMEOUT`, which is why the issue's option B — killing the
+  deploy's child process group — is not here.
+
 - **A self-upgrade left every root helper running the old code**
   ([#391](https://github.com/fraiseql/fraisier/issues/391)).
   `maybe_self_upgrade` installs a newer fraisier into the deploy user's venv
