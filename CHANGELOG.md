@@ -117,6 +117,17 @@ self-upgrade dropped.**
 
   `db exec`, `db migrate` and `db build` still run unlocked.
 
+### Changed
+
+- **One ruff version across the repo**
+  ([#361](https://github.com/fraiseql/fraisier/pull/361)). The `ruff-pre-commit`
+  rev in `.pre-commit-config.yaml` is the single pin — `quality-gate.yml` and
+  `publish.yml` both read it and `uv pip install ruff==${RUFF_VERSION}` — but
+  `uv.lock` is resolved separately, so the autoupdate moved the hook and CI to
+  a new ruff while a developer's `uv run ruff` stayed on 0.16.1. Both are now
+  on 0.16.6, which is what the resolver picks: pinning the lock to the bot's
+  0.16.5 would have reintroduced the skew from the other side.
+
 ## [0.71.0] - 2026-09-06
 
 **The deploy path stops asking for privileges it cannot get.**
