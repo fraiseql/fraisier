@@ -7,9 +7,10 @@ execution, per-op + overall timeouts, optional marker-file writes.
 See ``fraisier.unit_installer_protocol`` for the wire format. SO_PEERCRED
 enforcement delegates to ``fraisier._peer_creds``.
 
-Phase 4 of bundle A (#240). Consumed by Phase 6's
-``apply_unit_diffs_via_helper`` client; lifecycle managed by Phase 5's
-renderer (``fraisier-<project>-<env>-unit-installer.{socket,service}``).
+The daemon half of the unit-installer helper (#240). Consumed by the
+``apply_unit_diffs_via_helper`` client in ``fraisier.scheduled_install``;
+lifecycle managed by the scaffold renderer
+(``fraisier-<project>-<env>-unit-installer.{socket,service}``).
 """
 
 from __future__ import annotations
@@ -258,7 +259,7 @@ def _execute_post_action(action: PostAction, *, resolved: ResolvedAllowlist) -> 
 
     The helper does NOT raise on systemctl non-zero — that's a deployment
     issue surfaced in the response, not a manifest-validation issue. The
-    caller (Phase 6 client) decides whether to retry or surface.
+    calling client decides whether to retry or surface.
 
     Security gate: ``disable_now`` and ``stop`` are only allowed against units
     that have a fraisier-managed marker present in one of the snapshotted
@@ -554,10 +555,10 @@ def _serve_connection(
     _handle_manifest(conn, allowlist=allowlist, resolved=resolved, lock_path=lock_path)
 
 
-def main() -> None:  # pragma: no cover — exercised end-to-end in Phase 8 smoke
+def main() -> None:  # pragma: no cover — exercised end-to-end by the smoke test
     """Entry point for ``fraisier-unit-installer``.
 
-    Argv shape (set by Phase 5's renderer)::
+    Argv shape (set by the scaffold renderer)::
 
         fraisier-unit-installer --deploy-user <name> \\
             --allow <src_prefix>:<dest_prefix> [--allow ...]

@@ -130,8 +130,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
 
                 self._install_dependencies()
 
-            # #240 follow-up 01 Phase 2 — auto-install scheduled unit files
-            # via the unit-installer helper before daemon-reload. Skipped if
+            # Auto-install scheduled unit files via the unit-installer
+            # helper before daemon-reload (#240). Skipped if
             # the host is pre-v0.29 (no socket) UNLESS the operator explicitly
             # opted out via FRAISIER_DISABLE_WEBHOOK_AUTO_INSTALL=1.
             self._auto_install_scheduled_units_if_applicable()

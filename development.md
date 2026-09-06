@@ -172,6 +172,32 @@ against a 16 server emits `SET transaction_timeout`, a GUC 16 does not have, so
 fallback matches the versions for you; `docker run … postgres:16-alpine` does
 not.
 
+### Stub the boundary, not the defect
+
+A stub may stand in for a *thing* — a process, a socket, a database. It may not
+return a shape the real thing cannot produce. Twice now a test agreed with a
+mock about a shape production never has, and the defect it was meant to cover
+shipped:
+
+- `tests/test_deployers.py` stubbed the command runner to return
+  `returncode=1` *without raising*. `LocalRunner` runs with `check=True`, so it
+  raises before any caller can look at a return code — the stderr diagnostic
+  the test was proving had no reachable path in production (#381).
+- `dbops/restore.py` tests stubbed `_pg_cmd` to return `(0, "", "")` for a
+  statement `psql` cannot parse. `restore.target_owner` had never worked; a
+  real `psql -c` refuses `REASSIGN OWNED BY :"owner"`, because `-c` does not
+  bind variables (#380).
+
+Two rules follow:
+
+1. **A stub's shape is the real boundary's shape.** If the runner raises on
+   non-zero, so does the stub. If the socket can time out, the fake socket has
+   `settimeout`.
+2. **When a test asserts on an argv, a second test executes it.** Assert the
+   command *is* what you think, and separately that the thing you built
+   actually runs — against a real `LocalRunner` with a fake executable, or
+   under `tests/integration/` against a real server.
+
 ### Code Quality
 
 ```bash

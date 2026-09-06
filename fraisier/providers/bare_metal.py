@@ -66,7 +66,7 @@ class BareMetalProvider(DeploymentProvider):
         # provider routes through fraisier.ssh, which carries the full
         # defensive flag set (BatchMode, ConnectTimeout, AddressFamily,
         # StrictHostKeyChecking, -n) by construction. This closes LB-4 from
-        # the Phase 1 inventory.
+        # the SSH hardening inventory.
         self._target = ssh.SshTarget(
             host=self.host,
             user=self.username,
@@ -86,8 +86,8 @@ class BareMetalProvider(DeploymentProvider):
 
         Routes through ``fraisier.ssh.short_cmd`` so the defensive flag set
         (BatchMode, ConnectTimeout, AddressFamily, StrictHostKeyChecking,
-        ``-n``) is applied by construction — closing LB-4 from the Phase 1
-        inventory.
+        ``-n``) is applied by construction — closing LB-4 from the SSH
+        hardening inventory.
 
         Args:
             command: Command to execute on the remote host

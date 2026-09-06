@@ -45,14 +45,14 @@ _VALID_ON_DRIFT = frozenset({"fail", "overwrite", "skip"})
 
 @dataclass(frozen=True)
 class AutoInstallPolicy:
-    """#240 follow-up 01 Phase 1 — webhook-driven install drift policy.
+    """Webhook-driven install drift policy (#240).
 
     Lives under ``fraises.yaml`` →
     ``fraises.<name>.environments.<env>.scheduled.auto_install``.
-    Drives the per-deploy decision made by ``ScheduledDeployer`` (Phase 2)
-    when reconciling source vs dest unit content.
+    Drives the per-deploy decision made by ``ScheduledDeployer`` when
+    reconciling source vs dest unit content.
 
-    Defaults (locked Phase 0):
+    Defaults:
     - ``on_missing="install"``: webhook copies new units from the deploy
       worktree into /etc/systemd/system/. The whole point of bundle A.
     - ``on_drift="fail"``: webhook aborts on drift between source and dest.
@@ -102,8 +102,8 @@ def parse_auto_install_policy(env_config: dict[str, Any]) -> AutoInstallPolicy:
 class WebhookInstallReport:
     """Outcome of one ``auto_install_scheduled_units`` call.
 
-    Phase 2 of #240's follow-up 01 — consumed by ``ScheduledDeployer`` to
-    populate ``deploy_event`` fields:
+    Consumed by ``ScheduledDeployer`` to populate ``deploy_event`` fields
+    (#240):
     - ``installed`` — units written this deploy
     - ``drift_overwrites`` — units whose dest differed from source and were
       replaced under ``on_drift="overwrite"``. Empty under ``on_drift="fail"``
@@ -120,7 +120,7 @@ class WebhookInstallReport:
 
 
 # Retry budget for "busy" responses from the unit-installer helper.
-# Locked Phase 0: 3 retries with 1s/3s/10s backoff = total wait < 30s.
+# 3 retries with 1s/3s/10s backoff = total wait < 30s.
 _WEBHOOK_BUSY_RETRY_DELAYS = (1.0, 3.0, 10.0)
 
 
@@ -247,7 +247,7 @@ def _apply_with_busy_retry(
     config_path: Path,
     sleep: Any,
 ) -> tuple[ApplyReport, int]:
-    """Call ``apply_unit_diffs_via_helper`` with the Phase 0 busy retry budget.
+    """Call ``apply_unit_diffs_via_helper`` with the busy retry budget.
 
     Returns ``(report, retried_count)``. Raises on exhausted retry budget.
     """
@@ -292,7 +292,7 @@ class ScheduledUnitInstall:
     is_timer: bool
     source_path: Path
     dest_path: Path
-    app_path: Path  # consumer's app_path; Phase 03 uses it for source-containment check
+    app_path: Path  # consumer's app_path; used for the source-containment check
 
 
 class UnitState(StrEnum):
@@ -390,7 +390,7 @@ class ApplyReport:
     """Summary of what ``apply_unit_diffs`` actually did during one call.
 
     ``rejected_reason``, ``busy``, ``timed_out`` are populated by
-    ``apply_unit_diffs_via_helper`` (#240 Phase 6); the direct apply path
+    ``apply_unit_diffs_via_helper`` (#240); the direct apply path
     leaves them at their defaults.
     """
 
@@ -529,7 +529,7 @@ def apply_unit_diffs(
 
 
 # ---------------------------------------------------------------------------
-# #240 Phase 6 — apply_unit_diffs_via_helper (client for unit-installer socket)
+# apply_unit_diffs_via_helper — client for the unit-installer socket (#240)
 # ---------------------------------------------------------------------------
 
 
@@ -648,8 +648,8 @@ def _build_helper_manifest(
 
     - ``ABSENT`` + (``DRIFTED`` with ``force``) → ``InstallFileOp``.
     - ``IDENTICAL`` with marker missing on disk → ``WriteMarkerOp``
-      (auto-backfill migration for v0.28.0-installed units; Phase 0
-      decision #2 of #240 follow-up 04). Idempotent on re-run: once the
+      (auto-backfill migration for v0.28.0-installed units, #240).
+      Idempotent on re-run: once the
       marker exists no op is emitted for that diff.
     - All other ``IDENTICAL`` → skipped, no round-trip.
 
@@ -799,7 +799,7 @@ def _build_apply_report(response: dict, diffs: list[UnitDiff]) -> ApplyReport:
 
 
 # ---------------------------------------------------------------------------
-# #240 follow-up 04 Phase 1 — marker convention (read helpers)
+# Marker convention — read helpers (#240)
 # ---------------------------------------------------------------------------
 
 
@@ -881,7 +881,7 @@ def read_marker(marker_path: Path) -> MarkerMeta:
 
 
 # ---------------------------------------------------------------------------
-# #240 follow-up 04 Phase 3 — prune_orphans planner (pure)
+# prune_orphans planner, pure (#240)
 # ---------------------------------------------------------------------------
 
 

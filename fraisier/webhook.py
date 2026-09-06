@@ -623,11 +623,28 @@ async def _run_deployment(
 
 
 def _get_lock_dir(config: "FraisierConfig") -> Path | None:
-    """Extract lock directory from config."""
+    """Extract lock directory from config, or None when it is unusable.
+
+    A relative ``deployment.lock_dir`` is a misconfiguration: the lock file
+    would land wherever the process happens to be, and no two processes would
+    agree on where it is. The webhook treats it as unresolvable — the same as
+    an absent one — and carries on with the checks it can still make. The
+    deploy itself fails loudly when it tries to take the lock, which is the
+    moment the answer actually matters.
+    """
     try:
-        return Path(config.deployment.lock_dir)
+        lock_dir = Path(config.deployment.lock_dir)
     except (AttributeError, FileNotFoundError):
         return None
+    if not lock_dir.is_absolute():
+        logger.error(
+            "deployment.lock_dir is %r, which is not an absolute path. "
+            "Deploy-concurrency and drain checks are being skipped; the next "
+            "deploy will refuse to start until this is fixed.",
+            str(lock_dir),
+        )
+        return None
+    return lock_dir
 
 
 def _build_estimate(

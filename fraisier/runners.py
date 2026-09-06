@@ -95,7 +95,7 @@ class SSHRunner:
         # routes through fraisier.ssh, which carries the full defensive
         # flag set (BatchMode, ConnectTimeout, AddressFamily,
         # StrictHostKeyChecking, -n) by construction. This closes
-        # LB-1/LB-2/LB-3/LB-5 from the Phase 1 inventory.
+        # LB-1/LB-2/LB-3/LB-5 from the SSH hardening inventory.
         self._target = ssh.SshTarget(
             host=host,
             user=user,
@@ -185,7 +185,7 @@ class SSHRunner:
 
         Routes the SSH leg through ``ssh.data_pipe`` so the defensive flag
         set (BatchMode, ConnectTimeout, AddressFamily, StrictHostKeyChecking)
-        is applied — closing LB-5 from the Phase 1 inventory. ``-n`` is
+        is applied — closing LB-5 from the SSH hardening inventory. ``-n`` is
         deliberately omitted by ``data_pipe`` because the tar stream rides
         on ssh's stdin.
         """

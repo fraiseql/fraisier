@@ -1,12 +1,12 @@
 """Wire protocol for the ``fraisier-unit-installer`` socket helper.
 
 Pure parse + serialize + validate. No mutating IO. Imported by both sides of
-the socket — the helper daemon (02 Phase 4) and the
-``apply_unit_diffs_via_helper`` client (02 Phase 6).
+the socket — the helper daemon in ``fraisier.unit_installer_helper`` and the
+``apply_unit_diffs_via_helper`` client in ``fraisier.scheduled_install``.
 
 Wire format: one JSON object terminated by ``\\n`` carrying ``version``,
 ``deploy_id``, ``operations``, and ``post_actions``. Envelope ships
-``version: 1`` from day one (locked Phase 0 decision).
+``version: 1`` from day one.
 
 Note on ``Path.resolve``: ``validate_manifest`` calls ``Path.resolve(strict=True)``
 on source/dest-parent paths to defeat symlink-escape. That reads symlink
@@ -50,7 +50,7 @@ class ManifestRejected(Exception):
 class MarkerMeta:
     """Sidecar marker payload — advisory, not authenticated.
 
-    Phase 04 of bundle A consumes these via ``prune_orphans`` to identify
+    ``prune_orphans`` consumes these to identify
     fraisier-managed units. ``fraises_yaml_path`` MUST be absolute (typically
     the caller's ``Path.resolve(strict=True)`` output) so prune planners
     started from different working directories converge on the same identity.
@@ -114,7 +114,7 @@ class DisableNowAction:
     """``systemctl disable --now <unit>`` post-action (prune path).
 
     Validator does NOT constrain ``unit`` against the same manifest's
-    install_file basenames — the helper's runtime layer (Phase 4) checks
+    install_file basenames — the helper daemon checks
     marker-presence on disk before executing.
     """
 

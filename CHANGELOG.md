@@ -113,6 +113,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowlist and restart the helper. Until then a scheduled deploy fails at the
   timer with a message naming exactly that.
 
+- **`deployment.lock_dir` must be an absolute path.** `file_deployment_lock`
+  and `is_deployment_locked` now refuse a relative one instead of `mkdir`-ing
+  it against the process's working directory, where no other process would
+  look for it. A relative value was never meaningful — the deploy user's cwd on
+  a server is its home directory — and it is how a `MagicMock.__fspath__`
+  string once became a committed directory tree in this repository.
+
 - **`ServiceManager.enable(name)` is part of the interface.** `SystemdServiceManager`
   implements it via `systemctl enable`; `RcServiceManager` via
   `sysrc <name>_enable=YES`, stripping any systemd unit suffix, since rc.d has

@@ -33,6 +33,25 @@ DEFAULT_LOCK_DIR = Path("/run/fraisier")
 DRAINING_FLAG_NAME = ".draining"
 
 
+def _require_absolute_lock_dir(lock_dir: Path) -> Path:
+    """Refuse a lock directory that is not absolute.
+
+    A relative ``deployment.lock_dir`` was never meaningful: the lock file
+    would land wherever the process happened to be, and no other process would
+    look there. It is also how a ``MagicMock.__fspath__`` string once became a
+    committed directory tree in this repository — the lock helpers ``mkdir``
+    and ``open("w")`` whatever they are given.
+    """
+    if not lock_dir.is_absolute():
+        raise ValueError(
+            f"deployment.lock_dir must be an absolute path, got {str(lock_dir)!r}. "
+            "A relative lock directory resolves against the deploy process's "
+            "working directory, so no two processes would agree on where the "
+            "lock is."
+        )
+    return lock_dir
+
+
 @contextmanager
 def file_deployment_lock(
     fraise_name: str,
@@ -52,9 +71,11 @@ def file_deployment_lock(
 
     Raises:
         DeploymentLockError: If the lock is already held by another process
+        ValueError: If *lock_dir* is not an absolute path
     """
     if lock_dir is None:
         lock_dir = DEFAULT_LOCK_DIR
+    _require_absolute_lock_dir(lock_dir)
 
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / f"{fraise_name}.lock"
@@ -91,9 +112,13 @@ def is_deployment_locked(
 
     Returns:
         True if a deployment is currently locked, False otherwise
+
+    Raises:
+        ValueError: If *lock_dir* is not an absolute path
     """
     if lock_dir is None:
         lock_dir = DEFAULT_LOCK_DIR
+    _require_absolute_lock_dir(lock_dir)
 
     # Open (or create) the lock file and attempt a non-blocking exclusive
     # flock.  No exists() pre-check: that would introduce a TOCTOU window
