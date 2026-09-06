@@ -16,6 +16,10 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fraisier.status import DEFAULT_STATUS_DIR
+
+from .mixins import StatusRecordMixin
+
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Iterator
 
@@ -186,7 +190,7 @@ class DeploymentResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
-class BaseDeployer(ABC):
+class BaseDeployer(StatusRecordMixin, ABC):
     """Abstract base class for fraise deployers.
 
     Each fraise type (api, etl, scheduled, backup) has its own deployer
@@ -214,6 +218,9 @@ class BaseDeployer(ABC):
         self.fraise_name = config.get("fraise_name", "unknown")
         self.environment = config.get("environment", "unknown")
         self.runner = runner or LocalRunner()
+        # Every deployer owns its record — including the ones that do not use
+        # the git deploy flow. Nothing else writes it (#378).
+        self.status_dir = Path(config.get("status_dir", str(DEFAULT_STATUS_DIR)))
 
     @abstractmethod
     def get_current_version(self) -> str | None:

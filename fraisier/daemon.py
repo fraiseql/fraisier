@@ -10,11 +10,14 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fraisier.config import CONFIG_SEARCH_LOCATIONS, get_config
 from fraisier.errors import DeploymentLockError
 from fraisier.logging import get_contextual_logger
+
+if TYPE_CHECKING:
+    from fraisier.deployers.base import BaseDeployer
 
 logger = get_contextual_logger("fraisier.daemon")
 
@@ -169,9 +172,6 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
             fraise_type: str = fraise_config.get("type") or ""
             deployer = _get_deployer(fraise_type, fraise_config)
 
-            if deployer is None:
-                raise ValueError(f"Unknown fraise type '{fraise_config.get('type')}'")
-
             # Check if deployment is needed
             force = request.options.get("force", False)
             if not force and not deployer.is_deployment_needed():
@@ -216,9 +216,6 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
         # Get deployer (reuse existing logic)
         fraise_type_str: str = fraise_config.get("type") or ""
         deployer = _get_deployer(fraise_type_str, fraise_config)
-
-        if deployer is None:
-            raise ValueError(f"Unknown fraise type '{fraise_config.get('type')}'")
 
         # Check if deployment is needed
         force = request.options.get("force", False)
@@ -373,36 +370,13 @@ def _format_project_not_found_error(config, project: str) -> str:
     return "\n".join(lines)
 
 
-def _get_deployer(fraise_type: str, fraise_config: dict):
-    """Get appropriate deployer for fraise type.
+def _get_deployer(fraise_type: str, fraise_config: dict) -> BaseDeployer:
+    """Build the deployer for *fraise_type* through the shared registry.
 
-    Extracted from cli/_helpers.py for reuse in daemon.
+    Always a local runner: the daemon process runs on the target host, so the
+    ``ssh:`` block — which is for client-side CLI commands — must not apply.
     """
-    # Always use a local runner: the daemon process runs on the target host,
-    # so the ssh: block (intended for client-side CLI commands) must not be
-    # applied here.
+    from fraisier.deployers.registry import build_deployer
     from fraisier.runners import LocalRunner
 
-    runner = LocalRunner()
-
-    if fraise_type == "api":
-        from fraisier.deployers.api import APIDeployer
-
-        return APIDeployer(fraise_config, runner=runner)
-
-    elif fraise_type == "etl":
-        from fraisier.deployers.etl import ETLDeployer
-
-        return ETLDeployer(fraise_config, runner=runner)
-
-    elif fraise_type in ("scheduled", "backup"):
-        from fraisier.deployers.scheduled import ScheduledDeployer
-
-        return ScheduledDeployer(fraise_config, runner=runner)
-
-    elif fraise_type == "docker_compose":
-        from fraisier.deployers.docker_compose import DockerComposeDeployer
-
-        return DockerComposeDeployer(fraise_config, runner=runner)
-
-    return None
+    return build_deployer(fraise_type, fraise_config, runner=LocalRunner())

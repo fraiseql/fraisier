@@ -10,6 +10,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -38,7 +39,14 @@ from .refused_dispatch_record import (
     clear_refused_dispatch,
     record_refused_dispatch,
 )
-from .status import FAILURE_STATES, read_status, reconcile_orphaned_deploys
+from .status import (
+    FAILURE_STATES,
+    DeploymentStatusFile,
+    current_owner,
+    read_status,
+    reconcile_orphaned_deploys,
+    write_status,
+)
 from .webhook_rate_limit import check_rate_limit
 from .webhook_self_upgrade import maybe_self_upgrade
 from .worker_logging import SELF_UPGRADE_LOG_DIR
@@ -462,27 +470,33 @@ async def _run_deployment(
             "deploy_user": deploy_user,
         }
 
-        # Get deployer — always use a local runner: the webhook process is
-        # already running on the target host, so the ssh: block (intended for
-        # client-side CLI commands) must not be applied here.
+        # Get deployer from the shared registry — always with a local runner:
+        # the webhook process is already running on the target host, so the
+        # ssh: block (intended for client-side CLI commands) must not apply.
+        #
+        # The registry is what the daemon uses too. The if-chain that used to
+        # be here knew only api/etl/docker_compose, so a push mapped to a
+        # `scheduled` or `backup` fraise was answered `deployment_triggered`
+        # and then dropped right here, with nothing recorded (#379).
+        from .deployers.registry import UnknownFraiseTypeError, build_deployer
         from .runners import LocalRunner
 
-        runner = LocalRunner()
-
-        if fraise_type == "api":
-            from .deployers.api import APIDeployer
-
-            deployer = APIDeployer(deploy_config, runner=runner)
-        elif fraise_type == "etl":
-            from .deployers.etl import ETLDeployer
-
-            deployer = ETLDeployer(deploy_config, runner=runner)
-        elif fraise_type == "docker_compose":
-            from .deployers.docker_compose import DockerComposeDeployer
-
-            deployer = DockerComposeDeployer(deploy_config, runner=runner)
-        else:
-            logger.error(f"Unknown fraise type: {fraise_type}")
+        try:
+            deployer = build_deployer(fraise_type, deploy_config, runner=LocalRunner())
+        except UnknownFraiseTypeError as exc:
+            # No deployer to write through, so the record is written directly:
+            # answering "triggered" and leaving no trace is what this fixes.
+            logger.error("Cannot deploy %s/%s: %s", fraise_name, environment, exc)
+            write_status(
+                DeploymentStatusFile(
+                    fraise_name=fraise_name,
+                    environment=environment,
+                    state="failed",
+                    finished_at=datetime.now().isoformat(),
+                    error_message=str(exc),
+                    **current_owner(),
+                )
+            )
             return
 
         # Execute deployment (deployer handles DB recording internally)

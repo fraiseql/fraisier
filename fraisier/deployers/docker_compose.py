@@ -76,11 +76,18 @@ class DockerComposeDeployer(BaseDeployer):
         return self.image_tag
 
     def execute(self) -> DeploymentResult:
-        """Execute Docker Compose deployment."""
+        """Execute Docker Compose deployment.
+
+        Writes its own status record, like every other deployer. It used to
+        write none: the deploy daemon's blanket ``success`` write was the only
+        record a compose fraise ever had, and the webhook path left none at
+        all (#378).
+        """
 
         start_time = time.time()
         old_version = self.get_current_version()
         self._previous_tag = old_version
+        self._write_status("deploying")
 
         try:
             # Step 1: Pull images
@@ -100,6 +107,7 @@ class DockerComposeDeployer(BaseDeployer):
             new_version = self.get_current_version() or self.image_tag
             duration = time.time() - start_time
 
+            self._write_status("success", commit_sha=new_version)
             return DeploymentResult(
                 success=True,
                 status=DeploymentStatus.SUCCESS,
@@ -111,6 +119,7 @@ class DockerComposeDeployer(BaseDeployer):
         except Exception as e:
             duration = time.time() - start_time
             logger.exception(f"Docker Compose deployment failed: {e}")
+            self._write_status("failed", error_message=str(e))
             return DeploymentResult(
                 success=False,
                 status=DeploymentStatus.FAILED,
@@ -139,6 +148,7 @@ class DockerComposeDeployer(BaseDeployer):
             self.runner.run(self._compose_cmd(*up_args), env=env)
 
             duration = time.time() - start_time
+            self._write_status("rolled_back", commit_sha=target)
             return DeploymentResult(
                 success=True,
                 status=DeploymentStatus.ROLLED_BACK,
@@ -149,12 +159,14 @@ class DockerComposeDeployer(BaseDeployer):
 
         except Exception as e:
             duration = time.time() - start_time
+            detail = f"Rollback failed: {e}"
+            self._write_status("rollback_failed", error_message=detail)
             return DeploymentResult(
                 success=False,
-                status=DeploymentStatus.FAILED,
+                status=DeploymentStatus.ROLLBACK_FAILED,
                 old_version=current,
                 duration_seconds=duration,
-                error_message=f"Rollback failed: {e}",
+                error_message=detail,
             )
 
     def health_check(self) -> bool:
