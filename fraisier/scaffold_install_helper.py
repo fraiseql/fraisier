@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
+from fraisier.helper_version import VersionWatch, serve_until_stale
 
 logger = logging.getLogger(__name__)
 
@@ -243,20 +244,16 @@ def main() -> None:
 
     server_sock = _build_server_socket(allowed_script)
 
+    watch = VersionWatch()
     try:
-        while True:
-            try:
-                conn, _ = server_sock.accept()
-            except OSError as exc:
-                logger.error("accept() failed: %s", exc)
-                break
-            try:
-                _serve_connection(
-                    conn,
-                    expected_uid=deploy_uid,
-                    allowed_script=allowed_script,
-                )
-            except Exception as exc:
-                logger.exception("Unhandled error in connection handler: %s", exc)
+        serve_until_stale(
+            server_sock,
+            lambda conn: _serve_connection(
+                conn,
+                expected_uid=deploy_uid,
+                allowed_script=allowed_script,
+            ),
+            is_stale=watch.is_stale,
+        )
     finally:
         server_sock.close()

@@ -22,6 +22,37 @@ module docstring. Recap:
 4. The worker survives the webhook restart because it is in its own
    session.
 
+## What else is running the old code
+
+The worker restarts one unit: the webhook. Every **root helper** —
+systemctl, install, scaffold-install, unit-installer — runs from the same
+deploy-user venv as a `Type=simple` daemon behind an `Accept=no` socket, so a
+single process serves every connection and an upgrade on disk does not reach
+it. Before v0.72.0 those processes kept serving the old code until someone ran
+`scaffold-install`, which is how a host could end up with a webhook that sends
+a request its own helper does not recognise
+([#391](https://github.com/fraiseql/fraisier/issues/391)).
+
+Each helper now compares the fraisier version it started with against the one
+installed on disk — read fresh, `importlib.metadata` re-reads its dist-info in
+a live process — and **exits cleanly when they differ**. Its socket unit is
+still listening, so the next connection starts it again on the new code. The
+check runs when `accept()` times out, so an idle helper turns over within
+`DEFAULT_POLL_INTERVAL_S` (30s) of the upgrade rather than waiting for a
+caller, and again after each request so a busy one turns over too. It never
+runs between accepting a connection and answering it.
+
+A version that cannot be read — a venv mid-upgrade, a half-removed dist-info
+(#351) — leaves the helper running. Staleness detection is not a new way for a
+root daemon to die.
+
+In the journal:
+
+```
+INFO fraisier.helper_version: fraisier changed under this helper: 0.71.1 → 0.72.0.
+Exiting so the next connection starts it on the new code.
+```
+
 ## Coordinated restart
 
 The worker sequences flag, install, settle, drain, and restart as follows:

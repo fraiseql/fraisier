@@ -7,9 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.71.1] - 2026-09-06
+## [0.72.0] - 2026-09-06
+
+**Two ways a host ends up running code nobody installed there.**
 
 ### Fixed
+
+- **A self-upgrade left every root helper running the old code**
+  ([#391](https://github.com/fraiseql/fraisier/issues/391)).
+  `maybe_self_upgrade` installs a newer fraisier into the deploy user's venv
+  and restarts exactly one unit: the webhook. All four root helpers — systemctl,
+  install, scaffold-install, unit-installer — run from that same venv as
+  `Type=simple` daemons behind `Accept=no` sockets, so one process serves every
+  connection and the upgrade on disk never reached them. They kept serving the
+  old code until someone ran `scaffold-install`.
+
+  Not new — every helper-side change since the helpers existed has had this
+  property. v0.71.0's #382 was the first with a visible consequence: a
+  self-upgraded host had a webhook that sends `enable` and a helper that refuses
+  it, so every scheduled deploy failed at the timer.
+
+  Each helper now compares the fraisier version it started with against the one
+  installed on disk and **exits cleanly when they differ**; its socket unit is
+  still listening, so the next connection starts it on the new code. The check
+  runs when `accept()` times out — so an idle helper turns over within 30s of
+  any upgrade rather than waiting for a caller — and again after each request,
+  so a busy one turns over too. Never between accepting a connection and
+  answering it.
+
+  This adds no privilege and no allowlist entry: a helper only ends itself. It
+  also works for any upgrade mechanism, not just the self-upgrade. A version
+  that cannot be read leaves the helper running — staleness detection is not a
+  new way for a root daemon to die.
 
 - **`db reset` dropped the database without the deploy lock**
   ([#389](https://github.com/fraiseql/fraisier/issues/389)). #310 gave
