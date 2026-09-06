@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.70.0] - 2026-09-06
+
+**The record said one thing, the deploy did another.**
+
+Four issues from a read-only review of v0.68.0. Ten of its thirteen findings
+were one defect at different heights: the record and the outcome were written
+by different code, and nothing asserted they agree. `tests/test_status_file_truth.py`
+is now that assertion — every terminal path of a deploy, one row each.
+
+### Fixed
+
+- **The status file records the outcome the deploy returned**
+  ([#378](https://github.com/fraiseql/fraisier/issues/378)). Five paths wrote
+  something else.
+
+  On the socket-activated path — every `trigger-deploy` and every
+  deploy-checker timer run — the daemon wrote `state="success"` after
+  `deployer.execute()` returned, whatever the result was, `rollback_failed`
+  included. It also blanked the commit sha it had just been given:
+  `getattr(result, "commit_sha", None)` looks for an attribute
+  `DeploymentResult` does not have. A `--wait` client got the true result over
+  the socket; every later reader got `success`. The daemon now writes no status
+  at all for a result `execute()` returned — the deployer owns its record, with
+  its owner fields and its own `status_dir`.
+
+  The daemon also wrote `deploying` *before* taking the lock, so a request
+  refused by a running deploy landed as `failed: Deploy already running` on top
+  of the record of the deploy that held it. A refusal now writes nothing.
+
+  Health-check, smoke-test and timeout rollbacks returned `ROLLBACK_FAILED`
+  when `migrate down` failed and filed `failed` — the state for which
+  `fraisier status` renders the loud "ROLLBACK FAILED — schema dirty" banner is
+  the one none of them wrote. The timeout path also overwrote the incident text
+  ("Rolled back 1 of 2 migrations; 1 still applied. Do NOT restart the service
+  until resolved.") with the timeout message, replacing the sentence that
+  mattered with the one that did not.
+
+  A pre-flight validation failure — a missing systemctl wrapper, a sandbox that
+  cannot write where the deploy is about to — raised from *outside* `execute()`'s
+  try block, past the failure handler. On the webhook path that left the record
+  at `deploying` stamped with the webhook's own live pid, so
+  `reconcile_orphaned_deploys` abstained for as long as that process lived, the
+  deployments row stayed open, and nothing was notified.
+
+- **The webhook deploys every fraise type the daemon does**
+  ([#379](https://github.com/fraiseql/fraisier/issues/379)). The fraise-type
+  table existed three times and the copies disagreed: the webhook's knew only
+  `api`, `etl` and `docker_compose`. A push to a branch mapped to a `scheduled`
+  or `backup` fraise was answered `202 deployment_triggered`, and the
+  background task then logged "Unknown fraise type" and returned — no status
+  write, no deployments row, no notification, no retry. The push looked
+  accepted and nothing happened. There is now one table
+  (`deployers/registry.py`), a tripwire test asserting no entry point keeps its
+  own, and an unknown type records `failed` instead of vanishing.
+
+- **`restore.target_owner` reassigns ownership**
+  ([#380](https://github.com/fraiseql/fraisier/issues/380)).
+  `REASSIGN OWNED BY CURRENT_USER TO :"owner"` was handed to `psql -c`, which
+  passes its string to the server unlexed — psql never sees the variable and
+  never substitutes it. Measured with psql 15, 16 and 18: all three answer
+  `syntax error at or near ":"`. So every configured `target_owner` has failed,
+  on every version, *after* the service was stopped, the database dropped and
+  the backup restored — and the error blamed `pg_restore`, a step that had
+  succeeded. Migrations did not run, the receipt was not written, and
+  `db restore` restarted the service against a database whose objects belonged
+  to the restoring role. The statement is now piped through `psql -f -`, the
+  only form psql lexes, and an integration test executes it against a real
+  server.
+
+- **A failing scaffold or install reaches the journal with its own stderr**
+  ([#381](https://github.com/fraiseql/fraisier/issues/381)). `LocalRunner.run`
+  defaults to `check=True`, so a refusing `fraisier scaffold` raised before the
+  branch that assembles the diagnostic. Under the line "fix the underlying
+  error below", the journal got `Command '[...]' returned non-zero exit status
+  1.` and then nothing — no "environment production resolves to no host", no
+  YAML error, no permission denial. The socket install path dropped the
+  helper's stderr, which is where "command not allowed" lives. An unset
+  `!envvar` webhook secret answered a bare 500 with an empty body on every
+  delivery, because `ConfigurationError` is not a `ValueError`.
+
+### Changed
+
+- **A rollback whose restored version fails its health check now reports
+  `rollback_failed`** (was `rolled_back` with `success=True`).
+  `_finalize_rollback` ran the health check on the version it had just restored
+  and discarded the answer, reporting "rolled back successfully" while nothing
+  was serving. `rollback_failed` already means "an operator must act before
+  anything is restarted", which is exactly the situation; the message names the
+  restored SHA and the health URL so it is distinguishable from a rollback that
+  itself failed. `fraisier rollback` exits non-zero on it. See
+  `docs/failure-modes.md`, "Restored, But Still Down".
+
+- **`deploy-daemon` accepts any environment name the renderer accepts.** It
+  validated `environment` against the literal list
+  `development`/`staging`/`production`, while the scaffold renderer accepts
+  `[a-zA-Z0-9_-]+` and `trigger-deploy` validates against the config and
+  forwards the name — so a fraise with a `preprod` environment had no working
+  socket-activated route at all, its deploy-checker timer included. Both
+  `project` and `environment` are now checked for the shape a status file name
+  requires, which also rejects the path-traversal strings that used to be
+  passed straight through.
+
+- **A pre-flight validation failure returns a failed result** instead of
+  raising out of `execute()`.
+
+- **`DockerComposeDeployer` writes a status record.** It never wrote one; the
+  daemon's blanket `success` write was the only record a compose fraise had on
+  that path, and the webhook path left none at all.
+
 ## [0.69.0] - 2026-09-05
 
 **One deploy was reading two versions of its own config.**
