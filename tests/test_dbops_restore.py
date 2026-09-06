@@ -174,12 +174,17 @@ class TestRestoreBackup:
             )
 
         assert result.success is True
-        # confiture does the restore; _pg_cmd runs only the REASSIGN OWNED step.
+        # confiture does the restore; _pg_cmd runs only the REASSIGN OWNED step,
+        # and it runs it through stdin: `psql -c` never substitutes psql
+        # variables, on any version (#380).
         mock_cmd.assert_called_once()
         reassign_cmd = mock_cmd.call_args[0][0]
         assert "psql" in reassign_cmd
-        assert any("REASSIGN OWNED" in arg for arg in reassign_cmd)
-        assert any("appuser" in arg for arg in reassign_cmd)
+        assert reassign_cmd[-2:] == ["-f", "-"]
+        assert "-c" not in reassign_cmd
+        assert "owner=appuser" in reassign_cmd
+        piped = mock_cmd.call_args.kwargs["input_text"]
+        assert "REASSIGN OWNED BY CURRENT_USER" in piped
 
     def test_restore_owner_fix_failure_reported(self):
         """REASSIGN OWNED BY failure sets success=False with error."""

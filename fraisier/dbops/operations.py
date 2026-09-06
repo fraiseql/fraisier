@@ -132,7 +132,10 @@ def check_db_exists(
     """Return True if the database *db_name* exists."""
     validate_pg_identifier(db_name, "database name")
     # db_name is validated as a safe identifier — embed directly in SQL.
-    # psql >=18 no longer substitutes :'var' in -c mode.
+    # `psql -c` never substitutes :'var', on any version: it hands its string
+    # to the server unlexed, so psql itself never sees the variable. Binding
+    # here would mean piping a script through `-f -` (#380); the identifier is
+    # embedded because it was validated, which is the simpler of the two.
     code, stdout, _ = _pg_cmd(
         [
             "psql",
@@ -156,7 +159,10 @@ def terminate_backends(
     """Terminate all connections to *db_name*."""
     validate_pg_identifier(db_name, "database name")
     # db_name is validated as a safe identifier — embed directly in SQL.
-    # psql >=18 no longer substitutes :'var' in -c mode.
+    # `psql -c` never substitutes :'var', on any version: it hands its string
+    # to the server unlexed, so psql itself never sees the variable. Binding
+    # here would mean piping a script through `-f -` (#380); the identifier is
+    # embedded because it was validated, which is the simpler of the two.
     return _pg_cmd(
         [
             "psql",

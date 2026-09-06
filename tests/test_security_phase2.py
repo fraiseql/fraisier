@@ -107,12 +107,18 @@ class TestRestoreInputValidation:
             )
 
         # confiture runs the restore; the sole _pg_cmd call is REASSIGN OWNED,
-        # which must use psql -v variable binding, not an f-string with the
-        # owner name interpolated directly into the SQL.
+        # which must bind the owner name rather than interpolate it into the
+        # SQL — and bind it the only way psql supports, through a script on
+        # stdin. `-c` hands its string to the server unlexed, so `-v` beside a
+        # `-c` was binding nothing at all (#380).
         cmd_args = mock_cmd.call_args[0][0]
         assert "-v" in cmd_args, (
             "REASSIGN OWNED should use psql -v variable binding, not f-string SQL"
         )
+        assert cmd_args[-2:] == ["-f", "-"], (
+            "psql only substitutes variables in a script it lexes; -c never does"
+        )
+        assert "appuser" not in mock_cmd.call_args.kwargs["input_text"]
 
 
 # ---------------------------------------------------------------------------
