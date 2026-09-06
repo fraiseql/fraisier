@@ -499,6 +499,20 @@ class BaseDeployer(StatusRecordMixin, ABC):
 
         return Path(get_config(config_path).scaffold_state_dir)
 
+    @staticmethod
+    def _combine_output(result: Any) -> str:
+        """stderr first, stdout second, both stripped, `(no output)` if neither.
+
+        stderr carries the reason and stdout carries the part that worked, so
+        the reason goes first. Reporting stdout alone left the operator with
+        the good news and no cause (#381).
+        """
+        parts = (
+            getattr(result, "stderr", "") or "",
+            getattr(result, "stdout", "") or "",
+        )
+        return "\n".join(p.strip() for p in parts if p and p.strip()) or "(no output)"
+
     def _regenerate_scaffold(self, config_path: Path | None = None) -> None:
         """Regenerate scaffold files based on current fraises.yaml.
 
@@ -543,6 +557,10 @@ class BaseDeployer(StatusRecordMixin, ABC):
         state_dir = self._scaffold_state_dir(config_path)
         fraisier_exe = self._get_fraisier_executable()
 
+        # check=False because the branch below is what reports this failure.
+        # With the default check=True the runner raised CalledProcessError
+        # first, and the journal got "returned non-zero exit status 1" with
+        # none of the child's own diagnostics (#381).
         result = self.runner.run(
             [
                 fraisier_exe,
@@ -553,22 +571,15 @@ class BaseDeployer(StatusRecordMixin, ABC):
                 str(state_dir),
             ],
             cwd=str(config_path.parent),
+            check=False,
         )
 
         if result.returncode != 0:
-            # stderr carries the reason. A render now refuses rather than
-            # silently narrowing (#325) — unknown --server, an environment
-            # that resolves to no host, a unit missing a hosted environment's
-            # trees — and those diagnostics go to stderr while stdout holds
-            # only the part of the render that succeeded. Reporting stdout
-            # alone left the operator with the good news and no cause.
-            detail = "\n".join(
-                part.strip()
-                for part in (getattr(result, "stderr", "") or "", result.stdout or "")
-                if part and part.strip()
-            )
+            # A render refuses rather than silently narrowing (#325) — unknown
+            # --server, an environment that resolves to no host, a unit missing
+            # a hosted environment's trees — and those diagnostics go to stderr.
             raise DeploymentError(
-                f"Failed to regenerate scaffold files: {detail or '(no output)'}"
+                f"Failed to regenerate scaffold files: {self._combine_output(result)}"
             )
 
         logger.info("✓ Scaffold files regenerated")
@@ -682,9 +693,12 @@ class BaseDeployer(StatusRecordMixin, ABC):
             socket_result = self._try_scaffold_install_via_socket(config_path)
             if socket_result is not None:
                 if socket_result.returncode != 0:
+                    # The helper's stderr was captured on the socket and then
+                    # dropped from the message — "command not allowed" is the
+                    # line an operator needs, and it is never on stdout (#381).
                     raise DeploymentError(
                         f"Failed to install scaffold files via socket helper: "
-                        f"{socket_result.stdout}"
+                        f"{self._combine_output(socket_result)}"
                     )
                 logger.info("✓ Scaffold files installed via helper socket")
                 return
@@ -708,6 +722,7 @@ class BaseDeployer(StatusRecordMixin, ABC):
                 ],
                 cwd=str(config_path.parent),
                 env=install_env,
+                check=False,
             )
         else:
             logger.warning(
@@ -715,11 +730,15 @@ class BaseDeployer(StatusRecordMixin, ABC):
             )
             fraisier_exe = self._get_fraisier_executable()
             result = self.runner.run(
-                [fraisier_exe, "scaffold-install", "--yes"], env=install_env
+                [fraisier_exe, "scaffold-install", "--yes"],
+                env=install_env,
+                check=False,
             )
 
         if result.returncode != 0:
-            raise DeploymentError(f"Failed to install scaffold files: {result.stdout}")
+            raise DeploymentError(
+                f"Failed to install scaffold files: {self._combine_output(result)}"
+            )
 
         logger.info("✓ Scaffold files installed")
 

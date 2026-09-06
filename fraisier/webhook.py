@@ -191,6 +191,10 @@ async def structured_error_handler(
 _RECOVERY_HINTS: dict[str, str] = {
     "authentication_error": "Check your webhook secret or deployment token.",
     "validation_error": "Check the request payload and provider configuration.",
+    "configuration_error": (
+        "The host's fraises.yaml or its environment is incomplete; "
+        "the journal names what is missing."
+    ),
     "not_found": "Verify the fraise name and that a status file exists.",
     "service_unavailable": (
         "Self-upgrade in progress. Retry after the indicated delay."
@@ -891,6 +895,20 @@ def _verify_signature(
             provider = get_provider(provider_name, provider_config)
         except ValueError as e:
             raise _structured_error(400, "validation_error", str(e)) from e
+        except ConfigurationError as e:
+            # An unset `!envvar` secret. `LazyEnv.resolve` raises a
+            # FrameworkError, not a ValueError, so this used to fall out of the
+            # handler and FastAPI answered a bare 500 with an empty body on
+            # every delivery — fail-closed, but with the variable's name only
+            # in a traceback (#381). The message names the variable and the
+            # YAML path; it goes to the journal, not to an unauthenticated
+            # caller.
+            logger.error("Webhook secret is not resolvable: %s", e)
+            raise _structured_error(
+                500,
+                "configuration_error",
+                "webhook secret is not configured on this host — see the journal",
+            ) from e
 
         if provider.verify_webhook_signature(body, normalized_headers):
             return provider, normalized_headers
