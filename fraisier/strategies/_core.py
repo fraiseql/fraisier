@@ -478,20 +478,19 @@ class RebuildStrategy(Strategy):
             if self._required_roles:
                 self._provision_roles(db_name, db_owner, connection_url=admin_url)
 
-            # Phase 1: Apply superuser SQL (roles, extensions) via admin_url.
-            # Compute the admin connection URL targeting the app database.
-            # Superuser SQL must land in the app db, not postgres.
+            # Superuser SQL runs through admin_url, but must land in the app
+            # database, not postgres — so retarget the admin connection.
             admin_app_conn = replace_db_name(admin_url, db_name)
 
-            # Phase 1: Apply superuser pre-schema SQL (roles, extensions).
+            # 1. Superuser pre-schema SQL (roles, extensions).
             if split.superuser_pre_files > 0:
                 self._apply_sql(admin_app_conn, superuser_pre_path)
 
-            # Phase 2: Apply app SQL (schemas, tables, views, data).
+            # 2. App SQL (schemas, tables, views, data).
             self._apply_sql(env.database_url, app_path)
 
-            # Phase 3: Apply superuser post-schema SQL (grants on tables,
-            # role settings) — requires tables to exist, hence after app.
+            # 3. Superuser post-schema SQL (grants on tables, role settings)
+            # — requires the tables to exist, hence after the app SQL.
             if split.superuser_post_files > 0:
                 self._apply_sql(admin_app_conn, Path(split.superuser_post_path))
         finally:

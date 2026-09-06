@@ -709,14 +709,14 @@ def _ship_with_pipeline(
     if not migration_result.success:
         raise SystemExit(1)
 
-    # Phase 1: auto-fixers (run against the working tree, before any staging)
+    # Auto-fixers, run against the working tree before any staging.
     console.print("[bold]Running fix checks...[/bold]")
     fix_result = pipeline.run_fix_phase()
     if not fix_result.success:
         console.print("[red]Fix checks failed, aborting ship.[/red]")
         raise SystemExit(1)
 
-    # Phase 2: validators + tests (also run against the working tree)
+    # Validators and tests, also against the working tree.
     console.print("[bold]Running validation and tests...[/bold]")
     verify_result = pipeline.run_verify_phase()
     if not verify_result.success:

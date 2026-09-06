@@ -32,7 +32,7 @@ from fraisier.dbops.confiture_contract import (
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Phase 1: Schema extraction + temp DB lifecycle
+# Schema extraction + temp DB lifecycle
 # ---------------------------------------------------------------------------
 
 
@@ -427,7 +427,7 @@ class PreflightDatabase:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Result types + confiture integration
+# Result types + confiture integration
 # ---------------------------------------------------------------------------
 
 

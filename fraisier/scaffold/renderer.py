@@ -313,7 +313,7 @@ def _collect_unit_installer_envs(
 
     Each allow_pair is ``"<src_prefix>:<dest_prefix>"`` baked at scaffold time
     for the unit-installer helper's argv. Multiple fraises sharing one env get
-    merged: one helper per env (Phase 0 decision #2 of #240). The dest prefix
+    merged: one helper per env (#240). The dest prefix
     is always ``/etc/systemd/system/``.
     """
     envs: dict[str, list[str]] = {}
@@ -1007,7 +1007,7 @@ class ScaffoldRenderer:
         # Install helper units: socket+service per fraise+env with separate install user
         rendered_files.extend(self._render_install_helper_units(dry_run))
 
-        # Unit-installer helper (#240 Phase 5): per-env socket+service when at
+        # Unit-installer helper (#240): per-env socket+service when at
         # least one type:scheduled fraise is declared.
         rendered_files.extend(self._render_unit_installer_helper_units(dry_run))
 
@@ -1154,7 +1154,7 @@ class ScaffoldRenderer:
     def _render_unit_installer_helper_units(self, dry_run: bool) -> list[str]:
         """Render the unit-installer helper for each env with type:scheduled fraises.
 
-        Phase 0 decision #2 (#240): one helper per (project, env). Allowlist
+        One helper per (project, env) (#240). Allowlist
         baked at render time as ``--allow <src_prefix>:<dest_prefix>`` pairs in
         ExecStart, with ``src_prefix = env.app_path / scripts/systemd/`` and
         ``dest_prefix = /etc/systemd/system/``.
