@@ -146,6 +146,102 @@ def _reconcile_orphaned_deploys() -> None:
         )
 
 
+#: Held so the replay task is not garbage-collected mid-flight. asyncio keeps
+#: only a weak reference to a bare `create_task` result.
+_replay_task: "asyncio.Task[None] | None" = None
+
+
+async def _run_replays(targets: list[Any]) -> None:
+    """Deploy each planned target, in order, one at a time.
+
+    Sequential on purpose: the order is a stated policy (production last), and
+    running them concurrently would make it decorative. Each target is a
+    separate debt, so one failure does not stop the rest — and a failure leaves
+    that target's ledger entry standing, because only a deploy that *succeeds*
+    discharges it (#367).
+    """
+    for target in targets:
+        logger.info(
+            "replaying the dispatch refused for %s/%s on %s",
+            target.fraise,
+            target.environment,
+            target.branch,
+        )
+        try:
+            await execute_deployment(
+                fraise_name=target.fraise,
+                environment=target.environment,
+                fraise_config=target.fraise_config,
+                webhook_id=None,
+                git_branch=target.branch,
+                # Deliberately not the recorded sha: the deploy resolves the
+                # branch head, so a replay never puts back code that newer
+                # pushes have already superseded (#367).
+                git_commit=None,
+            )
+        except Exception:
+            logger.exception(
+                "replay of %s/%s failed; its refused-dispatch entry stands and "
+                "`fraisier doctor` still reports it",
+                target.fraise,
+                target.environment,
+            )
+
+
+def _replay_refused_dispatches() -> None:
+    """Re-fire the dispatches the self-upgrade that restarted us refused (#367).
+
+    Gated on the handoff marker the upgrade worker leaves immediately before
+    requesting the restart, and never on the restart alone: a webhook restarted
+    for any other reason must not read "deploy everything in the ledger" from
+    the fact that it started.
+
+    The marker is consumed either way — including when replay is switched off —
+    so a stale handoff cannot fire later. The ledger is not touched here at all;
+    an entry is discharged only by a deploy that succeeds.
+
+    Best-effort, like its neighbours in ``lifespan``: a webhook must start.
+    """
+    global _replay_task
+
+    from fraisier.refused_dispatch_record import read_refused_dispatches
+    from fraisier.replay_handoff import consume_replay_handoff
+    from fraisier.replay_plan import plan_replays
+
+    try:
+        config = get_config()
+    except (FileNotFoundError, FrameworkError):
+        return
+    lock_dir = _get_lock_dir(config)
+    if lock_dir is None:
+        return
+
+    handoff = consume_replay_handoff(lock_dir)
+    if handoff is None:
+        return
+
+    mode = str(config.webhook.get("replay_refused", "head")).lower()
+    if mode == "off":
+        logger.info(
+            "self-upgrade to %s finished; webhook.replay_refused is off, so the "
+            "refused dispatches stay in the ledger for `fraisier doctor`",
+            handoff.version,
+        )
+        return
+
+    targets = plan_replays(read_refused_dispatches(lock_dir), config)
+    if not targets:
+        return
+
+    logger.info(
+        "self-upgrade to %s finished; replaying %d refused dispatch(es): %s",
+        handoff.version,
+        len(targets),
+        ", ".join(f"{t.fraise}/{t.environment}" for t in targets),
+    )
+    _replay_task = asyncio.create_task(_run_replays(targets))
+
+
 def _install_sighup_reload() -> asyncio.AbstractEventLoop | None:
     """Register a SIGHUP handler that forces a config reload, if possible.
 
@@ -199,6 +295,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _config_preflight()
     _clear_stale_drain_flag()
     _reconcile_orphaned_deploys()
+    # After the reconciler: a replay must not race the pass that closes the
+    # records of the deploys this same restart interrupted (#349).
+    _replay_refused_dispatches()
     sighup_loop = _install_sighup_reload()
     yield
     _remove_sighup_reload(sighup_loop)

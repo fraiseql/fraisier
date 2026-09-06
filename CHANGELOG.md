@@ -9,7 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.72.0] - 2026-09-06
 
-**Two ways a host ends up running code nobody installed there.**
+**Two ways a host ends up running code nobody installed there, and the deploy a
+self-upgrade dropped.**
+
+### Added
+
+- **A dispatch a self-upgrade refused is re-fired after the upgrade**
+  ([#367](https://github.com/fraiseql/fraisier/issues/367)). v0.66.0 made the
+  loss *visible* — one ledger entry per dropped `(fraise, environment)`, and a
+  `doctor` warning while any stands. It deliberately did not re-run them,
+  because four decisions had to be made first and each can make things worse
+  than the manual re-fire it replaces. They are made now:
+
+  **Which ref: the branch head, never the recorded sha.** Without the refusal
+  the push would have deployed, and any later push would have deployed after it
+  — the end state is *branch head deployed*. Re-deploying the recorded sha
+  would put back code newer pushes had superseded. There is no mode that does
+  it.
+
+  **What order: production last**, otherwise alphabetical by
+  `(environment, fraise)`. Deterministic, and a replay mechanism that is itself
+  broken breaks on a lower-stakes target first.
+
+  **When: only on the restart the upgrade caused.** The worker writes
+  `<lock_dir>/.replay-on-start` immediately before requesting the restart; the
+  next start consumes it — reads and removes in one step — and replays only
+  then. A webhook restarted for any other reason replays nothing.
+
+  **What clears an entry: nothing here.** The replay dispatches through the
+  same path a push takes, whose success branch already discharges the entry. A
+  failed or unfinished replay leaves it standing and `doctor` still reports it
+  — a replay that cleared on *attempt* would erase the record of what it was
+  meant to recover.
+
+  A target renamed or removed from `fraises.yaml` is not replayed. Switch the
+  whole thing off with `webhook.replay_refused: off`; `off` still consumes the
+  marker, so re-enabling later cannot fire a stale handoff.
 
 ### Fixed
 
