@@ -98,6 +98,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.git_repo = config.get("git_repo")
         self._bind_deploy_settings(config)
         self._migrations_applied: int = 0
+        # Set when the deploy's timeout lands inside a running rollback (#384),
+        # so the report says the previous version may be only partly restored.
+        self._rollback_interrupted_by_timeout = False
         self._version_json_snapshotted = False
         self._version_json_existed = False
         self._version_json_snapshot: bytes | None = None
@@ -878,6 +881,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     ) -> DeploymentResult:
         """Handle a deployment timeout, attempting rollback if possible."""
         logger.error(str(exc))
+        message = self._timeout_message(exc)
 
         if self._previous_sha:
             logger.warning(
@@ -886,18 +890,34 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             rollback_result = self.rollback()
             duration = time.time() - start_time
             return self._build_timeout_rollback_result(
-                rollback_result, old_version, duration, str(exc)
+                rollback_result, old_version, duration, message
             )
 
         duration = time.time() - start_time
         self._restore_version_json()
-        self._write_status("failed", error_message=str(exc))
+        self._write_status("failed", error_message=message)
         return DeploymentResult(
             success=False,
             status=DeploymentStatus.FAILED,
             old_version=old_version,
             duration_seconds=duration,
-            error_message=str(exc),
+            error_message=message,
+        )
+
+    def _timeout_message(self, exc: DeploymentTimeoutExpired) -> str:
+        """The timeout text, saying so when a rollback was cut short by it.
+
+        ``timeout:`` is checked between steps, so the exception surfaces
+        wherever the blocking step happened to return — which can be inside a
+        rollback already under way. The operator needs to know the tree may be
+        part-way back (#384).
+        """
+        if not self._rollback_interrupted_by_timeout:
+            return str(exc)
+        return (
+            f"{exc} — a rollback was already running and was interrupted by "
+            "it, so the previous version may be only partly restored. Check "
+            "the deployed commit and the schema before restarting."
         )
 
     def _restore_previous_state(self) -> RestoreOutcome:
@@ -1399,6 +1419,21 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             result = self._finalize_rollback(current_version, target, start_time)
             result.details.update(db_details)
             return result
+
+        except DeploymentTimeoutExpired:
+            # The deploy timed out, and the exception landed here because the
+            # rollback was what happened to be running. Swallowing it into the
+            # handler below reported `Rollback failed:
+            # DeploymentTimeoutExpired:` — blaming the rollback for the
+            # deploy's own budget (#384). Let it out to `_handle_timeout`,
+            # which is the one place that knows what a timeout means.
+            self._rollback_interrupted_by_timeout = True
+            logger.critical(
+                "Rollback interrupted by the deployment timeout; the tree may "
+                "be part-way back to %s",
+                (target or "the previous commit")[:8],
+            )
+            raise
 
         except subprocess.CalledProcessError as e:
             duration = time.time() - start_time

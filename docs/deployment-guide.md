@@ -152,6 +152,38 @@ transfer better than the milliseconds.
 
 ---
 
+## What `timeout:` guarantees
+
+```yaml
+fraises:
+  my_api:
+    environments:
+      production:
+        timeout: 900        # seconds for the whole deploy; default 600
+```
+
+`timeout:` is checked **between steps**, not inside them.
+
+The deploy runs on one thread with a timer beside it. When the budget expires
+the timer raises `DeploymentTimeoutExpired` in the deploy thread — and Python
+delivers that at the next bytecode boundary. A thread sitting inside a C-level
+wait reaches no boundary until the wait returns: a database driver blocked on a
+socket, a child process being waited for, a read from a root helper. So:
+
+- **Every step that can carry its own hard bound has one.** Subprocesses get an
+  execution timeout; both root-helper sockets are bounded by whatever is left
+  of this deploy's budget, so a helper that accepts a connection and never
+  answers can no longer hold the deploy — or the per-fraise lock, or the
+  `deploying` record — open indefinitely.
+- **A step that blocks past the budget is reported when it returns, not
+  interrupted.** A migration that hangs inside the database holds the lock for
+  as long as it hangs. `fraisier status` shows the deploy as still running,
+  because it is. To bound the database itself, set a `statement_timeout` on the
+  deploy role.
+- **A timeout that lands inside a rollback is reported as a timeout**, and says
+  the previous version may be only partly restored — it is not reported as a
+  failed rollback.
+
 ## Token providers for authenticated smoke tests
 
 `smoke_tests` (introduced in #204) probes the freshly-deployed service with bearer

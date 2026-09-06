@@ -16,7 +16,9 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fraisier.constants import DEFAULT_EXEC_TIMEOUT
 from fraisier.status import DEFAULT_STATUS_DIR
+from fraisier.timeout import derived_timeout
 
 from .mixins import StatusRecordMixin
 
@@ -693,10 +695,17 @@ class BaseDeployer(StatusRecordMixin, ABC):
         # neutered under NoNewPrivileges — so surface it loudly.
         socket_present = Path(socket_path).exists()
 
+        from fraisier.errors import DeploymentError
+
+        # Bounded by what is left of this deploy's budget (#384): a helper that
+        # accepts and never answers used to block here forever, and `timeout:`
+        # cannot reach a thread inside a blocking read.
+        timeout_s = derived_timeout(DEFAULT_EXEC_TIMEOUT)
         try:
             with _socket_mod.socket(
                 _socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM
             ) as sock:
+                sock.settimeout(timeout_s)
                 sock.connect(socket_path)
                 # `deploy_in_flight` tells install.sh that restarting a
                 # deploy-hosting unit would terminate its own caller (#349).
@@ -715,6 +724,20 @@ class BaseDeployer(StatusRecordMixin, ABC):
                 stdout=response.get("stdout", ""),
                 stderr=response.get("stderr", ""),
             )
+        except TimeoutError as exc:
+            # A hang is not an absence. The helper accepted the connection, so
+            # it may still be installing; falling through to the subprocess
+            # would install a second time. Fail, and name where to look (#384).
+            raise DeploymentError(
+                f"The scaffold-install helper at {socket_path} did not answer "
+                f"within {timeout_s:.0f}s. The deploy is not falling back to "
+                "the subprocess install: the helper accepted the connection "
+                "and may still be running, and a second attempt would install "
+                "twice.\n"
+                "  Look at the helper's own journal: "
+                "journalctl -u 'fraisier-*-scaffold-install-helper.service'",
+                context={"socket_path": socket_path, "timeout_s": timeout_s},
+            ) from exc
         except (
             FileNotFoundError,
             ConnectionRefusedError,

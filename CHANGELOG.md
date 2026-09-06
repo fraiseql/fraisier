@@ -58,7 +58,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is kept: `execute()` syncs twice, and the second would otherwise record the
   config this same deploy installed minutes earlier.
 
+- **`timeout:` could not end a step, and reported the wrong thing when it fired**
+  ([#384](https://github.com/fraiseql/fraisier/issues/384)).
+  `deployment_timeout` delivers its exception with
+  `PyThreadState_SetAsyncExc`, which raises at the next bytecode boundary —
+  a thread inside a C-level wait reaches none until the wait returns. Neither
+  root-helper socket client set a timeout at all, so a helper that accepted a
+  connection and never answered held the deploy, its per-fraise lock and its
+  `deploying` record open indefinitely, and `timeout:` could not end it.
+
+  Both clients are now bounded by `derived_timeout()` — what is left of this
+  deploy's budget, or `DEFAULT_EXEC_TIMEOUT` outside a deploy, floored at one
+  second because `settimeout(0)` means *non-blocking*, not "expire now". A
+  helper that does not answer fails the deploy naming the socket, the bound and
+  the helper's own journal; it is not retried through the subprocess fallback,
+  because the helper accepted the connection and may still be installing.
+
+  `rollback()` no longer swallows `DeploymentTimeoutExpired` into its
+  `except Exception`. A health-check rollback running when the budget expired
+  was reported as `Rollback failed: DeploymentTimeoutExpired:` — the deploy
+  timed out, and the record blamed the rollback. The timeout now reaches
+  `_handle_timeout`, and its message says the previous version may be only
+  partly restored.
+
 ### Changed
+
+- **`timeout:` is documented as what it is** (#384): checked *between* steps,
+  with each step carrying its own hard bound, and a step that blocks past the
+  budget reported when it returns rather than interrupted. See "What `timeout:`
+  guarantees" in `docs/deployment-guide.md`; a test pins the wording to the
+  behaviour. Ending a blocked step outright — killing the child process group,
+  or a `statement_timeout` through confiture — is
+  [#388](https://github.com/fraiseql/fraisier/issues/388).
 
 - **The webhook starts with an unloadable fraises.yaml**
   ([#383](https://github.com/fraiseql/fraisier/issues/383)) instead of failing
