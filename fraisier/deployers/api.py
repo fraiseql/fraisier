@@ -1059,6 +1059,24 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         service_manager = get_service_manager(self.runner, None)
         service_manager.restart(self.systemd_service)
 
+    def _record_outcome(
+        self,
+        result: DeploymentResult,
+        error_message: str | None = None,
+    ) -> DeploymentResult:
+        """File *result* as this deploy's outcome, and return it unchanged.
+
+        The status file's ``state`` is ``result.status.value`` by construction,
+        so the record cannot say something the returned result does not (#378).
+        *error_message* overrides the result's own when the caller has a fuller
+        sentence — a timeout that also failed its rollback carries both.
+        """
+        self._write_status(
+            result.status.value,
+            error_message=error_message or result.error_message,
+        )
+        return result
+
     def _build_rollback_result(
         self,
         rollback_result: DeploymentResult,
@@ -1107,6 +1125,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 },
             ),
         )
+        self._record_outcome(result)
         self._notify(result)
         return result
 
@@ -1119,7 +1138,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     ) -> DeploymentResult:
         """Build a DeploymentResult after a rollback triggered by timeout."""
         if rollback_result.success:
-            self._write_status("rolled_back", commit_sha=rollback_result.new_version)
+            # `_finalize_rollback` already filed `rolled_back` with the full
+            # target sha; a second write here only shortened it.
             return DeploymentResult(
                 success=False,
                 status=DeploymentStatus.ROLLED_BACK,
@@ -1140,7 +1160,6 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             "TIMEOUT ROLLBACK FAILED — service may be in broken state: %s",
             rollback_result.error_message,
         )
-        self._write_status("failed", error_message=timeout_message)
         result = DeploymentResult(
             success=False,
             status=DeploymentStatus.ROLLBACK_FAILED,
@@ -1157,6 +1176,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     "rollback_error": rollback_result.error_message,
                 },
             ),
+        )
+        # Both facts, and the incident text intact: the timeout message used to
+        # overwrite "Rolled back 1 of 2 … Do NOT restart" (#378).
+        self._record_outcome(
+            result, error_message=f"{timeout_message} — {rollback_result.error_message}"
         )
         self._notify(result)
         return result
@@ -1236,10 +1260,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             target_version=target,
             db_errors=db_result.errors,
         )
-        self._write_status("failed", error_message=error_msg)
+        # No status write here: this is one step of a rollback, not the end of
+        # a deploy. Whoever owns the outcome files it, with the message that
+        # describes the whole failure (#378).
         return DeploymentResult(
             success=False,
-            status=DeploymentStatus.FAILED,
+            status=DeploymentStatus.ROLLBACK_FAILED,
             old_version=current_version,
             duration_seconds=0,
             error_message=error_msg,
@@ -1284,7 +1310,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 db_result = self._rollback_database(current_version, target)
                 if not db_result.success:
                     db_result.duration_seconds = time.time() - start_time
-                    return db_result
+                    return self._record_outcome(db_result)
                 db_details = db_result.details
 
             self._git_rollback(target)
@@ -1300,23 +1326,25 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 f"stderr: {e.stderr}"
             )
             logger.critical(detail)
-            self._write_status("failed", error_message=detail)
-            return DeploymentResult(
-                success=False,
-                status=DeploymentStatus.FAILED,
-                old_version=current_version,
-                duration_seconds=duration,
-                error_message=detail,
+            return self._record_outcome(
+                DeploymentResult(
+                    success=False,
+                    status=DeploymentStatus.ROLLBACK_FAILED,
+                    old_version=current_version,
+                    duration_seconds=duration,
+                    error_message=detail,
+                )
             )
         except Exception as e:
             duration = time.time() - start_time
             detail = f"Rollback failed: {type(e).__name__}: {e}"
             logger.critical(detail)
-            self._write_status("failed", error_message=detail)
-            return DeploymentResult(
-                success=False,
-                status=DeploymentStatus.FAILED,
-                old_version=current_version,
-                duration_seconds=duration,
-                error_message=detail,
+            return self._record_outcome(
+                DeploymentResult(
+                    success=False,
+                    status=DeploymentStatus.ROLLBACK_FAILED,
+                    old_version=current_version,
+                    duration_seconds=duration,
+                    error_message=detail,
+                )
             )
