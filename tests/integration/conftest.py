@@ -22,9 +22,12 @@ was found — so no test module has to know which one it got.
 
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import os
+import re
 import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import quote, unquote, urlparse
@@ -121,16 +124,42 @@ def _env_target() -> PgTarget | None:
     )
 
 
+def _client_tools_present() -> bool:
+    """Are the CLI tools these tests shell out to on PATH?
+
+    A container cannot substitute for them: the dump/restore round trips run
+    the *host's* ``pg_dump`` and ``pg_restore``.
+    """
+    return all(shutil.which(tool) for tool in ("psql", "pg_dump", "pg_restore"))
+
+
+def client_major_version() -> int | None:
+    """The major version of the host's ``pg_dump``, or None if unreadable."""
+    try:
+        out = subprocess.run(
+            ["pg_dump", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"(\d+)", out)
+    return int(match.group(1)) if match else None
+
+
 def _discover_target() -> PgTarget | None:
-    """Return a server to run against, or None if there is none.
+    """Return a *running* server to use, or None if there is none.
 
     ``FRAISIER_TEST_PG_URL`` is tried first — it is the server CI provides — and
     a local socket second. An env URL that does not answer falls through rather
     than deciding the question, so a stale variable cannot hide a working local
-    server.
+    server. A container is not tried here; see :func:`_container_target`, which
+    only runs once nothing already-running answered.
     """
     pytest.importorskip("psycopg")
-    if not all(shutil.which(tool) for tool in ("psql", "pg_dump", "pg_restore")):
+    if not _client_tools_present():
         return None
 
     from_env = _env_target()
@@ -142,6 +171,60 @@ def _discover_target() -> PgTarget | None:
         if socket_dir is not None:
             return PgTarget(host=socket_dir)
     return None
+
+
+@contextlib.contextmanager
+def _container_target() -> Iterator[PgTarget | None]:
+    """A throwaway server in Docker, for a machine that has no other one.
+
+    Last resort, and deliberately so — a container is slower than a running
+    server and needs Docker, which is exactly what a CI runner or a developer
+    box usually already provides in another form.
+
+    **Pinned to the host client's major version.** The dump/restore tests shell
+    out to the host's ``pg_dump``; an 18 client against a 16 server emits
+    ``SET transaction_timeout``, a GUC 16 does not have, and ``pg_restore``
+    fails with two failures that look real and are not. A matched pair has
+    neither problem, so the image follows the client rather than a constant.
+
+    Yields None — never raises and never skips — so ``pg_target`` stays the one
+    place that decides what "no server" means. A skip decided here would be the
+    #370 failure again, silently.
+    """
+    if not _client_tools_present():
+        yield None
+        return
+    major = client_major_version()
+    if major is None:
+        yield None
+        return
+    try:
+        from testcontainers.postgres import PostgresContainer
+    except ImportError:
+        yield None
+        return
+
+    try:
+        container = PostgresContainer(f"postgres:{major}", driver=None)
+        container.start()
+    except Exception:
+        # No Docker, no image, no network. Not this harness's call to make.
+        yield None
+        return
+
+    try:
+        parsed = urlparse(container.get_connection_url())
+        target = PgTarget(
+            host=parsed.hostname or "127.0.0.1",
+            port=parsed.port,
+            user=unquote(parsed.username) if parsed.username else None,
+            password=unquote(parsed.password) if parsed.password else None,
+        )
+        # Probed like any other candidate, so "a server with createdb" means the
+        # same thing however it was found.
+        yield target if _probe(target.dsn(_MAINTENANCE_DB)) is not None else None
+    finally:
+        container.stop()
 
 
 def unavailable(reason: str) -> NoReturn:
@@ -163,13 +246,34 @@ def unavailable(reason: str) -> NoReturn:
     pytest.skip(reason)  # ty: ignore[too-many-positional-arguments]
 
 
+@pytest.fixture(scope="session")
+def _pg_server() -> Iterator[PgTarget | None]:
+    """The server for the whole session: env URL, local socket, or a container.
+
+    Session-scoped because starting a container per test would be absurd, and
+    because "is a database reachable here" is one fact, not one per test.
+    """
+    already_running = _discover_target()
+    if already_running is not None:
+        yield already_running
+        return
+    with _container_target() as started:
+        yield started
+
+
 @pytest.fixture
-def pg_target() -> PgTarget:
-    """A PostgreSQL server with createdb privilege, or skip."""
-    resolved = _discover_target()
-    if resolved is None:
-        unavailable("no PostgreSQL with createdb privilege is reachable")
-    return resolved
+def pg_target(_pg_server: PgTarget | None) -> PgTarget:
+    """A PostgreSQL server with createdb privilege, or skip.
+
+    Tests create and drop their own databases on it. Nothing they did not
+    create is theirs to drop (#386).
+    """
+    if _pg_server is None:
+        unavailable(
+            "no PostgreSQL with createdb privilege is reachable, and no "
+            "container could be started"
+        )
+    return _pg_server
 
 
 def _hold_flock(

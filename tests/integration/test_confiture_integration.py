@@ -1,21 +1,31 @@
 """Integration tests for confiture migration operations.
 
-These tests use real confiture against a temporary PostgreSQL database
-(via testcontainers or a local instance). They verify that fraisier's
-thin wrapper over confiture behaves correctly with real SQL.
+These run real confiture against a database of their own, created on whatever
+server ``pg_target`` discovered and dropped afterwards.
+
+**Each test gets a fresh database, and this module drops nothing else.** It used
+to read ``FRAISIER_TEST_PG_URL`` itself and begin every test by dropping every
+table in ``public`` of whatever that named — ``CASCADE``, ``autocommit=True``,
+with no check that the target was a throwaway. Pointed at a real database, that
+emptied it (#386). Isolation now comes from owning the database, not from
+clearing someone else's.
 
 Run with: uv run pytest tests/integration/ -m integration
 """
 
-import os
+from __future__ import annotations
+
 import textwrap
-from pathlib import Path
+import uuid
+from typing import TYPE_CHECKING
 
 import psycopg
 import pytest
 
-# Skip if no PostgreSQL available
-_PG_URL = os.getenv("FRAISIER_TEST_PG_URL")
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
 pytestmark = pytest.mark.integration
 
 
@@ -41,30 +51,33 @@ def _write_migration(migrations_dir: Path, version: str, up_sql: str, down_sql: 
 
 
 @pytest.fixture
-def pg_url():
-    """Get PostgreSQL URL, skip if not available."""
-    url = os.getenv("FRAISIER_TEST_PG_URL")
-    if not url:
-        pytest.skip("FRAISIER_TEST_PG_URL not set — skipping integration test")  # ty: ignore[too-many-positional-arguments]
-    return url
+def pg_url(pg_target) -> Iterator[str]:
+    """A database of this test's own, dropped when it finishes.
+
+    A fresh database is empty, which is the isolation these tests wanted, and
+    it bounds what the teardown can destroy to something this fixture created.
+    """
+    db_name = f"confiture_it_{uuid.uuid4().hex[:12]}"
+    admin = pg_target.dsn("postgres")
+
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{db_name}"')  # ty: ignore[no-matching-overload]
+
+    try:
+        yield pg_target.dsn(db_name)
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')  # ty: ignore[no-matching-overload]
 
 
 @pytest.fixture
 def migration_env(tmp_path, pg_url):
-    """Set up a clean migration environment with confiture config and migration dir.
-
-    Drops all user tables and confiture's tracking table before each test
-    to ensure complete isolation.
-    """
-    with psycopg.connect(pg_url) as conn:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            # Drop all user tables and the tracking table
-            cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-            tables = [row[0] for row in cur.fetchall()]
-            for table in tables:
-                cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')  # ty: ignore[no-matching-overload]
-
+    """A confiture config and migrations dir pointed at this test's database."""
     migrations_dir = tmp_path / "migrations"
     config_path = _write_confiture_config(tmp_path, pg_url)
     return config_path, migrations_dir
