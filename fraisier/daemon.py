@@ -9,13 +9,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fraisier.config import CONFIG_SEARCH_LOCATIONS, get_config
+from fraisier.errors import DeploymentLockError
 from fraisier.logging import get_contextual_logger
-from fraisier.status import DeploymentStatusFile, write_status
 
 logger = get_contextual_logger("fraisier.daemon")
 
@@ -108,6 +107,11 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
         timestamp=request.timestamp,
     ):
         logger.info("Starting deployment", event="deployment_started")
+
+    # Set to the deployer once its own record is open — i.e. once execute() has
+    # been entered and has written `deploying`. Nothing before that point has
+    # touched the status file.
+    open_record: Any = None
 
     try:
         # Get configuration
@@ -234,21 +238,31 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
                 deployed_version=current_version,
             )
 
-        # Write deploying status before starting
-        started_at = datetime.now().isoformat()
-        deploying_status = DeploymentStatusFile(
-            fraise_name=request.project,
-            environment=request.environment,
-            state="deploying",
-            started_at=started_at,
-        )
-        write_status(deploying_status)
-
-        # Execute deployment with lock
+        # The status file belongs to the deployer, from `deploying` through to
+        # the terminal state (#378). It stamps the owner fields and honours the
+        # fraise's own status_dir; a write from here knows neither, and the one
+        # that used to sit after execute() reported `success` for every result,
+        # `rollback_failed` included.
         from fraisier.locking import deployment_lock
 
-        with deployment_lock(request.project):
-            result = deployer.execute()
+        try:
+            with deployment_lock(request.project):
+                open_record = deployer
+                result = deployer.execute()
+        except DeploymentLockError as e:
+            # The record belongs to the deploy that holds the lock. Writing
+            # `failed` here would bury it while it is still running.
+            logger.warning(
+                "Deployment refused: another deploy holds the lock",
+                event="deployment_refused",
+                error=str(e),
+            )
+            return DeploymentResult(
+                success=False,
+                status="failed",
+                message="Deploy already running",
+                error_message=str(e),
+            )
 
         # Convert to daemon result format
         daemon_result = DeploymentResult(
@@ -259,19 +273,6 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
             duration_seconds=result.duration_seconds,
             error_message=result.error_message if not result.success else None,
         )
-
-        # Write success status
-        finished_at = datetime.now().isoformat()
-        success_status = DeploymentStatusFile(
-            fraise_name=request.project,
-            environment=request.environment,
-            state="success",
-            version=result.new_version,
-            commit_sha=getattr(result, "commit_sha", None),
-            started_at=started_at,
-            finished_at=finished_at,
-        )
-        write_status(success_status)
 
         logger.info(
             "Deployment completed",
@@ -299,22 +300,20 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
         )
 
     except Exception as e:
-        # Write failed status if deployment was started
-        if "started_at" in locals():
-            finished_at = datetime.now().isoformat()
-            failed_status = DeploymentStatusFile(
-                fraise_name=request.project,
-                environment=request.environment,
-                state="failed",
-                started_at=started_at,
-                finished_at=finished_at,
-                error_message=str(e),
-                last_error={
-                    "message": str(e),
-                    "timestamp": finished_at,
-                },
-            )
-            write_status(failed_status)
+        # An exception that escaped execute() leaves the deployer's record at
+        # `deploying` with nobody left to close it. Close it through the
+        # deployer's own writer so the owner fields and status_dir are the ones
+        # the rest of the record already carries (#378). Best effort: a failure
+        # here must not replace the error being reported.
+        if open_record is not None:
+            try:
+                open_record._write_status("failed", error_message=str(e))
+            except Exception as write_exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "Could not close the deployment record",
+                    event="status_write_failed",
+                    error=str(write_exc),
+                )
 
         logger.error(
             "Deployment failed",
