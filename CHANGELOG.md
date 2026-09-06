@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`db reset` dropped the database without the deploy lock**
+  ([#389](https://github.com/fraiseql/fraisier/issues/389)). #310 gave
+  `db restore` the per-fraise lock the webhook takes around every deploy, after
+  a restore timer fired mid-deploy and killed an in-flight `pg_restore`.
+  `db reset` was left out — and it is the more destructive of the two:
+  `reset_from_template` force-disconnects every client, **drops** the database
+  and recreates it from its template. Run against a fraise mid-deploy it took
+  the schema out from under a running migration.
+
+  It now holds the lock across the reset and refuses loudly when a deploy holds
+  it. No `--skip-if-locked`: `db restore` has one because its generated timer
+  unit passes it and a skipped nightly restore is a non-event, but nothing
+  schedules `db reset`, and a silently skipped reset would leave the operator
+  with the database they were trying to replace.
+
+  `db exec`, `db migrate` and `db build` still run unlocked.
+
 ## [0.71.0] - 2026-09-06
 
 **The deploy path stops asking for privileges it cannot get.**
