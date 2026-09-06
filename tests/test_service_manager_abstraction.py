@@ -12,6 +12,7 @@ class MockServiceManager(ServiceManager):
         self.started = set()
         self.stopped = set()
         self.restarted = set()
+        self.enabled = set()
 
     def start(self, service_name: str) -> None:
         service_name = self._validate_service_name(service_name)
@@ -24,6 +25,10 @@ class MockServiceManager(ServiceManager):
     def restart(self, service_name: str) -> None:
         service_name = self._validate_service_name(service_name)
         self.restarted.add(service_name)
+
+    def enable(self, service_name: str) -> None:
+        service_name = self._validate_service_name(service_name)
+        self.enabled.add(service_name)
 
     def is_active(self, service_name: str) -> bool:
         service_name = self._validate_service_name(service_name)
@@ -113,3 +118,30 @@ def test_wait_stopped_timeout():
     # Should have polled until timeout
     assert mock_is_active.call_count >= 1
     assert mock_sleep.call_count >= 1
+
+
+def test_service_manager_enable():
+    """#382: `enable` is part of the interface, so a caller need not know
+    whether it is talking to systemd or rc."""
+    manager = MockServiceManager()
+    manager.enable("test_service")
+    assert "test_service" in manager.enabled
+
+
+def test_service_manager_requires_enable():
+    """An implementation that forgets `enable` cannot be instantiated."""
+
+    class Incomplete(ServiceManager):
+        def start(self, service_name: str) -> None: ...
+
+        def stop(self, service_name: str) -> None: ...
+
+        def restart(self, service_name: str) -> None: ...
+
+        def is_active(self, service_name: str) -> bool:
+            return False
+
+        def daemon_reload(self) -> None: ...
+
+    with pytest.raises(TypeError, match="enable"):
+        Incomplete()

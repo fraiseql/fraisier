@@ -11,7 +11,9 @@ Request (one JSON line + newline)::
 
     {"action": "stop", "service": "api.printoptim.dev.service"}
 
-``daemon-reload`` requests omit the ``service`` field::
+Actions: ``start``, ``stop``, ``restart``, ``enable``, ``is-active`` — each
+takes a ``service`` that must appear in the allowlist — plus ``daemon-reload``,
+which omits the ``service`` field::
 
     {"action": "daemon-reload"}
 
@@ -38,7 +40,7 @@ from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
 logger = logging.getLogger(__name__)
 
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
-    {"stop", "start", "restart", "is-active", "daemon-reload"}
+    {"stop", "start", "restart", "enable", "is-active", "daemon-reload"}
 )
 
 _SYSTEMCTL = "/usr/bin/systemctl"

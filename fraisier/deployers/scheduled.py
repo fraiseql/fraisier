@@ -5,12 +5,17 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Iterator
+
     from fraisier.runners import CommandRunner
+    from fraisier.service_managers.base import ServiceManager
 
 from fraisier import naming
+from fraisier.errors import DeploymentError
 
 from .base import BaseDeployer, DeploymentResult, DeploymentStatus
 from .mixins import GitDeployMixin
@@ -44,8 +49,57 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
         if self.systemd_service:
             validate_service_name(self.systemd_service)
 
+    def _timer_manager(self) -> ServiceManager:
+        """Return the platform's service manager for the timer's unit actions.
+
+        Every privileged systemd action goes through it, which prefers the
+        root helper socket. The deploy and webhook units set
+        ``NoNewPrivileges``, so a ``sudo systemctl`` spawned from here exits 1
+        and the deploy dies at "Enabling timer" — after the pull and the
+        dependency install (#382).
+        """
+        from fraisier.service_managers import get_service_manager
+
+        return get_service_manager(self.runner, None)
+
+    @contextmanager
+    def _helper_refusal_is_actionable(self) -> Iterator[None]:
+        """Turn a helper allowlist rejection into an error naming the remedy.
+
+        Both the action list and the service list are baked into the host's
+        systemctl helper: the actions by the fraisier version installed there,
+        the services by the last rendered scaffold. A host that predates #382
+        (or #239, for the timer units) answers ``not allowed`` and the raw
+        ``CalledProcessError`` says only that a command exited 1.
+        """
+        try:
+            yield
+        except subprocess.CalledProcessError as exc:
+            reason = (exc.stderr or "").strip()
+            if "not allowed" not in reason.lower():
+                raise
+            raise DeploymentError(
+                f"systemctl helper rejected the request: {reason}. This host's "
+                "helper predates the timer actions this deploy needs. Upgrade "
+                "fraisier on the host, then run `fraisier scaffold && sudo "
+                "fraisier scaffold-install --yes` to refresh the helper's "
+                "allowlist and restart it.",
+                context={
+                    "fraise": self.fraise_name,
+                    "environment": self.environment,
+                    "unit": self.systemd_timer,
+                },
+                cause=exc,
+            ) from exc
+
     def is_deployment_needed(self) -> bool:
-        """Check if timer needs to be enabled/restarted."""
+        """Check if timer needs to be enabled/restarted.
+
+        Uses ``systemctl is-active`` directly rather than the service manager:
+        the query needs no privilege, so it works under ``NoNewPrivileges``
+        with or without a helper socket, while the manager would fall back to
+        ``sudo`` on a host that has none.
+        """
         if not self.systemd_timer:
             return False
 
@@ -84,15 +138,11 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
 
             if self.systemd_timer:
                 logger.info(f"Enabling timer: {self.systemd_timer}")
-                self.runner.run(
-                    ["sudo", "systemctl", "daemon-reload"],
-                )
-                self.runner.run(
-                    ["sudo", "systemctl", "enable", self.systemd_timer],
-                )
-                self.runner.run(
-                    ["sudo", "systemctl", "start", self.systemd_timer],
-                )
+                manager = self._timer_manager()
+                with self._helper_refusal_is_actionable():
+                    manager.daemon_reload()
+                    manager.enable(self.systemd_timer)
+                    manager.start(self.systemd_timer)
 
             new_version = new_sha[:8] if new_sha else self._get_timer_state()
             return old_version, new_version
@@ -194,7 +244,10 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             )
 
     def _get_timer_state(self) -> str | None:
-        """Get timer active state as version proxy."""
+        """Get timer active state as version proxy.
+
+        Unprivileged, like :meth:`is_deployment_needed`.
+        """
         if not self.systemd_timer:
             return None
         try:
@@ -213,7 +266,10 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             return None
 
     def health_check(self) -> bool:
-        """Check if timer is active."""
+        """Check if timer is active.
+
+        Unprivileged, like :meth:`is_deployment_needed`.
+        """
         if not self.systemd_timer:
             return True
         try:
@@ -238,9 +294,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
 
             if self.systemd_timer:
                 logger.info(f"Restarting timer: {self.systemd_timer}")
-                self.runner.run(
-                    ["sudo", "systemctl", "restart", self.systemd_timer],
-                )
+                with self._helper_refusal_is_actionable():
+                    self._timer_manager().restart(self.systemd_timer)
 
             new_version = target[:8] if target else self._get_timer_state()
             duration = time.time() - start_time

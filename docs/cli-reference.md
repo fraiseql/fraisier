@@ -816,6 +816,8 @@ sudo fraisier scheduled-install --env <env>
 
 Skipping steps 1–2 leaves the on-disk `fraisier-<project>-systemctl-helper.service` carrying the *old* allowlist (rendered before the new job was declared). Webhook-driven redeploys of the new timer will then be rejected by the helper socket until those steps run. The change to `_collect_allowed_services` in v0.28.0 updates the *generator*; the rendered helper unit on each host is a separate artefact that only refreshes when `scaffold-install` runs.
 
+Steps 1–2 also matter on **upgrade**, not just when adding a job. From v0.71.0 the deployer enables and starts the timer through the helper socket instead of `sudo systemctl` — `sudo` cannot run from the `NoNewPrivileges` deploy and webhook units at all ([#382](https://github.com/fraiseql/fraisier/issues/382)). The helper's *action* list lives in the fraisier version installed on the host, so after upgrading fraisier there, re-run `fraisier scaffold && sudo fraisier scaffold-install --yes` to restart the helper on the new code. Until that runs, a scheduled deploy fails at the timer with a message naming this remedy.
+
 #### `--via-socket` (v0.29+)
 
 By default `fraisier scheduled-install` writes directly into `/etc/systemd/system/` and runs `systemctl` itself — both of which require root, so the operator must invoke the whole command under `sudo`.

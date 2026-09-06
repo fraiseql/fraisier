@@ -91,6 +91,9 @@ class SystemdServiceManager(ServiceManager):
     1. Unix socket (FRAISIER_SYSTEMCTL_SOCKET) — preferred, no privilege escalation
     2. Wrapper script (FRAISIER_SYSTEMCTL_WRAPPER) — legacy, requires sudo in sudoers
     3. sudo systemctl — fallback when neither env var is set
+
+    Only step 3 escalates, and it is unreachable from a ``NoNewPrivileges``
+    unit; callers running under one must have a socket or wrapper (#382).
     """
 
     def __init__(self, runner: CommandRunner) -> None:
@@ -151,6 +154,17 @@ class SystemdServiceManager(ServiceManager):
         service_name = self._validate_service_name(service_name)
         logger.info("Restarting systemd service: %s", service_name)
         self._run_systemctl("restart", service_name, timeout, check=True)
+
+    def enable(self, service_name: str, timeout: int = 60) -> None:
+        """Enable a systemd unit so it starts on boot.
+
+        Raises:
+            ValueError: If service_name is invalid.
+            subprocess.CalledProcessError: If systemctl fails.
+        """
+        service_name = self._validate_service_name(service_name)
+        logger.info("Enabling systemd unit: %s", service_name)
+        self._run_systemctl("enable", service_name, timeout, check=True)
 
     def is_active(self, service_name: str) -> bool:
         """Check if a systemd service is active.
