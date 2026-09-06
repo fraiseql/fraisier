@@ -58,6 +58,7 @@ from fraisier.drain_restart import (
     send_restart,
     wait_for_deploys_to_drain,
 )
+from fraisier.replay_handoff import record_replay_handoff
 from fraisier.self_upgrade_record import (
     clear_self_upgrade_failure,
     read_self_upgrade_failure,
@@ -433,13 +434,27 @@ def _refuse_restart_for_broken_entrypoint(
     )
 
 
-def _restart_outcome(socket_path: str, service: str) -> tuple[str, int]:
+def _restart_outcome(
+    socket_path: str,
+    service: str,
+    *,
+    required: str,
+    lock_dir: Path | None,
+) -> tuple[str, int]:
     """Request the restart and name the result, which used to be swallowed.
 
     ``_send_restart``'s rc was returned to a caller that discards it and never
     logged, so the last thing written was "requesting restart" whether or not
     the request landed.
+
+    Hands the refused dispatches to whatever starts next, *before* asking for
+    the restart: the RPC can land before this process runs another line, so the
+    marker has to already be on disk (#367). Only this function writes it, so a
+    restart requested for any other reason leaves nothing for the next start to
+    act on.
     """
+    if lock_dir is not None:
+        record_replay_handoff(lock_dir, version=required, service=service)
     rc = _send_restart(socket_path, service)
     return ("restart requested" if rc == 0 else "restart request failed", rc)
 
@@ -517,7 +532,12 @@ def _run_upgrade(
                 service,
             )
             return _finish("no restart socket; install only", 0, started_at)
-        return _finish(*_restart_outcome(socket_path, service), started_at)
+        return _finish(
+            *_restart_outcome(
+                socket_path, service, required=required, lock_dir=lock_dir
+            ),
+            started_at,
+        )
 
     # Flag covers install + drain so dispatch refuses new deploys for the
     # entire upgrade window, not just the drain tail.
@@ -561,7 +581,10 @@ def _run_upgrade(
             )
 
     log.info("self-upgrade: deploys drained; requesting restart of %s", service)
-    return _finish(*_restart_outcome(socket_path, service), started_at)
+    return _finish(
+        *_restart_outcome(socket_path, service, required=required, lock_dir=lock_dir),
+        started_at,
+    )
 
 
 def _main() -> None:

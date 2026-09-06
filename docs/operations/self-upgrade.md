@@ -53,6 +53,49 @@ INFO fraisier.helper_version: fraisier changed under this helper: 0.71.1 → 0.7
 Exiting so the next connection starts it on the new code.
 ```
 
+## Replaying what the upgrade refused
+
+While the `.draining` flag is up the webhook answers new dispatches with
+HTTP 503, and records each `(fraise, environment)` it dropped in
+`<lock_dir>/.refused-dispatches` ([#365](https://github.com/fraiseql/fraisier/issues/365)).
+Since v0.72.0 the upgrade also re-fires them
+([#367](https://github.com/fraiseql/fraisier/issues/367)).
+
+The worker writes `<lock_dir>/.replay-on-start` immediately before it requests
+the restart. The next webhook start **consumes** that marker — reads and
+removes in one step — and replays only then. A webhook restarted for any other
+reason finds no marker and replays nothing: "deploy everything in the ledger"
+is not something an unrelated restart may mean.
+
+Three things the replay does deliberately:
+
+- **It deploys the branch head, not the recorded sha.** Without the refusal the
+  push would have deployed, and any later push would have deployed after it —
+  the end state is *branch head deployed*. Re-deploying the recorded sha would
+  put back code that newer pushes had already superseded, which is a regression
+  dressed as a recovery. There is no mode that does it.
+- **Production goes last**, otherwise alphabetical by `(environment, fraise)`.
+  Deterministic, and if the replay mechanism is itself broken it breaks on a
+  lower-stakes target first. The entries are separate debts, so one failure does
+  not hold the others back.
+- **It never clears a ledger entry.** The replay dispatches through the same
+  path a push takes, whose success branch already discharges the entry. A replay
+  that failed, or that has not finished, leaves the entry standing and
+  `fraisier doctor` still reports it.
+
+A target that has been renamed or removed from `fraises.yaml` is not replayed;
+its entry stands for the operator.
+
+Turn it off with:
+
+```yaml
+webhook:
+  replay_refused: off     # default: head
+```
+
+`off` still consumes the marker, so switching back on later cannot fire a stale
+handoff.
+
 ## Coordinated restart
 
 The worker sequences flag, install, settle, drain, and restart as follows:
