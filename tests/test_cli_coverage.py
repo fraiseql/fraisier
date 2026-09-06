@@ -426,3 +426,44 @@ class TestRollbackCommand:
             ["--config", cfg, "rollback", "my_api", "production", "--force"],
         )
         assert result.exit_code != 0
+
+    def test_failed_rollback_exits_non_zero(self, runner: CliRunner, cfg: str) -> None:
+        """A rollback that did not restore a working service must not exit 0.
+
+        The case that reaches here is a restore onto a version that fails its
+        health check: it used to report ``success=True`` and exit 0 while
+        nothing was serving (#378).
+        """
+        from unittest.mock import MagicMock, patch
+
+        from fraisier.deployers.base import DeploymentResult, DeploymentStatus
+
+        deployer = MagicMock()
+        deployer.get_current_version.return_value = "newsha12"
+        deployer.rollback.return_value = DeploymentResult(
+            success=False,
+            status=DeploymentStatus.ROLLBACK_FAILED,
+            error_message=(
+                "Reverted to aaaaaaaa, but the health check still fails "
+                "after the restart."
+            ),
+        )
+
+        with patch("fraisier.cli._rollback._get_deployer", return_value=deployer):
+            result = runner.invoke(
+                main,
+                [
+                    "--config",
+                    cfg,
+                    "rollback",
+                    "my_api",
+                    "production",
+                    "--to-version",
+                    "a" * 40,
+                    "--force",
+                ],
+            )
+
+        deployer.rollback.assert_called_once()
+        assert result.exit_code != 0
+        assert "rollback" in result.output.lower()

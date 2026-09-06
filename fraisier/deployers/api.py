@@ -1274,13 +1274,40 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
     def _finalize_rollback(
         self, current_version: str | None, target: str, start_time: float
     ) -> DeploymentResult:
-        """Restart service, health-check, and return success result."""
+        """Restart the service on *target*, health-check it, report what happened.
+
+        The health check used to be run and its answer thrown away, so a
+        rollback onto a version that does not come back up reported
+        ``success=True`` and ``rolled_back`` — "rolled back successfully" while
+        nothing was serving (#378). It reports ``rollback_failed`` instead:
+        that state already means "an operator must act before anything is
+        restarted", which is exactly the situation, and the message carries the
+        distinction.
+        """
         if self.systemd_service:
             self._restart_service()
-        if self.health_check_url:
-            self._wait_for_health()
+        healthy = self._wait_for_health() if self.health_check_url else True
 
         duration = time.time() - start_time
+        if not healthy:
+            message = (
+                f"Reverted to {target[:8]}, but the health check at "
+                f"{self.health_check_url} still fails after the restart. "
+                "The previous version is not serving — do NOT assume the "
+                "rollback recovered the service."
+            )
+            logger.critical(message)
+            return self._record_outcome(
+                DeploymentResult(
+                    success=False,
+                    status=DeploymentStatus.ROLLBACK_FAILED,
+                    old_version=current_version,
+                    new_version=target[:8],
+                    duration_seconds=duration,
+                    error_message=message,
+                )
+            )
+
         self._write_status("rolled_back", commit_sha=target)
         return DeploymentResult(
             success=True,
