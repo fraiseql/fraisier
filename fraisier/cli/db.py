@@ -252,7 +252,31 @@ def db_reset(
         )
         raise SystemExit(1)
 
-    result = reset_from_template(db_name, prefix=prefix, connection_url=admin_url)
+    # Hold the same per-fraise lock the webhook takes, for the reason #310 gave
+    # `db restore` (#389). This is the more destructive of the two:
+    # `reset_from_template` force-disconnects every client, drops the database
+    # and recreates it from its template. Run against a fraise mid-deploy it
+    # takes the schema out from under a running migration.
+    #
+    # No `--skip-if-locked`: `db restore` has one because its generated timer
+    # unit passes it, and a skipped nightly restore is a non-event. Nothing
+    # schedules `db reset`, and a silently skipped reset would leave the
+    # operator with the database they were trying to replace.
+    from fraisier.errors import DeploymentLockError
+    from fraisier.locking import deployment_lock
+
+    try:
+        with deployment_lock(fraise):
+            result = reset_from_template(
+                db_name, prefix=prefix, connection_url=admin_url
+            )
+    except DeploymentLockError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        console.print(
+            "  A deploy is in progress for this fraise. Resetting now would "
+            "drop the database it is migrating. Retry once it finishes."
+        )
+        raise SystemExit(1) from exc
 
     if result.success:
         console.print(f"[green]Reset '{db_name}' from {result.template_name}[/green]")
