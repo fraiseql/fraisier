@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The scheduled deployer asked for a privilege it could not get**
+  ([#382](https://github.com/fraiseql/fraisier/issues/382)).
+  `ScheduledDeployer` ran `sudo systemctl daemon-reload`, `enable`, `start` and
+  `restart` through its runner. Both units that host a deploy —
+  `deploy-service.j2` and `fraisier-webhook.service.j2` — set
+  `NoNewPrivileges=yes`, under which `sudo` exits 1 before doing anything, as
+  the unit templates' own comments say for the install fallback. A scheduled
+  fraise with a `systemd_timer` therefore failed at "Enabling timer" on every
+  automated deploy — after the git pull and the dependency install — and only
+  ever worked when someone ran it by hand.
+
+  All four actions now go through `ServiceManager`, which prefers the root
+  systemctl-helper socket the units are already provisioned with.
+  `is_deployment_needed`, `health_check` and `_get_timer_state` keep their
+  direct, unprivileged `systemctl is-active` / `show`: those need no privilege,
+  so routing them through the manager would only have added a `sudo` fallback
+  on a host with no helper.
+
+  A helper that rejects the request now fails the deploy with the rejection and
+  the remedy, instead of `Command 'enable' returned non-zero exit status 1`.
+
+### Changed
+
+- **`enable` is a systemctl-helper action** (#382). It is gated by the same
+  service allowlist as `stop`/`start`/`restart`; nothing new becomes reachable
+  except `enable` on units the allowlist already names —
+  `_collect_allowed_services` has included every scheduled job's
+  `systemd_service` and `systemd_timer` since #239.
+
+  **Hosts must be upgraded to act on it.** The action list lives in the
+  fraisier version running the helper, and the service list in the last
+  rendered scaffold. After upgrading fraisier on a host, run
+  `fraisier scaffold && sudo fraisier scaffold-install --yes` to refresh the
+  allowlist and restart the helper. Until then a scheduled deploy fails at the
+  timer with a message naming exactly that.
+
+- **`ServiceManager.enable(name)` is part of the interface.** `SystemdServiceManager`
+  implements it via `systemctl enable`; `RcServiceManager` via
+  `sysrc <name>_enable=YES`, stripping any systemd unit suffix, since rc.d has
+  none.
+
 ## [0.70.0] - 2026-09-06
 
 **The record said one thing, the deploy did another.**

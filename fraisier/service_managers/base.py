@@ -38,6 +38,15 @@ class ServiceManager(ABC):
         """Restart a service."""
 
     @abstractmethod
+    def enable(self, service_name: str) -> None:
+        """Enable a service so it starts on boot.
+
+        Implementations must not escalate privileges themselves: the deploy
+        and webhook units run with ``NoNewPrivileges``, under which ``sudo``
+        exits 1 (#382).
+        """
+
+    @abstractmethod
     def is_active(self, service_name: str) -> bool:
         """Check if a service is active."""
 

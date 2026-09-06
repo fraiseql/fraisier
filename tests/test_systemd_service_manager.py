@@ -176,3 +176,88 @@ class TestSystemdViaSocket:
         manager = self._make_manager()
         with env_patch, sock_patch, pytest.raises(subprocess.CalledProcessError):
             manager.stop("test_service")
+
+
+# ---------------------------------------------------------------------------
+# enable (#382)
+# ---------------------------------------------------------------------------
+
+
+class TestSystemdEnable:
+    """`enable` resolves through the same three transports as every other action.
+
+    #382: the scheduled deployer used to spawn ``sudo systemctl enable`` itself,
+    which cannot work from a ``NoNewPrivileges`` unit. Routing it through the
+    manager means the socket wins whenever the host provides one.
+    """
+
+    @pytest.fixture
+    def mock_runner(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def manager(self, mock_runner):
+        return SystemdServiceManager(mock_runner)
+
+    def test_enable_falls_back_to_sudo(self, manager, mock_runner):
+        with patch.dict("os.environ", {}, clear=True):
+            manager.enable("backup.timer")
+        mock_runner.run.assert_called_once_with(
+            ["sudo", "systemctl", "enable", "backup.timer"], timeout=60, check=True
+        )
+
+    def test_enable_uses_wrapper_when_set(self, manager, mock_runner):
+        with patch.dict(
+            "os.environ", {"FRAISIER_SYSTEMCTL_WRAPPER": "/usr/local/bin/w"}, clear=True
+        ):
+            manager.enable("backup.timer")
+        mock_runner.run.assert_called_once_with(
+            ["/usr/local/bin/w", "enable", "backup.timer"], timeout=60, check=True
+        )
+
+    def test_enable_goes_through_the_socket_when_set(self, manager, mock_runner):
+        response = _make_socket_response(ok=True, returncode=0, stdout="")
+        mock_sock = MagicMock()
+        mock_file = MagicMock()
+        mock_file.readline.return_value = response
+        mock_sock.makefile.return_value.__enter__ = MagicMock(return_value=mock_file)
+        mock_sock.makefile.return_value.__exit__ = MagicMock(return_value=False)
+        with (
+            patch.dict("os.environ", {"FRAISIER_SYSTEMCTL_SOCKET": "/tmp/test.sock"}),
+            patch(
+                "socket.socket",
+                return_value=MagicMock(
+                    __enter__=MagicMock(return_value=mock_sock),
+                    __exit__=MagicMock(return_value=False),
+                ),
+            ),
+        ):
+            manager.enable("backup.timer")
+
+        mock_runner.run.assert_not_called()
+        sent = json.loads(mock_sock.sendall.call_args[0][0].decode())
+        assert sent == {"action": "enable", "service": "backup.timer"}
+
+    def test_enable_raises_when_the_helper_refuses(self, manager):
+        response = _make_socket_response(ok=False, returncode=1, stdout="")
+        mock_sock = MagicMock()
+        mock_file = MagicMock()
+        mock_file.readline.return_value = response
+        mock_sock.makefile.return_value.__enter__ = MagicMock(return_value=mock_file)
+        mock_sock.makefile.return_value.__exit__ = MagicMock(return_value=False)
+        with (
+            patch.dict("os.environ", {"FRAISIER_SYSTEMCTL_SOCKET": "/tmp/test.sock"}),
+            patch(
+                "socket.socket",
+                return_value=MagicMock(
+                    __enter__=MagicMock(return_value=mock_sock),
+                    __exit__=MagicMock(return_value=False),
+                ),
+            ),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            manager.enable("backup.timer")
+
+    def test_enable_validates_the_service_name(self, manager):
+        with pytest.raises(ValueError, match="Invalid service name"):
+            manager.enable("backup timer; rm -rf /")

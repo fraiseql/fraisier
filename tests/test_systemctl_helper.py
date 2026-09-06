@@ -61,8 +61,11 @@ class TestAllowedActions:
     def test_contains_daemon_reload(self):
         assert "daemon-reload" in _ALLOWED_ACTIONS
 
-    def test_does_not_contain_enable(self):
-        assert "enable" not in _ALLOWED_ACTIONS
+    def test_contains_enable(self):
+        """#382: the scheduled deployer enables its timer through the helper,
+        because both deploy-hosting units set NoNewPrivileges and sudo cannot
+        run under them."""
+        assert "enable" in _ALLOWED_ACTIONS
 
     def test_does_not_contain_disable(self):
         assert "disable" not in _ALLOWED_ACTIONS
@@ -120,9 +123,47 @@ class TestHandleConnection:
         return json.loads(raw.decode()) if raw else {}
 
     def test_rejects_unknown_action(self):
-        result = self._call({"action": "enable", "service": "foo.service"}, frozenset())
+        result = self._call(
+            {"action": "disable", "service": "foo.service"}, frozenset()
+        )
         assert result["ok"] is False
         assert "action not allowed" in result["error"]
+
+    def test_enable_allowed_service_calls_systemctl(self):
+        """#382: enable reaches systemctl for an allowlisted timer."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            result = self._call(
+                {"action": "enable", "service": "backup.timer"},
+                frozenset({"backup.timer"}),
+            )
+
+        mock_run.assert_called_once()
+        assert mock_run.call_args[0][0] == [
+            "/usr/bin/systemctl",
+            "enable",
+            "backup.timer",
+        ]
+        assert result["ok"] is True
+
+    def test_enable_rejected_for_service_not_in_allowlist(self):
+        """#382: enable is gated by the same service allowlist as stop/start."""
+        result = self._call(
+            {"action": "enable", "service": "evil.timer"},
+            frozenset({"backup.timer"}),
+        )
+        assert result["ok"] is False
+        assert "service not allowed" in result["error"]
+
+    def test_enable_rejects_missing_service_field(self):
+        """#382: enable is not a service-less action like daemon-reload."""
+        result = self._call({"action": "enable"}, frozenset({"backup.timer"}))
+        assert result["ok"] is False
+        assert "missing 'service'" in result["error"]
 
     def test_rejects_service_not_in_allowlist(self):
         result = self._call(
