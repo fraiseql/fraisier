@@ -14,6 +14,7 @@ from fraisier.daemon import (
     execute_deployment_request,
     parse_deployment_request,
 )
+from fraisier.deployers.base import DeploymentResult, DeploymentStatus
 
 
 @pytest.fixture
@@ -107,12 +108,11 @@ class TestDeploymentRequest:
 class TestExecuteDeploymentRequest:
     """Tests for execute_deployment_request function."""
 
-    @patch("fraisier.daemon.write_status")
     @patch("fraisier.locking.deployment_lock")
     @patch("fraisier.daemon.get_config")
     @patch("fraisier.daemon._get_deployer")
     def test_execute_successful_deployment(
-        self, mock_get_deployer, mock_get_config, mock_lock, mock_write_status
+        self, mock_get_deployer, mock_get_config, mock_lock
     ):
         """Execute deployment request successfully."""
         # Mock config
@@ -152,9 +152,8 @@ class TestExecuteDeploymentRequest:
         assert result.status == "success"
         mock_deployer.execute.assert_called_once()
 
-    @patch("fraisier.daemon.write_status")
     @patch("fraisier.daemon.get_config")
-    def test_execute_unknown_project(self, mock_get_config, mock_write_status):
+    def test_execute_unknown_project(self, mock_get_config):
         """Execute deployment for unknown project fails with diagnostic."""
         mock_config = MagicMock()
         mock_config.get_fraise_environment.return_value = None
@@ -180,9 +179,8 @@ class TestExecuteDeploymentRequest:
         assert "/opt/fraisier/fraises.yaml" in result.error_message
         assert "Available projects: api, web, worker" in result.error_message
 
-    @patch("fraisier.daemon.write_status")
     @patch("fraisier.daemon.get_config")
-    def test_execute_config_not_found(self, mock_get_config, mock_write_status):
+    def test_execute_config_not_found(self, mock_get_config):
         """Execute deployment when config file not found shows diagnostic."""
         paths = [
             "/tmp/test/fraises.yaml",
@@ -211,12 +209,11 @@ class TestExecuteDeploymentRequest:
         assert "Searched locations:" in result.error_message
         assert "systemd" in result.error_message
 
-    @patch("fraisier.daemon.write_status")
     @patch("fraisier.locking.deployment_lock")
     @patch("fraisier.daemon.get_config")
     @patch("fraisier.daemon._get_deployer")
     def test_execute_force_deployment(
-        self, mock_get_deployer, mock_get_config, mock_lock, mock_write_status
+        self, mock_get_deployer, mock_get_config, mock_lock
     ):
         """Execute deployment when forced even if not needed."""
         # Mock config
@@ -255,15 +252,44 @@ class TestExecuteDeploymentRequest:
         assert result.success is True
         mock_deployer.execute.assert_called_once()
 
-    @patch("fraisier.daemon.write_status")
+    def test_the_daemon_owns_no_status_writer(self):
+        """Exactly one writer produces the status file, and it is the deployer.
+
+        Two writers is the whole of #378: whichever wrote last won, and the
+        daemon's write said `success` for every outcome. This pins both routes
+        back in — a module-level import and a qualified call.
+        """
+        import re
+        from pathlib import Path
+
+        from fraisier import daemon
+
+        assert not hasattr(daemon, "write_status"), (
+            "fraisier.daemon imported a status writer again"
+        )
+        source = Path(daemon.__file__).read_text()
+        stray = re.search(r"(?<![\w.])write_status\(", source)
+        assert stray is None, "daemon.py calls write_status() again (#378)"
+
+    @pytest.mark.parametrize("status_value", ["success", "failed", "rollback_failed"])
     @patch("fraisier.locking.deployment_lock")
     @patch("fraisier.daemon.get_config")
     @patch("fraisier.daemon._get_deployer")
-    def test_execute_writes_status_files(
-        self, mock_get_deployer, mock_get_config, mock_lock, mock_write_status
+    def test_execute_leaves_the_record_to_the_deployer(
+        self,
+        mock_get_deployer,
+        mock_get_config,
+        mock_lock,
+        status_value,
     ):
-        """Execute deployment writes status files for deploying/success states."""
-        # Mock config
+        """The daemon writes no status for a result ``execute()`` returned.
+
+        The deployer already wrote it — with its owner fields, its own
+        ``status_dir`` and the real commit sha. The daemon's second write
+        reported ``success`` for every outcome, ``rollback_failed`` included,
+        and blanked the sha, because ``DeploymentResult`` has no ``commit_sha``
+        attribute for ``getattr`` to find (#378).
+        """
         mock_config = MagicMock()
         mock_config.get_fraise_environment.return_value = {
             "type": "api",
@@ -272,14 +298,14 @@ class TestExecuteDeploymentRequest:
         mock_config.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
         mock_get_config.return_value = mock_config
 
-        # Mock deployer
         mock_deployer = MagicMock()
         mock_deployer.is_deployment_needed.return_value = True
-        mock_deployer.execute.return_value = MagicMock(
-            success=True,
-            status=MagicMock(value="success"),
+        mock_deployer.execute.return_value = DeploymentResult(
+            success=status_value == "success",
+            status=DeploymentStatus(status_value),
             new_version="abc123",
             duration_seconds=30.0,
+            error_message=None if status_value == "success" else "boom",
         )
         mock_get_deployer.return_value = mock_deployer
 
@@ -294,25 +320,101 @@ class TestExecuteDeploymentRequest:
             metadata={},
         )
 
-        execute_deployment_request(request)
+        result = execute_deployment_request(request)
 
-        # Check that write_status was called twice: deploying then success
-        assert mock_write_status.call_count == 2
+        assert result.status == status_value
+        mock_deployer._write_status.assert_not_called()
 
-        # Check first call: deploying state
-        deploying_call = mock_write_status.call_args_list[0]
-        status_arg = deploying_call[0][0]  # First positional arg
-        assert status_arg.fraise_name == "api"
-        assert status_arg.state == "deploying"
-        assert status_arg.started_at is not None
+    @patch("fraisier.locking.deployment_lock")
+    @patch("fraisier.daemon.get_config")
+    @patch("fraisier.daemon._get_deployer")
+    def test_execute_refused_by_the_lock_writes_nothing(
+        self, mock_get_deployer, mock_get_config, mock_lock
+    ):
+        """A refused request must not touch the record of the running deploy.
 
-        # Check second call: success state
-        success_call = mock_write_status.call_args_list[1]
-        status_arg = success_call[0][0]
-        assert status_arg.fraise_name == "api"
-        assert status_arg.state == "success"
-        assert status_arg.finished_at is not None
-        assert status_arg.version == "abc123"
+        The daemon used to write ``deploying`` before taking the lock, so a
+        refusal then landed as ``failed: Deploy already running`` on top of the
+        record belonging to the deploy that holds it (#378).
+        """
+        from fraisier.errors import DeploymentLockError
+
+        mock_config = MagicMock()
+        mock_config.get_fraise_environment.return_value = {
+            "type": "api",
+            "app_path": "/var/www/api",
+        }
+        mock_config.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
+        mock_get_config.return_value = mock_config
+
+        mock_deployer = MagicMock()
+        mock_deployer.is_deployment_needed.return_value = True
+        mock_get_deployer.return_value = mock_deployer
+
+        mock_lock.side_effect = DeploymentLockError("Deploy already running for api")
+
+        request = DeploymentRequest(
+            version=1,
+            project="api",
+            environment="development",
+            branch="dev",
+            timestamp="2026-04-02T11:15:23Z",
+            triggered_by="webhook",
+            options={},
+            metadata={},
+        )
+
+        result = execute_deployment_request(request)
+
+        assert result.success is False
+        assert "already running" in (result.message or "").lower()
+        mock_deployer.execute.assert_not_called()
+        mock_deployer._write_status.assert_not_called()
+
+    @patch("fraisier.locking.deployment_lock")
+    @patch("fraisier.daemon.get_config")
+    @patch("fraisier.daemon._get_deployer")
+    def test_execute_closes_the_record_when_the_deployer_raises(
+        self, mock_get_deployer, mock_get_config, mock_lock
+    ):
+        """An exception that escapes ``execute()`` leaves the record open.
+
+        Nobody else will close it, so the daemon does — through the deployer's
+        own ``_write_status``, which stamps the owner fields and honours the
+        fraise's ``status_dir``. The daemon's module-level writer knows neither
+        (#378).
+        """
+        mock_config = MagicMock()
+        mock_config.get_fraise_environment.return_value = {
+            "type": "api",
+            "app_path": "/var/www/api",
+        }
+        mock_config.get_deploy_user.return_value = pwd.getpwuid(os.getuid()).pw_name
+        mock_get_config.return_value = mock_config
+
+        mock_deployer = MagicMock()
+        mock_deployer.is_deployment_needed.return_value = True
+        mock_deployer.execute.side_effect = RuntimeError("git pull exploded")
+        mock_get_deployer.return_value = mock_deployer
+
+        request = DeploymentRequest(
+            version=1,
+            project="api",
+            environment="development",
+            branch="dev",
+            timestamp="2026-04-02T11:15:23Z",
+            triggered_by="webhook",
+            options={},
+            metadata={},
+        )
+
+        result = execute_deployment_request(request)
+
+        assert result.success is False
+        mock_deployer._write_status.assert_called_once()
+        args, kwargs = mock_deployer._write_status.call_args
+        assert args[0] == "failed"
+        assert "git pull exploded" in kwargs["error_message"]
 
     @patch("fraisier.daemon.get_config")
     def test_execute_wrong_user_fails_with_clear_message(self, mock_get_config):
