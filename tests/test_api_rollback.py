@@ -538,3 +538,63 @@ class TestDoubleFailureSendsCriticalNotification:
 
         assert "Health check failed" in result.error_message
         assert "migrate down failed" in result.error_message
+
+
+class TestRollbackOntoAnUnhealthyVersion:
+    """A restore that does not come back up is not a successful rollback.
+
+    ``_finalize_rollback`` ran the health check and discarded the answer, so a
+    rollback onto a version that stayed down reported "rolled back
+    successfully" with ``success=True`` — on the health-failure path, the
+    timeout path, the smoke-test path and ``fraisier rollback`` alike (#378).
+    """
+
+    def test_finalize_reports_rollback_failed_when_the_old_version_is_down(
+        self, tmp_path
+    ):
+        from fraisier.status import read_status
+
+        deployer = _make_deployer(
+            tmp_path,
+            health_check={"url": "http://127.0.0.1:1/health", "timeout": 1},
+            status_dir=str(tmp_path / "status"),
+        )
+        target = "a" * 40
+
+        with (
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_wait_for_health", return_value=False) as health,
+        ):
+            result = deployer._finalize_rollback("newsha", target, start_time=0.0)
+
+        health.assert_called_once()
+        assert result.success is False
+        assert result.status == DeploymentStatus.ROLLBACK_FAILED
+        assert "aaaaaaaa" in (result.error_message or "")
+        assert "127.0.0.1:1/health" in (result.error_message or "")
+
+        status = read_status("myapi", status_dir=tmp_path / "status")
+        assert status is not None
+        assert status.state == "rollback_failed"
+
+    def test_finalize_reports_rolled_back_when_the_old_version_answers(self, tmp_path):
+        from fraisier.status import read_status
+
+        deployer = _make_deployer(
+            tmp_path,
+            health_check={"url": "http://127.0.0.1:1/health", "timeout": 1},
+            status_dir=str(tmp_path / "status"),
+        )
+        target = "a" * 40
+
+        with (
+            patch.object(deployer, "_restart_service"),
+            patch.object(deployer, "_wait_for_health", return_value=True),
+        ):
+            result = deployer._finalize_rollback("newsha", target, start_time=0.0)
+
+        assert result.success is True
+        assert result.status == DeploymentStatus.ROLLED_BACK
+        status = read_status("myapi", status_dir=tmp_path / "status")
+        assert status is not None and status.state == "rolled_back"
+        assert status.commit_sha == target

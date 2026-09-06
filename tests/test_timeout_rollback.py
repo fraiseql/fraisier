@@ -28,11 +28,13 @@ def _make_api_deployer(tmp_path, **overrides) -> APIDeployer:
 
 
 def _assert_record_matches(result, tmp_path):
+    """The record equals the returned result; hand it back for further checks."""
     status = read_status("my_api", status_dir=tmp_path / "status")
     assert status is not None, "the timeout path filed no record"
     assert status.state == result.status.value, (
         f"returned {result.status.value!r} and filed {status.state!r}"
     )
+    return status
 
 
 class TestTimeoutRollback:
@@ -111,8 +113,7 @@ class TestTimeoutRollback:
 
         assert result.status == DeploymentStatus.ROLLBACK_FAILED
         assert "rollback" in (result.error_message or "").lower()
-        _assert_record_matches(result, tmp_path)
-        status = read_status("my_api", status_dir=tmp_path / "status")
+        status = _assert_record_matches(result, tmp_path)
         assert "rollback broke" in (status.error_message or ""), (
             "the timeout message overwrote the rollback's own explanation: "
             f"{status.error_message!r}"

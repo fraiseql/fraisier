@@ -29,9 +29,15 @@ Deployment started
   |     |    2. Git checkout previous SHA
   |     |    3. Restart service
   |     |
-  |     +-- Rollback succeeded?
+  |     +-- Rollback succeeded, restored version healthy?
   |     |     -> Status: ROLLED_BACK
   |     |     -> Action: Check app logs, fix code, redeploy
+  |     |
+  |     +-- Rollback succeeded, restored version still down?
+  |     |     -> Status: ROLLBACK_FAILED
+  |     |     -> Message names the restored SHA and the health URL
+  |     |     -> Action: the cause is outside this deploy — check the
+  |     |        journal for the restored version (see below)
   |     |
   |     +-- Rollback failed?
   |           -> Status: ROLLBACK_FAILED
@@ -71,9 +77,23 @@ Deployment started
 2. Rolls back migrations (`confiture migrate down --steps=N`)
 3. Checks out previous git SHA
 4. Restarts service
-5. Returns `ROLLED_BACK` status
+5. Health-checks the *restored* version
+6. Returns `ROLLED_BACK` status if it answers
 
 **What you should do**: Check application logs. The new code likely crashes on startup or binds to a different port.
+
+### Restored, But Still Down
+
+**What happens**: The rollback ran to completion — migrations down, previous SHA checked out, service restarted — and the health endpoint still does not answer.
+
+**What fraisier does**:
+1. Logs `CRITICAL`
+2. Returns `ROLLBACK_FAILED`, not `ROLLED_BACK`, with a message naming the restored SHA and the health URL
+3. Writes `rollback_failed` to the status file, so `fraisier status` shows the incident banner
+
+The status is deliberately the same one a failed rollback reports: both mean *an operator must look before anything is restarted*. The message tells the two apart — a `ROLLBACK_FAILED` whose text says "Reverted to `<sha>`, but the health check … still fails" had a clean revert and a service that is down for another reason.
+
+**What you should do**: The previous version is not serving, so the cause is outside the deploy — a dependency, the database, a port already bound, an expired credential. Check the service journal for the *restored* version before redeploying; a redeploy of the same code will not fix it.
 
 ### Double Failure (Rollback Failed)
 
