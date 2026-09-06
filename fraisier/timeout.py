@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -77,28 +78,79 @@ def derived_timeout(default: float) -> float:
     return max(MIN_DERIVED_TIMEOUT_S, remaining)
 
 
-def _interrupt_main_thread(
+def _interrupt_thread(
+    target_tid: int,
     on_timeout: Callable[[], None] | None,
 ) -> None:
-    """Raise DeploymentTimeoutExpired in the main thread."""
+    """Raise DeploymentTimeoutExpired in the thread that started the timer.
+
+    *target_tid* is captured when :func:`deployment_timeout` is entered, not
+    looked up here. It used to be ``threading.main_thread()``, which is only
+    the deploying thread when the deploy runs on it: a deploy dispatched
+    through the webhook's ``BackgroundTasks`` runs on a worker, so the
+    exception went to uvicorn's event loop while the deploy carried on
+    unbounded (#388).
+    """
     if on_timeout is not None:
         on_timeout()
 
-    # Inject exception into the main thread
-    main_tid = threading.main_thread().ident
-    if main_tid is not None:
-        rc = ctypes.pythonapi.PyThreadState_SetAsyncExc(
-            ctypes.c_ulong(main_tid),
-            ctypes.py_object(DeploymentTimeoutExpired),
+    rc = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(target_tid),
+        ctypes.py_object(DeploymentTimeoutExpired),
+    )
+    if rc == 0:
+        logger.warning(
+            "PyThreadState_SetAsyncExc: thread not found (tid=%s)", target_tid
         )
-        if rc == 0:
-            logger.warning(
-                "PyThreadState_SetAsyncExc: thread not found (tid=%s)", main_tid
-            )
-        elif rc > 1:
-            # Multiple threads affected — undo to avoid corruption
-            ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(main_tid), None)
-            logger.error("PyThreadState_SetAsyncExc affected %d threads, undone", rc)
+    elif rc > 1:
+        # Multiple threads affected — undo to avoid corruption
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(target_tid), None)
+        logger.error("PyThreadState_SetAsyncExc affected %d threads, undone", rc)
+
+
+def statement_timeout_url(database_url: str | None, *, seconds: float) -> str | None:
+    """Return *database_url* with a PostgreSQL ``statement_timeout`` attached.
+
+    The one hang on the deploy path that ``timeout:`` cannot reach is a
+    migration waiting on the database: the wait is inside libpq, and
+    ``PyThreadState_SetAsyncExc`` raises at the next bytecode boundary. The
+    server can end it instead — and libpq accepts a GUC through the connection
+    string's ``options`` parameter, so this needs nothing from confiture (#388).
+
+    Appended, never substituted: an operator who set ``options`` meant it, and
+    PostgreSQL takes the last setting of a GUC. ``None`` in, ``None`` out —
+    confiture resolves its own URL when fraisier supplies none, and there is
+    then nothing to attach to. A URL that cannot be parsed is returned
+    unchanged: a diagnostic bound is never worth breaking a connection string.
+    """
+    if not database_url or seconds <= 0:
+        return database_url
+    try:
+        if not urlsplit(database_url).scheme:
+            return database_url
+        # Split on "?" by hand rather than round-tripping through
+        # urlunsplit: it collapses an empty netloc, so the socket-style
+        # `postgresql:///db?host=/run/postgresql` this project uses everywhere
+        # would come back as `postgresql:/db` and fail to parse as a DSN.
+        base, _, query_str = database_url.partition("?")
+        query = parse_qsl(query_str, keep_blank_values=True)
+        setting = f"-c statement_timeout={int(seconds * 1000)}"
+        existing = next((v for k, v in query if k == "options"), None)
+        merged = f"{existing} {setting}" if existing else setting
+        query = [(k, v) for k, v in query if k != "options"]
+        query.append(("options", merged))
+        # `quote_via=quote`, not urlencode's default `quote_plus`: libpq
+        # percent-decodes a connection string but does *not* read "+" as a
+        # space, so the default encoding turns `-c statement_timeout=…` into
+        # `-c+statement_timeout=…` and the server rejects the parameter.
+        return f"{base}?{urlencode(query, quote_via=quote)}"
+    except Exception:
+        logger.warning(
+            "could not attach a statement_timeout to the database URL; "
+            "the migration keeps its server-side default",
+            exc_info=True,
+        )
+        return database_url
 
 
 @contextmanager
@@ -128,8 +180,9 @@ def deployment_timeout(
     """
     timer = threading.Timer(
         seconds,
-        _interrupt_main_thread,
-        args=(on_timeout,),
+        _interrupt_thread,
+        # Captured here, in the thread that is about to do the work.
+        args=(threading.get_ident(), on_timeout),
     )
     timer.daemon = True
     ctx = TimeoutContext(timer=timer, deadline=time.monotonic() + seconds)

@@ -175,11 +175,26 @@ socket, a child process being waited for, a read from a root helper. So:
   of this deploy's budget, so a helper that accepts a connection and never
   answers can no longer hold the deploy — or the per-fraise lock, or the
   `deploying` record — open indefinitely.
-- **A step that blocks past the budget is reported when it returns, not
-  interrupted.** A migration that hangs inside the database holds the lock for
-  as long as it hangs. `fraisier status` shows the deploy as still running,
-  because it is. To bound the database itself, set a `statement_timeout` on the
-  deploy role.
+- **The database is bounded by the server.** A migration waiting inside libpq
+  is the one hang the timer cannot reach, so the deploy hands PostgreSQL its own
+  budget: the connection string fraisier gives confiture carries
+  `statement_timeout` set to whatever is left of `timeout:`. A stuck migration
+  is cancelled by the server, the transaction rolls back, and the deploy fails
+  and releases its lock instead of holding it indefinitely.
+
+  ```yaml
+  database:
+    statement_timeout: auto   # default; `false` to leave it alone, or a number of seconds
+  ```
+
+  Only when fraisier supplies the URL. If confiture resolves its own connection
+  from `confiture.yaml`, set `statement_timeout` on the deploy role instead.
+  Outside a deploy — a CLI migration — there is no budget to inherit and the
+  connection is untouched.
+
+- **A step that blocks past the budget with no bound of its own is reported
+  when it returns, not interrupted.** `fraisier status` shows the deploy as
+  still running, because it is.
 - **A timeout that lands inside a rollback is reported as a timeout**, and says
   the previous version may be only partly restored — it is not reported as a
   failed rollback.

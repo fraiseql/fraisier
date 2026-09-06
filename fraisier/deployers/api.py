@@ -1018,8 +1018,38 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         migrations_dir = Path(
             self.database_config.get("migrations_dir", "db/migrations")
         )
-        database_url = self.database_config.get("database_url")
+        database_url = self._bounded_database_url(
+            self.database_config.get("database_url")
+        )
         return strategy, confiture_config, migrations_dir, database_url
+
+    def _bounded_database_url(self, database_url: str | None) -> str | None:
+        """Attach a ``statement_timeout`` carrying this deploy's budget (#388).
+
+        A migration waiting on the database is the one hang ``timeout:`` cannot
+        reach: the wait is inside libpq, and the timer's exception is delivered
+        at the next bytecode boundary. PostgreSQL can end it instead, and libpq
+        takes the GUC through the connection string — so the deploy's own budget
+        becomes the server-side bound, and a stuck migration stops holding the
+        per-fraise lock and the ``deploying`` record indefinitely.
+
+        ``database.statement_timeout`` overrides: ``false`` leaves the URL
+        alone, a number pins that many seconds. Outside a deploy there is no
+        budget to inherit and the URL is untouched, so a CLI migration is
+        unaffected.
+        """
+        from fraisier.timeout import remaining_budget, statement_timeout_url
+
+        configured = self.database_config.get("statement_timeout", "auto")
+        if configured is False or configured == "off":
+            return database_url
+        if isinstance(configured, int | float) and not isinstance(configured, bool):
+            seconds: float | None = float(configured)
+        else:
+            seconds = remaining_budget()
+        if seconds is None:
+            return database_url
+        return statement_timeout_url(database_url, seconds=seconds)
 
     def _resolve_paths_against_app(
         self, confiture_config: Path, migrations_dir: Path
