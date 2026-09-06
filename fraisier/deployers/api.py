@@ -647,14 +647,19 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
         timeout = self.config.get("timeout", 600)
 
-        # Validate wrapper scripts before deployment starts
-        self._validate_wrapper_scripts()
-
-        # Prove the sandbox can write where this deploy is about to (#325),
-        # before the first step that would fail on it with a bare exit code.
-        self._validate_sandbox_writes()
-
         try:
+            # Inside the try, deliberately (#378). These two raise, and the
+            # record and the deployments row are already open above: raising
+            # past the handler left `deploying` stamped with a live pid — on
+            # the webhook path, the webhook's own — so the orphan reconciler
+            # abstained for as long as that process lived, the row stayed open
+            # and nothing was notified. Outside `deployment_timeout` because
+            # neither touches the network.
+            self._validate_wrapper_scripts()
+            # Prove the sandbox can write where this deploy is about to (#325),
+            # before the first step that would fail on it with a bare exit code.
+            self._validate_sandbox_writes()
+
             with deployment_timeout(timeout):
                 # Config sync and scaffold regeneration (pre-pull, from cached worktree)
                 try:

@@ -1185,7 +1185,10 @@ class TestVersionJsonAbortRollback:
             patch.object(deployer, "_run_database_migrations"),
             patch.object(deployer, "_run_post_migrate"),
             patch.object(deployer, "_restart_service"),
-            patch.object(deployer, "_wait_for_health", return_value=False),
+            # The deploy's own check fails; the restored version answers. The
+            # second answer is what separates ROLLED_BACK from ROLLBACK_FAILED
+            # (#378), so it has to be given here.
+            patch.object(deployer, "_wait_for_health", side_effect=[False, True]),
             patch.object(deployer, "_git_rollback"),
             patch.object(deployer, "get_current_version", return_value="oldsha"),
             patch.object(deployer, "_write_status"),

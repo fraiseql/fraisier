@@ -387,3 +387,36 @@ def test_the_record_says_what_the_deploy_returned(path: TerminalPath, tmp_path: 
             f"path {path.id!r} filed {status.error_message!r}, which drops "
             f"{path.message_contains!r}"
         )
+
+
+def test_a_validation_failure_closes_the_row_and_notifies(tmp_path: Path):
+    """The pre-flight validators raised past the failure handler (#378).
+
+    `_write_status("deploying")` and `_start_db_record()` had already run, so a
+    missing wrapper script left a live-owned `deploying` record, an open
+    deployments row and no notification — on the webhook path, for as long as
+    the webhook process lived.
+    """
+    deployer = _deployer(tmp_path)
+
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "FRAISIER_SYSTEMCTL_WRAPPER": str(
+                    Path(str(deployer.app_path)) / "no-such-wrapper"
+                )
+            },
+        ),
+        _git_and_service(deployer),
+        patch.object(deployer, "_start_db_record", return_value=17),
+        patch.object(deployer, "_complete_db_record") as complete,
+        patch.object(deployer, "_notify") as notify,
+    ):
+        result = deployer.execute()
+
+    assert result.status is DeploymentStatus.FAILED
+    assert "no-such-wrapper" in (result.error_message or "")
+    complete.assert_called_once()
+    assert complete.call_args.args[0] == 17
+    notify.assert_called_once()

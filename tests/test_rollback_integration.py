@@ -64,7 +64,7 @@ class TestDeployRollbackIntegration:
 
         with (
             patch.object(deployer, "_restart_service"),
-            patch.object(deployer, "_wait_for_health", return_value=False),
+            patch.object(deployer, "_wait_for_health", side_effect=[False, True]),
             patch.object(deployer, "_write_status"),
         ):
             result = deployer.execute()
@@ -106,7 +106,7 @@ class TestDeployRollbackIntegration:
 
         with (
             patch.object(deployer, "_restart_service"),
-            patch.object(deployer, "_wait_for_health", return_value=False),
+            patch.object(deployer, "_wait_for_health", side_effect=[False, True]),
             patch.object(deployer, "_write_status", side_effect=track_status),
         ):
             result = deployer.execute()
@@ -133,7 +133,7 @@ class TestDeployRollbackIntegration:
 
         with (
             patch.object(deployer, "_restart_service"),
-            patch.object(deployer, "_wait_for_health", return_value=False),
+            patch.object(deployer, "_wait_for_health", side_effect=[False, True]),
             patch.object(deployer, "_write_status"),
             patch.object(
                 deployer,
