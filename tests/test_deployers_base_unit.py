@@ -231,6 +231,7 @@ class TestInstallScaffoldDeclaresTheDeploy:
         config_path.write_text("name: myproj\nfraises: {}\n")
 
         sent: list[bytes] = []
+        bounds: list[float] = []
 
         class _FakeSock:
             def __enter__(self):
@@ -238,6 +239,12 @@ class TestInstallScaffoldDeclaresTheDeploy:
 
             def __exit__(self, *exc):
                 return False
+
+            def settimeout(self, seconds):
+                # A real socket has this, and the client bounds every helper
+                # call from the deploy budget (#384) — a stub that omits it
+                # would let an unbounded read ship.
+                bounds.append(seconds)
 
             def connect(self, _path):
                 return None
@@ -265,6 +272,7 @@ class TestInstallScaffoldDeclaresTheDeploy:
         request = json.loads(sent[0].decode())
         assert request["action"] == "install"
         assert request["deploy_in_flight"] is True
+        assert bounds and bounds[0] > 0, "the helper call was not bounded"
 
 
 # ---------------------------------------------------------------------------

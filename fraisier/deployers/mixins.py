@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fraisier.constants import DEFAULT_EXEC_TIMEOUT
 from fraisier.errors import DeploymentError, FrameworkError
 from fraisier.git.operations import (
     clone_bare_repo,
@@ -21,6 +22,7 @@ from fraisier.git.operations import (
     get_worktree_sha,
 )
 from fraisier.status import DeploymentStatusFile, current_owner, write_status
+from fraisier.timeout import derived_timeout
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -295,9 +297,16 @@ class GitDeployMixin(StatusRecordMixin):
             DeploymentError: If the connection fails or the command exits non-zero.
         """
         request = json.dumps({"command": command, "cwd": cwd}).encode() + b"\n"
+        # Bounded by what is left of this deploy's budget (#384). Without it a
+        # helper that accepts and never answers held the per-fraise lock and
+        # the `deploying` record for as long as it hung, and `timeout:` could
+        # not end it: the exception lands at the next bytecode boundary, and a
+        # blocking recv reaches none.
+        timeout_s = derived_timeout(DEFAULT_EXEC_TIMEOUT)
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             with sock:
+                sock.settimeout(timeout_s)
                 sock.connect(socket_path)
                 sock.sendall(request)
                 sock.shutdown(socket.SHUT_WR)
@@ -311,6 +320,21 @@ class GitDeployMixin(StatusRecordMixin):
                     if b"\n" in buf:
                         raw = bytes(buf.split(b"\n", 1)[0])
                         break
+        except TimeoutError as exc:
+            raise DeploymentError(
+                f"The install helper at {socket_path} did not answer within "
+                f"{timeout_s:.0f}s. The deploy is not retrying it: the helper "
+                "accepted the connection, so it may still be running the "
+                "install, and a second attempt would run it twice.\n"
+                "  Look at the helper's own journal: "
+                "journalctl -u 'fraisier-*-install-helper.service'",
+                context={
+                    "socket_path": socket_path,
+                    "command": command,
+                    "cwd": cwd,
+                    "timeout_s": timeout_s,
+                },
+            ) from exc
         except OSError as exc:
             raise DeploymentError(
                 f"Failed to connect to install helper socket {socket_path}: {exc}",
