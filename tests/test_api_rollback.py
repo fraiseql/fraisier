@@ -163,7 +163,10 @@ class TestRollbackAbortsOnMigrationFailure:
             result = deployer.rollback()
 
         assert not result.success
-        assert result.status == DeploymentStatus.FAILED
+        # A rollback whose `migrate down` failed is a *failed rollback*: the
+        # schema may be half-migrated, which is exactly what ROLLBACK_FAILED
+        # means and what FAILED does not (#378).
+        assert result.status == DeploymentStatus.ROLLBACK_FAILED
         assert "manual intervention required" in result.error_message.lower()
         # Git checkout must NOT have been called
         git_calls = [c for c in mock_subprocess.call_args_list if "checkout" in str(c)]
