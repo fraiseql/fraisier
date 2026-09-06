@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
+from fraisier.helper_version import VersionWatch, serve_until_stale
 from fraisier.unit_installer_protocol import (
     Allowlist,
     AllowlistEntry,
@@ -574,24 +575,20 @@ def main() -> None:  # pragma: no cover — exercised end-to-end by the smoke te
     resolved = _resolve_allowlist(allowlist)
     lock_path = _DEFAULT_LOCK_DIR / f"unit-installer-{project}-{env}.lock"
     server_sock = _build_server_socket()
+    watch = VersionWatch()
+
+    def _handle(conn: socket.socket) -> None:
+        with conn:
+            _serve_connection(
+                conn,
+                expected_uid=deploy_uid,
+                allowlist=allowlist,
+                resolved=resolved,
+                lock_path=lock_path,
+            )
+
     try:
-        while True:
-            try:
-                conn, _ = server_sock.accept()
-            except OSError as exc:
-                logger.error("accept() failed: %s", exc)
-                break
-            with conn:
-                try:
-                    _serve_connection(
-                        conn,
-                        expected_uid=deploy_uid,
-                        allowlist=allowlist,
-                        resolved=resolved,
-                        lock_path=lock_path,
-                    )
-                except Exception as exc:
-                    logger.exception("Unhandled error in manifest handler: %s", exc)
+        serve_until_stale(server_sock, _handle, is_stale=watch.is_stale)
     finally:
         server_sock.close()
 

@@ -291,7 +291,14 @@ class TestMainConnectionErrorLogging:
     """
 
     def test_handler_crash_is_logged_with_exception_object(self):
-        from fraisier import install_helper
+        """A crashing handler is logged, with the exception object in the
+        rendered line, and the loop keeps serving.
+
+        The accept loop itself lives in ``helper_version`` since #391, so
+        that is where the log line comes from; this still exercises the
+        wiring end to end through ``main()``.
+        """
+        from fraisier import helper_version, install_helper
 
         boom = RuntimeError("simulated install handler crash")
         fake_conn = MagicMock()
@@ -311,7 +318,7 @@ class TestMainConnectionErrorLogging:
             patch.dict("os.environ", {"LISTEN_FDS": "1"}, clear=False),
             patch.object(install_helper.socket, "fromfd", return_value=fake_sock),
             patch.object(install_helper, "_handle_connection", side_effect=boom),
-            patch.object(install_helper, "logger") as mock_logger,
+            patch.object(helper_version, "logger") as mock_logger,
         ):
             install_helper.main()
 

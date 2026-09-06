@@ -478,7 +478,14 @@ class TestMainConnectionErrorLogging:
     """
 
     def test_handler_crash_is_logged_with_exception_object(self):
-        from fraisier import systemctl_helper
+        """A crashing handler is logged, with the exception object in the
+        rendered line, and the loop keeps serving.
+
+        The accept loop itself lives in ``helper_version`` since #391, so
+        that is where the log line comes from; this still exercises the
+        wiring end to end through ``main()``.
+        """
+        from fraisier import helper_version, systemctl_helper
 
         boom = RuntimeError("simulated handler crash")
         fake_conn = MagicMock()
@@ -495,7 +502,7 @@ class TestMainConnectionErrorLogging:
                 systemctl_helper, "_build_server_socket", return_value=fake_sock
             ),
             patch.object(systemctl_helper, "_handle_connection", side_effect=boom),
-            patch.object(systemctl_helper, "logger") as mock_logger,
+            patch.object(helper_version, "logger") as mock_logger,
             patch.object(systemctl_helper.sys, "argv", ["fraisier-systemctl-helper"]),
         ):
             systemctl_helper.main()
