@@ -852,8 +852,15 @@ class TestStagingRestore:
                 connection_url=_TEST_URL,
             )
 
-        reassign = " ".join(mock_cmd.call_args[0][0])
-        assert "REASSIGN" in reassign and "appuser" in reassign
+        # The statement is piped, not embedded: `psql -c` never substitutes
+        # psql variables, so `:"owner"` reached the server literally and every
+        # configured target_owner failed with a syntax error (#380).
+        argv = mock_cmd.call_args[0][0]
+        assert argv[-2:] == ["-f", "-"]
+        assert "-c" not in argv
+        assert "owner=appuser" in argv
+        assert "ON_ERROR_STOP=1" in argv
+        assert "REASSIGN OWNED" in mock_cmd.call_args.kwargs["input_text"]
 
     def test_restore_failure(self):
         from fraisier.dbops.restore import restore_backup

@@ -365,10 +365,12 @@ class TestBackupRestoreCycle:
             )
 
             assert result.success is True
-            # confiture does the restore; _pg_cmd runs only the ownership fix.
+            # confiture does the restore; _pg_cmd runs only the ownership fix,
+            # piped through stdin so psql actually binds `:"owner"` (#380).
             mock_cmd.assert_called_once()
             ownership_call = mock_cmd.call_args[0][0]
-            assert any("REASSIGN" in str(a) for a in ownership_call)
+            assert ownership_call[-2:] == ["-f", "-"]
+            assert "REASSIGN" in mock_cmd.call_args.kwargs["input_text"]
 
     def test_backup_failure_returns_error(self):
         """Backup failure returns BackupResult with error."""

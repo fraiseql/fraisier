@@ -376,9 +376,10 @@ class RestoreMigrateStrategy(Strategy):
         )
         restore_secs = restore_result.duration_seconds
         if not restore_result.success:
-            raise DatabaseError(
-                f"pg_restore failed: {restore_result.error}",
-            )
+            # The message names the step that failed. It used to say
+            # "pg_restore failed" for an ownership reassignment that runs
+            # *after* a successful restore (#380).
+            raise DatabaseError(restore_result.error)
         log.info(
             "Restored backup into %s (%dms)",
             cfg.db_name,

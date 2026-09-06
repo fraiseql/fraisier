@@ -37,10 +37,16 @@ class RestoreResult:
     can show the restore phase breakdown.  ``matviews_*`` are ``None`` when the
     backup carried no materialized views — in that case confiture takes the
     classic three-phase path and ``analyze_ran`` stays ``False``.
+
+    ``stage`` names the step that failed, so the caller stops blaming
+    ``pg_restore`` for a failure in a step that runs after it — the sentence an
+    operator reads at 02:00, when the service is already stopped and the
+    database already dropped and reloaded (#380).
     """
 
     success: bool
     error: str = ""
+    stage: str = "restore"
     duration_seconds: float = 0.0
     matviews_deferred: int | None = None
     matviews_refreshed: int | None = None
@@ -105,6 +111,40 @@ def _augmented_env(extra: dict[str, str]) -> Iterator[None]:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = previous
+
+
+def _reassign_owner(
+    db_name: str,
+    db_owner: str,
+    *,
+    connection_url: str,
+) -> tuple[int, str, str]:
+    """Hand every object ``CURRENT_USER`` owns in *db_name* to *db_owner*.
+
+    Bound through stdin, not ``-c``. ``psql -c`` hands its string to the server
+    unlexed, so psql never sees ``:"owner"`` and never substitutes it: every
+    configured ``restore.target_owner`` failed with ``syntax error at or near
+    ":"`` — after the service was stopped, the database dropped and the backup
+    restored. Measured against psql 15, 16 and 18; it is not a version thing,
+    ``-c`` has never substituted (#380).
+
+    ``ON_ERROR_STOP=1`` because ``-f`` exits 0 on a failed statement.
+    """
+    return _pg_cmd(
+        [
+            "psql",
+            "-d",
+            db_name,
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-v",
+            f"owner={db_owner}",
+            "-f",
+            "-",
+        ],
+        connection_url=connection_url,
+        input_text='REASSIGN OWNED BY CURRENT_USER TO :"owner";\n',
+    )
 
 
 def restore_backup(
@@ -197,34 +237,33 @@ def restore_backup(
             result = DatabaseRestorer().restore(options)
     except RestoreError as exc:
         return RestoreResult(
-            success=False, error=str(exc), duration_seconds=time.monotonic() - t0
+            success=False,
+            stage="restore",
+            error=f"restore failed: {exc}",
+            duration_seconds=time.monotonic() - t0,
         )
 
     if not result.success:
         return RestoreResult(
             success=False,
-            error="; ".join(result.errors) or "pg_restore failed",
+            stage="restore",
+            error=f"restore failed: {'; '.join(result.errors) or 'pg_restore failed'}",
             duration_seconds=time.monotonic() - t0,
         )
 
-    # Fix ownership if requested — use psql variable binding to prevent injection
+    # Fix ownership if requested
     if db_owner:
-        rc, _, stderr = _pg_cmd(
-            [
-                "psql",
-                "-d",
-                db_name,
-                "-v",
-                f"owner={db_owner}",
-                "-c",
-                'REASSIGN OWNED BY CURRENT_USER TO :"owner"',
-            ],
-            connection_url=connection_url,
+        rc, _, stderr = _reassign_owner(
+            db_name, db_owner, connection_url=connection_url
         )
         if rc != 0:
             return RestoreResult(
                 success=False,
-                error=f"Ownership reassignment to {db_owner} failed: {stderr.strip()}",
+                stage="reassign_owner",
+                error=(
+                    f"reassign_owner failed: ownership reassignment to "
+                    f"{db_owner} did not run: {stderr.strip()}"
+                ),
                 duration_seconds=time.monotonic() - t0,
             )
 
