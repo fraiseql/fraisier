@@ -382,12 +382,54 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         """Path to the server-side fraises.yaml the deploy reads/writes."""
         return Path(os.environ.get("FRAISIER_CONFIG") or "/opt/fraisier/fraises.yaml")
 
+    def _validate_before_sync(self, app_config: Path) -> None:
+        """Refuse to install a fraises.yaml that cannot be loaded (#383).
+
+        Validation used to happen *after* the copy, indirectly, when
+        ``fraisier scaffold`` ran against the file already at
+        :meth:`_opt_config_path`. The refusal aborted the deploy and rolled
+        back git only, so the unloadable config outlived the deploy that
+        installed it — and the next webhook restart, self-upgrade or
+        ``trigger-deploy`` died on ``get_config()`` until someone repaired the
+        file by hand.
+
+        Loaded through :class:`FraisierConfig` directly rather than
+        ``get_config``: the singleton must keep pointing at the server-side
+        file, or an aborted deploy leaves a long-running webhook reading the
+        checkout. ``get_fraise_environment`` is what triggers the per-env
+        validator, which is lazy.
+        """
+        from fraisier.config.loader import FraisierConfig
+        from fraisier.errors import FrameworkError
+
+        try:
+            candidate = FraisierConfig(app_config)
+            candidate.get_fraise_environment(self.fraise_name, self.environment)
+        except FrameworkError as e:
+            raise DeploymentError(
+                f"{app_config} is not a usable configuration, so it was not "
+                f"installed to {self._opt_config_path()}: {e}\n"
+                "  Remediation: fix it in the repository and push again. The "
+                "server-side configuration is untouched, so the previous "
+                "deploy's routes keep working.",
+                context={
+                    "phase": "config_validation",
+                    "source": str(app_config),
+                    "fraise": self.fraise_name,
+                    "environment": self.environment,
+                },
+                cause=e,
+                recovery_hint="",
+            ) from e
+
     def _sync_config_if_needed(self) -> None:
         """Sync fraises.yaml from git checkout and regenerate scaffold if changed.
 
-        Ends by re-reading this deploy's settings from the file it just synced
-        (#376), so that from here on the deploy and the regenerated units are
-        working from one snapshot rather than two.
+        Validates the *source* before anything is copied (#383), then ends by
+        re-reading this deploy's settings from the file it just synced (#376),
+        so that from here on the deploy and the regenerated units are working
+        from one snapshot rather than two. The validation and the refresh read
+        the same file a moment apart — keep them adjacent.
         """
         if not self.app_path:
             return
@@ -395,6 +437,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         app_config = Path(self.app_path) / "fraises.yaml"
 
         if app_config.exists():
+            self._validate_before_sync(app_config)
             self._sync_fraises_yaml(source_path=app_config, dest_path=opt_config)
             if self._detect_config_changes(config_path=opt_config):
                 logger.info(
@@ -886,6 +929,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                         error_message=db_result.error_message,
                     )
             self._git_rollback(self._previous_sha)
+            # The tree went back a commit; the configuration that describes it
+            # goes back with it (#383).
+            self._restore_synced_config()
             restarted = bool(self.systemd_service)
             if restarted:
                 self._restart_service()
@@ -1080,6 +1126,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             result.status.value,
             error_message=error_message or result.error_message,
         )
+        # The deploy is over. Whatever config stands now is the one that stays;
+        # the kept copy must not outlive the run that made it (#383).
+        self._discard_replaced_config()
         return result
 
     def _build_rollback_result(
@@ -1346,6 +1395,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 db_details = db_result.details
 
             self._git_rollback(target)
+            self._restore_synced_config()
             result = self._finalize_rollback(current_version, target, start_time)
             result.details.update(db_details)
             return result

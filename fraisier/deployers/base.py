@@ -190,6 +190,18 @@ class DeploymentResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ConfigReplacement:
+    """The server-side fraises.yaml this deploy replaced, and where it is kept.
+
+    *previous* sits in *live*'s own directory so putting it back is a rename
+    on one filesystem, never a copy that can half-succeed.
+    """
+
+    live: Path
+    previous: Path
+
+
 class BaseDeployer(StatusRecordMixin, ABC):
     """Abstract base class for fraise deployers.
 
@@ -221,6 +233,10 @@ class BaseDeployer(StatusRecordMixin, ABC):
         # Every deployer owns its record — including the ones that do not use
         # the git deploy flow. Nothing else writes it (#378).
         self.status_dir = Path(config.get("status_dir", str(DEFAULT_STATUS_DIR)))
+        # Set by the first :meth:`_sync_fraises_yaml` of this deploy that
+        # replaces an existing server-side config, so a rollback can put the
+        # previous one back (#383).
+        self._config_replaced: ConfigReplacement | None = None
 
     @abstractmethod
     def get_current_version(self) -> str | None:
@@ -341,6 +357,7 @@ class BaseDeployer(StatusRecordMixin, ABC):
         # per-fraise), and a fixed temp name would let their copies collide.
         tmp_path = dest_path.with_name(f"{dest_path.name}.tmp.{os.getpid()}")
         self.runner.run(["cp", str(source_path), str(tmp_path)])
+        self._keep_replaced_config(dest_path)
         self.runner.run(["mv", "-f", str(tmp_path), str(dest_path)])
 
         self._sync_template_dir(source_path.parent, dest_path.parent)
@@ -355,6 +372,71 @@ class BaseDeployer(StatusRecordMixin, ABC):
                 "environment": self.environment,
             },
         )
+
+    def _keep_replaced_config(self, dest_path: Path) -> None:
+        """Preserve the config about to be overwritten, once per deploy.
+
+        ``execute()`` syncs twice — once pre-pull from the cached worktree,
+        once after the checkout. Only the first replacement is kept: the second
+        would overwrite the record with the config this same deploy installed
+        minutes earlier, and a rollback would "restore" it.
+
+        A destination that does not exist yet is not a replacement; there is no
+        previous configuration to go back to, and the next deploy regenerates
+        from whatever is there.
+        """
+        if self._config_replaced is not None or not dest_path.exists():
+            return
+        previous = dest_path.with_name(f"{dest_path.name}.prev")
+        self.runner.run(["cp", "-p", str(dest_path), str(previous)])
+        self._config_replaced = ConfigReplacement(live=dest_path, previous=previous)
+        logger.debug("Kept the replaced config at %s", previous)
+
+    def _restore_synced_config(self) -> bool:
+        """Put back the config this deploy replaced. Returns whether it did.
+
+        Belongs beside the git rollback: the tree and the configuration that
+        describes it go back together, or neither does. Idempotent, and
+        best-effort like everything else on the failure path — a deploy that
+        has already failed must not fail differently here.
+        """
+        replaced = self._config_replaced
+        if replaced is None:
+            return False
+        self._config_replaced = None
+        try:
+            self.runner.run(["mv", "-f", str(replaced.previous), str(replaced.live)])
+        except Exception as exc:
+            logger.error(
+                "Could not restore the previous %s from %s: %s. The "
+                "configuration at %s is the one this failed deploy installed; "
+                "the next deploy regenerates from it.",
+                replaced.live,
+                replaced.previous,
+                exc,
+                replaced.live,
+            )
+            return False
+        logger.info(
+            "Restored the configuration that was live before this deploy: %s",
+            replaced.live,
+        )
+        return True
+
+    def _discard_replaced_config(self) -> None:
+        """Drop the kept copy — the deploy is over and the new config stands.
+
+        Called at every terminal point so ``fraises.yaml.prev`` never
+        accumulates next to the live file. Never raises.
+        """
+        replaced = self._config_replaced
+        if replaced is None:
+            return
+        self._config_replaced = None
+        try:
+            replaced.previous.unlink(missing_ok=True)
+        except OSError as exc:  # pragma: no cover - defensive
+            logger.debug("Could not remove %s: %s", replaced.previous, exc)
 
     def _sync_template_dir(self, source_dir: Path, dest_dir: Path) -> None:
         """Copy ``scaffold.template_dir`` next to the synced fraises.yaml (#312).
@@ -741,49 +823,3 @@ class BaseDeployer(StatusRecordMixin, ABC):
             )
 
         logger.info("✓ Scaffold files installed")
-
-    def _rollback_config(self, config_path: Path | None = None) -> bool:
-        """Rollback to previous fraises.yaml and regenerate scaffold.
-
-        Restores previous commit version of fraises.yaml from git and
-        regenerates scaffold files from the restored config.
-
-        Args:
-            config_path: Path to fraises.yaml to restore
-
-        Returns:
-            True if rollback successful, False otherwise
-        """
-        if not config_path:
-            logger.warning("No config path provided, skipping config rollback")
-            return True
-
-        try:
-            logger.info("Rolling back to previous configuration")
-
-            # Restore previous commit of fraises.yaml from git
-            config_path = Path(config_path)
-            app_path = config_path.parent.parent / "app"  # Assume git checkout
-
-            result = self.runner.run(
-                ["git", "-C", str(app_path), "checkout", "HEAD~1", "--", "fraises.yaml"]
-            )
-
-            if result.returncode == 0:
-                # Re-sync the previous version to server
-                self._sync_fraises_yaml(
-                    source_path=app_path / "fraises.yaml", dest_path=config_path
-                )
-
-                # Regenerate and install scaffold from restored config
-                self._regenerate_scaffold(config_path=config_path)
-                self._install_scaffold(config_path=config_path)
-
-                logger.info("✓ Configuration rolled back")
-                return True
-            else:
-                logger.warning("Could not restore previous config: %s", result.stdout)
-                return False
-        except Exception as e:
-            logger.error("Config rollback failed: %s", e)
-            return False

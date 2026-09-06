@@ -273,32 +273,6 @@ class TestDeployerInstallScaffold:
         assert callable(getattr(BaseDeployer, "_install_scaffold", None))
 
 
-# Phase 4: Rollback handling tests
-class TestDeployerRollbackConfig:
-    """Tests for BaseDeployer._rollback_config()."""
-
-    def test_rollback_config_method_exists(self, tmp_path):
-        """_rollback_config() method exists on deployer."""
-        from fraisier.deployers.base import BaseDeployer
-
-        assert hasattr(BaseDeployer, "_rollback_config")
-
-    def test_rollback_config_is_callable(self, tmp_path):
-        """_rollback_config() is callable."""
-        from fraisier.deployers.base import BaseDeployer
-
-        assert callable(getattr(BaseDeployer, "_rollback_config", None))
-
-    def test_rollback_config_returns_bool(self, tmp_path):
-        """_rollback_config() returns boolean."""
-        from fraisier.deployers.base import BaseDeployer
-
-        method = getattr(BaseDeployer, "_rollback_config", None)
-        assert method is not None
-        # Check that it's expected to return a bool (via docstring)
-        assert "Returns:" in method.__doc__
-
-
 # Phase 5: Edge Cases & Error Handling tests
 class TestConfigSyncEdgeCases:
     """Tests for edge cases and error scenarios."""
@@ -397,17 +371,3 @@ class TestConfigSyncEdgeCases:
         config_file.write_bytes(b"\x00\x01\x02\x04")
 
         assert watcher.has_changed() is True
-
-    def test_rollback_config_handles_none_path(self, tmp_path):
-        """_rollback_config returns True with None path."""
-        config = {
-            "fraise_name": "test_api",
-            "environment": "dev",
-        }
-
-        from fraisier.deployers.api import APIDeployer
-
-        deployer = APIDeployer(config)
-
-        result = deployer._rollback_config(config_path=None)
-        assert result is True

@@ -26,7 +26,12 @@ if TYPE_CHECKING:
     from .database import FraisierDB
 from .deferred_restart import maybe_apply_deferred_restarts
 from .duration_estimate import build_estimate, to_dispatch_dict
-from .errors import ConfigurationError, DeploymentError, DeploymentLockError
+from .errors import (
+    ConfigurationError,
+    DeploymentError,
+    DeploymentLockError,
+    FrameworkError,
+)
 from .git import GitProvider, WebhookEvent, get_provider
 from .locking import (
     clear_draining_flag,
@@ -69,11 +74,47 @@ def _validate_env_config(port: int, rate_limit: int) -> None:
         raise ValueError(msg)
 
 
+def _config_preflight() -> None:
+    """Name an unloadable fraises.yaml in the journal, and start anyway (#383).
+
+    A deploy that installed a config the loader refuses leaves the file at
+    ``/opt``: the running webhook keeps its cached copy and looks fine, and the
+    *next* restart — a self-upgrade, a reboot, a ``scaffold-install`` — used to
+    die here. A webhook under ``Restart=on-failure`` that cannot start cannot
+    be repaired by the redeploy the operator was told to run; one that starts
+    and refuses per request can. Requests that need the configuration answer a
+    structured error; ``fraisier doctor`` has a config check.
+    """
+    from fraisier.config import resolve_config_path
+
+    try:
+        get_config()
+    except FileNotFoundError:
+        return
+    except FrameworkError as exc:
+        try:
+            path: Path | str = resolve_config_path()
+        except FileNotFoundError:  # pragma: no cover - defensive
+            path = "<unresolved>"
+        logger.error(
+            "%s cannot be loaded: %s. The webhook is starting anyway and will "
+            "refuse every request that needs the configuration. Fix the file "
+            "and restart, or redeploy; if the deploy that installed it is "
+            "still rolling back, it puts the previous copy back itself.",
+            path,
+            exc,
+        )
+
+
 def _clear_stale_drain_flag() -> None:
     """Best-effort cleanup of a ``.draining`` flag left by a crashed worker."""
     try:
         lock_dir = _get_lock_dir(get_config())
     except FileNotFoundError:
+        return
+    except FrameworkError:
+        # Already named by _config_preflight; a webhook that cannot read its
+        # configuration must still start (#383).
         return
     if lock_dir is None:
         return
@@ -155,6 +196,7 @@ def _remove_sighup_reload(loop: asyncio.AbstractEventLoop | None) -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage webhook server lifecycle."""
     logger.info("Fraisier webhook server starting")
+    _config_preflight()
     _clear_stale_drain_flag()
     _reconcile_orphaned_deploys()
     sighup_loop = _install_sighup_reload()
@@ -875,6 +917,18 @@ def _verify_signature(
         git_config = get_config().get_git_provider_config()
     except FileNotFoundError:
         git_config = {}
+    except FrameworkError as e:
+        # An unloadable fraises.yaml (#383). The host has one and it is broken,
+        # which is not the same as not having one: proceeding on env-var
+        # secrets alone would dispatch against a configuration nobody can
+        # read. Refuse, and put the reason in the journal rather than in an
+        # unauthenticated response.
+        logger.error("Cannot read the git provider configuration: %s", e)
+        raise _structured_error(
+            500,
+            "configuration_error",
+            "this host's fraises.yaml cannot be loaded — see the journal",
+        ) from e
 
     normalized_headers = {k.lower(): v for k, v in headers.items()}
     secrets = _collect_webhook_secrets()

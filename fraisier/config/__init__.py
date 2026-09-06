@@ -15,6 +15,7 @@ from fraisier.config.loader import (
     _config_lock,  # noqa: F401 — exposed for test singleton reset
     get_config,
     reset_config,
+    resolve_config_path,
 )
 from fraisier.config.schema import (
     CONFIG_SEARCH_LOCATIONS,
@@ -84,5 +85,6 @@ __all__ = [
     "get_config",
     "is_string_like",
     "reset_config",
+    "resolve_config_path",
     "to_str",
 ]
