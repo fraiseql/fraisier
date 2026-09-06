@@ -20,12 +20,7 @@ from fraisier.git.operations import (
     fetch_and_checkout,
     get_worktree_sha,
 )
-from fraisier.status import (
-    DEFAULT_STATUS_DIR,
-    DeploymentStatusFile,
-    current_owner,
-    write_status,
-)
+from fraisier.status import DeploymentStatusFile, current_owner, write_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,7 +79,43 @@ def _install_failure_advice(
     return None
 
 
-class GitDeployMixin:
+class StatusRecordMixin:
+    """Writing the deployment record.
+
+    Split out of :class:`GitDeployMixin` so a deployer that does not use the
+    git deploy flow still owns its record: nothing else writes it any more, so
+    a deployer without this wrote nothing at all (#378).
+    """
+
+    # Provided by BaseDeployer (the consuming class).
+    fraise_name: str
+    environment: str
+    status_dir: Path
+
+    def _write_status(self, state: str, **kwargs: Any) -> None:
+        """Write deployment status file."""
+        # Stamped on every write, not only the first: the record must always
+        # name a process a reader can look for, so a deploy killed mid-flight is
+        # distinguishable from one still running (#349).
+        status = DeploymentStatusFile(
+            fraise_name=self.fraise_name,
+            environment=self.environment,
+            state=state,
+            **current_owner(),
+            **kwargs,
+        )
+        try:
+            write_status(status, status_dir=self.status_dir)
+        except OSError as exc:
+            logger.warning(
+                "Failed to write status file for %s (dir=%s): %s",
+                self.fraise_name,
+                self.status_dir,
+                exc,
+            )
+
+
+class GitDeployMixin(StatusRecordMixin):
     """Mixin providing bare-repo git operations and status file writing.
 
     Expects the consuming class to set self.fraise_name and self.environment
@@ -92,8 +123,6 @@ class GitDeployMixin:
     """
 
     # These attributes are provided by BaseDeployer (the consuming class).
-    fraise_name: str
-    environment: str
     runner: CommandRunner
     config: dict[str, Any]
 
@@ -108,7 +137,6 @@ class GitDeployMixin:
         else:
             repos_base = config.get("repos_base", str(DEFAULT_REPOS_BASE))
             self.bare_repo = Path(repos_base) / f"{self.fraise_name}.git"
-        self.status_dir = Path(config.get("status_dir", str(DEFAULT_STATUS_DIR)))
         self.lock_timeout = config.get("lock_timeout", 300)
         self._previous_sha: str | None = None
         install_config = config.get("install", {})
@@ -396,28 +424,6 @@ class GitDeployMixin:
             environment=self.environment,
         )
         self._dispatcher.notify(event)
-
-    def _write_status(self, state: str, **kwargs: Any) -> None:
-        """Write deployment status file."""
-        # Stamped on every write, not only the first: the record must always
-        # name a process a reader can look for, so a deploy killed mid-flight is
-        # distinguishable from one still running (#349).
-        status = DeploymentStatusFile(
-            fraise_name=self.fraise_name,
-            environment=self.environment,
-            state=state,
-            **current_owner(),
-            **kwargs,
-        )
-        try:
-            write_status(status, status_dir=self.status_dir)
-        except OSError as exc:
-            logger.warning(
-                "Failed to write status file for %s (dir=%s): %s",
-                self.fraise_name,
-                self.status_dir,
-                exc,
-            )
 
     def _start_db_record(
         self,

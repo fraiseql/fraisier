@@ -192,3 +192,55 @@ class TestCliWiring:
             {"compose_file": "dc.yml", "project_name": "test"},
         )
         assert isinstance(deployer, DockerComposeDeployer)
+
+
+class TestItOwnsItsRecord:
+    """A compose deploy files its own status, like every other deployer.
+
+    It filed none. On the daemon path the daemon's blanket ``success`` write
+    was the only record a compose fraise ever had; on the webhook path there
+    was none at all. Once the daemon stopped writing (#378), a deployer that
+    writes nothing leaves nothing (#379).
+    """
+
+    def test_a_successful_deploy_is_recorded(self, tmp_path):
+        from fraisier.status import read_status
+
+        deployer, _ = _make_deployer(
+            fraise_name="web", environment="production", status_dir=str(tmp_path)
+        )
+        result = deployer.execute()
+
+        status = read_status("web", status_dir=tmp_path)
+        assert status is not None
+        assert status.state == result.status.value == "success"
+        assert status.owner_pid is not None
+
+    def test_a_failed_deploy_is_recorded(self, tmp_path):
+        from fraisier.status import read_status
+
+        deployer, runner = _make_deployer(
+            fraise_name="web", environment="production", status_dir=str(tmp_path)
+        )
+        runner.run.side_effect = subprocess.CalledProcessError(1, ["docker"])
+
+        result = deployer.execute()
+
+        status = read_status("web", status_dir=tmp_path)
+        assert status is not None
+        assert status.state == result.status.value == "failed"
+
+    def test_a_failed_rollback_is_recorded_as_a_failed_rollback(self, tmp_path):
+        from fraisier.status import read_status
+
+        deployer, runner = _make_deployer(
+            fraise_name="web", environment="production", status_dir=str(tmp_path)
+        )
+        runner.run.side_effect = subprocess.CalledProcessError(1, ["docker"])
+
+        result = deployer.rollback(to_version="v1")
+
+        assert result.status == DeploymentStatus.ROLLBACK_FAILED
+        status = read_status("web", status_dir=tmp_path)
+        assert status is not None
+        assert status.state == result.status.value == "rollback_failed"

@@ -251,46 +251,27 @@ def _print_dry_run(
 
 
 def _get_deployer(fraise_type: str | None, fraise_config: dict, job: str | None = None):
-    """Get appropriate deployer for fraise type.
+    """Get appropriate deployer for fraise type, or None if there is none.
 
-    When the fraise_config contains an ``ssh`` key, the deployer is
-    configured with an ``SSHRunner`` so that commands execute on the
-    remote host.  Otherwise a local ``LocalRunner`` is used.
+    When the fraise_config contains an ``ssh`` key, the deployer is configured
+    with an ``SSHRunner`` so that commands execute on the remote host;
+    otherwise a local ``LocalRunner`` is used.
+
+    The type table itself lives in ``deployers/registry.py`` — one table, so
+    the CLI, the daemon and the webhook cannot disagree about which fraises
+    are deployable (#379). ``None`` is kept here rather than the registry's
+    exception because every caller in the CLI branches on it to print its own
+    message.
     """
+    from fraisier.deployers.registry import UnknownFraiseTypeError, build_deployer
     from fraisier.runners import runner_from_config
 
-    runner = runner_from_config(fraise_config.get("ssh"))
-
-    if fraise_type == "api":
-        from fraisier.deployers.api import APIDeployer
-
-        return APIDeployer(fraise_config, runner=runner)
-
-    elif fraise_type == "etl":
-        from fraisier.deployers.etl import ETLDeployer
-
-        return ETLDeployer(fraise_config, runner=runner)
-
-    elif fraise_type == "docker_compose":
-        from fraisier.deployers.docker_compose import DockerComposeDeployer
-
-        return DockerComposeDeployer(fraise_config, runner=runner)
-
-    elif fraise_type in ("scheduled", "backup"):
-        from fraisier.deployers.scheduled import ScheduledDeployer
-
-        # Handle nested jobs
-        if job and "jobs" in fraise_config:
-            job_config = fraise_config["jobs"].get(job)
-            if job_config:
-                return ScheduledDeployer(
-                    {
-                        **fraise_config,
-                        **job_config,
-                        "job_name": job,
-                    },
-                    runner=runner,
-                )
-        return ScheduledDeployer(fraise_config, runner=runner)
-
-    return None
+    try:
+        return build_deployer(
+            fraise_type,
+            fraise_config,
+            runner=runner_from_config(fraise_config.get("ssh")),
+            job=job,
+        )
+    except UnknownFraiseTypeError:
+        return None
