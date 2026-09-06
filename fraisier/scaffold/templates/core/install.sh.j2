@@ -691,8 +691,9 @@ fi
 # touch nothing that reaches this unit — #349's two failing changesets edited
 # `ship:` check definitions — so the common case becomes no restart at all
 # rather than a deferred one. This also makes the rollback path self-cancelling:
-# `_rollback_config` reinstalls the previous fraises.yaml, the unit returns to
-# its old bytes, and the debt recorded above never needed paying.
+# a failed deploy restores the fraises.yaml it replaced (#383), the next
+# install sees the unit's old bytes, and the debt recorded above never needed
+# paying.
 if cmp -s "${WEBHOOK_SRC}" "${WEBHOOK_DST}" 2>/dev/null; then
     echo "  Webhook service unit unchanged — not reinstalled"
 else

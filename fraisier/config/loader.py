@@ -139,6 +139,33 @@ def _attach_paths(obj: Any, prefix: str = "") -> None:
             _attach_paths(value, f"{prefix}[{i}]")
 
 
+def resolve_config_path(config_path: Path | str | None = None) -> Path:
+    """Return the file :func:`get_config` would read, without loading it.
+
+    Separate from loading so a caller can name the offending file in a message
+    about a config it could not load (#383).
+
+    Raises:
+        FileNotFoundError: If no fraises.yaml exists in any search location.
+    """
+    if config_path:
+        return Path(config_path)
+
+    # Check FRAISIER_CONFIG environment variable
+    env_path = os.environ.get("FRAISIER_CONFIG")
+    if env_path:
+        return Path(env_path)
+
+    # Check standard locations (CWD first, then system-wide)
+    locations = _config_search_locations()
+    for loc in locations:
+        if loc.exists():
+            return loc
+
+    locations_str = [str(p) for p in locations]
+    raise FileNotFoundError(f"fraises.yaml not found in any of: {locations_str}")
+
+
 class FraisierConfig:
     """Load and manage deployment configuration from fraises.yaml.
 
@@ -163,22 +190,7 @@ class FraisierConfig:
 
     def _resolve_config_path(self, config_path: Path | str | None) -> Path:
         """Resolve configuration file path."""
-        if config_path:
-            return Path(config_path)
-
-        # Check FRAISIER_CONFIG environment variable
-        env_path = os.environ.get("FRAISIER_CONFIG")
-        if env_path:
-            return Path(env_path)
-
-        # Check standard locations (CWD first, then system-wide)
-        locations = _config_search_locations()
-        for loc in locations:
-            if loc.exists():
-                return loc
-
-        locations_str = [str(p) for p in locations]
-        raise FileNotFoundError(f"fraises.yaml not found in any of: {locations_str}")
+        return resolve_config_path(config_path)
 
     def _load(self) -> None:
         """Load configuration from YAML file.

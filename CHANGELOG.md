@@ -30,7 +30,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A helper that rejects the request now fails the deploy with the rejection and
   the remedy, instead of `Command 'enable' returned non-zero exit status 1`.
 
+- **An invalid fraises.yaml was installed before anything validated it, and
+  outlived the rollback**
+  ([#383](https://github.com/fraiseql/fraisier/issues/383)). The deploy copied
+  the checkout's `fraises.yaml` over the server copy first and validated it
+  afterwards, indirectly, when `fraisier scaffold` ran against the file already
+  at `/opt/fraisier/fraises.yaml`. The refusal aborted the deploy and rolled
+  back **git only** — `_rollback_config`, written for exactly this, had no
+  production caller and three tests that asserted only that it existed.
+
+  Nothing looked wrong at first: the running webhook keeps its cached config.
+  The *next* webhook start — a self-upgrade, a reboot, a `scaffold-install` —
+  died in `lifespan` on `get_config()`, and so did `trigger-deploy`. The
+  operator had been told to "fix the underlying error and redeploy", and no
+  deploy route worked until someone repaired the `/opt` file by hand.
+
+  The source file is now loaded and its environment validated *before* any
+  copy, so an unusable config never reaches `/opt` and the previous deploy's
+  routes keep working. The validation loads its own `FraisierConfig` rather
+  than going through `get_config`, so an aborted deploy does not leave a
+  long-running webhook pointing at the checkout.
+
+  A deploy that does replace the file keeps the previous one beside it as
+  `fraises.yaml.prev`, and puts it back wherever the git tree is reverted —
+  `_restore_previous_state` and `rollback()`. The kept copy is dropped at every
+  terminal point, so it never accumulates. Only the first replacement in a run
+  is kept: `execute()` syncs twice, and the second would otherwise record the
+  config this same deploy installed minutes earlier.
+
 ### Changed
+
+- **The webhook starts with an unloadable fraises.yaml**
+  ([#383](https://github.com/fraiseql/fraisier/issues/383)) instead of failing
+  its lifespan. It names the file and the loader's message in the journal at
+  startup, `/health` answers, and every request that needs the configuration —
+  a delivery included — answers a structured `configuration_error` rather than
+  a bare 500. A webhook under `Restart=on-failure` that cannot start cannot be
+  repaired by the redeploy the operator was told to run; one that starts and
+  refuses can.
 
 - **`enable` is a systemctl-helper action** (#382). It is gated by the same
   service allowlist as `stop`/`start`/`restart`; nothing new becomes reachable
