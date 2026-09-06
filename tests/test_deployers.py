@@ -791,23 +791,35 @@ class TestAPIDeployer:
         alone left them with the *successful* part of the render and no
         reason.
         """
+        import stat
+
         from fraisier.errors import DeploymentError
+        from fraisier.runners import LocalRunner
 
         opt_config, _ = self._write_state_dir_config(tmp_path)
 
-        runner = MagicMock()
-        runner.run.return_value = MagicMock(
-            returncode=1,
-            stdout="Generated 3 files\n",
-            stderr="ValueError: Environment(s) production declare no 'server:'\n",
+        # A real runner and a real failing program. This test used to stub the
+        # runner into returning returncode=1 *without raising* — a shape
+        # LocalRunner cannot produce, since it runs with check=True — so it
+        # asserted a branch production could not reach (#381).
+        refusing = tmp_path / "fraisier-stub"
+        refusing.write_text(
+            "#!/bin/sh\n"
+            "echo 'Generated 3 files'\n"
+            "echo \"ValueError: Environment(s) production declare no 'server:'\" >&2\n"
+            "exit 1\n"
         )
+        refusing.chmod(refusing.stat().st_mode | stat.S_IXUSR)
+
         deployer = APIDeployer(
             {"fraise_name": "api", "app_path": str(tmp_path / "var/www/api")},
-            runner=runner,
+            runner=LocalRunner(),
         )
 
         with (
-            patch.object(deployer, "_get_fraisier_executable", return_value="fraisier"),
+            patch.object(
+                deployer, "_get_fraisier_executable", return_value=str(refusing)
+            ),
             pytest.raises(DeploymentError) as exc,
         ):
             deployer._regenerate_scaffold(config_path=opt_config)
