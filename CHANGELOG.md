@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-09-06
+
+**The deploy path stops asking for privileges it cannot get.**
+
+The second half of the v0.68.0 review: the three findings that needed a design
+call or a host-side re-render, plus the hygiene the bundle owed. Each of the
+three is the same shape — the deploy assumed something about its own
+environment that had never been true, and nothing in the tests could see the
+difference, because every one of them stubbed the boundary where the assumption
+lived.
+
 ### Fixed
 
 - **The scheduled deployer asked for a privilege it could not get**
