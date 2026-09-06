@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from fraisier.config import CONFIG_SEARCH_LOCATIONS, get_config
 from fraisier.errors import DeploymentLockError
 from fraisier.logging import get_contextual_logger
+from fraisier.status import _SAFE_NAME_RE
 
 if TYPE_CHECKING:
     from fraisier.deployers.base import BaseDeployer
@@ -76,10 +77,17 @@ def parse_deployment_request(json_str: str) -> DeploymentRequest:
         if field not in data:
             raise ValueError(f"Missing required field: {field}")
 
-    # Validate environment
-    valid_environments = ["development", "staging", "production"]
-    if data["environment"] not in valid_environments:
-        raise ValueError(f"Invalid environment: {data['environment']}")
+    # Shape, not vocabulary. This used to accept only development/staging/
+    # production, while the scaffold renderer, `trigger-deploy` and the
+    # daemon's own help example accept any name — so a `preprod` fraise had no
+    # socket-activated route at all (#379). Both names end up in status file
+    # names, which is the real constraint; whether they exist is checked one
+    # step later, by `get_fraise_environment`.
+    for field in ("project", "environment"):
+        if not _SAFE_NAME_RE.match(data[field]):
+            raise ValueError(
+                f"Invalid {field}: {data[field]!r} — must match {_SAFE_NAME_RE.pattern}"
+            )
 
     return DeploymentRequest(
         version=version,
@@ -124,7 +132,9 @@ def execute_deployment_request(request: DeploymentRequest) -> DeploymentResult:
         )
 
         if not fraise_config:
-            error_msg = _format_project_not_found_error(config, request.project)
+            error_msg = _format_project_not_found_error(
+                config, request.project, request.environment
+            )
             logger.error(
                 "Project not found in configuration",
                 event="deployment_failed",
@@ -353,12 +363,36 @@ def _format_config_not_found_error() -> str:
     return "\n".join(lines)
 
 
-def _format_project_not_found_error(config, project: str) -> str:
-    """Format diagnostic message when project is not found in config."""
-    lines = [f"Project '{project}' not found in configuration."]
+def _format_project_not_found_error(
+    config, project: str, environment: str | None = None
+) -> str:
+    """Format the diagnostic when a project/environment pair is not in the config.
+
+    Names the environment too: ``get_fraise_environment`` returns ``None`` when
+    *either* half is missing, and now that any environment name parses (#379),
+    "Project 'api' not found" is the wrong sentence far more often than it used
+    to be — the project usually exists and the environment does not.
+    """
+    known_project = project in config.list_fraises()
+    if environment is not None and known_project:
+        lines = [
+            f"Project '{project}' has no environment '{environment}' in configuration."
+        ]
+    else:
+        lines = [f"Project '{project}' not found in configuration."]
 
     # Show loaded config file
     lines.append(f"Configuration loaded from: {config.config_path}")
+
+    if environment is not None and known_project:
+        environments = config.list_environments(project)
+        if environments:
+            lines.append(
+                f"Available environments for '{project}': {', '.join(environments)}"
+            )
+        else:
+            lines.append(f"No environments defined for '{project}'.")
+        return "\n".join(lines)
 
     # List available projects
     available = config.list_fraises()

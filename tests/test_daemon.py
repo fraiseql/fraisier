@@ -91,11 +91,17 @@ class TestDeploymentRequest:
             parse_deployment_request(json.dumps(json_data))
 
     def test_parse_invalid_environment(self):
-        """Parse JSON with invalid environment name."""
+        """An environment name that cannot be a file name is rejected.
+
+        ``invalid_env`` used to be rejected because it was not one of three
+        literal names; it is a perfectly good environment name and is now
+        accepted. What is rejected is a name that cannot be part of a status
+        file name (#379).
+        """
         json_data = {
             "version": 1,
             "project": "api",
-            "environment": "invalid_env",
+            "environment": "invalid env!",
             "branch": "dev",
             "timestamp": "2026-04-02T11:15:23Z",
             "triggered_by": "webhook",
@@ -103,6 +109,53 @@ class TestDeploymentRequest:
 
         with pytest.raises(ValueError, match="Invalid environment"):
             parse_deployment_request(json.dumps(json_data))
+
+    @pytest.mark.parametrize("environment", ["preprod", "dev", "qa-2", "prod_eu"])
+    def test_parse_accepts_any_environment_name_the_renderer_accepts(
+        self, environment: str
+    ):
+        """The daemon's own vocabulary was narrower than everything else's.
+
+        It accepted only development/staging/production. The scaffold renderer
+        accepts ``[a-zA-Z0-9_-]+``, ``trigger-deploy`` validates the name
+        against the config and forwards it, and the daemon's own help example
+        uses ``dev`` — so a fraise with a ``preprod`` environment had no working
+        socket-activated route at all, deploy-checker timer included (#379).
+        """
+        payload = {
+            "version": 1,
+            "project": "api",
+            "environment": environment,
+            "branch": "main",
+            "timestamp": "t",
+            "triggered_by": "cli",
+        }
+        request = parse_deployment_request(json.dumps(payload))
+        assert request.environment == environment
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("environment", "../../etc"),
+            ("environment", "prod/../x"),
+            ("environment", ""),
+            ("project", "../secrets"),
+            ("project", "a b"),
+        ],
+    )
+    def test_parse_rejects_names_that_cannot_be_file_names(self, field, value):
+        """Both end up in status file names — that is the real constraint."""
+        payload = {
+            "version": 1,
+            "project": "api",
+            "environment": "production",
+            "branch": "main",
+            "timestamp": "t",
+            "triggered_by": "cli",
+            field: value,
+        }
+        with pytest.raises(ValueError, match=field):
+            parse_deployment_request(json.dumps(payload))
 
 
 class TestExecuteDeploymentRequest:
@@ -151,6 +204,39 @@ class TestExecuteDeploymentRequest:
         assert result.success is True
         assert result.status == "success"
         mock_deployer.execute.assert_called_once()
+
+    @patch("fraisier.daemon.get_config")
+    def test_execute_names_the_environment_when_the_project_exists(
+        self, mock_get_config
+    ):
+        """The project usually exists; the environment is what is missing.
+
+        `get_fraise_environment` returns None for either half, and the message
+        blamed the project every time (#379).
+        """
+        mock_config = MagicMock()
+        mock_config.get_fraise_environment.return_value = None
+        mock_config.config_path = "/opt/fraisier/fraises.yaml"
+        mock_config.list_fraises.return_value = ["api", "web"]
+        mock_config.list_environments.return_value = ["production", "staging"]
+        mock_get_config.return_value = mock_config
+
+        request = DeploymentRequest(
+            version=1,
+            project="api",
+            environment="preprod",
+            branch="main",
+            timestamp="t",
+            triggered_by="cli",
+            options={},
+            metadata={},
+        )
+
+        result = execute_deployment_request(request)
+
+        assert result.success is False
+        assert "no environment 'preprod'" in (result.error_message or "")
+        assert "production, staging" in (result.error_message or "")
 
     @patch("fraisier.daemon.get_config")
     def test_execute_unknown_project(self, mock_get_config):
