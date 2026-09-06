@@ -13,12 +13,15 @@ harness's own reachability logic is pinned by tests that always run.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from _pytest.outcomes import Failed, Skipped
 
+from tests.integration import conftest
 from tests.integration.conftest import PgTarget, _discover_target, unavailable
 from tests.test_preflight_e2e import _get_admin_url
 
@@ -155,6 +158,177 @@ class TestDiscovery:
         )
 
         assert _discover_target() == PgTarget(host="/run/postgresql")
+
+
+class TestTheHarnessIsTheOnlyDoor:
+    """An integration module gets its server from ``pg_target``, never itself.
+
+    ``test_confiture_integration.py`` read ``FRAISIER_TEST_PG_URL`` directly and
+    paid for it twice: it *skipped* silently when the variable was unset, the
+    #358 failure mode this file exists to prevent, and its setup dropped every
+    table in ``public`` of whatever the variable named — so pointing it at a
+    real database emptied that database (#386). The harness knows about
+    discovery, about ``unavailable()``, and about giving a test a database of
+    its own; a module that goes around it knows none of that.
+    """
+
+    @staticmethod
+    def _integration_modules() -> list[Path]:
+        directory = Path(__file__).resolve().parent / "integration"
+        return sorted(
+            path
+            for path in directory.glob("*.py")
+            if path.name not in {"conftest.py", "__init__.py"}
+        )
+
+    def test_there_are_modules_to_check(self):
+        assert self._integration_modules()
+
+    @staticmethod
+    def _names_the_variable_in_code(path: Path) -> bool:
+        """Is the variable *used* here, rather than merely written about?
+
+        An exact string constant is a lookup; a docstring that explains the
+        history contains it as a substring of something longer, and is not.
+        """
+        return any(
+            isinstance(node, ast.Constant) and node.value == "FRAISIER_TEST_PG_URL"
+            for node in ast.walk(ast.parse(path.read_text()))
+        )
+
+    def test_no_integration_module_reads_the_env_url_itself(self):
+        offenders = [
+            path.name
+            for path in self._integration_modules()
+            if self._names_the_variable_in_code(path)
+        ]
+        assert offenders == [], (
+            f"{offenders} read FRAISIER_TEST_PG_URL directly; request the "
+            "`pg_target` fixture instead (#386)"
+        )
+
+
+class TestTheContainerFallback:
+    """A container is the last resort, and it never decides "no server".
+
+    It exists for a machine with the client tools but no server. Two rules keep
+    it from doing harm: it yields ``None`` rather than skipping — a skip decided
+    here would be #370 again, silently — and its image follows the host
+    client's major version, because an 18 ``pg_dump`` against a 16 server emits
+    ``SET transaction_timeout`` and the restore fails for a reason that has
+    nothing to do with the code.
+    """
+
+    def test_the_client_major_version_is_read_from_pg_dump(self, monkeypatch):
+        monkeypatch.setattr(
+            conftest.subprocess,
+            "run",
+            lambda *_a, **_kw: SimpleNamespace(stdout="pg_dump (PostgreSQL) 18.4\n"),
+        )
+        assert conftest.client_major_version() == 18
+
+    def test_an_unreadable_client_version_is_no_version(self, monkeypatch):
+        monkeypatch.setattr(
+            conftest.subprocess,
+            "run",
+            lambda *_a, **_kw: SimpleNamespace(stdout="who knows\n"),
+        )
+        assert conftest.client_major_version() is None
+
+    def test_the_image_follows_the_client_major_version(self, monkeypatch):
+        monkeypatch.setattr(conftest, "_client_tools_present", lambda: True)
+        monkeypatch.setattr(conftest, "client_major_version", lambda: 18)
+        started: list[str] = []
+
+        class _FakeContainer:
+            def __init__(self, image, **_kwargs):
+                started.append(image)
+
+            def start(self):
+                return self
+
+            def stop(self):
+                return None
+
+            def get_connection_url(self):
+                return "postgresql://u:p@127.0.0.1:55432/test"
+
+        postgres = pytest.importorskip("testcontainers.postgres")
+        monkeypatch.setattr(postgres, "PostgresContainer", _FakeContainer)
+        monkeypatch.setattr(conftest, "_probe", lambda _dsn: "/var/run/postgresql")
+
+        with conftest._container_target() as target:
+            assert target is not None
+            assert target.host == "127.0.0.1"
+            assert target.port == 55432
+
+        assert started == ["postgres:18"], (
+            "the image must match the host client's major version, or "
+            "pg_dump 18 against a 16 server fails on SET transaction_timeout"
+        )
+
+    def test_a_container_that_does_not_probe_clean_is_not_used(self, monkeypatch):
+        """ "A server with createdb" means the same however it was found."""
+        monkeypatch.setattr(conftest, "_client_tools_present", lambda: True)
+        monkeypatch.setattr(conftest, "client_major_version", lambda: 18)
+        stopped: list[bool] = []
+
+        class _FakeContainer:
+            def __init__(self, _image, **_kwargs):
+                pass
+
+            def start(self):
+                return self
+
+            def stop(self):
+                stopped.append(True)
+
+            def get_connection_url(self):
+                return "postgresql://u:p@127.0.0.1:55432/test"
+
+        postgres = pytest.importorskip("testcontainers.postgres")
+        monkeypatch.setattr(postgres, "PostgresContainer", _FakeContainer)
+        monkeypatch.setattr(conftest, "_probe", lambda _dsn: None)
+
+        with conftest._container_target() as target:
+            assert target is None
+        assert stopped == [True], "a container that is not used is still stopped"
+
+    def test_no_client_tools_means_no_container(self, monkeypatch):
+        """A container cannot substitute for the host's pg_dump."""
+        monkeypatch.setattr(conftest, "_client_tools_present", lambda: False)
+        with conftest._container_target() as target:
+            assert target is None
+
+    def test_a_container_that_will_not_start_is_not_a_failure_here(self, monkeypatch):
+        monkeypatch.setattr(conftest, "_client_tools_present", lambda: True)
+        monkeypatch.setattr(conftest, "client_major_version", lambda: 18)
+
+        def _explode(*_a, **_kw):
+            raise RuntimeError("Cannot connect to the Docker daemon")
+
+        postgres = pytest.importorskip("testcontainers.postgres")
+        monkeypatch.setattr(postgres, "PostgresContainer", _explode)
+
+        with conftest._container_target() as target:
+            assert target is None, (
+                "deciding 'no server' belongs to pg_target, which knows about "
+                "FRAISIER_INTEGRATION; a skip decided here would be silent"
+            )
+
+    def test_discovery_itself_never_starts_a_container(self, monkeypatch):
+        """A running server always wins, and the unit tests stay database-free."""
+        monkeypatch.setattr(
+            conftest, "_container_target", _never_called("_container_target")
+        )
+        conftest._discover_target()
+
+
+def _never_called(name: str):
+    def _fail(*_a, **_kw):
+        raise AssertionError(f"{name} was called")
+
+    return _fail
 
 
 class TestPreflightAdminUrl:

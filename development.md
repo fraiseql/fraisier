@@ -141,6 +141,37 @@ pytest tests/test_cli.py::test_list_command -v
 pytest -k "deploy" -v
 ```
 
+### Integration Tests and `FRAISIER_TEST_PG_URL`
+
+Tests under `tests/integration/` need a real PostgreSQL server. The harness
+(`tests/integration/conftest.py::pg_target`) finds one in this order:
+
+1. the server `FRAISIER_TEST_PG_URL` names,
+2. a local server on a unix socket,
+3. a throwaway Docker container, pinned to your `pg_dump` major version.
+
+```bash
+# A dedicated database, the way CI does it. Never point this at `postgres`.
+FRAISIER_TEST_PG_URL="postgresql:///fraisier_test?host=/run/postgresql" \
+FRAISIER_INTEGRATION=1 uv run pytest
+```
+
+**`FRAISIER_INTEGRATION=1` makes a missing database an error rather than a
+skip.** Use it for any run whose result you intend to trust. Ten preflight
+tests once skipped on every CI run for months — including the one gating the
+PyPI upload — while the checkmark reported a healthy passed count (#370).
+
+**Point it at a database you are willing to lose.** Tests create and drop
+databases on the server they find. `fraisier_test` is the conventional name and
+the one all three workflows use.
+
+**Version skew is the trap when mirroring CI by hand.** If you start a
+container yourself, match its major version to your client's: an 18 `pg_dump`
+against a 16 server emits `SET transaction_timeout`, a GUC 16 does not have, so
+`pg_restore` fails with errors that look real and are not. The harness's own
+fallback matches the versions for you; `docker run … postgres:16-alpine` does
+not.
+
 ### Code Quality
 
 ```bash
