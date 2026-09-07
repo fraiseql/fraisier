@@ -626,6 +626,37 @@ database name) — the SQL is the same.
 
 ---
 
+## Migrations that lose data
+
+Confiture 1.2+ generates a migration that loses data — a dropped table or
+column, a narrowed type — carrying a `destructive` marker, and **refuses to
+apply it** unless it is explicitly allowed. fraisier honours that refusal by
+default and aborts the deploy before anything is applied:
+
+```
+Destructive migration refused: data is lost when it applies:
+20260908000000_drop_legacy.py. Set `allow_destructive: true` on this
+environment to apply it anyway.
+```
+
+To allow it, say so per environment:
+
+```yaml
+fraises:
+  my_api:
+    environments:
+      production:
+        allow_destructive: true    # default: false
+```
+
+It sits beside `allow_irreversible` and works the same way: an environment-level
+key, threaded to the migration strategy. `false` is the default because saying
+yes to data loss is an operator decision, not something a deploy should infer.
+
+Both the `migrate` and `restore_migrate` strategies honour it. The check runs
+*before* the first migration applies, so a refused deploy leaves the database
+exactly as it was — there is nothing to roll back.
+
 ## Post-migration verification
 
 Fraisier ships two complementary hooks that run after `confiture migrate` and

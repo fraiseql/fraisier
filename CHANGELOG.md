@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.74.0] - 2026-09-08
+
+**Confiture's 1.3 line, and the migration it refuses to apply.**
+
+### Added
+
+- **`allow_destructive`, per environment**
+  ([#398](https://github.com/fraiseql/fraisier/issues/398)). Confiture 1.2.0
+  added a destructive gate: a migration that loses data — a dropped table or
+  column, a narrowed type — is generated carrying a `destructive` marker and
+  `migrate up` **refuses** it (`VALID_002`, exit 5) unless run with
+  `allow_destructive`. fraisier never passed it, so such a migration could not
+  be deployed at all.
+
+  ```yaml
+  environments:
+    production:
+      allow_destructive: false   # default; true is an explicit decision
+  ```
+
+  Threaded exactly like `allow_irreversible`: environment config →
+  `APIDeployer` → `strategy.execute` → `migrate_up` → `MigratorSession.up`,
+  which already accepted the flag. Both the `migrate` and `restore_migrate`
+  strategies honour it. The default is `false` because saying yes to data loss
+  is an operator decision, not something a deploy should infer.
+
+### Fixed
+
+- **A refused migration is a fraisier error, in fraisier's words** (#398).
+  `migrate_up` caught only `LockAcquisitionError`, so the refusal arrived as a
+  raw `confiture.exceptions.ValidationError` — **not** a fraisier
+  `MigrationError`, which meant `_run_strategy`'s handler (the one that records
+  how many migrations applied before re-raising, #272) did not catch it, and the
+  operator was told to run `migrate up --allow-destructive`: a CLI fraisier
+  never invokes.
+
+  It is now a `MigrationError` naming the config key, with `steps_applied=0` —
+  exact rather than defensive, because the gate runs before the first migration,
+  so a refused deploy leaves the database untouched.
+
+  The conversion keys on the **error code** `VALID_002`, not on the exception
+  class. The destructive gate is the only `raise ValidationError` in confiture's
+  whole `_migrator` package, so the class alone looks equivalent today — but
+  "set `allow_destructive: true`" is the right remediation for that code and the
+  wrong one for any other validation failure, and a wrong remediation sends the
+  operator after a knob that will not help.
+
+### Changed
+
+- **`fraiseql-confiture>=1.0.0,<1.4`** (was `<1.1`), lock at 1.3.0
+  ([#397](https://github.com/fraiseql/fraisier/issues/397)). Seven releases. The
+  `>=1.0.0` floor is untouched: it is a capability floor for `--check-live-drift`
+  on schema-qualified DDL (#395), not housekeeping.
+
+  Three things reach fraisier across the range. **1.0.1's drift work is benign**
+  — constraint-backed indexes (`t_pkey`, `t_code_key`) are no longer reported and
+  every DDL-declared table's indexes are compared; `EXTRA_INDEX` is INFO and
+  `MISSING_INDEX` is WARNING, neither ever CRITICAL, so `post_migrate_check`'s
+  `passed = not has_critical_drift` cannot move. Strictly less noise.
+  **1.2.0's destructive gate** is the entry above. **`VALID_002` and
+  `DIFFER_401`** are new codes at exit 5; the contract table is keyed on the
+  exit integer, so `classify_confiture_failure(5)` stays `INVALID_CONFIG` and
+  the cross-repo contract test holds against the live table.
+
+  1.1.0's desired-state `migrate diff --from/--to` and 1.3.0's expand/contract
+  `migrate up --online` / `migrate steps` are inert: fraisier invokes neither.
+
 ## [0.73.0] - 2026-09-07
 
 **The check nothing ran: does the migration leave the database in the shape the

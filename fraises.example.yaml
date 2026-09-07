@@ -62,6 +62,10 @@ fraises:
         branch: dev
         git_repo: /var/git/api.myapp.dev.git
         app_path: /var/www/api.myapp.dev
+        # Confiture 1.2+ refuses a migration that loses data (a dropped
+        # table or column, a narrowed type). Default false — saying yes
+        # to data loss is an operator decision, not a deploy's inference.
+        # allow_destructive: true
         systemd_service: api.myapp.dev.service
         database:
           name: myapp_development
