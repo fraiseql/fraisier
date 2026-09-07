@@ -285,6 +285,10 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
     if isinstance(db, dict) and db.get("post_migrate") is not None:
         errors.extend(_validate_post_migrate(fraise_name, db))
 
+    # post_migrate_check gate validation (#395)
+    if isinstance(db, dict) and db.get("post_migrate_check") is not None:
+        errors.extend(_validate_post_migrate_check(fraise_name, db))
+
     # smoke_tests validation (#204 PR B)
     if env.get("smoke_tests") is not None:
         errors.extend(_validate_smoke_tests(fraise_name, env))
@@ -531,6 +535,56 @@ def _validate_post_migrate(fraise_name: str, db: dict) -> list[str]:
                 f"{fraise_name}: {location}.on_error must be 'halt' or "
                 f"'warn', got {on_error!r}"
             )
+
+    return errors
+
+
+def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
+    """Return validation errors for a ``database.post_migrate_check`` block (#395).
+
+    Validated whether or not the gate is ``enabled``: a typo found only when
+    someone switches the gate on is found too late, and a gate that is believed
+    to be running while it quietly does nothing is worse than no gate.
+    """
+    from fraisier.post_migrate_check import ON_CRITICAL, VALID_CHECKS
+
+    errors: list[str] = []
+    raw_block: Any = db.get("post_migrate_check")
+    location = "database.post_migrate_check"
+    if not isinstance(raw_block, dict):
+        errors.append(
+            f"{fraise_name}: {location} must be a mapping, "
+            f"got {type(raw_block).__name__}"
+        )
+        return errors
+
+    block = cast("dict[str, Any]", raw_block)
+    checks = block.get("checks", list(VALID_CHECKS[:1]))
+    if not isinstance(checks, list):
+        errors.append(
+            f"{fraise_name}: {location}.checks must be a list, "
+            f"got {type(checks).__name__}"
+        )
+    elif not checks:
+        errors.append(
+            f"{fraise_name}: {location}.checks must name at least one check "
+            f"({', '.join(VALID_CHECKS)}); an enabled gate that runs nothing "
+            f"reports nothing"
+        )
+    else:
+        unknown = [name for name in checks if name not in VALID_CHECKS]
+        if unknown:
+            errors.append(
+                f"{fraise_name}: {location}.checks has unknown check(s) "
+                f"{unknown}; valid: {', '.join(VALID_CHECKS)}"
+            )
+
+    on_critical = block.get("on_critical", "fail")
+    if on_critical not in ON_CRITICAL:
+        errors.append(
+            f"{fraise_name}: {location}.on_critical must be "
+            f"{' or '.join(repr(v) for v in ON_CRITICAL)}, got {on_critical!r}"
+        )
 
     return errors
 

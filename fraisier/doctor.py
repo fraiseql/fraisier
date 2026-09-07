@@ -606,6 +606,79 @@ def _check_sandbox_write_probe(config: FraisierConfig | None) -> CheckResult:
     return CheckResult(name, "pass", f"wrote into {len(paths)} sandboxed path(s)")
 
 
+def _enabled_drift_gates(config: FraisierConfig | None) -> list[tuple[str, str, str]]:
+    """``(fraise, app_path, confiture_config)`` per enabled post_migrate_check gate."""
+    gates: list[tuple[str, str, str]] = []
+    fraises = getattr(config, "fraises", None) if config is not None else None
+    for fraise_name, fraise in (fraises or {}).items():
+        if not isinstance(fraise, dict):
+            continue
+        for env_config in (fraise.get("environments") or {}).values():
+            if not isinstance(env_config, dict):
+                continue
+            db = env_config.get("database") or {}
+            if not (db.get("post_migrate_check") or {}).get("enabled"):
+                continue
+            app_path = env_config.get("app_path")
+            if not app_path:
+                continue
+            gates.append(
+                (
+                    str(fraise_name),
+                    str(app_path),
+                    str(db.get("confiture_config", "confiture.yaml")),
+                )
+            )
+    return gates
+
+
+@register_check("post_migrate_check_buildable")
+def _check_post_migrate_check_buildable(config: FraisierConfig | None) -> CheckResult:
+    """The drift gate must be able to build the schema it compares against (#395).
+
+    ``confiture build`` cannot be pointed at a config *path*, only at an
+    environment *name* it resolves to ``<app_path>/db/environments/<name>.yaml``.
+    A project whose ``confiture_config`` lives anywhere else — a root
+    ``confiture.yaml``, say — gives the gate nothing to build, so it refuses.
+
+    That refusal lands mid-deploy, **after** the migrations have been applied,
+    which is the worst moment to discover a configuration problem. Nothing else
+    catches it: the config path itself is perfectly valid for `migrate up`,
+    which takes it directly.
+    """
+    name = "post_migrate_check_buildable"
+    gates = _enabled_drift_gates(config)
+    if not gates:
+        return CheckResult(name, "skip", "no post_migrate_check gate enabled")
+
+    from fraisier.dbops.drift import _env_for_build
+
+    unresolvable: list[str] = []
+    for fraise_name, app_path, confiture_config in gates:
+        project_dir = Path(app_path)
+        candidate = Path(confiture_config)
+        if not candidate.is_absolute():
+            candidate = project_dir / candidate
+        try:
+            _env_for_build(project_dir, candidate)
+        except ValueError:
+            unresolvable.append(f"{fraise_name} ({confiture_config})")
+
+    if unresolvable:
+        return CheckResult(
+            name,
+            "warn",
+            f"post_migrate_check is enabled but `confiture build --env` cannot "
+            f"resolve the config for {', '.join(unresolvable)}; the gate will "
+            f"refuse mid-deploy, after the migrations have been applied",
+            fix_hint=(
+                "point database.confiture_config at "
+                "db/environments/<env>.yaml, or disable the gate"
+            ),
+        )
+    return CheckResult(name, "pass", f"{len(gates)} drift gate(s) can build a schema")
+
+
 @register_check("pre_migrate_dump_writable")
 def _check_pre_migrate_dump_writable(config: FraisierConfig | None) -> CheckResult:
     """The dump gate must be able to write from inside the unit's sandbox (#317).
