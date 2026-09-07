@@ -35,6 +35,7 @@ passed.
 | `secrets_env_readable` | `~/.config/fraisier/secrets.env` exists and is mode 0600 | no | `chmod 600 ~/.config/fraisier/secrets.env` |
 | `helper_sudoers` | `/etc/sudoers.d/<project>` exists and is mode 0440 | no | `fraisier scaffold-install` |
 | `pre_migrate_dump_writable` | the installed webhook unit allows writes to `pre_migrate_dump.output_dir` | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |
+| `post_migrate_check_buildable` | every enabled `post_migrate_check` gate has a `confiture_config` that `confiture build --env` can resolve | no | point `database.confiture_config` at `db/environments/<env>.yaml`, or disable the gate |
 | `install_compile_bytecode` | a `uv sync` `install.command` passes `--compile-bytecode` | no | add `--compile-bytecode` to `install.command` — see [bytecode and startup time](deployment-guide.md#bytecode-and-startup-time) |
 | `inert_timers` | which `scaffold.systemd.timers` families this host runs, and which it only carries | no | none needed — see [scheduled timers you switch on](deployment-guide.md#scheduled-timers-you-switch-on) |
 | `backup_retention` | every declared `retain` corpus has both halves of its prune unit on disk | no | `sudo fraisier scaffold-install` — until then nothing prunes that corpus |
