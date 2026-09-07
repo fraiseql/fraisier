@@ -123,6 +123,17 @@ fraises:
           #   jobs: 1                # >1 switches to directory-format -Fd -j N
           #   min_free_gb: 20        # abort if output_dir has less free space
           #   retention_hours: 168   # prune older gate dumps after a SUCCESSFUL dump
+          # Optional post-migration schema-drift gate (#395). Asks
+          # confiture whether the live database matches the schema this
+          # checkout builds — the failure a migration cannot see, because
+          # a PL/pgSQL function body is stored without being resolved.
+          # Runs AFTER migrate up (before it, a pending table-adding
+          # migration reads as critical drift) and before the SQL hooks.
+          # Needs confiture_config to be db/environments/<env>.yaml.
+          # post_migrate_check:
+          #   enabled: true
+          #   checks: [live-drift]   # live-drift | signatures
+          #   on_critical: fail      # fail | warn
           # Optional post-migration SQL hooks (#204). Each entry has
           # exactly one of `sql_dir` or `sql_file`; on_error is `halt`
           # (default — abort before restart) or `warn` (log + continue).

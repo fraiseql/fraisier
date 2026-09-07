@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.73.0] - 2026-09-07
+
+**The check nothing ran: does the migration leave the database in the shape the
+code assumes?**
+
+### Added
+
+- **`database.post_migrate_check` — gate the deploy on confiture's live schema
+  drift check** ([#395](https://github.com/fraiseql/fraisier/issues/395)). The
+  deploy takes a pre-migration dump and can run post-migration SQL hooks
+  (#204), and nothing between the two asked whether the target database is in
+  the shape the migrations assume. Confiture ships that check; no fraisier code
+  path invoked it.
+
+  The failure it closes: `CREATE OR REPLACE FUNCTION` stores a **PL/pgSQL** body
+  without resolving what it references, so a migration replaying a DDL file
+  whose function body names a column the live table does not have **applies
+  successfully**. The deploy reports success and the error surfaces at that
+  function's next call, minutes or weeks later, in whichever code path calls
+  first. The restore-based preflight does not catch it and is not wrong to miss
+  it: it predicts whether the migrations *apply*, and they do. The fault is in
+  what was applied.
+
+  ```yaml
+  database:
+    confiture_config: db/environments/production.yaml
+    post_migrate_check:
+      enabled: true
+      checks: [live-drift]      # live-drift | signatures
+      on_critical: fail         # fail | warn
+  ```
+
+  **It runs after `migrate up`, not before** — which is not what the issue
+  proposed, and the difference is measured rather than argued.
+  `--check-live-drift` grades expected (the DDL) against actual (live) and rates
+  `MISSING_TABLE` / `MISSING_COLUMN` CRITICAL. A pending migration that adds a
+  table or column is, by definition, "in the DDL and not yet in live", so a
+  `pre_migrate_check` fails closed on **every** deploy carrying one. With a
+  single entirely legitimate pending migration: critical drift before `migrate
+  up`, clean after. Only the post-migration position tells a deploy in progress
+  apart from a broken schema. It sits beside the `post_migrate` SQL hooks and
+  before the restart, where nothing is serving the new code yet — so failing
+  closed needs no rollback, and the dump gate has already produced the rollback
+  point.
+
+  Three parts of confiture's contract are sharp enough that the module names
+  each one and a test pins it. `confiture build` takes `--project-dir`/`--env`
+  while `migrate validate` takes neither, so the build is addressed by project
+  directory and the validate by an **absolute** `-c`; the env name is derived
+  from the config's stem and then *proved* to round-trip to the same file, so
+  the gate cannot silently compare live against another environment's DDL.
+  Exit 1 is **overloaded** — critical drift *and* "schema file not found" — so
+  the built file's existence is checked where the cause is still legible.
+  And the `--format json` payload **changes shape with the number of checks**:
+  one emits the bare report, two wrap them in a `checks` envelope where
+  `has_critical_drift` is absent from the top level, so a reader that knows only
+  the bare shape calls a drifting database clean while confiture exits 1.
+
+  `migrate validate` has no `--database-url` and connects to whatever its `-c`
+  names. When fraises.yaml overrides `database.database_url`, the gate compares
+  connection targets and **refuses** on a mismatch: a check that inspects the
+  wrong database and reports it clean is worse than no check. The gate also
+  reads the config snapshot `_run_strategy` resolved rather than resolving a
+  second time (#376).
+
+  Every non-verdict outcome — a failed or truncated schema build, an
+  unreachable database, an unparseable report, an unknown check name — is
+  reported as *not passed* and distinguishable from a clean schema. `fail`
+  means "stop me", and a check that did not run has cleared nothing; `warn`
+  means "tell me, don't stop me", and that intent holds however it failed.
+
+  New `doctor` check `post_migrate_check_buildable`: `confiture build` can only
+  be pointed at an environment *name*, so a `confiture_config` outside
+  `db/environments/` leaves the gate nothing to build. Without it that refusal
+  lands mid-deploy, after the migrations have been applied.
+
+### Changed
+
+- **`fraiseql-confiture>=1.0.0,<1.1`** (was `>=0.38.0,<0.47`). A **capability**
+  floor, not housekeeping: before 1.0.0 `--check-live-drift` was blind on
+  schema-qualified DDL. `core/drift.py` took the table name with `(\w+)`, which
+  does not match a dot, so `core.tb_meter` parsed as a table called `core`, and
+  `core/schema_analyzer.py` read the live side with a hardcoded
+  `table_schema = 'public'`. Measured side by side on the same database and the
+  same schema file, live applied verbatim from its own DDL:
+
+  | confiture | result |
+  |---|---|
+  | 0.46.0 | exit 1 — `CRITICAL MISSING_TABLE core` |
+  | 1.0.0 | exit 0 — no schema drift detected |
+
+  Admitting an older confiture would fail closed on every deploy of a
+  multi-schema project while looking like a working gate — the #262 shape — so
+  the floor is pinned by a test rather than by a comment. 1.0.0 also *freezes*
+  the surfaces fraisier consumes: exit codes and their semantic classes, the
+  JSON error envelope, the documented CLI, and the library API.
+
+### Fixed
+
+- **`confiture.core.error_codes` moved to `confiture.error_codes` in confiture
+  1.0.0**, a move its changelog does not list among the breaking changes.
+  `dbops/confiture_contract` resolves that table at fraisier *import* time, so
+  the single hardcoded path became an `ImportError` that took every module
+  reaching `dbops.confiture` down with it. It now tries both homes, newest
+  first, and still degrades to the vendored copy rather than raising — a crash
+  there is a crash in every fraisier command. The two cross-repo contract tests
+  no longer skip on "confiture too old to export the table": under a `>=1.0.0`
+  floor that is not a state this suite can be in, and a skip is not a pass.
+
 ## [0.72.0] - 2026-09-06
 
 **Two ways a host ends up running code nobody installed there, and the deploy a

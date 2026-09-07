@@ -633,15 +633,76 @@ before the deployment is reported successful:
 
 | Hook | Runs | Reads | Failure policy |
 |---|---|---|---|
+| `database.post_migrate_check` | after migrate, before the SQL hooks | the live schema vs the checkout's DDL | `on_critical: fail | warn` |
 | `database.post_migrate` | after migrate, before service restart | DB only (no app) | `on_error: halt | warn` |
 | `smoke_tests` | after service restart and `/health` passes | the live HTTP app | `on_failure: rollback | halt | warn` |
 
-The two solve different problems. `post_migrate` is for **schema-side**
-side effects that the migration tool itself doesn't cover (grant
-reconciliation, materialized view refreshes, vendor extension setup).
-`smoke_tests` is for **application-side** behavior that an
-unauthenticated `/health` probe can't reach (authenticated queries,
-permission boundaries, cross-service contracts).
+They solve different problems. `post_migrate_check` asks whether the
+migration left the database in the shape the code assumes.
+`post_migrate` is for **schema-side** side effects that the migration
+tool itself doesn't cover (grant reconciliation, materialized view
+refreshes, vendor extension setup). `smoke_tests` is for
+**application-side** behavior that an unauthenticated `/health` probe
+can't reach (authenticated queries, permission boundaries,
+cross-service contracts).
+
+### `database.post_migrate_check`: does live match the DDL? (#395)
+
+A migration can apply cleanly and still leave the database in a shape the
+code does not expect. `CREATE OR REPLACE FUNCTION` stores a **PL/pgSQL**
+body without resolving what it references, so a DDL file whose function
+reads a column the migration never added applies with exit 0 — the deploy
+reports success and the error surfaces at that function's next call,
+minutes or weeks later, in whichever code path calls first.
+
+The pre-migration dump gate does not catch this and is not wrong to miss
+it: it predicts whether the migrations *apply*, and they do. The fault is
+in what was applied.
+
+```yaml
+database:
+  database_url: !envvar DATABASE_URL
+  strategy: apply
+  confiture_config: db/environments/production.yaml   # required — see below
+  post_migrate_check:
+    enabled: true
+    checks: [live-drift]      # live-drift | signatures
+    on_critical: fail         # fail | warn
+```
+
+The gate builds the schema this checkout would produce (`confiture build
+--schema-only`, no database connection, into a temp path that is cleaned
+up) and hands it to `confiture migrate validate --check-live-drift`.
+Warnings do not fail; only critical drift does. `confiture_lock_holder`
+shows up as an `EXTRA_TABLE` warning on every fraisier-managed database,
+which is why that distinction matters.
+
+**It runs after `migrate up`, not before.** `--check-live-drift` grades
+the DDL against live and rates "in the DDL, not in live" —
+`MISSING_TABLE`, `MISSING_COLUMN` — as critical. A pending migration that
+adds a table or a column is, by definition, exactly that. Measured on one
+entirely legitimate pending migration: critical drift before `migrate
+up`, clean after. A pre-migration gate would abort every deploy carrying
+a table-adding migration. Failing closed here is safe because nothing is
+serving the new code yet — no rollback is needed — and the
+`pre_migrate_dump` gate has already produced the rollback point.
+
+**`confiture_config` must be `db/environments/<env>.yaml`.** `confiture
+build` can only be pointed at an environment *name*, which it resolves
+under the project directory; a config anywhere else (a root
+`confiture.yaml`, say) leaves the gate nothing to build and it refuses.
+`fraisier doctor` reports that as `post_migrate_check_buildable` so you
+find it before a deploy does.
+
+**`on_critical` also governs a gate that could reach no verdict** — a
+failed schema build, an unreachable database, a report fraisier cannot
+parse. `fail` means "stop me", and a check that did not run has cleared
+nothing; `warn` means "tell me, don't stop me", and that intent holds
+however the check failed.
+
+Requires `fraiseql-confiture >= 1.0.0`. Earlier versions read
+schema-qualified DDL wrongly — `core.tb_widget` parsed as a table called
+`core` — and would fail closed on every deploy of a multi-schema project.
 
 ### `database.post_migrate`: SQL hooks after migrate
 
