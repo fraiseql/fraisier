@@ -12,6 +12,9 @@ drift check (the Rust adapter vendors and verifies the same output).
 
 from __future__ import annotations
 
+import types
+from unittest import mock
+
 import pytest
 
 from fraisier.dbops.confiture_contract import (
@@ -21,6 +24,7 @@ from fraisier.dbops.confiture_contract import (
     NO_LEDGER_ERROR_CODE,
     ConfitureFailureClass,
     classify_confiture_failure,
+    confiture_error_codes,
     envelope_error_code,
 )
 
@@ -102,35 +106,77 @@ def test_no_ledger_error_code_is_precon_1001() -> None:
     assert NO_LEDGER_ERROR_CODE == "PRECON_1001"
 
 
-def test_vendored_table_matches_live_confiture_when_available() -> None:
+def test_confiture_error_codes_module_resolves() -> None:
+    """The live table has a home, and fraisier finds it wherever it moved to.
+
+    confiture 1.0.0 moved the module from ``confiture.core.error_codes`` to
+    ``confiture.error_codes`` without listing the move among its documented
+    breaking changes.  ``_exit_class_table`` imported the old path directly, so
+    the bump turned it into an ``ImportError`` raised at *fraisier* import time
+    — every module that reaches ``dbops.confiture`` failed to collect.
+    """
+    assert confiture_error_codes() is not None, (
+        "no confiture error-codes module resolved; the exit-code contract would "
+        "silently fall back to the vendored copy"
+    )
+
+
+def test_vendored_table_matches_live_confiture() -> None:
     """The vendored copy must equal confiture's live table — the cross-repo guard.
 
-    Skips against a confiture too old to export the table (fraisier still pins
-    ``fraiseql-confiture < 0.36``); it activates automatically once the floor moves
-    to a confiture that ships ``EXIT_CODE_SEMANTIC_CLASS``. The Rust adapter runs
-    the equivalent diff against ``confiture --exit-codes-json``.
+    Asserted unconditionally: the floor is ``fraiseql-confiture>=1.0.0`` and
+    1.0.0 *freezes* the exit codes, so "the installed confiture is too old to
+    export the table" is no longer a state this suite can be in.  It used to
+    skip, and a skip is not a pass.  The Rust adapter runs the equivalent diff
+    against ``confiture --exit-codes-json``.
     """
-    from confiture.core import error_codes
-
-    live = getattr(error_codes, "EXIT_CODE_SEMANTIC_CLASS", None)
-    if live is None:
-        pytest.skip("installed confiture predates EXIT_CODE_SEMANTIC_CLASS")  # ty: ignore[too-many-positional-arguments]
+    error_codes = confiture_error_codes()
+    assert error_codes is not None
+    live = error_codes.EXIT_CODE_SEMANTIC_CLASS
 
     vendored = {code: str(cls) for code, cls in VENDORED_EXIT_CLASS.items()}
     assert vendored == {int(c): n for c, n in live.items()}, (
         "vendored _VENDORED_EXIT_CLASS is stale vs the installed confiture; "
-        "update it to match confiture.core.error_codes.EXIT_CODE_SEMANTIC_CLASS"
+        "update it to match confiture's EXIT_CODE_SEMANTIC_CLASS"
     )
 
 
-def test_no_ledger_error_code_matches_confiture_when_available() -> None:
-    """fraisier's no-ledger code stays confiture's, verified live when possible."""
-    from confiture.core import error_codes
+def test_exit_class_table_reads_the_live_module_not_the_vendored_copy() -> None:
+    """The live table is what is *used*, not merely what is compared against.
 
-    confiture_code = getattr(error_codes, "NO_LEDGER_ERROR_CODE", None)
-    if confiture_code is None:
-        pytest.skip("installed confiture predates NO_LEDGER_ERROR_CODE")  # ty: ignore[too-many-positional-arguments]
-    assert confiture_code == NO_LEDGER_ERROR_CODE
+    fraisier's vendored copy and confiture's live table are equal by
+    construction (the test above), so reading the result proves nothing about
+    which one produced it. Feed the resolver a module whose table differs from
+    the vendored one and assert the difference reaches the output: a
+    ``_exit_class_table`` that quietly always returned the vendored copy would
+    pass every other test in this module.
+    """
+    from fraisier.dbops import confiture_contract
+
+    stub = types.SimpleNamespace(
+        EXIT_CODE_SEMANTIC_CLASS={0: "lock_contention", 6: "ok"}
+    )
+    with mock.patch.object(confiture_contract, "confiture_error_codes", lambda: stub):
+        table = confiture_contract._exit_class_table()
+    assert table == {
+        0: ConfitureFailureClass.LOCK_CONTENTION,
+        6: ConfitureFailureClass.OK,
+    }
+
+
+def test_exit_class_table_falls_back_when_confiture_exports_no_table() -> None:
+    """No table anywhere degrades to the vendored copy rather than raising."""
+    from fraisier.dbops import confiture_contract
+
+    with mock.patch.object(confiture_contract, "confiture_error_codes", lambda: None):
+        assert confiture_contract._exit_class_table() == dict(VENDORED_EXIT_CLASS)
+
+
+def test_no_ledger_error_code_matches_confiture() -> None:
+    """fraisier's no-ledger code stays confiture's, verified live."""
+    error_codes = confiture_error_codes()
+    assert error_codes is not None
+    assert error_codes.NO_LEDGER_ERROR_CODE == NO_LEDGER_ERROR_CODE
 
 
 def test_envelope_error_code_reads_the_confiture_failure_shape() -> None:

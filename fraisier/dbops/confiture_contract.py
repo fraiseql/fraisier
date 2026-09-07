@@ -20,8 +20,13 @@ both consumers project one confiture-owned table. Every consumer in
 
 from __future__ import annotations
 
+import importlib
 import json
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 # Confiture's error code for a reachable-but-uninitialised database — no
 # migration ledger (``tb_confiture`` absent). It exits 2, and is the one code
@@ -80,18 +85,35 @@ _VENDORED_EXIT_CLASS: dict[int, ConfitureFailureClass] = {
 }
 
 
+#: Where confiture keeps its error-code table, newest home first. It moved from
+#: ``confiture.core.error_codes`` to ``confiture.error_codes`` in confiture
+#: 1.0.0 — a move its changelog does not list among the breaking changes. This
+#: module resolves the table at *fraisier import time*, so importing one fixed
+#: path made that move an ``ImportError`` that took every module reaching
+#: ``dbops.confiture`` down with it. Both homes are tried, and the older one
+#: stays as defence in depth: a crash here is a crash in every fraisier command.
+_ERROR_CODES_MODULES = ("confiture.error_codes", "confiture.core.error_codes")
+
+
+def confiture_error_codes() -> ModuleType | None:
+    """The installed confiture's error-code module, or None if it has none."""
+    for name in _ERROR_CODES_MODULES:
+        try:
+            return importlib.import_module(name)
+        except ImportError:
+            continue
+    return None
+
+
 def _exit_class_table() -> dict[int, ConfitureFailureClass]:
     """The confiture-owned ``exit_int → class`` table.
 
     Prefers the installed confiture's ``EXIT_CODE_SEMANTIC_CLASS`` (zero drift);
-    falls back to the vendored copy when confiture is too old to export it, or
+    falls back to the vendored copy when confiture exports no such table, or
     when it exports a class this fraisier does not model yet (a confiture newer
     than us — the contract test surfaces the gap rather than crashing import).
     """
-    from confiture.core import error_codes  # confiture is a hard dependency
-
-    # `EXIT_CODE_SEMANTIC_CLASS` is new in a future confiture and absent from the
-    # currently pinned line — read it dynamically so this resolves both ways.
+    error_codes = confiture_error_codes()
     table = getattr(error_codes, "EXIT_CODE_SEMANTIC_CLASS", None)
     if table is None:
         return dict(_VENDORED_EXIT_CLASS)
