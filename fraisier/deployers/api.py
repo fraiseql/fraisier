@@ -143,6 +143,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.database_config = config.get("database", {})
         self.smoke_tests_config = config.get("smoke_tests")
         self.allow_irreversible = config.get("allow_irreversible", False)
+        # Confiture 1.2+ refuses a migration that loses data. Default False:
+        # saying yes to data loss is an explicit operator decision (#398).
+        self.allow_destructive = config.get("allow_destructive", False)
         self.lock_timeout = config.get("lock_timeout", 300)
         install_config = config.get("install", {})
         self.install_command = install_config.get("command")
@@ -1171,6 +1174,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 confiture_config,
                 migrations_dir=migrations_dir,
                 allow_irreversible=self.allow_irreversible,
+                allow_destructive=self.allow_destructive,
                 pre_migrate_verify=pre_verify,
                 database_url=database_url,
                 hooks_config=hooks_config,

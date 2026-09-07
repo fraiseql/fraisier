@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
+from confiture.exceptions import ValidationError
 
 from fraisier.dbops.confiture_contract import (
     ConfitureFailureClass,
@@ -41,6 +42,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from confiture.config.environment import Environment
 
 log = logging.getLogger(__name__)
+
+#: Confiture's code for "this migration loses data" (1.2+, exit 5). The
+#: destructive gate is the only thing in its `_migrator` package that raises
+#: ValidationError, so this is a precise key rather than a catch-all.
+_DESTRUCTIVE_REFUSED = "VALID_002"
 
 MAX_LOCK_RETRIES = 3
 
@@ -359,6 +365,7 @@ def migrate_up(
     lock_timeout: int = 30_000,
     pre_migrate_verify: bool = False,
     require_reversible: bool = False,
+    allow_destructive: bool = False,
     database_url: str | None = None,
     hooks_config: dict[str, Any] | None = None,
     project_dir: Path | str | None = None,
@@ -373,6 +380,10 @@ def migrate_up(
             catch SQL errors before applying for real.
         require_reversible: When True, abort if any pending migration
             lacks a .down.sql file (confiture v0.8.11+).
+        allow_destructive: When True, apply migrations that confiture's
+            destructive gate would otherwise refuse — a dropped table or
+            column, a narrowed type (confiture v1.2+). Default False: data
+            loss is an explicit operator decision, never a default.
         project_dir: Directory to run the migration in — the same one the
             scaffolded ``db_deploy.sh`` changes into. Migrations that resolve a
             path against the working directory then behave identically on both
@@ -420,8 +431,35 @@ def migrate_up(
                 result: MigrateUpResult = m.up(
                     lock_timeout=lock_timeout,
                     require_reversible=require_reversible,
+                    allow_destructive=allow_destructive,
                 )
                 break
+            except ValidationError as exc:
+                # Confiture 1.2+ refuses a migration marked destructive. This
+                # is the *only* `raise ValidationError` in its whole `_migrator`
+                # package, and it carries VALID_002 — so keying on that code
+                # catches the destructive gate and nothing else, and every
+                # other confiture exception keeps behaving as it did.
+                #
+                # Re-raised as a fraisier MigrationError for two reasons: the
+                # deployer's `except MigrationError` is what records how many
+                # migrations applied before re-raising (#272), and a raw
+                # upstream error tells the operator to run
+                # `migrate up --allow-destructive` — a CLI fraisier never
+                # invokes. `steps_applied=0` is exact, not defensive: the gate
+                # runs before the first migration, so nothing has been applied.
+                if getattr(exc, "error_code", None) != _DESTRUCTIVE_REFUSED:
+                    raise
+                raise FraisierMigrationError(
+                    message=(
+                        f"{exc}. Set `allow_destructive: true` on this "
+                        f"environment to apply it anyway."
+                    ),
+                    direction="up",
+                    db_error=str(exc),
+                    rollback_attempted=False,
+                    steps_applied=0,
+                ) from exc
             except LockAcquisitionError:  # pragma: no cover
                 if attempt == MAX_LOCK_RETRIES - 1:
                     raise

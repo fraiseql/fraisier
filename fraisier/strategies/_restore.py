@@ -228,6 +228,7 @@ class RestoreMigrateStrategy(Strategy):
         *,
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
+        allow_destructive: bool = False,
         pre_migrate_verify: bool = False,
         database_url: str | None = None,
         hooks_config: dict[str, Any] | None = None,
@@ -425,9 +426,14 @@ class RestoreMigrateStrategy(Strategy):
 
         # Step 9: Migrate up
         t_migrate = time.monotonic()
+        # `allow_destructive` is threaded; `allow_irreversible` deliberately is
+        # not. This path has always migrated without `require_reversible`, and
+        # starting to honour it here would newly refuse deploys that work today
+        # — a separate decision from #398, which only *adds* a way to say yes.
         result = migrate_up(
             confiture_config,
             migrations_dir=migrations_dir,
+            allow_destructive=allow_destructive,
             database_url=database_url,
             hooks_config=hooks_config,
             project_dir=self._project_dir,

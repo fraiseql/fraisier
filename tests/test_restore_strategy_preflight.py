@@ -354,3 +354,45 @@ class TestMigrationPreflightError:
     def test_error_without_result(self):
         err = MigrationPreflightError("preflight failed")
         assert err.preflight_result is None
+
+
+class TestAllowDestructive:
+    """The restore path runs `migrate up` too, so it clears the same gate (#398).
+
+    Asserted on the call rather than the signature: a parameter accepted at the
+    top and dropped before `migrate_up` is indistinguishable from one that was
+    never threaded, and the deploy goes on refusing.
+    """
+
+    @pytest.mark.parametrize("allow", [False, True])
+    def test_it_reaches_migrate_up(self, allow: bool) -> None:
+        strategy = _make_strategy(preflight_enabled=False)
+
+        with (
+            patch(_P_FIND_BACKUP, return_value=_BACKUP_FILE),
+            patch(_P_VALIDATE_AGE, return_value=True),
+            patch(_P_TERMINATE),
+            patch(_P_DROP, return_value=(0, "", "")),
+            patch(_P_CREATE, return_value=(0, "", "")),
+            patch(_P_RESTORE, return_value=MagicMock(success=True)),
+            patch(_P_MIGRATE_UP, return_value=MagicMock(steps_applied=1)) as migrate,
+        ):
+            strategy.execute(Path("confiture.yaml"), allow_destructive=allow)
+
+        assert migrate.call_args.kwargs["allow_destructive"] is allow
+
+    def test_it_defaults_to_refusing(self) -> None:
+        strategy = _make_strategy(preflight_enabled=False)
+
+        with (
+            patch(_P_FIND_BACKUP, return_value=_BACKUP_FILE),
+            patch(_P_VALIDATE_AGE, return_value=True),
+            patch(_P_TERMINATE),
+            patch(_P_DROP, return_value=(0, "", "")),
+            patch(_P_CREATE, return_value=(0, "", "")),
+            patch(_P_RESTORE, return_value=MagicMock(success=True)),
+            patch(_P_MIGRATE_UP, return_value=MagicMock(steps_applied=1)) as migrate,
+        ):
+            strategy.execute(Path("confiture.yaml"))
+
+        assert migrate.call_args.kwargs["allow_destructive"] is False
