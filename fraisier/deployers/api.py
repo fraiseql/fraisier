@@ -98,6 +98,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.git_repo = config.get("git_repo")
         self._bind_deploy_settings(config)
         self._migrations_applied: int = 0
+        # The config snapshot the migration actually ran against, set by
+        # `_run_strategy` and read by the drift gate (#395/#376).
+        self._migrated_config: Path = Path()
+        self._migrated_database_url: str | None = None
         # Set when the deploy's timeout lands inside a running rollback (#384),
         # so the report says the previous version may be only partly restored.
         self._rollback_interrupted_by_timeout = False
@@ -637,6 +641,59 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             return result
         return None
 
+    def _run_post_migrate_check(self) -> None:
+        """Gate the deploy on confiture's live schema-drift check (#395).
+
+        Runs between the migration and the ``post_migrate`` SQL hooks. After
+        the migration because ``--check-live-drift`` rates "in the DDL, not in
+        live" CRITICAL, and a pending table-adding migration is exactly that —
+        before it, the gate would fail closed on every deploy carrying one.
+        Before the restart because nothing is serving the new code yet, so a
+        failure here needs no rollback; the ``pre_migrate_dump`` gate has
+        already produced the rollback point that makes failing closed safe.
+
+        What it closes: ``CREATE OR REPLACE FUNCTION`` stores a PL/pgSQL body
+        without resolving what it references, so a DDL file whose function
+        reads a column the migration never added applies with exit 0 and the
+        deploy reports success. The error surfaces at that function's next
+        call, far from the change that caused it.
+
+        Raises:
+            DeploymentError: drift was found, or the check could not reach a
+                verdict, and ``on_critical`` is ``fail``.
+        """
+        from fraisier.post_migrate_check import load_post_migrate_check
+
+        gate = load_post_migrate_check(self.database_config)
+        if not gate.enabled:
+            return
+
+        from fraisier.dbops import drift
+
+        result = drift.check_schema_drift(
+            project_dir=Path(self.app_path) if self.app_path else Path(),
+            confiture_config=self._migrated_config,
+            checks=gate.checks,
+            database_url=self._migrated_database_url,
+        )
+        if result.passed:
+            logger.info("%s", result.summary())
+            return
+        # A check that did not run has cleared nothing, so `on_critical`
+        # governs both outcomes: `fail` means "stop me", `warn` means "tell me,
+        # do not stop me" — and that intent holds however the check failed.
+        if gate.on_critical == "warn":
+            logger.warning("%s", result.summary())
+            return
+        raise DeploymentError(
+            result.summary(),
+            context={
+                "fraise": self.fraise_name,
+                "environment": self.environment,
+                "checks": ", ".join(gate.checks),
+            },
+        )
+
     def _run_post_migrate(self) -> None:
         """Run database.post_migrate SQL hooks (#204).
 
@@ -771,6 +828,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 # Step 3: Run database migrations via strategy if configured
                 if self.database_config:
                     self._run_database_migrations()
+                    self._run_post_migrate_check()
                     self._run_post_migrate()
 
                 # Step 4: Restart service (unless strategy handles it)
@@ -1094,6 +1152,13 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         confiture_config, migrations_dir = self._resolve_paths_against_app(
             confiture_config, migrations_dir
         )
+        # What the migration actually ran against, kept for the drift gate.
+        # `_run_post_migrate_check` reads these rather than calling
+        # `_resolve_strategy()` again: one deploy resolving two config
+        # snapshots is the #376 defect, and a gate that inspected a different
+        # database than was migrated would report on the wrong schema.
+        self._migrated_config = confiture_config
+        self._migrated_database_url = database_url
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
         hooks_config = self.database_config.get("hooks")
