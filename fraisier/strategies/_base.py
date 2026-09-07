@@ -119,6 +119,7 @@ class Strategy(ABC):
         *,
         migrations_dir: Path = Path("db/migrations"),
         allow_irreversible: bool = False,
+        allow_destructive: bool = False,
         pre_migrate_verify: bool = False,
         database_url: str | None = None,
         hooks_config: dict[str, Any] | None = None,
