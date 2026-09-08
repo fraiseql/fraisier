@@ -16,7 +16,7 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 dependencies = [
-  # Pinned to confiture's 1.x line, floor 1.0.0 and cap below 1.4.
+  # Pinned to confiture's 1.x line, floor 1.0.0 and cap below 1.7.
   #
   # The FLOOR is a **capability** floor, not housekeeping, and must not be
   # lowered: the post-migration drift gate (#395) reads
@@ -55,11 +55,87 @@ dependencies = [
   # 1.1.0's desired-state `migrate diff --from/--to` and 1.3.0's expand/contract
   # `migrate up --online` / `migrate steps` are inert: fraisier invokes neither.
   #
+  # 1.4.0 is a lint release: eight phases against `confiture lint`, a command
+  # fraisier never invokes. `error_codes`, `core/migrator`, `core/restorer`,
+  # `core/locking`, `core/view_manager` and every `migrate` subcommand are
+  # byte-identical to 1.3.0. Exactly one file fraisier reads changed —
+  # `core/builder.py` — and only under `build.sort_mode: hex`:
+  #   * `find_sql_files()` now reads the numeric prefix on *every* path
+  #     component and ends the key with the path, so the order is total. Under
+  #     1.3.0 the filename's own prefix was the whole key, so
+  #     `020_app/00001_create.sql` tied with `010_core/00001_create.sql` and
+  #     `rglob` broke the tie: measured on a four-file tree, 1.3.0 emitted the
+  #     app directory *before* the core schema it depends on, and read a
+  #     lowercase `009a` as no prefix at all so it sorted after `0100`. Both
+  #     are fixed, so for a hex-mode project this is a correction, not a
+  #     regression.
+  #   * The order is the digest, so `SchemaBuilder.compute_hash()` moves once
+  #     for such a project. Self-healing on both consumers that read it:
+  #     `TemplateManager.ensure_template` rebuilds on a hash it does not
+  #     recognise, and the drift gate builds its expected schema fresh every
+  #     run into a temporary directory. `sort_mode: alphabetical` — the
+  #     default, and the only mode fraisier's own tree and templates use — is
+  #     unaffected: measured, same order and same digest on both versions.
+  #
+  # 1.5.0 rewrites the same file again, and this one can change *which files*
+  # a build reads. `include`/`exclude` globs move to gitignore's dialect (a
+  # pattern with a `/` is left-anchored; `**` spans zero or more components),
+  # the `order` key on an `include_dirs` entry finally partitions the build,
+  # `recursive` alone bounds the walk, and a file selected twice is built once.
+  # A build can **grow**: measured, `exclude: ["temp/*.sql"]` dropped
+  # `a/temp/t2.sql` at any depth under 1.4.0 and keeps it under 1.5.0, because
+  # the pattern now names one place.
+  #
+  # None of that reaches fraisier's own configuration. The knobs only exist on
+  # an `include_dirs` entry written as a mapping, and fraisier writes none:
+  # `scaffold/templates/core/confiture.yaml.j2` emits `database`, `schema`,
+  # `compile` and `migrations` and no `include_dirs` at all, and the fixtures
+  # in this tree use plain-string entries. That is exactly the default shape
+  # 1.5.0 promises not to move, and it was measured rather than assumed — the
+  # same tree through 1.3.0, 1.4.0, 1.5.0 and 1.6.0 gives one selection and one
+  # digest on the default shape, in both sort modes.
+  #
+  # 1.6.0 answers the gap that audit found (confiture #268): `BuildResult`
+  # published a `warnings` array that no code path ever wrote to, so a consumer
+  # reading `build --format json` — the right thing to do — could not see a
+  # diagnostic the console printed. It is now a typed `BuildWarning`
+  # (`code`/`severity`/`message`/`file`, keyed on the error-code registry), and
+  # the transitional `CONFIG_013`/`CONFIG_014` glob-migration codes are gone
+  # with the 1.5.0 replay that computed them (confiture #263).
+  #
+  # Both of 1.6.0's breaking changes miss fraisier, and neither is load-bearing
+  # here yet: `warnings[]` entries became objects rather than strings, and
+  # `patterns[]` left `build --list-files --format json`. `dbops/drift.py` runs
+  # `confiture build --schema-only --output …` with no `--format json` and reads
+  # only the exit code and the file it wrote, and nothing in fraisier invokes
+  # `--list-files`. The typed channel is what a future drift gate should read
+  # instead of discarding `build.stdout` on a zero exit — it is now worth
+  # consuming, which it was not before 1.6.0.
+  #
+  # `error_codes` drops `CONFIG_013`/`CONFIG_014` and gains `SCHEMA_206`,
+  # `SEED_002` and `SEED_003`, all three exit-0 carve-outs. None of it moves
+  # `EXIT_CODE_SEMANTIC_CLASS` — the table `dbops/confiture_contract.py` imports
+  # live, with a vendored fallback — and fraisier never reads
+  # `CANONICAL_EXIT_CODES`, so `classify_confiture_failure` is untouched.
+  #
+  # ⚠️ This cap is a **single hop over the migration aid.** `main` ships
+  # `<1.4` and locks 1.3.0, so a user taking this release resolves straight to
+  # 1.6.0 and never runs a 1.5.x, which is the only line that emitted
+  # `CONFIG_013`/`CONFIG_014`. Measured on the same project: 1.3.0 selects
+  # `keep.sql`; 1.6.0 selects `a/temp/t2.sql, keep.sql` — the grown 1.5.0
+  # selection, with **no diagnostic on either stream**. Nothing fraisier
+  # generates can trigger it (see the scaffold note above), so this is not a
+  # blocker, but it is the one thing the release notes owe a project that
+  # hand-writes `include`/`exclude` globs: diff
+  # `confiture build --list-files` across the upgrade, which still works in
+  # 1.6.0 and which confiture recommends over the retired codes anyway, since
+  # four of the seven changed shapes never had a diagnostic at all.
+  #
   # The cap still moves deliberately, on a green suite: the freeze is upstream's
   # promise, and `<1.0` is precisely the width that let #262 resolve a confiture
   # whose preflight JSON fraisier could not parse and read the unparsed result
   # as a pass (issues #262, #362, #368, #395, #397).
-  "fraiseql-confiture>=1.0.0,<1.4",
+  "fraiseql-confiture>=1.0.0,<1.7",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
