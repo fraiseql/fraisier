@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.75.0] - 2026-09-10
+
+**Confiture's 1.6 line — and a hop over the aid that would have explained it.**
+
+### Changed
+
+- **`fraiseql-confiture>=1.0.0,<1.7`** (was `<1.4`), lock at 1.6.0
+  ([#400](https://github.com/fraiseql/fraisier/issues/400)). Three releases on
+  three consecutive days. The `>=1.0.0` floor is untouched: it is a capability
+  floor for `--check-live-drift` on schema-qualified DDL (#395), not
+  housekeeping.
+
+  All three land on exactly one file fraisier reads, `core/builder.py`.
+  `core/migrator`, `core/restorer`, `core/locking`, `core/view_manager` and
+  every `migrate` subcommand are byte-identical to 1.3.0.
+
+  **1.4.0 is a `confiture lint` release**, a command fraisier never invokes.
+  Its one reachable change makes `build.sort_mode: hex` ordering *total*: 1.3.0
+  used the filename's own prefix as the whole sort key, so
+  `020_app/00001_create.sql` tied with `010_core/00001_create.sql` and `rglob`
+  broke the tie — emitting the app directory before the core schema it depends
+  on — and a lowercase `009a` was not read as a prefix at all, so it sorted
+  after `0100`. A correction, not a regression. The order is the digest, so
+  `compute_hash()` moves once for a hex-mode project; both consumers self-heal
+  (`TemplateManager.ensure_template` rebuilds on a hash it does not recognise,
+  and the drift gate builds its expected schema fresh every run).
+
+  **1.5.0 changes which files a build reads.** `include`/`exclude` globs move to
+  gitignore's dialect, the `order` key on an `include_dirs` entry finally
+  partitions the build, `recursive` alone bounds the walk, and a file selected
+  twice is built once. A build can **grow**.
+
+  **1.6.0 connects the build warning channel** (confiture #268, filed from this
+  audit). `BuildResult` published a `warnings` array no code path ever wrote to,
+  so a consumer reading `build --format json` — the right thing to do — could
+  not see a diagnostic the console printed. It is a typed `BuildWarning` now:
+  `code` / `severity` / `message` / `file`, resolved from the error-code
+  registry.
+
+  Both of 1.6.0's breaking changes miss fraisier: `warnings[]` entries became
+  objects rather than strings, and `patterns[]` left
+  `build --list-files --format json`. `dbops/drift.py` passes no `--format json`
+  and reads only the exit code and the file written, and nothing here invokes
+  `--list-files`. On exit codes, `error_codes` drops `CONFIG_013`/`CONFIG_014`
+  and gains `SCHEMA_206`, `SEED_002` and `SEED_003`, all exit-0 carve-outs;
+  `EXIT_CODE_SEMANTIC_CLASS` — the table `dbops/confiture_contract.py` imports
+  live, with a vendored fallback — is untouched, so
+  `classify_confiture_failure` cannot move.
+
+  Measured rather than assumed, on the same tree through all four versions:
+  `sort_mode: alphabetical` — the default, and the only mode fraisier's own tree
+  and templates use — gives one selection and one digest on 1.3.0, 1.4.0, 1.5.0
+  and 1.6.0 alike.
+
+### Upgrade note — if you hand-write confiture `include`/`exclude` globs
+
+**This cap is a single hop *over* confiture's migration aid.** v0.74.0 locks
+1.3.0, so taking this release resolves straight to 1.6.0 and **never runs a
+1.5.x** — the only line that emitted the transitional `CONFIG_013`/`CONFIG_014`
+glob-migration diagnostics, which retire in 1.6.0 along with the replay that
+computed them (confiture #263).
+
+The consequence is a silently changed file selection. Measured on one project:
+
+```
+1.3.0  →  keep.sql
+1.6.0  →  a/temp/t2.sql, keep.sql     ← the grown 1.5.0 selection, with
+                                         no diagnostic on either stream
+```
+
+`exclude: ["temp/*.sql"]` dropped `a/temp/t2.sql` at any depth under the old
+dialect and keeps it under the new one, because the pattern now names one place.
+
+**Nothing fraisier scaffolds can trigger this.** The 1.5.0 knobs exist only on
+an `include_dirs` entry written as a mapping, and fraisier writes none:
+`scaffold/templates/core/confiture.yaml.j2` emits `database`, `schema`,
+`compile` and `migrations` and no `include_dirs` at all. If your project's
+`confiture.yaml` is hand-written with `include`/`exclude` globs, diff
+
+```
+confiture build --list-files
+```
+
+across the upgrade. It still works in 1.6.0 (just without `patterns[]`), and it
+is the surface confiture recommends over the retired codes anyway — four of the
+seven changed shapes never had a diagnostic at all.
+
 ## [0.74.0] - 2026-09-08
 
 **Confiture's 1.3 line, and the migration it refuses to apply.**
