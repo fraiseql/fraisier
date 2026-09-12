@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.76.0] - 2026-09-12
+
+**The drift gate keeps the build's own diagnostics.**
+
+### Fixed
+
+- **A build that warns and exits 0 no longer loses the line explaining the
+  drift the gate is about to report**
+  ([#401](https://github.com/fraiseql/fraisier/issues/401)).
+  `fraisier/dbops/drift.py` kept `confiture build`'s output only inside its
+  `returncode != 0` branch, so the diagnostic reached the operator on exactly
+  the path where it was least needed. `DriftResult` gained `build_notes`, and
+  `summary()` reports them next to the verdict — a clean gate logs them and
+  passes; they are never drift and never change `passed`.
+
+  Measured under confiture 1.5.0: an `exclude` pattern that had stopped
+  matching printed `CONFIG_013` and exited 0, the built schema grew by a file,
+  and the gate failed the deploy naming an extra object with no mention of the
+  sentence that explained it.
+
+- **A failed build is now explained by its envelope, not by a progress line.**
+  `--format json` splits confiture's streams the other way round from what a
+  reader expects: `{"ok": false, "error": {…}}` goes to stdout and only the
+  progress line to stderr. The gate's existing `(stderr or stdout)` would have
+  handed the operator `🔨 Building schema for environment: production` in
+  place of `SCHEMA_001` and its remediation hint, so the failure branch reads
+  the envelope too. This is a regression that the obvious spelling of the fix
+  above would have introduced; it never shipped.
+
+### Changed
+
+- **The drift gate's build passes `--warn-duplicates`.** Without it the channel
+  above is provably silent: measured against confiture 1.6.0 over a tree with a
+  duplicated table and a file pglast cannot parse, the gate's previous flags
+  produce `warnings: []` and `duplicates: []`. `SCHEMA_206` needs this flag;
+  `SEED_002`/`SEED_003` need `--sequential`, which `--schema-only` excludes.
+  It reports and builds — never `--fail-on-duplicates`, which would turn a
+  reportable fact into an unreachable verdict. Measured cost on a 1001-file DDL
+  tree: 0.52s → 0.77s; at 200 files, unmeasurable.
+
+  So an object defined in two of the build's files is now reported on every
+  deploy that runs the gate. That is a new diagnostic on existing projects, and
+  it cannot fail one.
+
+### Unchanged
+
+- **No dependency floor moves**, and this was measured at the floor rather than
+  assumed. Under confiture **1.0.0** the gate's new argv verbatim exits 0,
+  writes its schema, and returns an envelope whose `warnings` key is present and
+  empty and whose `duplicates[]` is already populated. A file pglast cannot
+  parse is still console prose there — that diagnostic only became a payload
+  entry in 1.6.0 — so the channel degrades gracefully instead of breaking:
+  `build_001` from the floor, `SCHEMA_206` from the lock. `>=1.0.0,<1.7` stays
+  exactly where v0.75.0 left it.
+- The verdict itself: `passed = not has_critical_drift`, as before.
+
 ## [0.75.0] - 2026-09-10
 
 **Confiture's 1.6 line — and a hop over the aid that would have explained it.**

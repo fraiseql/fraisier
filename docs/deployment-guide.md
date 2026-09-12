@@ -731,6 +731,30 @@ parse. `fail` means "stop me", and a check that did not run has cleared
 nothing; `warn` means "tell me, don't stop me", and that intent holds
 however the check failed.
 
+**What the build itself said is reported next to the verdict.** A
+`confiture build` can warn and still exit 0 — a file its parser could not
+read, an object two of its files define — and those are the sentences that
+explain a drift verdict rather than leaving you to work backwards from the
+object it names. The gate builds with `--warn-duplicates --format json` and
+reports whatever the envelope carries:
+
+```
+post_migrate_check: 1 critical schema drift item(s) after migration —
+CRITICAL missing_column core.tb_widget.label: Column is missing
+the build that produced the expected schema said:
+  SCHEMA_206 [db/schema/030_legacy.sql]: pglast could not parse it — not
+  checked for duplicates
+  build_001 [db/schema/010_core.sql]: table core.tb_widget is defined 2
+  times in one build (db/schema/010_core.sql, db/schema/020_again.sql);
+  wins: conflict
+```
+
+They are never drift and never change the verdict — a clean gate logs them
+and passes. An ordinary build says nothing, so this adds no per-deploy
+noise. Which codes reach you depends on the confiture in use: `build_001`
+from 1.0.0, `SCHEMA_206` from 1.6.0 (before that it was console prose the
+gate could not keep).
+
 Requires `fraiseql-confiture >= 1.0.0`. Earlier versions read
 schema-qualified DDL wrongly — `core.tb_widget` parsed as a table called
 `core` — and would fail closed on every deploy of a multi-schema project.
