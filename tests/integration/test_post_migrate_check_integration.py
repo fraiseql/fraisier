@@ -107,14 +107,22 @@ def drift_db(pg_target):
             _exec("postgres", pg_target, f"DROP DATABASE IF EXISTS {_DB} WITH (FORCE)")
 
 
-def _project(tmp_path: Path, drift_db, migration: str) -> Path:
-    """A confiture project laid out the way ``confiture build --env`` expects."""
+def _project(
+    tmp_path: Path, drift_db, migration: str, extra_ddl: dict[str, str] | None = None
+) -> Path:
+    """A confiture project laid out the way ``confiture build --env`` expects.
+
+    *extra_ddl* maps a filename under ``db/schema/`` to its contents, for the
+    cases that need the build itself to have something to say (#401).
+    """
     root = tmp_path / "app"
     (root / "db" / "schema").mkdir(parents=True)
     (root / "db" / "migrations").mkdir(parents=True)
     (root / "db" / "environments").mkdir(parents=True)
 
     (root / "db" / "schema" / "010_core.sql").write_text(_DDL)
+    for name, body in (extra_ddl or {}).items():
+        (root / "db" / "schema" / name).write_text(body)
     (root / "db" / "migrations" / "20260907000000_create_widget.py").write_text(
         migration
     )
@@ -239,3 +247,81 @@ class TestWhyItRunsAfterTheMigration:
         # ...and the same project, same gate, after the migration: clean.
         assert _migrate(project).success is True
         assert _gate(project).passed
+
+
+class TestTheBuildsOwnDiagnostics:
+    """#401: what the build said reaches the verdict, from a real confiture.
+
+    ``tests/test_drift_gate.py`` asserts the codes against a double built from
+    a recorded envelope.  These execute the build, so a confiture that renames
+    a key, moves a code or stops filling the channel fails here rather than
+    going quietly back to the behaviour #401 was filed about.
+
+    Neither test asserts the *verdict*.  Both projects deliberately hand the
+    build DDL that is wrong in some way, so what live-drift then makes of it is
+    confiture's business; what is being proved is that the sentence explaining
+    it survived.
+    """
+
+    def test_a_duplicate_definition_reaches_the_verdict(
+        self, tmp_path, drift_db
+    ) -> None:
+        """``build_001`` — an object two of the build's files define.
+
+        Reachable only because the gate passes ``--warn-duplicates``: measured
+        against confiture 1.6.0, a plain ``--schema-only`` build over this same
+        tree reports ``duplicates: []``.
+        """
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_COMPLETE,
+            extra_ddl={
+                "020_again.sql": "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY);\n"
+            },
+        )
+        assert _migrate(project).success is True
+
+        result = _gate(project)
+
+        codes = [note.code for note in result.build_notes]
+        assert "build_001" in codes, result.summary()
+        note = next(n for n in result.build_notes if n.code == "build_001")
+        assert "core.tb_widget" in note.message
+        assert "010_core.sql" in note.message
+        assert "020_again.sql" in note.message
+        assert "build_001" in result.summary()
+
+    def test_a_file_the_parser_cannot_read_reaches_the_verdict(
+        self, tmp_path, drift_db
+    ) -> None:
+        """``SCHEMA_206`` — a file that went into the schema unchecked.
+
+        The build exits 0 and writes a complete schema; the only signal that
+        one of its files was never looked at is this note.
+        """
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_COMPLETE,
+            extra_ddl={"030_broken.sql": "CREATE TABLE core.tb_truncated (id BIGINT\n"},
+        )
+        assert _migrate(project).success is True
+
+        result = _gate(project)
+
+        codes = [note.code for note in result.build_notes]
+        assert "SCHEMA_206" in codes, result.summary()
+        note = next(n for n in result.build_notes if n.code == "SCHEMA_206")
+        assert note.severity == "warning"
+        assert "030_broken.sql" in str(note.file)
+
+    def test_an_ordinary_build_says_nothing(self, tmp_path, drift_db) -> None:
+        """The channel is quiet when there is nothing to say — no per-deploy noise."""
+        project = _project(tmp_path, drift_db, _MIGRATION_COMPLETE)
+        assert _migrate(project).success is True
+
+        result = _gate(project)
+
+        assert result.passed, result.summary()
+        assert result.build_notes == ()

@@ -17,7 +17,7 @@ legitimate pending migration: exit 1 before, exit 0 after.  Only the
 post-migration position discriminates between a deploy in progress and a broken
 schema.
 
-Three parts of confiture's contract are sharp enough to name:
+Four parts of confiture's contract are sharp enough to name:
 
 * ``confiture build`` takes ``--project-dir``/``--env``, ``migrate validate``
   takes **neither** — its ``--env`` resolves ``db/environments/{env}.yaml``
@@ -33,6 +33,12 @@ Three parts of confiture's contract are sharp enough to name:
   the bare shape finds ``has_critical_drift`` absent in the envelope and calls a
   drifting database clean — so :func:`_reports` handles both and refuses
   anything else rather than defaulting to "no drift".
+* ``build --format json`` **swaps which stream carries what**.  The envelope
+  goes to stdout, the schema still to ``--output``, and the human progress
+  lines to stderr — so a failed build is explained on *stdout*, and reading
+  stderr first yields ``🔨 Building schema for environment: …``.  A build that
+  warns and exits 0 says so only in that envelope, which is why the gate reads
+  it on both paths and reports it next to the verdict (#401).
 """
 
 from __future__ import annotations
@@ -77,6 +83,27 @@ class DriftItem:
 
 
 @dataclass(frozen=True)
+class BuildNote:
+    """One thing ``confiture build`` said about the schema it just produced.
+
+    A *note*, not a warning: the channel carries confiture's ``warnings[]``
+    — whose ``SEED_003`` is severity ``info`` — its ``duplicates[]``, and
+    fraisier's own note when the envelope cannot be read.  A build note is
+    never drift and never changes the verdict; it is the sentence that explains
+    one.
+    """
+
+    code: str
+    severity: str
+    message: str
+    file: str | None = None
+
+    def __str__(self) -> str:
+        where = f" [{self.file}]" if self.file else ""
+        return f"{self.code}{where}: {self.message}"
+
+
+@dataclass(frozen=True)
 class DriftResult:
     """The gate's verdict.
 
@@ -93,6 +120,7 @@ class DriftResult:
     warnings: tuple[DriftItem, ...] = ()
     error: str | None = None
     checks: tuple[str, ...] = field(default_factory=tuple)
+    build_notes: tuple[BuildNote, ...] = ()
 
     @property
     def ran(self) -> bool:
@@ -102,15 +130,27 @@ class DriftResult:
     def summary(self) -> str:
         """One line for a log, or several when there is drift to name."""
         if self.error is not None:
-            return f"post_migrate_check could not run: {self.error}"
+            return f"post_migrate_check could not run: {self.error}{self._said()}"
         if self.passed:
             note = f" ({len(self.warnings)} warning(s))" if self.warnings else ""
-            return f"post_migrate_check: no critical schema drift{note}"
+            return f"post_migrate_check: no critical schema drift{note}{self._said()}"
         named = "; ".join(str(item) for item in self.critical)
         return (
             f"post_migrate_check: {len(self.critical)} critical schema drift "
-            f"item(s) after migration — {named}"
+            f"item(s) after migration — {named}{self._said()}"
         )
+
+    def _said(self) -> str:
+        """The build's diagnostics, on every branch (#401).
+
+        Including the failed one: a build that stopped is exactly when its
+        warnings are worth reading, which is why confiture prints them there
+        too.
+        """
+        if not self.build_notes:
+            return ""
+        named = "".join(f"\n  {note}" for note in self.build_notes)
+        return f"\nthe build that produced the expected schema said:{named}"
 
 
 def _env_for_build(project_dir: Path, confiture_config: Path) -> str:
@@ -235,6 +275,123 @@ def _items(reports: Iterable[dict[str, Any]], severity: str) -> tuple[DriftItem,
     )
 
 
+#: The code fraisier puts on its own note when confiture's build envelope
+#: cannot be read.  Not a confiture code — nothing upstream owns this.
+_ENVELOPE_UNREADABLE = "FRAISIER_BUILD_ENVELOPE"
+
+
+def _duplicate_note(duplicate: dict[str, Any]) -> BuildNote:
+    """An object the build defines more than once, rendered from its own tokens.
+
+    ``wins`` is carried verbatim rather than expanded into confiture's prose
+    for it: a restatement of upstream semantics inside fraisier is a thing that
+    goes stale without anything failing.
+    """
+    definitions = duplicate.get("definitions") or []
+    places = ", ".join(
+        str(d.get("file", "?")) for d in definitions if isinstance(d, dict)
+    )
+    identity = str(duplicate.get("identity", "?"))
+    kind = str(duplicate.get("kind", "object"))
+    return BuildNote(
+        code=str(duplicate.get("rule_id", "build_000")),
+        severity="warning",
+        message=(
+            f"{kind} {identity} is defined {len(definitions)} times in one "
+            f"build ({places}); wins: {duplicate.get('wins', '?')}"
+        ),
+        file=next(
+            (
+                str(d["file"])
+                for d in definitions
+                if isinstance(d, dict) and d.get("file")
+            ),
+            None,
+        ),
+    )
+
+
+def _build_notes(stdout: str) -> tuple[BuildNote, ...]:
+    """Everything the build said about itself, from its ``--format json`` envelope.
+
+    ``warnings[]`` and ``duplicates[]`` are separate keys upstream and one
+    channel here: both say the built schema is not what the checkout looks like
+    it says, which is exactly the fact a drift verdict needs next to it.
+
+    Neither key is required.  An older confiture that omits ``warnings``
+    yields nothing rather than raising, which is why #401 needs no floor bump.
+
+    Raises:
+        ValueError: *stdout* is not a JSON object — the caller decides whether
+            that is worth a note or worth nothing, since only it knows whether
+            the build succeeded.
+    """
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        head = stdout.strip()[:200] or "<empty>"
+        msg = f"confiture build emitted no JSON envelope under --format json: {head}"
+        raise ValueError(msg) from exc
+    if not isinstance(payload, dict):
+        msg = (
+            f"confiture build's JSON envelope is not an object: {stdout.strip()[:200]}"
+        )
+        raise ValueError(msg)
+    warnings = [
+        BuildNote(
+            code=str(entry.get("code", "?")),
+            severity=str(entry.get("severity", "warning")),
+            message=str(entry.get("message", "")),
+            file=entry.get("file") and str(entry["file"]),
+        )
+        for entry in (payload.get("warnings") or [])
+        if isinstance(entry, dict)
+    ]
+    duplicates = [
+        _duplicate_note(entry)
+        for entry in (payload.get("duplicates") or [])
+        if isinstance(entry, dict)
+    ]
+    return tuple(warnings + duplicates)
+
+
+def _notes_or_none(stdout: str) -> tuple[BuildNote, ...]:
+    """The build's notes when it emitted an envelope; nothing when it did not.
+
+    The failed path needs no "envelope unreadable" note of its own: whatever
+    went wrong is already the subject of :func:`_build_error`.
+    """
+    try:
+        return _build_notes(stdout)
+    except ValueError:
+        return ()
+
+
+def _build_error(build: subprocess.CompletedProcess[str]) -> str:
+    """Why the build failed, preferring the envelope to the raw streams.
+
+    Under ``--format json`` the streams are split the other way round from what
+    a reader expects: stdout carries ``{"ok": false, "error": {...}}`` and
+    stderr carries only the progress line.  Reading ``(stderr or stdout)`` —
+    which is what this did before #401 — hands the operator
+    ``🔨 Building schema for environment: production`` and drops the error.
+
+    Falls back to the raw streams for the failures that emit no envelope at
+    all: a missing binary, a kill, a wrapper script.
+    """
+    try:
+        payload = json.loads(build.stdout)
+    except json.JSONDecodeError:
+        payload = None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        hint = error.get("actionable")
+        return f"{error.get('code', '?')}: {error['message']}" + (
+            f" ({hint})" if hint else ""
+        )
+    return (build.stderr or build.stdout).strip()[:400]
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     log.debug("post_migrate_check: %s", " ".join(cmd))
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -295,8 +452,17 @@ def check_schema_drift(
                 "--env",
                 env_name,
                 "--schema-only",
+                # Reports duplicate definitions and builds anyway. Without it
+                # nothing reaches the envelope's `warnings[]` on a schema-only
+                # build, so the channel below would read a key confiture never
+                # fills. Measured cost on a 1001-file DDL tree: +0.25s.
+                "--warn-duplicates",
                 "--output",
                 str(expected),
+                # The schema still goes to --output; this is the envelope, on
+                # stdout, with the progress lines moved to stderr.
+                "--format",
+                "json",
             ]
         )
         if build.returncode != 0:
@@ -304,10 +470,24 @@ def check_schema_drift(
                 passed=False,
                 exit_code=build.returncode,
                 checks=selected,
+                build_notes=_notes_or_none(build.stdout),
                 error=(
                     f"could not build the expected schema for env {env_name!r} "
                     f"(confiture build exit {build.returncode}): "
-                    f"{(build.stderr or build.stdout).strip()[:400]}"
+                    f"{_build_error(build)}"
+                ),
+            )
+        # Whatever the build said about the schema the verdict is about to be
+        # measured against (#401). An unreadable envelope becomes a note rather
+        # than a failed gate: the exit code already vouched for the schema's
+        # completeness, so the verdict stands and only the commentary is
+        # missing — but it is never dropped in silence, which is the whole bug.
+        try:
+            notes = _build_notes(build.stdout)
+        except ValueError as exc:
+            notes = (
+                BuildNote(
+                    code=_ENVELOPE_UNREADABLE, severity="warning", message=str(exc)
                 ),
             )
         if not expected.exists():
@@ -317,6 +497,7 @@ def check_schema_drift(
             return DriftResult(
                 passed=False,
                 checks=selected,
+                build_notes=notes,
                 error=(f"confiture build exited 0 but wrote no schema to {expected}"),
             )
 
@@ -344,6 +525,7 @@ def check_schema_drift(
             passed=False,
             exit_code=validate.returncode,
             checks=selected,
+            build_notes=notes,
             error=(
                 f"{exc} (confiture migrate validate exit {validate.returncode}{detail})"
             ),
@@ -358,4 +540,5 @@ def check_schema_drift(
         critical=critical,
         warnings=warnings,
         checks=selected,
+        build_notes=notes,
     )
