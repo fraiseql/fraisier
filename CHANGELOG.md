@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-09-17
+
+**The confiture cap moves to the 1.10 line.**
+
+### Changed
+
+- **`fraiseql-confiture` is capped `<1.11`, locked at 1.10.1**
+  ([#405](https://github.com/fraiseql/fraisier/issues/405)). The `>=1.0.0`
+  floor is untouched: it is a capability floor, not a preference, and
+  `tests/test_confiture_dependency_floor.py` still holds it.
+
+  The hop is **four published releases, not six**. 1.7.0 and 1.8.0 each have a
+  release commit and a CHANGELOG entry upstream, neither has a tag, and PyPI
+  goes straight from 1.6.0 to 1.9.0 — so a project taking this release resolves
+  1.10.1, and the `build_003` work those two entries describe arrives inside
+  1.9.0. Both are `confiture lint` releases, and fraisier never invokes `lint`.
+
+  Most of the audit is what did *not* change: `core/drift.py`,
+  `core/error_codes.py`, `core/builder.py`, `core/restorer.py`,
+  `core/locking.py`, `core/view_manager.py`, `core/connection.py` and
+  `core/function_signature_drift.py` are byte-identical to 1.6.0. The
+  exit-code contract table `dbops/confiture_contract.py` imports live, the
+  restore path, the distributed lock, and the implementations behind both
+  checks the drift gate runs are untouched.
+
+  Three changes reach a fraisier call site and none of them moves it. Confiture
+  1.10.0 makes `migrate status`, `validate`, `fix` and `preflight` **read a
+  `--config` they previously accepted and never opened** — a file that would
+  not parse, or was not there at all, produced the same green output and the
+  same exit 0 as a valid one, and `preflight` rendered its whole pre-deployment
+  table against a configuration that did not exist. fraisier runs three of the
+  four: the preflight config is the temp file `dbops/preflight.py` writes
+  itself and confiture already read on that path, the drift gate reads its `-c`
+  before confiture sees it, and `confiture_status()` has no caller. The same
+  release fixes `rebuild()` to build from the environment it was handed rather
+  than re-reading `db/environments/<name>.yaml` behind the caller's back, which
+  fraisier reaches only through `fraisier db build --rebuild`, and where it is
+  a correction.
+
+  Confiture's `SchemaDiffer` rewrite (its #288) is the largest change in the
+  range and is inert here: it is reached by `migrate validate
+  --require-migration` and `migrate diff`, and the gate's argv is
+  `--check-live-drift` / `--check-signatures`.
+
+### Unchanged
+
+- **The drift gate's verdict, measured rather than argued.**
+  `fraisier/dbops/drift.py` runs confiture as a subprocess, so it is the one
+  path where a bump can fail a deploy without the suite seeing anything. Both
+  versions drove `check_schema_drift` against one live PostgreSQL 18 database
+  over a DDL tree carrying `text[]`, `int[]`, `integer[][]`, `json`, `jsonb`,
+  `bit(3)`, `bit varying(8)`, `citext`, `timestamptz`, an `ALTER TABLE … ADD
+  COLUMN`, an `ALTER COLUMN … TYPE`, an index, a view, a trigger and three
+  routines — in six live states: matching, a dropped column, an array column
+  collapsed to its element type, a column left at its pre-`ALTER` type, a
+  dropped view and trigger, and a changed function signature. **Every
+  `DriftResult` is byte-identical between 1.6.0 and 1.10.1**, verdict, exit
+  code, critical items, warnings and build notes alike; the dropped column is
+  `CRITICAL missing_column`, exit 1, on both.
+
+- **No behaviour of fraisier's own changes**, and no test did: 5794 passed / 1
+  skipped, the v0.76.0 baseline exactly.
+
+### Upgrade note
+
+**The confiture you resolve after this release is stricter, in ways unrelated
+to fraisier's own paths.** If you invoke confiture directly — in your CI, a
+Makefile or a pre-commit hook — four changes can turn a green run red:
+
+- `migrate validate --require-migration` now reports sixteen further object
+  kinds (views, routines, triggers, policies, extensions … and `ALTER TABLE …
+  ADD COLUMN`, which had no column gate at all), so a tree that added any of
+  them without a migration starts failing — correctly. A schema confiture
+  cannot parse is now `is_valid: false` rather than a green skip.
+- `migrate status|validate|fix|preflight --config <missing or unparseable>`
+  exits 5 where it exited 0. A CI step that pointed at a path that does not
+  exist has been reporting on nothing.
+- `confiture sync` no longer truncates each target table with `CASCADE` as it
+  copies, which was emptying tables it had already synced while reporting
+  success. If you sync between related tables, your previous runs were probably
+  short of rows.
+- A misspelled anonymization strategy is `CONFIG_002` rather than a silent
+  `[REDACTED]` column.
+
+**Also worth knowing about the gate's warnings.** A database applied verbatim
+from its own DDL reports nine `type_mismatch` warnings on the probe tree above
+(`varchar(50)` vs `character varying`, `text[]` vs `array`, `citext` vs
+`user-defined`, `pg_catalog.json` vs `json`), a real `int[]` → `int` change
+appears as one more warning in that noise, and a dropped view, a dropped
+trigger and a changed routine signature are reported by neither version. This
+is confiture's live-drift comparison, identical on 1.6.0 and 1.10.1 and
+unchanged by this release; warnings never reach
+`passed = not has_critical_drift`, so no verdict moves. Do not read a short
+warning list as agreement between the two sides.
+
 ## [0.76.0] - 2026-09-12
 
 **The drift gate keeps the build's own diagnostics.**
