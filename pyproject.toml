@@ -131,11 +131,81 @@ dependencies = [
   # 1.6.0 and which confiture recommends over the retired codes anyway, since
   # four of the seven changed shapes never had a diagnostic at all.
   #
+  # 1.7.0 → 1.10.1 (issue #405) is one hop of four published releases, not six:
+  # **1.7.0 and 1.8.0 were never published.** Each has a release commit and a
+  # CHANGELOG entry, neither has a tag, and PyPI goes straight from 1.6.0 to
+  # 1.9.0 — so a user resolving this cap lands on 1.10.1 and the `build_003`
+  # work those two entries describe arrives inside 1.9.0. Both are `confiture
+  # lint`, which fraisier never invokes.
+  #
+  # Byte-identical to 1.6.0, and this is most of the audit: `core/drift.py`,
+  # `core/error_codes.py`, `core/builder.py`, `core/restorer.py`,
+  # `core/locking.py`, `core/view_manager.py`, `core/connection.py` and
+  # `core/function_signature_drift.py`. The exit-code contract table
+  # `dbops/confiture_contract.py` imports live, the restore path, the lock, and
+  # the implementations behind both checks the drift gate runs are untouched.
+  #
+  # Three things do reach fraisier's call sites, and none of them moves it:
+  #   * **#284**: `migrate status`, `validate`, `fix` and `preflight` accepted a
+  #     `--config` they never opened — a file that would not parse, or was not
+  #     there at all, produced the same green output and exit 0, and
+  #     `preflight` rendered its whole table against a configuration that did
+  #     not exist. All four now raise `CONFIG_004`/`CONFIG_002` (exit 5) for a
+  #     path the operator typed; the ambient `confiture.yaml` is untouched.
+  #     fraisier runs three of them: the preflight config is the temp file
+  #     `dbops/preflight.py` writes itself, which confiture already
+  #     `load_config`'d on the `--against` path; the drift gate reads its `-c`
+  #     before confiture sees it; `confiture_status()` has no caller.
+  #   * `rebuild()` now hands `SchemaBuilder` the resolved `Environment` rather
+  #     than its *name*, which had sent the builder back to
+  #     `db/environments/<name>.yaml` to re-read a config the caller had
+  #     already resolved. Reachable here only through `fraisier db build
+  #     --rebuild`, and a correction there.
+  #   * ⚠️ The same release **removed `rebuild(schema_dir=…)`** from `Migrator`
+  #     — a keyword argument declared, defaulted and never read, so no
+  #     behaviour moved, but the paragraph above says the library API is frozen
+  #     until a major. fraisier never passes it. Recorded because the width of
+  #     this cap rests on that freeze, and the freeze is not airtight.
+  #
+  # #288 rewrites `SchemaDiffer`: sixteen further object kinds compared by
+  # definition, `ALTER TABLE` folded into the table it alters, and a schema that
+  # does not parse reported as `is_valid: false` instead of a green skip. It is
+  # inert here — that code is reached by `migrate validate --require-migration`
+  # and `migrate diff`, and the gate's argv is `--check-live-drift` /
+  # `--check-signatures`. Live drift builds its expected side from
+  # `linting.inventory`, whose table and column rendering is unchanged; 1.9.0's
+  # work there is the routine-signature canonicaliser (#275).
+  #
+  # 1.9.1 makes `sql_lexer._lex` linear in the number of `COPY … FROM stdin`
+  # blocks (38 003.9 ms → 188.5 ms at 1600 blocks). `split_statements` is on
+  # fraisier's `migrate up` path; upstream asserts byte-identical answers over
+  # 5000 generated inputs and all 3812 `.sql` files in its tree.
+  #
+  # The gate is the one path a confiture bump can fail a deploy on without the
+  # suite seeing it, because the gate runs confiture as a subprocess. So it was
+  # measured: per-version venvs driving `check_schema_drift` over a live
+  # PostgreSQL 18 database and a DDL tree carrying `text[]`, `int[]`,
+  # `integer[][]`, `json`, `jsonb`, `bit(3)`, `bit varying(8)`, `citext`,
+  # `timestamptz`, an `ALTER TABLE … ADD COLUMN`, an `ALTER COLUMN … TYPE`, an
+  # index, a view, a trigger and three routines, against six live states.
+  # **Every `DriftResult` is byte-identical between 1.6.0 and 1.10.1.**
+  #
+  # That probe also found live-drift behaviour that is the same on both
+  # versions, so it is upstream's rather than this bump's: a database applied
+  # verbatim from its own DDL reports nine `type_mismatch` **warnings**
+  # (`varchar(50)` vs `character varying`, `text[]` vs `array`, `citext` vs
+  # `user-defined`, `pg_catalog.json` vs `json`), a real `int[]` → `int` change
+  # is one more warning in that noise, an `ALTER COLUMN … TYPE` is ignored on
+  # the expected side, and a dropped view, a dropped trigger and a changed
+  # routine signature are reported by neither. Warnings never reach
+  # `passed = not has_critical_drift`, so the verdict is unaffected — but do not
+  # read a clean-looking warning list as agreement between the two sides.
+  #
   # The cap still moves deliberately, on a green suite: the freeze is upstream's
   # promise, and `<1.0` is precisely the width that let #262 resolve a confiture
   # whose preflight JSON fraisier could not parse and read the unparsed result
-  # as a pass (issues #262, #362, #368, #395, #397).
-  "fraiseql-confiture>=1.0.0,<1.7",
+  # as a pass (issues #262, #362, #368, #395, #397, #405).
+  "fraiseql-confiture>=1.0.0,<1.11",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
