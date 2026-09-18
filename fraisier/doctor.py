@@ -606,9 +606,30 @@ def _check_sandbox_write_probe(config: FraisierConfig | None) -> CheckResult:
     return CheckResult(name, "pass", f"wrote into {len(paths)} sandboxed path(s)")
 
 
-def _enabled_drift_gates(config: FraisierConfig | None) -> list[tuple[str, str, str]]:
-    """``(fraise, app_path, confiture_config)`` per enabled post_migrate_check gate."""
-    gates: list[tuple[str, str, str]] = []
+@dataclass(frozen=True)
+class _DriftGate:
+    """One enabled ``post_migrate_check``, as the doctor needs to see it."""
+
+    fraise: str
+    app_path: str
+    confiture_config: str
+    checks: tuple[str, ...]
+
+    @property
+    def project_dir(self) -> Path:
+        return Path(self.app_path)
+
+    @property
+    def config_path(self) -> Path:
+        candidate = Path(self.confiture_config)
+        return candidate if candidate.is_absolute() else self.project_dir / candidate
+
+
+def _enabled_drift_gates(config: FraisierConfig | None) -> list[_DriftGate]:
+    """Every enabled ``post_migrate_check`` gate across the config."""
+    from fraisier.post_migrate_check import load_post_migrate_check
+
+    gates: list[_DriftGate] = []
     fraises = getattr(config, "fraises", None) if config is not None else None
     for fraise_name, fraise in (fraises or {}).items():
         if not isinstance(fraise, dict):
@@ -617,16 +638,18 @@ def _enabled_drift_gates(config: FraisierConfig | None) -> list[tuple[str, str, 
             if not isinstance(env_config, dict):
                 continue
             db = env_config.get("database") or {}
-            if not (db.get("post_migrate_check") or {}).get("enabled"):
+            gate = load_post_migrate_check(db)
+            if not gate.enabled:
                 continue
             app_path = env_config.get("app_path")
             if not app_path:
                 continue
             gates.append(
-                (
-                    str(fraise_name),
-                    str(app_path),
-                    str(db.get("confiture_config", "confiture.yaml")),
+                _DriftGate(
+                    fraise=str(fraise_name),
+                    app_path=str(app_path),
+                    confiture_config=str(db.get("confiture_config", "confiture.yaml")),
+                    checks=gate.checks,
                 )
             )
     return gates
@@ -654,15 +677,11 @@ def _check_post_migrate_check_buildable(config: FraisierConfig | None) -> CheckR
     from fraisier.dbops.drift import _env_for_build
 
     unresolvable: list[str] = []
-    for fraise_name, app_path, confiture_config in gates:
-        project_dir = Path(app_path)
-        candidate = Path(confiture_config)
-        if not candidate.is_absolute():
-            candidate = project_dir / candidate
+    for gate in gates:
         try:
-            _env_for_build(project_dir, candidate)
+            _env_for_build(gate.project_dir, gate.config_path)
         except ValueError:
-            unresolvable.append(f"{fraise_name} ({confiture_config})")
+            unresolvable.append(f"{gate.fraise} ({gate.confiture_config})")
 
     if unresolvable:
         return CheckResult(
@@ -677,6 +696,106 @@ def _check_post_migrate_check_buildable(config: FraisierConfig | None) -> CheckR
             ),
         )
     return CheckResult(name, "pass", f"{len(gates)} drift gate(s) can build a schema")
+
+
+#: One ``ALTER TABLE`` statement, up to its terminator.
+_ALTER_TABLE_RE = re.compile(r"\bALTER\s+TABLE\b.*?(?:;|\Z)", re.IGNORECASE | re.DOTALL)
+
+#: A ``DROP`` inside one that takes a **column** away.  The alternatives excluded
+#: here are the other things ``ALTER TABLE`` can drop — they are not folded into
+#: the expected schema either, but only a missing column is graded CRITICAL.
+#: Both spellings count: ``DROP COLUMN legacy`` and the bare ``DROP legacy``.
+_DROP_COLUMN_RE = re.compile(
+    r"\bDROP\s+(?!CONSTRAINT\b|DEFAULT\b|NOT\s+NULL\b|IDENTITY\b|EXPRESSION\b)"
+    r"(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?[\w\"]+",
+    re.IGNORECASE,
+)
+
+
+def _ddl_dirs(gate: _DriftGate) -> list[Path]:
+    """The directories the gate's confiture config builds its schema from."""
+    import yaml
+
+    try:
+        raw = yaml.safe_load(gate.config_path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    if not isinstance(raw, dict):
+        return []
+    dirs: list[Path] = []
+    for entry in raw.get("include_dirs") or []:
+        candidate = Path(str(entry))
+        dirs.append(
+            candidate if candidate.is_absolute() else gate.project_dir / candidate
+        )
+    return dirs
+
+
+def _drops_a_column(sql: str) -> bool:
+    return any(
+        _DROP_COLUMN_RE.search(statement) for statement in _ALTER_TABLE_RE.findall(sql)
+    )
+
+
+@register_check("post_migrate_check_alter_safe")
+def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> CheckResult:
+    """A DDL tree that drops a column fails the drift gate on a *correct* database.
+
+    confiture builds the gate's expected schema from its linting inventory, and
+    that inventory folds only ``ADD COLUMN`` and ``ADD CONSTRAINT`` into a table.
+    An ``ALTER TABLE … DROP COLUMN`` in the tree is invisible to it, so the
+    column stays "expected" and a database applied verbatim from that same tree
+    — correctly without it — is reported ``CRITICAL missing_column``.  With
+    ``on_critical: fail`` that is a failed deploy on a correct migration, and
+    the failure names a column rather than the cause (#407,
+    fraiseql/confiture#301; reproduced on confiture 1.6.0 and 1.10.1).
+
+    Only ``live-drift`` reads that inventory, so a gate running ``signatures``
+    alone is unaffected.
+    """
+    name = "post_migrate_check_alter_safe"
+    gates = [g for g in _enabled_drift_gates(config) if "live-drift" in g.checks]
+    if not gates:
+        return CheckResult(
+            name, "skip", "no post_migrate_check live-drift gate enabled"
+        )
+
+    scanned = 0
+    offenders: list[str] = []
+    for gate in gates:
+        for ddl_dir in _ddl_dirs(gate):
+            if not ddl_dir.is_dir():
+                continue
+            for sql_file in sorted(ddl_dir.rglob("*.sql")):
+                try:
+                    body = sql_file.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                scanned += 1
+                if _drops_a_column(body):
+                    offenders.append(f"{gate.fraise} ({sql_file})")
+
+    if not scanned:
+        return CheckResult(
+            name, "skip", "no DDL files readable from here for the enabled gate(s)"
+        )
+    if offenders:
+        return CheckResult(
+            name,
+            "warn",
+            f"the drift gate will report false critical drift for "
+            f"{', '.join(offenders)}: confiture's expected schema does not fold "
+            f"ALTER TABLE … DROP COLUMN, so the dropped column reads as missing "
+            f"from a correct database (fraiseql/confiture#301)",
+            fix_hint=(
+                "declare the table's final shape in its CREATE TABLE and move "
+                "the drop to a migration, or set on_critical: warn until "
+                "confiture#301 ships"
+            ),
+        )
+    return CheckResult(
+        name, "pass", f"{scanned} DDL file(s) fold into the built schema"
+    )
 
 
 @register_check("pre_migrate_dump_writable")
