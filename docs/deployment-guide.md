@@ -759,6 +759,70 @@ Requires `fraiseql-confiture >= 1.0.0`. Earlier versions read
 schema-qualified DDL wrongly — `core.tb_widget` parsed as a table called
 `core` — and would fail closed on every deploy of a multi-schema project.
 
+#### `checks: [signatures]` — the overload `CREATE OR REPLACE` leaves behind
+
+Changing a function's parameter type with `CREATE OR REPLACE FUNCTION`
+does not replace anything. PostgreSQL treats a different parameter list
+as a different function, so the old one stays live and callable, and
+whichever call site still matches it keeps running last release's body.
+The migration exits 0 and says nothing.
+
+`signatures` compares the routines the checkout's DDL declares against
+the ones the database actually has, and fails the gate on any live
+overload the source no longer declares — with the `DROP FUNCTION` that
+removes it:
+
+```
+post_migrate_check: 1 critical schema drift item(s) after migration —
+CRITICAL stale_overload core.fn_seen(timestamp without time zone): live
+has an overload the source no longer declares (source declares:
+core.fn_seen(timestamp with time zone)); remediation: DROP FUNCTION
+core.fn_seen(timestamp without time zone);
+```
+
+**Which schemas it looks in is derived from your DDL, not configured.**
+confiture inspects `public` alone unless told otherwise; fraisier reads
+the schema it just built and passes every schema that declares a routine
+in it, plus `public`. Adding a schema to the tree therefore needs no
+second edit here — and until v0.78.0 this was a bare flag, so on any
+project whose routines live in `core`/`app`/`tenant` this check inspected
+a schema the project does not use and reported every database clean
+(#408).
+
+It reports **stale overloads only**. A routine the DDL declares that the
+database does *not* have is `missing_from_db`, which confiture documents
+as informational and which does not fail the check — so `signatures` will
+not catch a migration that forgot to create a function
+(fraiseql/confiture#303).
+
+#### When `live-drift` reports drift that is not drift (#407)
+
+The expected side of `live-drift` is built from the DDL by confiture's
+inventory, and that inventory folds only two `ALTER TABLE` subtypes into
+a table: `ADD COLUMN` and `ADD CONSTRAINT`. A DDL tree that reaches its
+final shape any other way is therefore compared against a schema it does
+not describe:
+
+```sql
+CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, legacy TEXT, ratio INT);
+ALTER TABLE core.tb_widget DROP COLUMN legacy;          -- not folded in
+ALTER TABLE core.tb_widget ALTER COLUMN ratio TYPE BIGINT;  -- not folded in
+```
+
+Apply that file verbatim and the database is correct, but the gate
+expects `legacy` to exist and rates its absence **critical** — a failed
+deploy with `on_critical: fail`, naming a column rather than the cause.
+The two `ALTER COLUMN` forms produce warnings from the same place and
+cannot fail the gate.
+
+This is upstream (fraiseql/confiture#301), reproduced on confiture 1.6.0
+and 1.10.1. Until it ships, either express the final shape in the
+`CREATE TABLE` and leave the transition to a migration — which is where a
+column drop belongs anyway, since the DDL tree describes the schema you
+want rather than how you got there — or run this gate with
+`on_critical: warn`. `fraisier doctor` reports an affected tree as
+`post_migrate_check_alter_safe` so you find it before a deploy does.
+
 ### `database.post_migrate`: SQL hooks after migrate
 
 A list of steps; each step runs exactly one of `sql_dir` (every `.sql`

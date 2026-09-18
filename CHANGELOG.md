@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-09-18
+
+**The signatures half of the drift gate could never fire, and the live-drift
+half fails a correct database when the DDL drops a column.**
+
+### Fixed
+
+- **`post_migrate_check`'s `signatures` check only ever inspected `public`**
+  ([#408](https://github.com/fraiseql/fraisier/issues/408)). confiture's
+  `--schemas` defaults to `public` and the gate sent a bare
+  `--check-signatures`, so on any project that keeps its routines in
+  `core`/`app`/`tenant` — every FraiseQL project, and the layout our own
+  integration tests model — the check inspected a schema the project does not
+  use and reported every database clean. It has been unable to fire since it
+  shipped in v0.73.0.
+
+  Measured on one database, same DDL, same confiture 1.10.1: the old argv exits
+  0 with `stale_overloads: []` and `schemas_checked: ["public"]`; add
+  `--schemas core` and it exits 1, names `core.fn_seen(timestamp without time
+  zone)` and hands back the `DROP FUNCTION` that removes it.
+
+  The schemas are now **derived, not configured**: `_routine_schemas()` reads
+  the schema the gate has just built and passes every schema that declares a
+  routine in it, plus `public`. That is the same text confiture parses its
+  source side from, so the two cannot disagree, and adding a schema to the tree
+  needs no second edit. `public` is always included, so this can only ever
+  widen what the gate looked at.
+
+- **A firing signatures check named nothing**. `--check-signatures` reports its
+  findings in `stale_overloads`, not in the `drift_items` the live-drift report
+  uses, and the gate read only the latter — so the first time it ever failed a
+  deploy it would have said `0 critical schema drift item(s) after migration —`
+  and stopped there, while the payload it had just read held both the signature
+  and its remediation. Each stale overload is now a `stale_overload` drift item
+  carrying the live signature, the ones the source declares, and confiture's own
+  `DROP FUNCTION`.
+
+  This half was invisible until the first half was fixed, which is the shape of
+  the whole defect: a check that cannot fire cannot show you that its reporting
+  path is missing.
+
+### Added
+
+- **`fraisier doctor` reports a DDL tree that will fail its own drift gate**
+  ([#407](https://github.com/fraiseql/fraisier/issues/407)). confiture builds
+  the gate's expected schema from its linting inventory, and that inventory
+  folds only `ADD COLUMN` and `ADD CONSTRAINT` into a table. A tree reaching its
+  final shape through `ALTER TABLE … DROP COLUMN` is therefore graded against a
+  schema that still has the column, and a database applied verbatim from that
+  same tree — correctly without it — is reported `CRITICAL missing_column`.
+  With `on_critical: fail` that is a failed deploy on a correct migration,
+  naming a column rather than the cause.
+
+  The cause is upstream (fraiseql/confiture#301, reproduced on confiture 1.6.0
+  and 1.10.1) and is not fixed here. The new `post_migrate_check_alter_safe`
+  check scans the DDL behind every enabled `live-drift` gate and warns before a
+  deploy finds out; `docs/deployment-guide.md` documents the trap and the two
+  ways around it. A tree the doctor cannot read from where it runs is a `skip`,
+  never a `pass`.
+
+### Known gaps
+
+- `signatures` reports **stale overloads only**. A routine the DDL declares that
+  the database does not have lands in confiture's `missing_from_db`, which is
+  informational and does not set `has_drift` — so the check will not catch a
+  migration that forgot to create a function. That is the case this gate would
+  most like to fail on; promoting it from this side would fail every deploy
+  whose DDL is one function ahead of its database. Tracked upstream as
+  fraiseql/confiture#303, and pinned by a test so the shape cannot change
+  quietly.
+
 ## [0.77.0] - 2026-09-17
 
 **The confiture cap moves to the 1.10 line.**
