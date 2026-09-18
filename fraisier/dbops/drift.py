@@ -17,7 +17,7 @@ legitimate pending migration: exit 1 before, exit 0 after.  Only the
 post-migration position discriminates between a deploy in progress and a broken
 schema.
 
-Four parts of confiture's contract are sharp enough to name:
+Five parts of confiture's contract are sharp enough to name:
 
 * ``confiture build`` takes ``--project-dir``/``--env``, ``migrate validate``
   takes **neither** — its ``--env`` resolves ``db/environments/{env}.yaml``
@@ -39,12 +39,19 @@ Four parts of confiture's contract are sharp enough to name:
   stderr first yields ``🔨 Building schema for environment: …``.  A build that
   warns and exits 0 says so only in that envelope, which is why the gate reads
   it on both paths and reports it next to the verdict (#401).
+* ``--check-signatures`` **scans ``public`` and nothing else** unless
+  ``--schemas`` says otherwise, and a FraiseQL project keeps its routines in
+  ``core``/``app``/``tenant`` — so the bare flag this gate sent until #408 could
+  not fire for any project it ships to.  :func:`_routine_schemas` derives the
+  list from the built schema, which is the same text the check parses its source
+  side from.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -67,6 +74,23 @@ CHECK_FLAGS: dict[str, str] = {
 
 #: ``confiture build --env NAME`` resolves this path under ``--project-dir``.
 _ENV_DIR = ("db", "environments")
+
+#: The schema ``--check-signatures`` inspects when it is told nothing, and the
+#: one confiture's own parser assigns an unqualified ``CREATE FUNCTION``.
+_DEFAULT_SCHEMA = "public"
+
+#: A schema-qualified routine declaration in the built schema.  Looser than
+#: confiture's parser on purpose: this decides only *where to look*, so matching
+#: a ``CREATE FUNCTION`` inside a quoted body costs one unused schema name,
+#: while missing a real declaration costs the check its subject.
+_ROUTINE_SCHEMA_RE = re.compile(
+    r"""
+    CREATE \s+ (?:OR \s+ REPLACE \s+)?
+    (?:FUNCTION|PROCEDURE) \s+
+    (?P<schema>[\w"]+) \s* \.
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 @dataclass(frozen=True)
@@ -179,6 +203,36 @@ def _env_for_build(project_dir: Path, confiture_config: Path) -> str:
     return config.stem
 
 
+def _routine_schemas(expected: Path) -> tuple[str, ...]:
+    """The schemas ``--check-signatures`` has to scan for *expected* to be graded.
+
+    ``--schemas`` defaults to ``public``, and a FraiseQL project's routines live
+    in ``core``/``app``/``tenant``, so the bare flag this gate used to send could
+    not fire for any of them (#408).
+
+    The list is derived rather than configured, from the same built file the
+    check is handed as ``--schema``.  That is not a convenience: confiture
+    reports a stale overload only for a ``(schema, name)`` the **source**
+    declares, so a schema the built schema declares no routine in has nothing
+    to contribute, and one it does declare a routine in is exactly where an
+    overload the source no longer has can be hiding.  Deriving it from the file
+    means the two sides are reading the same text, and adding a schema to the
+    tree needs no second edit anywhere.
+
+    ``public`` is always present: it is where an unqualified declaration lands,
+    and keeping it means this can only ever widen what the gate looked at.
+
+    Raises:
+        OSError: the built schema could not be read.
+    """
+    text = expected.read_text(encoding="utf-8", errors="replace")
+    found = {
+        match.group("schema").strip('"').lower()
+        for match in _ROUTINE_SCHEMA_RE.finditer(text)
+    }
+    return tuple(sorted(found | {_DEFAULT_SCHEMA}))
+
+
 def _connection_target(url: str) -> tuple[str, str, str]:
     """``(host, port, dbname)`` for *url*, for comparison only.
 
@@ -272,6 +326,48 @@ def _items(reports: Iterable[dict[str, Any]], severity: str) -> tuple[DriftItem,
         for report in reports
         for item in report.get("drift_items", [])
         if str(item.get("severity")) == severity
+    )
+
+
+def _stale_overloads(reports: Iterable[dict[str, Any]]) -> tuple[DriftItem, ...]:
+    """The signatures check's findings, which it does not put in ``drift_items``.
+
+    ``--check-live-drift`` reports a list of graded ``drift_items``;
+    ``--check-signatures`` reports ``stale_overloads`` and sets
+    ``has_critical_drift``.  A reader that knows only the first shape fails the
+    deploy with "0 critical schema drift item(s)" and names nothing — while the
+    payload it just read held the signature *and* the ``DROP FUNCTION`` that
+    resolves it.
+
+    Every stale overload is critical: the check has no lesser grade, and
+    ``has_critical_drift`` is a plain alias for ``has_drift`` upstream.
+    """
+    return tuple(
+        _stale_overload_item(overload)
+        for report in reports
+        for overload in report.get("stale_overloads", [])
+        if isinstance(overload, dict)
+    )
+
+
+def _stale_overload_item(overload: dict[str, Any]) -> DriftItem:
+    """One stale overload, with the signatures that frame it and its remedy.
+
+    The source signatures are named because a bare "live has one the source
+    does not" leaves the operator to guess which call site moved; the
+    ``DROP FUNCTION`` is carried verbatim from confiture rather than rebuilt
+    here, so what the log says to run is what upstream computed.
+    """
+    declared = [str(sig) for sig in overload.get("source_signatures") or []]
+    return DriftItem(
+        kind="stale_overload",
+        severity="critical",
+        object_name=str(overload.get("stale_signature", "?")),
+        message=(
+            f"live has an overload the source no longer declares "
+            f"(source declares: {', '.join(declared) or 'none'}); "
+            f"remediation: {overload.get('drop_sql', '?')}"
+        ),
     )
 
 
@@ -501,12 +597,30 @@ def check_schema_drift(
                 error=(f"confiture build exited 0 but wrote no schema to {expected}"),
             )
 
+        # Only --check-signatures reads --schemas; sending it otherwise would
+        # claim a scope the requested checks do not have.
+        scoped: list[str] = []
+        if "signatures" in selected:
+            try:
+                scoped = ["--schemas", ",".join(_routine_schemas(expected))]
+            except OSError as exc:
+                return DriftResult(
+                    passed=False,
+                    checks=selected,
+                    build_notes=notes,
+                    error=(
+                        f"could not read the built schema at {expected} to find "
+                        f"the schemas to check signatures in: {exc}"
+                    ),
+                )
+
         validate = _run(
             [
                 "confiture",
                 "migrate",
                 "validate",
                 *(CHECK_FLAGS[name] for name in selected),
+                *scoped,
                 "-c",
                 str(config),
                 "--schema",
@@ -531,7 +645,7 @@ def check_schema_drift(
             ),
         )
 
-    critical = _items(reports, "critical")
+    critical = _items(reports, "critical") + _stale_overloads(reports)
     warnings = _items(reports, "warning")
     drifted = any(report.get("has_critical_drift") for report in reports)
     return DriftResult(

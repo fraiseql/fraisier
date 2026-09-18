@@ -88,6 +88,67 @@ CREATE TABLE core.tb_widget (
 );
 """
 
+#: The one signature the checkout declares for ``core.fn_seen`` — in ``core``,
+#: like every routine a FraiseQL project has, and therefore invisible to a
+#: ``--check-signatures`` that was never told to look outside ``public`` (#408).
+_ROUTINE_DDL = """CREATE OR REPLACE FUNCTION core.fn_seen(p_at TIMESTAMP WITH TIME ZONE)
+    RETURNS INT LANGUAGE sql AS $$ SELECT 1 $$;
+"""
+
+#: A migration that changes a parameter type the way ``CREATE OR REPLACE``
+#: invites: PostgreSQL does not replace the function, it adds an overload, and
+#: the old one stays live and callable. Both statements succeed and the
+#: migration reports success.
+_MIGRATION_STALE_OVERLOAD = '''from confiture.models.migration import Migration
+
+
+class CreateWidget(Migration):
+    version = "20260907000000"
+    name = "create_widget"
+
+    def up(self):
+        self.connection.execute("CREATE SCHEMA IF NOT EXISTS core")
+        self.connection.execute(
+            "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, "
+            "serial TEXT NOT NULL, label TEXT)"
+        )
+        self.connection.execute(
+            """CREATE OR REPLACE FUNCTION core.fn_seen(p_at TIMESTAMP)
+            RETURNS INT LANGUAGE sql AS $$ SELECT 1 $$"""
+        )
+        self.connection.execute(
+            """CREATE OR REPLACE FUNCTION core.fn_seen(p_at TIMESTAMPTZ)
+            RETURNS INT LANGUAGE sql AS $$ SELECT 1 $$"""
+        )
+
+    def down(self):
+        self.connection.execute("DROP SCHEMA core CASCADE")
+'''
+
+#: The same migration that got the parameter type right the first time: one
+#: overload, and it is the one the DDL declares.
+_MIGRATION_ONE_OVERLOAD = '''from confiture.models.migration import Migration
+
+
+class CreateWidget(Migration):
+    version = "20260907000000"
+    name = "create_widget"
+
+    def up(self):
+        self.connection.execute("CREATE SCHEMA IF NOT EXISTS core")
+        self.connection.execute(
+            "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, "
+            "serial TEXT NOT NULL, label TEXT)"
+        )
+        self.connection.execute(
+            """CREATE OR REPLACE FUNCTION core.fn_seen(p_at TIMESTAMPTZ)
+            RETURNS INT LANGUAGE sql AS $$ SELECT 1 $$"""
+        )
+
+    def down(self):
+        self.connection.execute("DROP SCHEMA core CASCADE")
+'''
+
 
 def _exec(db: str, target, *statements: str) -> None:
     with psycopg.connect(target.dsn(db), autocommit=True) as conn:
@@ -132,11 +193,11 @@ def _project(
     return root
 
 
-def _gate(project: Path):
+def _gate(project: Path, checks: list[str] | None = None):
     return check_schema_drift(
         project_dir=project,
         confiture_config=project / "db" / "environments" / "production.yaml",
-        checks=["live-drift"],
+        checks=checks or ["live-drift"],
     )
 
 
@@ -247,6 +308,99 @@ class TestWhyItRunsAfterTheMigration:
         # ...and the same project, same gate, after the migration: clean.
         assert _migrate(project).success is True
         assert _gate(project).passed
+
+
+class TestTheSignaturesCheckOutsidePublic:
+    """#408, against a real confiture: the check had never been able to fire.
+
+    ``--schemas`` defaults to ``public`` and this gate sent a bare
+    ``--check-signatures``, so for any project that keeps its routines in
+    ``core``/``app``/``tenant`` — every FraiseQL project — the check inspected a
+    schema the project does not use and reported a clean database.
+
+    ``tests/test_drift_gate.py`` pins the argv.  These execute it: the stale
+    overload below is in ``core``, so a gate that stops deriving the schemas
+    goes quietly back to passing and this fails.
+    """
+
+    def test_a_stale_overload_outside_public_fails_the_gate(
+        self, tmp_path, drift_db
+    ) -> None:
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_STALE_OVERLOAD,
+            extra_ddl={"020_routines.sql": _ROUTINE_DDL},
+        )
+        assert _migrate(project).success is True
+
+        result = _gate(project, checks=["signatures"])
+
+        assert result.ran, result.error
+        assert not result.passed, result.summary()
+        assert result.exit_code == 1
+        assert [item.object_name for item in result.critical] == [
+            "core.fn_seen(timestamp without time zone)"
+        ]
+
+    def test_the_verdict_carries_the_statement_that_fixes_it(
+        self, tmp_path, drift_db
+    ) -> None:
+        """confiture computes the ``DROP FUNCTION``; it is worth nothing unread."""
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_STALE_OVERLOAD,
+            extra_ddl={"020_routines.sql": _ROUTINE_DDL},
+        )
+        assert _migrate(project).success is True
+
+        summary = _gate(project, checks=["signatures"]).summary()
+
+        assert "DROP FUNCTION core.fn_seen(timestamp without time zone);" in summary
+
+    def test_the_migration_itself_reports_success(self, tmp_path, drift_db) -> None:
+        """The premise again: nothing on the migration path notices the overload.
+
+        ``CREATE OR REPLACE`` with a changed parameter type is a *create*, not a
+        replace, and PostgreSQL says nothing about the function it left behind.
+        """
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_STALE_OVERLOAD,
+            extra_ddl={"020_routines.sql": _ROUTINE_DDL},
+        )
+
+        assert _migrate(project).success is True
+
+        with psycopg.connect(drift_db.dsn(_DB)) as conn:
+            live = conn.execute(
+                "SELECT count(*) FROM pg_proc p JOIN pg_namespace n "
+                "ON n.oid = p.pronamespace "
+                "WHERE n.nspname = 'core' AND p.proname = 'fn_seen'"
+            ).fetchone()
+        assert live == (2,)
+
+    def test_the_declared_overload_alone_passes(self, tmp_path, drift_db) -> None:
+        """The gate stays quiet when the database matches what the DDL declares.
+
+        Without this, pointing the check at more schemas could be "caught" by
+        failing everywhere, and the suite would not know the difference.
+        """
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_ONE_OVERLOAD,
+            extra_ddl={"020_routines.sql": _ROUTINE_DDL},
+        )
+        assert _migrate(project).success is True
+
+        result = _gate(project, checks=["signatures"])
+
+        assert result.ran, result.error
+        assert result.passed, result.summary()
+        assert result.critical == ()
 
 
 class TestTheBuildsOwnDiagnostics:
