@@ -191,3 +191,127 @@ fraises:
         assert "confiture build --env" in result.detail
         assert result.fix_hint is not None
         assert "db/environments" in result.fix_hint
+
+
+class TestDoctorFindsTheAlterTrap:
+    """``post_migrate_check_alter_safe`` — #407, before a deploy discovers it.
+
+    confiture's expected schema folds only ``ADD COLUMN`` and ``ADD CONSTRAINT``
+    into a table, so a DDL tree that reaches its final shape through
+    ``ALTER TABLE … DROP COLUMN`` is graded against a schema that still has the
+    column.  The database, applied verbatim from that same tree, is correctly
+    without it, and the gate calls that ``CRITICAL missing_column``.
+
+    The check is advisory and errs towards saying something: a warning naming
+    the file takes seconds to dismiss, while the failure it predicts arrives
+    mid-deploy with the migrations already applied and names a column rather
+    than the cause.
+    """
+
+    def _run(self, cfg: FraisierConfig) -> CheckResult:
+        from fraisier import doctor
+
+        return doctor.DOCTOR_CHECKS["post_migrate_check_alter_safe"].fn(cfg)
+
+    def _cfg(
+        self, tmp_path: Path, ddl: str, *, checks: str = "[live-drift]"
+    ) -> FraisierConfig:
+        from fraisier.config import FraisierConfig
+
+        app = tmp_path / "app"
+        (app / "db" / "environments").mkdir(parents=True)
+        (app / "db" / "schema").mkdir(parents=True)
+        (app / "db" / "environments" / "production.yaml").write_text(
+            "name: production\ninclude_dirs:\n  - db/schema\n"
+        )
+        (app / "db" / "schema" / "010_tables.sql").write_text(ddl)
+
+        path = tmp_path / "fraises.yaml"
+        path.write_text(f"""
+name: myproj
+scaffold:
+  deploy_user: fraisier
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: {app}
+        database:
+          name: db
+          strategy: migrate
+          confiture_config: db/environments/production.yaml
+          post_migrate_check:
+            enabled: true
+            checks: {checks}
+""")
+        return FraisierConfig(path)
+
+    def test_registered(self) -> None:
+        from fraisier import doctor
+
+        assert "post_migrate_check_alter_safe" in doctor.DOCTOR_CHECKS
+
+    def test_an_ordinary_tree_passes(self, tmp_path: Path) -> None:
+        cfg = self._cfg(
+            tmp_path,
+            "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY);\n"
+            "ALTER TABLE core.tb_widget ADD COLUMN label TEXT;\n",
+        )
+        assert self._run(cfg).status == "pass"
+
+    def test_a_dropped_column_warns_and_names_the_file(self, tmp_path: Path) -> None:
+        cfg = self._cfg(
+            tmp_path,
+            "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, legacy TEXT);\n"
+            "ALTER TABLE core.tb_widget DROP COLUMN legacy;\n",
+        )
+
+        result = self._run(cfg)
+
+        assert result.status == "warn"
+        assert "010_tables.sql" in result.detail
+        assert "confiture#301" in result.detail
+        assert result.fix_hint is not None
+
+    def test_the_bare_drop_spelling_counts_too(self, tmp_path: Path) -> None:
+        """``DROP COLUMN`` is optional in PostgreSQL; the trap is identical."""
+        cfg = self._cfg(
+            tmp_path,
+            "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, legacy TEXT);\n"
+            "ALTER TABLE core.tb_widget DROP legacy;\n",
+        )
+        assert self._run(cfg).status == "warn"
+
+    def test_dropping_something_that_is_not_a_column_is_not_this_trap(
+        self, tmp_path: Path
+    ) -> None:
+        """Only a missing *column* is graded CRITICAL, so only that is warned about."""
+        cfg = self._cfg(
+            tmp_path,
+            "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, ratio INT NOT NULL);\n"
+            "ALTER TABLE core.tb_widget DROP CONSTRAINT tb_widget_pkey;\n"
+            "ALTER TABLE core.tb_widget ALTER COLUMN ratio DROP NOT NULL;\n"
+            "ALTER TABLE core.tb_widget ALTER COLUMN ratio DROP DEFAULT;\n",
+        )
+        assert self._run(cfg).status == "pass"
+
+    def test_a_signatures_only_gate_is_unaffected(self, tmp_path: Path) -> None:
+        """Nothing but ``live-drift`` reads the inventory this trap lives in."""
+        cfg = self._cfg(
+            tmp_path,
+            "ALTER TABLE core.tb_widget DROP COLUMN legacy;\n",
+            checks="[signatures]",
+        )
+        assert self._run(cfg).status == "skip"
+
+    def test_a_tree_that_is_not_on_this_host_is_a_skip_not_a_pass(
+        self, tmp_path: Path
+    ) -> None:
+        """Doctor often runs where the checkout is not. Silence is not a verdict."""
+        cfg = self._cfg(tmp_path, "CREATE TABLE core.tb_widget (id BIGINT);\n")
+        import shutil
+
+        shutil.rmtree(tmp_path / "app" / "db" / "schema")
+
+        assert self._run(cfg).status == "skip"
