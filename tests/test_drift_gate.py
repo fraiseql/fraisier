@@ -124,17 +124,46 @@ BUILD_FAILED = {
     },
 }
 
+#: A clean ``--check-signatures`` report, copied from a 1.10.1 run.  Note what
+#: is **not** here: ``drift_items``.  That key belongs to the live-drift report;
+#: this check says what it found in ``stale_overloads``, so a reader that knows
+#: only the other shape reports a failing gate with nothing in it.
+SIGNATURES_CLEAN = {
+    "check": "function_signature_drift",
+    "has_drift": False,
+    "has_critical_drift": False,
+    "remediation_sql": [],
+    "stale_overloads": [],
+    "missing_from_db": ["core.fn_seen(timestamp with time zone)"],
+    "schemas_checked": ["core", "public"],
+    "functions_checked": 1,
+    "detection_time_ms": 0.017,
+}
+
+#: The same report against a database carrying the second overload a
+#: ``CREATE OR REPLACE`` with a changed parameter type silently leaves behind.
+SIGNATURES_STALE = {
+    **SIGNATURES_CLEAN,
+    "has_drift": True,
+    "has_critical_drift": True,
+    "remediation_sql": ["DROP FUNCTION core.fn_seen(timestamp without time zone);"],
+    "stale_overloads": [
+        {
+            "schema": "core",
+            "name": "fn_seen",
+            "stale_signature": "core.fn_seen(timestamp without time zone)",
+            "source_signatures": ["core.fn_seen(timestamp with time zone)"],
+            "drop_sql": "DROP FUNCTION core.fn_seen(timestamp without time zone);",
+        }
+    ],
+}
+
 DRIFT_ENVELOPE = {
     "version": "1",
     "status": "failed",
     "checks": {
         "live_drift": DRIFT_BARE,
-        "function_signature_drift": {
-            "check": "function_signature_drift",
-            "has_drift": False,
-            "has_critical_drift": False,
-            "drift_items": [],
-        },
+        "function_signature_drift": SIGNATURES_CLEAN,
     },
 }
 
@@ -163,6 +192,7 @@ def _fake_confiture(
     validate_rc: int = 0,
     build_payload: dict | str | None = _UNSET,
     build_stderr: str = BUILD_PROGRESS,
+    built_schema: str = "CREATE TABLE part",
 ):
     """A ``subprocess.run`` double that also writes the built schema file.
 
@@ -175,6 +205,12 @@ def _fake_confiture(
     under ``--format json``: the envelope on stdout, the progress lines on
     stderr. Passing ``build_payload`` as a ``str`` puts that string on stdout
     verbatim, for the case where it is not an envelope at all.
+
+    *built_schema* is what lands at ``--output``.  The default is deliberately
+    not valid SQL: nothing here parses it, and a plausible-looking schema would
+    invite a reader to believe it was checked.  The cases that need the built
+    text to *mean* something — the schemas the signatures check is pointed at —
+    pass their own.
     """
     if build_payload is _UNSET:
         build_payload = BUILD_CLEAN if build_rc == 0 else BUILD_FAILED
@@ -186,7 +222,7 @@ def _fake_confiture(
 
     def run(cmd: list[str], **_kwargs: object) -> MagicMock:
         if cmd[1] == "build":
-            Path(cmd[cmd.index("--output") + 1]).write_text("CREATE TABLE part")
+            Path(cmd[cmd.index("--output") + 1]).write_text(built_schema)
             return MagicMock(
                 returncode=build_rc, stdout=_build_stdout(), stderr=build_stderr
             )
@@ -272,6 +308,160 @@ class TestValidateInvocation:
         assert CHECK_FLAGS["signatures"] in validate
         # --check-body-replay is the heaviest signal and belongs on a timer.
         assert "--check-body-replay" not in validate
+
+
+#: A built schema whose routines live where a FraiseQL project puts them, which
+#: is to say nowhere near ``public`` — the only schema confiture inspects unless
+#: it is told otherwise.  The quoted ``"Tenant"`` is here because confiture
+#: lowercases and unquotes a routine's schema when it parses the source side; a
+#: derivation that did not would name a schema the live side never matches.
+SCHEMA_WITH_ROUTINES = """\
+CREATE SCHEMA core;
+
+CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, serial TEXT NOT NULL);
+
+CREATE OR REPLACE FUNCTION core.fn_seen(p_at TIMESTAMPTZ)
+    RETURNS INT LANGUAGE sql AS $$ SELECT 1 $$;
+
+CREATE FUNCTION app.fn_widget(p_id BIGINT)
+    RETURNS INT LANGUAGE sql AS $$ SELECT 1 $$;
+
+CREATE PROCEDURE "Tenant".pr_seed()
+    LANGUAGE sql AS $$ SELECT 1 $$;
+"""
+
+
+class TestWhichSchemasTheSignaturesCheckScans:
+    """#408: ``--schemas`` defaults to ``public``, and our routines are not there.
+
+    confiture reports a stale overload only for a ``(schema, name)`` the
+    **source** declares, and it reads that source from the very file this gate
+    builds and hands it as ``--schema``.  So the schemas worth scanning are
+    exactly the ones that file declares routines in — derived from it rather
+    than configured, so they cannot drift from the tree.
+
+    Every case here asserts the argv.  That is not enough on its own, which is
+    the whole reason this defect survived: ``tests/integration/
+    test_post_migrate_check_integration.py`` plants a real stale overload in
+    ``core`` and requires a real confiture to fail the gate on it.
+    """
+
+    def _validate(self, project: Path, checks: list[str], schema: str) -> list[str]:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(CLEAN_BARE, built_schema=schema)
+            check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=checks,
+            )
+        return _runs(mock_run)[1]
+
+    def test_every_schema_the_built_schema_declares_a_routine_in(
+        self, project: Path
+    ) -> None:
+        validate = self._validate(project, ["signatures"], SCHEMA_WITH_ROUTINES)
+
+        assert validate[validate.index("--schemas") + 1] == "app,core,public,tenant"
+
+    def test_public_is_scanned_even_when_nothing_declares_a_routine_there(
+        self, project: Path
+    ) -> None:
+        """The derivation may only ever widen what the gate looked at before.
+
+        ``public`` is confiture's default, so dropping it for a project whose
+        routines are all elsewhere would trade one blind spot for another — and
+        it is also where an unqualified ``CREATE FUNCTION`` lands, since that is
+        the schema confiture's own parser assigns one.
+        """
+        schema = "CREATE FUNCTION core.fn_only(p INT) RETURNS INT AS $$ SELECT 1 $$;"
+
+        validate = self._validate(project, ["signatures"], schema)
+
+        assert validate[validate.index("--schemas") + 1] == "core,public"
+
+    def test_a_schema_with_no_routines_is_not_scanned(self, project: Path) -> None:
+        """Tables alone buy nothing here: the check compares routine signatures."""
+        schema = "CREATE SCHEMA audit;\nCREATE TABLE audit.tb_log (id BIGINT);\n"
+
+        validate = self._validate(project, ["signatures"], schema)
+
+        assert validate[validate.index("--schemas") + 1] == "public"
+
+    def test_no_schemas_flag_when_signatures_was_not_asked_for(
+        self, project: Path
+    ) -> None:
+        """``--schemas`` is documented as "used with --check-signatures"."""
+        validate = self._validate(project, ["live-drift"], SCHEMA_WITH_ROUTINES)
+
+        assert "--schemas" not in validate
+
+
+class TestWhatAFiringSignaturesCheckSays:
+    """The other half of #408: it had never fired, so it had never reported.
+
+    ``--check-signatures`` puts its findings in ``stale_overloads``, not in the
+    ``drift_items`` the live-drift report uses.  Reading only the latter, the
+    gate would fail the deploy with ``0 critical schema drift item(s) …`` and
+    name nothing — while confiture had the signature *and* the ``DROP FUNCTION``
+    that fixes it sitting in the payload.
+    """
+
+    def _result(self, project: Path, payload: dict, rc: int = 0) -> DriftResult:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(payload, validate_rc=rc)
+            return check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["signatures"],
+            )
+
+    def test_a_stale_overload_fails_the_gate_and_is_named(self, project: Path) -> None:
+        result = self._result(project, SIGNATURES_STALE, rc=1)
+
+        assert not result.passed
+        assert [item.object_name for item in result.critical] == [
+            "core.fn_seen(timestamp without time zone)"
+        ]
+        assert result.critical[0].kind == "stale_overload"
+        assert result.critical[0].severity == "critical"
+
+    def test_the_remediation_reaches_the_operator(self, project: Path) -> None:
+        """The whole point: the deploy log says what to run, not just what broke."""
+        result = self._result(project, SIGNATURES_STALE, rc=1)
+
+        assert (
+            "DROP FUNCTION core.fn_seen(timestamp without time zone);"
+            in result.summary()
+        )
+
+    def test_the_signature_the_source_does_declare_is_named_too(
+        self, project: Path
+    ) -> None:
+        """Without it the report is one signature short of a diagnosis."""
+        result = self._result(project, SIGNATURES_STALE, rc=1)
+
+        assert "core.fn_seen(timestamp with time zone)" in result.critical[0].message
+
+    def test_a_clean_signatures_report_contributes_nothing(self, project: Path) -> None:
+        result = self._result(project, SIGNATURES_CLEAN)
+
+        assert result.passed
+        assert result.critical == ()
+        assert result.warnings == ()
+
+    def test_missing_from_db_is_not_read_as_drift(self, project: Path) -> None:
+        """confiture documents it as informational and does not set ``has_drift``.
+
+        It is also the thing this gate would most like to fail on — a routine the
+        DDL declares that the migration never created — so the temptation to
+        promote it here is real.  Doing so would fail every deploy whose DDL is
+        ahead of its database by one function, which is not a verdict we can
+        stand behind from this side (fraiseql/confiture#303).
+        """
+        result = self._result(project, SIGNATURES_CLEAN)
+
+        assert result.passed
+        assert "core.fn_seen" not in result.summary()
 
 
 class TestVerdicts:
