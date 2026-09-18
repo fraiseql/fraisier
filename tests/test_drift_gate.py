@@ -379,6 +379,24 @@ class TestWhichSchemasTheSignaturesCheckScans:
 
         assert validate[validate.index("--schemas") + 1] == "core,public"
 
+    def test_a_delimited_schema_name_survives_the_derivation(
+        self, project: Path
+    ) -> None:
+        """A quoted identifier may hold anything, and a space is the common case.
+
+        Matching the name with ``\\w+`` stops at that space and derives no schema
+        at all — the one failure direction this must not have, since it puts the
+        gate straight back to inspecting ``public`` alone.
+        """
+        schema = (
+            'CREATE FUNCTION "billing archive".fn_sweep() '
+            "RETURNS INT AS $$ SELECT 1 $$;"
+        )
+
+        validate = self._validate(project, ["signatures"], schema)
+
+        assert validate[validate.index("--schemas") + 1] == "billing archive,public"
+
     def test_a_schema_with_no_routines_is_not_scanned(self, project: Path) -> None:
         """Tables alone buy nothing here: the check compares routine signatures."""
         schema = "CREATE SCHEMA audit;\nCREATE TABLE audit.tb_log (id BIGINT);\n"
