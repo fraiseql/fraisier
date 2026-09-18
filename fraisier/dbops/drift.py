@@ -82,12 +82,15 @@ _DEFAULT_SCHEMA = "public"
 #: A schema-qualified routine declaration in the built schema.  Looser than
 #: confiture's parser on purpose: this decides only *where to look*, so matching
 #: a ``CREATE FUNCTION`` inside a quoted body costs one unused schema name,
-#: while missing a real declaration costs the check its subject.
+#: while missing a real declaration costs the check its subject.  The quoted
+#: alternative is what keeps that asymmetry honest — a delimited identifier may
+#: hold anything, spaces included, and ``\w+`` would stop at the first one and
+#: silently derive no schema at all.
 _ROUTINE_SCHEMA_RE = re.compile(
     r"""
     CREATE \s+ (?:OR \s+ REPLACE \s+)?
     (?:FUNCTION|PROCEDURE) \s+
-    (?P<schema>[\w"]+) \s* \.
+    (?P<schema>"[^"]+"|[\w$]+) \s* \.
     """,
     re.IGNORECASE | re.VERBOSE,
 )
