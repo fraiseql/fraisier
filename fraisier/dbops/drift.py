@@ -39,12 +39,15 @@ Five parts of confiture's contract are sharp enough to name:
   stderr first yields ``🔨 Building schema for environment: …``.  A build that
   warns and exits 0 says so only in that envelope, which is why the gate reads
   it on both paths and reports it next to the verdict (#401).
-* ``--check-signatures`` **scans ``public`` and nothing else** unless
-  ``--schemas`` says otherwise, and a FraiseQL project keeps its routines in
-  ``core``/``app``/``tenant`` — so the bare flag this gate sent until #408 could
-  not fire for any project it ships to.  :func:`_routine_schemas` derives the
-  list from the built schema, which is the same text the check parses its source
-  side from.
+* ``--check-signatures`` **scanned ``public`` and nothing else** below confiture
+  1.11.0 unless ``--schemas`` said otherwise, and a FraiseQL project keeps its
+  routines in ``core``/``app``/``tenant`` — so the bare flag this gate sent until
+  #408 could not fire for any project it ships to.  :func:`_routine_schemas`
+  derives the list from the built schema, which is the same text the check parses
+  its source side from.  From 1.11.0 confiture derives that same set itself and
+  uses it as the default; the flag is still sent because this package's floor
+  admits every version below that, which makes the derived list a thing that must
+  never be *narrower* than confiture's own (#410).
 """
 
 from __future__ import annotations
@@ -94,6 +97,13 @@ _ROUTINE_SCHEMA_RE = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+#: SQL comments, for a second pass over the built schema.  A comment may sit
+#: between ``FUNCTION`` and the name it qualifies, where the ``\s+`` above will
+#: not follow it — measured against confiture 1.11.0's parser, which reads
+#: ``CREATE FUNCTION /* c */ core.fn()`` as declaring ``core`` while the pattern
+#: above sees nothing at all.
+_SQL_COMMENT_RE = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -225,13 +235,29 @@ def _routine_schemas(expected: Path) -> tuple[str, ...]:
     ``public`` is always present: it is where an unqualified declaration lands,
     and keeping it means this can only ever widen what the gate looked at.
 
+    **Why this is still sent from confiture 1.11.0 on**, where ``--schemas``
+    defaults to the schemas the source declares and this list is therefore
+    usually redundant: the floor in ``pyproject.toml`` is ``>=1.0.0``, and every
+    version below 1.11.0 defaults to ``public`` alone.  Dropping the flag would
+    re-create #408 for anyone on 1.0-1.10.x.  What that costs is a duty: an
+    explicit list *overrides* the better default, so it must never be narrower
+    than the one confiture would have derived.  Hence the second pass —
+    measured, not supposed: a comment between ``FUNCTION`` and the qualified
+    name is read by confiture's parser and missed by the pattern here.
+
+    The two passes are **unioned** rather than the stripped text replacing the
+    raw.  Stripping comments from SQL with a regex is the kind of thing that
+    holds until a routine body contains the token, and a union makes the strip
+    monotone: it can add a schema, never remove one.
+
     Raises:
         OSError: the built schema could not be read.
     """
     text = expected.read_text(encoding="utf-8", errors="replace")
     found = {
         match.group("schema").strip('"').lower()
-        for match in _ROUTINE_SCHEMA_RE.finditer(text)
+        for pass_text in (text, _SQL_COMMENT_RE.sub(" ", text))
+        for match in _ROUTINE_SCHEMA_RE.finditer(pass_text)
     }
     return tuple(sorted(found | {_DEFAULT_SCHEMA}))
 

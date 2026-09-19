@@ -397,6 +397,51 @@ class TestWhichSchemasTheSignaturesCheckScans:
 
         assert validate[validate.index("--schemas") + 1] == "billing archive,public"
 
+    def test_a_declaration_behind_a_block_comment_is_still_found(
+        self, project: Path
+    ) -> None:
+        """Measured against confiture 1.11.0's parser, which does see it.
+
+        From 1.11.0 confiture derives this same set itself and uses it as the
+        default, so an explicit ``--schemas`` that is *narrower* silently
+        replaces a correct default with a wrong one — #408 again, one layer
+        down. The derivation may over-include freely; it may never under-include.
+        """
+        schema = "CREATE FUNCTION /* rebuilt nightly */ core.fn_b() RETURNS INT;"
+
+        validate = self._validate(project, ["signatures"], schema)
+
+        assert validate[validate.index("--schemas") + 1] == "core,public"
+
+    def test_a_declaration_behind_a_line_comment_is_still_found(
+        self, project: Path
+    ) -> None:
+        schema = "CREATE FUNCTION -- see ADR-14\n  core.fn_c() RETURNS INT;"
+
+        validate = self._validate(project, ["signatures"], schema)
+
+        assert validate[validate.index("--schemas") + 1] == "core,public"
+
+    def test_comment_stripping_can_only_add_a_schema_never_remove_one(
+        self, project: Path
+    ) -> None:
+        """A ``/*`` inside a string literal must not swallow a real declaration.
+
+        Stripping comments from SQL with a regex is the kind of thing that works
+        until a body contains the token. The derivation therefore matches the
+        raw text *and* the stripped copy and unions the two, so stripping is
+        monotone: it can only ever add.
+        """
+        schema = (
+            "CREATE FUNCTION core.fn_marker() RETURNS TEXT AS $$ SELECT '/*' $$;\n"
+            "CREATE FUNCTION app.fn_real() RETURNS INT AS $$ SELECT 1 $$;\n"
+            "CREATE FUNCTION audit.fn_close() RETURNS TEXT AS $$ SELECT '*/' $$;\n"
+        )
+
+        validate = self._validate(project, ["signatures"], schema)
+
+        assert validate[validate.index("--schemas") + 1] == "app,audit,core,public"
+
     def test_a_schema_with_no_routines_is_not_scanned(self, project: Path) -> None:
         """Tables alone buy nothing here: the check compares routine signatures."""
         schema = "CREATE SCHEMA audit;\nCREATE TABLE audit.tb_log (id BIGINT);\n"
