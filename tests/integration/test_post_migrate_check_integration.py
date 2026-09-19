@@ -403,6 +403,118 @@ class TestTheSignaturesCheckOutsidePublic:
         assert result.critical == ()
 
 
+#: Objects the checkout declares beyond its tables — a view, a routine and a
+#: trigger. Until confiture 1.11.0 a database missing any of them was exit 0
+#: with ``drift_items: []``, so the gate passed a deploy whose migration had
+#: simply not created them.
+_DDL_OBJECTS = """CREATE OR REPLACE FUNCTION core.fn_label(p_id BIGINT)
+    RETURNS TEXT LANGUAGE sql AS $$ SELECT 'x' $$;
+
+CREATE VIEW core.v_widget AS SELECT id, serial FROM core.tb_widget;
+
+CREATE OR REPLACE FUNCTION core.fn_touch()
+    RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+
+CREATE TRIGGER trg_touch BEFORE UPDATE ON core.tb_widget
+    FOR EACH ROW EXECUTE FUNCTION core.fn_touch();
+"""
+
+
+class TestObjectsTheMigrationNeverCreated:
+    """confiture 1.11.0 grades a missing view, routine or trigger CRITICAL.
+
+    Measured on one database, same DDL, ``--check-live-drift``: on 1.10.1 each
+    of these is exit 0 with ``drift_items: []``; on 1.11.0 each is exit 1 with a
+    critical item naming the object. That is a **new deploy-failing path** on a
+    gate that runs after every migration, which is why it is pinned here rather
+    than trusted to the release notes.
+
+    The behaviour arrives in confiture 1.11.0. ``pyproject.toml``'s floor is
+    ``>=1.0.0`` and does not promise it — the floor says the gate *works*, the
+    lock says what it *reports*. If the lock is ever moved below 1.11.0 these
+    fail, which is the intended alarm.
+    """
+
+    def _gate_without_objects(self, tmp_path, drift_db):
+        """The DDL declares view/routine/trigger; the migration creates none."""
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_COMPLETE,
+            extra_ddl={"020_objects.sql": _DDL_OBJECTS},
+        )
+        assert _migrate(project).success is True
+        return _gate(project)
+
+    def test_the_migration_itself_reports_success(self, tmp_path, drift_db) -> None:
+        """The premise: nothing before the gate notices the objects are absent."""
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_COMPLETE,
+            extra_ddl={"020_objects.sql": _DDL_OBJECTS},
+        )
+
+        result = _migrate(project)
+
+        assert result.success is True
+        assert result.steps_applied == 1
+
+    def test_a_missing_view_routine_and_trigger_all_fail_the_gate(
+        self, tmp_path, drift_db
+    ) -> None:
+        result = self._gate_without_objects(tmp_path, drift_db)
+
+        assert result.ran, result.error
+        assert not result.passed, result.summary()
+        assert result.exit_code == 1
+        kinds = {item.kind for item in result.critical}
+        assert {"missing_view", "missing_routine", "missing_trigger"} <= kinds, (
+            result.summary()
+        )
+
+    def test_each_missing_object_is_named(self, tmp_path, drift_db) -> None:
+        """A verdict that says "3 critical items" and nothing else is unactionable."""
+        result = self._gate_without_objects(tmp_path, drift_db)
+
+        named = {item.object_name for item in result.critical}
+        assert "core.v_widget" in named
+        assert any(n.startswith("core.fn_label") for n in named), named
+        assert any("trg_touch" in n for n in named), named
+
+    def test_a_database_that_has_them_all_passes(self, tmp_path, drift_db) -> None:
+        """The control: these verdicts must discriminate, not fire on everything."""
+        migration = _MIGRATION_COMPLETE.replace(
+            "    def down(self):",
+            '''        self.connection.execute(
+            """CREATE OR REPLACE FUNCTION core.fn_label(p_id BIGINT)
+            RETURNS TEXT LANGUAGE sql AS $$ SELECT 'x' $$"""
+        )
+        self.connection.execute(
+            "CREATE VIEW core.v_widget AS SELECT id, serial FROM core.tb_widget"
+        )
+        self.connection.execute(
+            """CREATE OR REPLACE FUNCTION core.fn_touch()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$"""
+        )
+        self.connection.execute(
+            """CREATE TRIGGER trg_touch BEFORE UPDATE ON core.tb_widget
+            FOR EACH ROW EXECUTE FUNCTION core.fn_touch()"""
+        )
+
+    def down(self):''',
+        )
+        project = _project(
+            tmp_path, drift_db, migration, extra_ddl={"020_objects.sql": _DDL_OBJECTS}
+        )
+        assert _migrate(project).success is True
+
+        result = _gate(project)
+
+        assert result.ran, result.error
+        assert result.passed, result.summary()
+
+
 class TestTheBuildsOwnDiagnostics:
     """#401: what the build said reaches the verdict, from a real confiture.
 
