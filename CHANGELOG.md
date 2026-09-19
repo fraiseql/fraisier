@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-09-19
+
+**The confiture cap moves to the 1.12 line, and the drift gate starts failing
+deploys it used to pass.**
+
+### Changed
+
+- **`fraiseql-confiture` is capped `<1.13`, locked at 1.12.0**
+  ([#410](https://github.com/fraiseql/fraisier/issues/410)). The `>=1.0.0` floor
+  is untouched — it is a capability floor, and
+  `tests/test_confiture_dependency_floor.py` still holds it. A two-minor hop:
+  1.11.0 and 1.12.0.
+
+- **⚠️ A missing view, materialized view, trigger or routine is now CRITICAL.**
+  This is 1.11.0's change and it is the reason this bump is not routine. Measured
+  on one live database, same DDL, `--check-live-drift`, 1.10.1 → 1.11.0:
+
+  | live state | 1.10.1 | 1.11.0 and 1.12.0 |
+  |---|---|---|
+  | dropped view | exit 0, `drift_items: []` | exit 1, CRITICAL `missing_view` |
+  | dropped materialized view | exit 0, `[]` | exit 1, CRITICAL `missing_matview` |
+  | dropped trigger | exit 0, `[]` | exit 1, CRITICAL `missing_trigger` |
+  | routine the DDL declares, live lacks | exit 0, `[]` | exit 1, CRITICAL `missing_routine` |
+
+  **`post_migrate_check` with `on_critical: fail` will now stop deploys that
+  previously went through.** Correctly — a migration that did not create a view
+  the DDL declares is exactly the #395 class — but it is a new failure mode on a
+  gate that runs after every migration, and the verdict names the object rather
+  than the migration that skipped it. A project that cannot fix the cause
+  immediately can set `on_critical: warn`.
+
+  This also closes, from the other direction, the gap v0.78.0 recorded as a known
+  one: a routine the DDL declares and the database has not got was invisible to
+  `--check-signatures`, because confiture files it under `missing_from_db` and
+  treats it as informational. `--check-live-drift` now grades it CRITICAL, so the
+  gate catches it without fraisier opting into anything.
+
+- **The pin comment's claim that "a dropped view, a dropped trigger and a changed
+  routine signature are reported by neither" is corrected in place.** It was
+  measured and true of 1.6.0 and 1.10.1. Leaving it would have been a false
+  statement about current behaviour sitting in the file that pins the version.
+
+### Fixed
+
+- **The derived `--schemas` list could be narrower than confiture's own.**
+  1.11.0 makes `--check-signatures` default to the schemas the source declares —
+  fraisier's #408 fix, arriving upstream three weeks later — and an explicit
+  `--schemas` **overrides** that default. So the list `_routine_schemas` derives
+  stopped being merely helpful and became a thing that can do harm.
+
+  Measured against confiture's own parser: a comment between `FUNCTION` and the
+  qualified name — `CREATE FUNCTION /* rebuilt nightly */ core.fn()`, and the
+  `--` form — makes fraisier's regex derive `public` alone where the parser
+  derives `core`. On 1.11.0 that silently replaces a correct default with a wrong
+  one: #408 again, one layer down.
+
+  The derivation now matches the raw text *and* a comment-stripped copy and
+  unions the two, so stripping is monotone — it can add a schema, never remove
+  one, which keeps the pathological case (a `/*` inside a routine body) safe.
+  Verified across 196 comparisons against confiture's parser: no input where
+  fraisier's set is narrower.
+
+  **The flag is still sent.** The floor is `>=1.0.0` and every version below
+  1.11.0 defaults to `public`, so dropping it would re-create #408 for anyone on
+  1.0–1.10.x. Dropping it safely would mean raising the floor to `>=1.11`, which
+  is a capability decision, not a cap bump.
+
+### Unchanged
+
+- **1.12.0 is invisible to fraisier.** All three of its flagged behaviour changes
+  are on `migrate verify` and `verify-checksums`, and fraisier invokes neither.
+  Verified rather than assumed: the same probe re-run on 1.12.0 produces
+  measurements identical to 1.11.0 — the `--schemas` derivation, the stale
+  overload, and all four missing-object verdicts.
+
+- **The rest of the call surface.** `build`, `migrate up`/`down`/`rebuild`/
+  `status`, and `migrate preflight` are untouched across both releases. The
+  `>=1.0.0` floor test imports every confiture attribute fraisier depends on and
+  still passes, so nothing moved under it.
+
+- **`--missing-is-drift` (new in 1.11.0, opt-in): not adopted.** Measured that
+  `--check-live-drift` already reports a missing routine as CRITICAL
+  `missing_routine`, and `live-drift` is the default check — the flag would add a
+  second, narrower path to a verdict the gate already reaches, and only for
+  projects that also enable `signatures`.
+
+- **`--check-data-assertions` (new in 1.12.0): not adopted.** Advisory only. Its
+  documented blind spot is worth knowing before anyone reaches for it: a
+  schema-only database is not an *empty* one — `pg_dump --schema-only` populates
+  the catalogue — so a guard deriving rows from `pg_class` is correct at
+  preflight time and still warns.
+
+### Note for `fraisier-core`
+
+confiture 1.12.0 moves `migrate verify`'s documented success test from
+`failed_count == 0` to `ok`. No Python code reads that payload, but the Rust
+`fraisier-adapter-confiture` crate does, and it reports `ok: true` for a
+ledger-less run that verified nothing. Filed as
+[fraisier-core#58](https://github.com/fraiseql/fraisier-core/issues/58).
+`fraisier/preflight.py`'s own `failed_count` is an unrelated abstraction and is
+untouched.
+
 ## [0.78.0] - 2026-09-18
 
 **The signatures half of the drift gate could never fire, and the live-drift

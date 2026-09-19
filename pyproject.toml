@@ -195,17 +195,31 @@ dependencies = [
   # verbatim from its own DDL reports nine `type_mismatch` **warnings**
   # (`varchar(50)` vs `character varying`, `text[]` vs `array`, `citext` vs
   # `user-defined`, `pg_catalog.json` vs `json`), a real `int[]` → `int` change
-  # is one more warning in that noise, an `ALTER COLUMN … TYPE` is ignored on
-  # the expected side, and a dropped view, a dropped trigger and a changed
-  # routine signature are reported by neither. Warnings never reach
+  # is one more warning in that noise, and an `ALTER COLUMN … TYPE` is ignored
+  # on the expected side. Warnings never reach
   # `passed = not has_critical_drift`, so the verdict is unaffected — but do not
   # read a clean-looking warning list as agreement between the two sides.
+  #
+  # **1.11.0 changed the verdict, so the gate fails deploys it used to pass.**
+  # Measured the same way, 1.10.1 → 1.11.0 on one database: a dropped view,
+  # materialized view, trigger or routine goes from exit 0 with
+  # `drift_items: []` to exit 1 with a CRITICAL `missing_view` /
+  # `missing_matview` / `missing_trigger` / `missing_routine`. That corrects the
+  # paragraph above, which was true of 1.6.0 and 1.10.1 (issue #410). It is the
+  # failure this gate exists to catch, so it is welcome — but it is new, and
+  # `tests/integration/test_post_migrate_check_integration.py` pins it.
+  #
+  # 1.11.0 also makes `--check-signatures` default to the schemas the source
+  # declares rather than `public` — fraisier's own #408 fix, arriving upstream.
+  # `drift.py` keeps sending `--schemas` because this floor is `>=1.0.0` and
+  # every version below 1.11.0 still defaults to `public`; see
+  # `_routine_schemas` for why the derived list must stay a superset.
   #
   # The cap still moves deliberately, on a green suite: the freeze is upstream's
   # promise, and `<1.0` is precisely the width that let #262 resolve a confiture
   # whose preflight JSON fraisier could not parse and read the unparsed result
-  # as a pass (issues #262, #362, #368, #395, #397, #405).
-  "fraiseql-confiture>=1.0.0,<1.11",
+  # as a pass (issues #262, #362, #368, #395, #397, #405, #410).
+  "fraiseql-confiture>=1.0.0,<1.13",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
@@ -220,7 +234,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.78.0"
+version = "0.79.0"
 
 [project.optional-dependencies]
 all-databases = [
