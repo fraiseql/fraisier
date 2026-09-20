@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.80.0] - 2026-09-20
+
+**The confiture cap opens to the whole 1.x line, locked at 1.14.0. 1.13.0 and
+1.14.0 are differ work, and the differ is not on this gate's path — measured, not
+assumed. What made each earlier lift a release of ours is now pinned upstream.**
+
+### Changed
+
+- **`fraiseql-confiture` is capped `<2` (was `<1.13`), locked at 1.14.0.** The
+  `>=1.0.0` floor is untouched, and `tests/test_confiture_dependency_floor.py`
+  still holds it. The lock moves two minors: 1.13.0 and 1.14.0, both published
+  the same day.
+
+  **Why the cap is now the major line.** Every lift from `<0.47` to `<1.13` was a
+  fraisier release re-auditing a confiture this repository cannot see, because
+  the only pin on what fraisier uses was the floor probe here — `import_module`
+  + `hasattr`, which a narrowed signature passes. confiture now pins it on its own
+  side, in CI (fraiseql/confiture#324): every symbol in `CONFITURE_IMPORT_SURFACE`
+  plus `exceptions.ValidationError`, the call shapes fraisier relies on
+  (`Migrator.from_config`, `MigratorSession.up/down/status`, `RestoreOptions`, …),
+  every argv fraisier spells flag by flag, and the exit integers closed at
+  `0..8` — each row naming the fraisier file and line it protects. Its release
+  policy makes 1.x JSON envelopes additive-only. `<1.0` remains the width that
+  let #262 through; `<2` is not, because what went unpinned then is pinned now.
+
+  Both releases rewrite `core/differ.py`: 1.13.0 gives `SchemaDiffer` a schema in
+  its identity, so `tenant.tb_meter` and `etl.tb_meter` stop being one table
+  (confiture #313); 1.14.0 gives it a single constraint reader, so a
+  column-level `REFERENCES`, `UNIQUE` or `CHECK` is read at all, and a column
+  type keeps its length and precision (confiture #315, #316, #317). Upstream
+  measured 4 of 17 foreign keys parsed before the fix, and 4 of 433 tables
+  permanently invisible on a real project.
+
+  **None of it reaches fraisier.** `SchemaDiffer` is imported only by
+  `cli/commands/diff.py`, `cli/commands/migrate/diff.py` and
+  `core/git_schema.py`; the gate's argv is `--check-live-drift` /
+  `--check-signatures`, and `core/drift.py` does not import the differ. Across
+  `v1.12.0..v1.14.0`, `core/drift.py`, `core/type_lattice.py`,
+  `core/validation/live_drift.py`, `cli/commands/validate_checks.py`,
+  `core/schema_analyzer.py`, `core/live_objects.py` and `core/desired_state.py`
+  are unchanged.
+
+  Measured over thirteen live states on a DDL tree built to carry both releases'
+  shapes — two schemas holding the same table name, and a column-level
+  `REFERENCES … ON DELETE CASCADE`, `UNIQUE`, `CHECK`, `VARCHAR(50)` and
+  `NUMERIC(10,2)`: **every verdict is byte-identical on 1.12.0, 1.13.0 and
+  1.14.0** — exit code, `has_critical_drift`, drift items and warning count
+  alike. `confiture build` emits a byte-identical schema but for its timestamp
+  line, and fraisier's #408 invariant still holds against confiture's own parser
+  on both versions.
+
+- **The pin comment's header said "cap below 1.7" while the cap was `<1.13`.**
+  Corrected in place, for the same reason v0.79.0 corrected the claim below it:
+  a stale statement about the pin, sitting in the file that holds the pin.
+
+### Known, not fixed
+
+- **⚠️ The live-drift gate does not grade constraints at all.** Dropping a
+  foreign key, a `CHECK` or a `UNIQUE` from the live database is exit 0 with no
+  drift item — on 1.12.0, 1.13.0 and 1.14.0 alike. A deploy passes
+  `post_migrate_check` with a constraint the DDL declares and the database has
+  lost. This is upstream behaviour rather than anything this bump changed, and
+  it was found by the audit probe rather than reported.
+
+  1.14.0 is what makes closing it possible, because the differ can now read
+  those constraints, but nothing routes them into `--check-live-drift`.
+
+- **A column's length or precision is a warning, never critical.**
+  `VARCHAR(50)` → `VARCHAR(100)` and `NUMERIC(10,2)` → `NUMERIC(10,4)` each
+  report one `type_mismatch` warning and exit 0. 1.14.0's "a column's length or
+  precision changing is now a change" is the differ's answer for
+  `--require-migration`, which fraisier does not run — not this gate's.
+
 ## [0.79.0] - 2026-09-19
 
 **The confiture cap moves to the 1.12 line, and the drift gate starts failing
