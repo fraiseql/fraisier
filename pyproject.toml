@@ -16,7 +16,7 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 dependencies = [
-  # Pinned to confiture's 1.x line, floor 1.0.0 and cap below 1.7.
+  # Pinned to confiture's 1.x line, floor 1.0.0 and cap below 2.
   #
   # The FLOOR is a **capability** floor, not housekeeping, and must not be
   # lowered: the post-migration drift gate (#395) reads
@@ -215,11 +215,74 @@ dependencies = [
   # every version below 1.11.0 still defaults to `public`; see
   # `_routine_schemas` for why the derived list must stay a superset.
   #
-  # The cap still moves deliberately, on a green suite: the freeze is upstream's
-  # promise, and `<1.0` is precisely the width that let #262 resolve a confiture
-  # whose preflight JSON fraisier could not parse and read the unparsed result
-  # as a pass (issues #262, #362, #368, #395, #397, #405, #410).
-  "fraiseql-confiture>=1.0.0,<1.13",
+  # **1.13.0 and 1.14.0 are both differ work, and the differ is not on this
+  # gate's path.** 1.13.0 gave `SchemaDiffer` a schema in its identity — it
+  # keyed a bare `t.name`, so `tenant.tb_meter` and `etl.tb_meter` were one
+  # table (#313); 1.14.0 gave it one constraint reader, so a column-level
+  # `REFERENCES`/`UNIQUE`/`CHECK` is read at all, and a column type keeps its
+  # typmod (#315, #316, #317). Both land in `core/differ.py`, which
+  # `core/drift.py` does not import: `SchemaDiffer`'s only importers are
+  # `cli/commands/diff.py`, `cli/commands/migrate/diff.py` and
+  # `core/git_schema.py`, and the gate's argv is `--check-live-drift` /
+  # `--check-signatures`. Across `v1.12.0..v1.14.0`, `core/drift.py`,
+  # `core/type_lattice.py`, `core/validation/live_drift.py`,
+  # `cli/commands/validate_checks.py`, `core/schema_analyzer.py`,
+  # `core/live_objects.py` and `core/desired_state.py` are **unchanged**. The
+  # two live-drift dependencies that did change are inert: `ddl_objects.py`
+  # rewrote the reason strings in `MODELLED_ELSEWHERE` with its four keys
+  # untouched, and `linting/inventory.py` moved `DEFAULT_SCHEMA = "public"` to
+  # `core/schema_identity.py` and imports it back at the same value.
+  #
+  # Measured the same way as 1.11.0, because reading is not measurement:
+  # thirteen live states over a DDL tree carrying both releases' shapes — two
+  # schemas holding the same table name, and a column-level `REFERENCES … ON
+  # DELETE CASCADE`, `UNIQUE`, `CHECK`, `VARCHAR(50)` and `NUMERIC(10,2)`.
+  # **Every verdict is byte-identical on 1.12.0, 1.13.0 and 1.14.0**, exit code,
+  # `has_critical_drift`, drift items and warning count alike; `confiture build`
+  # emits a byte-identical schema but for its timestamp line, and fraisier's
+  # #408 invariant (`theirs - ours` empty) still holds on both parsers.
+  #
+  # That probe also found two things that are upstream's rather than this
+  # bump's, both true on 1.12.0 as well:
+  #   * ⚠️ **Live drift does not grade constraints at all.** Dropping a foreign
+  #     key, a `CHECK` or a `UNIQUE` from the live database is exit 0, no drift
+  #     item, on all three versions — so a deploy passes this gate with a
+  #     constraint the DDL declares and the database has lost. 1.14.0 is what
+  #     makes closing that possible, because the *differ* can now read those
+  #     constraints, but nothing routes them into `--check-live-drift`.
+  #   * A column's length or precision is a **warning**, never critical:
+  #     `VARCHAR(50)` → `VARCHAR(100)` and `NUMERIC(10,2)` → `NUMERIC(10,4)`
+  #     each report one `type_mismatch` warning and exit 0. 1.14.0's
+  #     "a column's length or precision changing is now a change" is the
+  #     differ's answer for `--require-migration`, not this gate's.
+  #
+  # 1.13.0 also adds `DIFFER_402` (an object defined twice in one tree), the
+  # first code carved out to **exit 0** — a warning in the envelope, never
+  # fatal. `EXIT_CODE_SEMANTIC_CLASS` is keyed on the exit integer and is
+  # unchanged, so `dbops/confiture_contract.py` is untouched; and the
+  # `warnings` key 1.13.0 makes required lands on `MigrateDiffResult`, which
+  # fraisier does not import.
+  #
+  # **The cap is the major line, `<2`, and no longer a minor.** Every lift from
+  # `<0.47` to `<1.15` was a release of ours that re-audited a confiture we
+  # could not see from here, because the only thing pinning what fraisier
+  # depends on was this repository's floor probe — `import_module` + `hasattr`,
+  # which a narrowed signature passes. From confiture's 1.15 train on, the pin
+  # lives on the side that can see the change (fraiseql/confiture#324):
+  # `tests/contract/test_consumer_symbols.py` imports every symbol
+  # `CONFITURE_IMPORT_SURFACE` lists, plus `exceptions.ValidationError`, and
+  # asserts the call shapes we use (`Migrator.from_config`, `up(lock_timeout=,
+  # require_reversible=, allow_destructive=, dry_run_execute=)`, `down(steps=)`,
+  # `RestoreOptions(...)`, …) have not narrowed; `test_consumer_cli_surface.py`
+  # resolves every argv we spell, flag by flag; and the exit integers are
+  # closed at `0..8` with `--exit-codes-json` recorded. Each row names our
+  # file:line, so a removal upstream is an edit that says it breaks fraisier.
+  # confiture's release policy (`docs/operations/release-trains.md`) makes 1.x
+  # envelopes additive-only. `<1.0` is still precisely the width that let #262
+  # resolve a confiture whose preflight JSON we could not parse (issues #262,
+  # #362, #368, #395, #397, #405, #410); `<2` is not that width, because the
+  # thing that went unpinned then is pinned now, upstream, in CI.
+  "fraiseql-confiture>=1.0.0,<2",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
@@ -234,7 +297,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.79.0"
+version = "0.80.0"
 
 [project.optional-dependencies]
 all-databases = [
