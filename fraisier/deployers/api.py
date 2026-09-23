@@ -678,6 +678,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             confiture_config=self._migrated_config,
             checks=gate.checks,
             database_url=self._migrated_database_url,
+            escalate=gate.escalate,
         )
         if result.passed:
             logger.info("%s", result.summary())

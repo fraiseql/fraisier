@@ -54,6 +54,28 @@ DRIFT_BARE = {
     ],
 }
 
+#: A dropped foreign key, copied from a confiture 1.18.0 run in
+#: ``.phases/2026-09-23-confiture-1-18-probe/`` (scenario ``I_fk_dropped``).
+#: Note the grades: ``severity: warning`` and ``has_critical_drift: false`` on a
+#: database that has lost a constraint its DDL declares.  Before 1.15.0 there
+#: was no item here at all — ``drift_items: []``, exit 0.
+LOST_CONSTRAINT_ITEM = {
+    "type": "missing_constraint",
+    "severity": "warning",
+    "object": "core.tb_widget",
+    "message": (
+        "Constraint 'tb_widget_pid_fkey' on 'core.tb_widget' "
+        "is declared but missing from the database"
+    ),
+}
+
+CONSTRAINT_LOST = {
+    **CLEAN_BARE,
+    "has_drift": True,
+    "warning_count": 1,
+    "drift_items": [LOST_CONSTRAINT_ITEM],
+}
+
 #: A clean ``confiture build --format json`` envelope, copied from a 1.6.0 run
 #: with the gate's own flags.  The schema goes to ``--output``, this to stdout,
 #: and the progress lines to stderr.
@@ -613,6 +635,167 @@ class TestVerdicts:
         assert [item.object_name for item in result.critical] == [
             "core.tb_widget.label"
         ]
+
+
+class TestEscalation:
+    """A warning this deploy has said it will not accept (#412).
+
+    confiture 1.15.0 emits ``missing_constraint`` and ``default_mismatch``, and
+    grades both ``warning`` — ``has_critical_drift`` is blind to them, so a
+    dropped foreign key is exit 0 and a deploy running ``on_critical: fail``
+    ships over it.  Measured on 1.15.0 through 1.18.0 in
+    ``.phases/2026-09-23-confiture-1-18-probe/``.
+
+    The grade is upstream's to set and fraisier does not argue with it.  What it
+    adds is a way for one deploy to say that losing *this* kind is not a deploy
+    it wants — off by default, so nobody's verdict moves without asking.
+    """
+
+    def test_an_escalated_warning_fails_the_gate(self, project: Path) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("missing_constraint",),
+            )
+
+        assert not result.passed
+        assert result.ran  # a verdict, not a failure to reach one
+        assert [item.object_name for item in result.critical] == ["core.tb_widget"]
+        assert not result.warnings
+
+    def test_the_escalated_item_says_it_is_critical(self, project: Path) -> None:
+        """The log has to read the way the verdict now behaves.
+
+        Leaving the item graded ``warning`` would print ``WARNING
+        missing_constraint`` inside a line announcing critical drift.  The
+        message is confiture's own words either way — only the grade is
+        fraisier's.
+        """
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("missing_constraint",),
+            )
+
+        item = result.critical[0]
+        assert item.severity == "critical"
+        assert item.kind == "missing_constraint"
+        assert "tb_widget_pid_fkey" in item.message
+        assert "1 critical schema drift item(s)" in result.summary()
+
+    def test_escalating_nothing_is_the_default_and_moves_no_verdict(
+        self, project: Path
+    ) -> None:
+        """The whole point: an operator who says nothing deploys as before."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+            )
+
+        assert result.passed
+        assert [item.kind for item in result.warnings] == ["missing_constraint"]
+
+    def test_a_kind_that_did_not_fire_escalates_nothing(self, project: Path) -> None:
+        """Naming a kind is not asserting it happened."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("default_mismatch",),
+            )
+
+        assert result.passed
+        assert [item.kind for item in result.warnings] == ["missing_constraint"]
+
+    def test_an_unescalated_warning_stays_a_warning_beside_one_that_rose(
+        self, project: Path
+    ) -> None:
+        """Escalation is per kind, not a switch that makes warnings fatal."""
+        payload = {
+            **CONSTRAINT_LOST,
+            "warning_count": 2,
+            "drift_items": [
+                LOST_CONSTRAINT_ITEM,
+                {
+                    "type": "type_mismatch",
+                    "severity": "warning",
+                    "object": "core.tb_widget.code",
+                    "message": "Expected varchar(50), live has varchar(100)",
+                },
+            ],
+        }
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(payload)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("missing_constraint",),
+            )
+
+        assert not result.passed
+        assert [item.kind for item in result.critical] == ["missing_constraint"]
+        assert [item.kind for item in result.warnings] == ["type_mismatch"]
+
+    def test_an_info_item_cannot_be_escalated(self, project: Path) -> None:
+        """``extra_constraint`` is ``info``, and info never reaches fraisier.
+
+        A constraint the live database has and the DDL does not name is not a
+        loss, and confiture grades it accordingly.  Escalation reads the
+        warnings, so naming it here is inert rather than a second way in.
+        """
+        payload = {
+            **CLEAN_BARE,
+            "has_drift": True,
+            "info_count": 1,
+            "drift_items": [
+                {
+                    "type": "extra_constraint",
+                    "severity": "info",
+                    "object": "core.tb_widget",
+                    "message": "Constraint 'tb_widget_extra_check' is not declared",
+                }
+            ],
+        }
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(payload)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("extra_constraint",),
+            )
+
+        assert result.passed
+        assert not result.critical
+        assert not result.warnings
+
+    def test_escalation_does_not_rescue_a_gate_that_never_ran(
+        self, project: Path
+    ) -> None:
+        """An unreadable report is still an unreachable verdict, not a clean one."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(None, validate_rc=1)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("missing_constraint",),
+            )
+
+        assert not result.passed
+        assert not result.ran
 
 
 class TestCannotReachAVerdict:

@@ -64,6 +64,22 @@ class TestLoader:
         assert loaded.checks == ("live-drift", "signatures")
         assert loaded.on_critical == "warn"
 
+    def test_escalate_is_empty_unless_asked_for(self) -> None:
+        """Nobody's deploy changes outcome because this release shipped."""
+        loaded = load_post_migrate_check({"post_migrate_check": {"enabled": True}})
+        assert loaded.escalate == ()
+
+    def test_escalate_is_read_from_config(self) -> None:
+        loaded = load_post_migrate_check(
+            {
+                "post_migrate_check": {
+                    "enabled": True,
+                    "escalate": ["missing_constraint", "default_mismatch"],
+                }
+            }
+        )
+        assert loaded.escalate == ("missing_constraint", "default_mismatch")
+
 
 class TestValidation:
     """Every one of these would otherwise be a gate silently doing nothing."""
@@ -117,6 +133,59 @@ class TestValidation:
         with pytest.raises(ValidationError, match="body-replay"):
             validate_one_fraise_environment(
                 "api", "production", _config(enabled=False, checks=["body-replay"])
+            )
+
+    def test_an_unknown_escalate_kind_is_rejected(self) -> None:
+        """The failure mode this closes is the worst one this gate has.
+
+        An operator who writes ``missing_constraints`` has said "stop the deploy
+        that loses a foreign key" and would be told nothing, while every such
+        deploy sailed through.  The valid kinds are named in the error.
+        """
+        with pytest.raises(ValidationError, match="missing_constraints"):
+            validate_one_fraise_environment(
+                "api",
+                "production",
+                _config(enabled=True, escalate=["missing_constraints"]),
+            )
+
+    def test_the_escalate_error_names_what_is_valid(self) -> None:
+        with pytest.raises(ValidationError, match="missing_constraint"):
+            validate_one_fraise_environment(
+                "api", "production", _config(enabled=True, escalate=["nope"])
+            )
+
+    def test_escalate_must_be_a_list(self) -> None:
+        with pytest.raises(ValidationError, match="must be a list"):
+            validate_one_fraise_environment(
+                "api",
+                "production",
+                _config(enabled=True, escalate="missing_constraint"),
+            )
+
+    def test_an_empty_escalate_is_fine(self) -> None:
+        """It is the default; spelling it out is not an error."""
+        validate_one_fraise_environment(
+            "api", "production", _config(enabled=True, escalate=[])
+        )
+
+    def test_a_valid_escalate_passes(self) -> None:
+        validate_one_fraise_environment(
+            "api",
+            "production",
+            _config(enabled=True, escalate=["missing_constraint", "type_mismatch"]),
+        )
+
+    def test_an_info_graded_kind_is_not_escalatable(self) -> None:
+        """``extra_constraint`` is ``info``, and info never reaches the verdict.
+
+        Accepting it here would sell a promise the gate cannot keep.
+        """
+        with pytest.raises(ValidationError, match="extra_constraint"):
+            validate_one_fraise_environment(
+                "api",
+                "production",
+                _config(enabled=True, escalate=["extra_constraint"]),
             )
 
 
@@ -314,4 +383,109 @@ fraises:
 
         shutil.rmtree(tmp_path / "app" / "db" / "schema")
 
+        assert self._run(cfg).status == "skip"
+
+
+class TestDoctorSaysWhatTheGateWillNotFailOn:
+    """``post_migrate_check_constraint_coverage`` — #412, said out loud.
+
+    confiture 1.15.0 reports a lost foreign key, ``CHECK``, ``UNIQUE``, primary
+    key or changed default — and grades every one of them ``warning``.
+    ``has_critical_drift`` stays false, so an operator running
+    ``on_critical: fail`` deploys over a constraint the DDL declares and the
+    database has lost, having bought a promise that is silently not kept.
+
+    The gap is one word of configuration wide now, which is exactly why it is
+    worth a check: before 1.15.0 there was nothing to say but "upstream cannot
+    see this".
+    """
+
+    def _run(self, cfg: FraisierConfig) -> CheckResult:
+        from fraisier import doctor
+
+        return doctor.DOCTOR_CHECKS["post_migrate_check_constraint_coverage"].fn(cfg)
+
+    def _cfg(
+        self,
+        tmp_path: Path,
+        *,
+        enabled: bool = True,
+        checks: str = "[live-drift]",
+        escalate: str | None = None,
+        on_critical: str = "fail",
+    ) -> FraisierConfig:
+        from fraisier.config import FraisierConfig
+
+        app = tmp_path / "app"
+        (app / "db" / "environments").mkdir(parents=True)
+        (app / "db" / "environments" / "production.yaml").write_text(
+            "name: production\n"
+        )
+        line = f"\n            escalate: {escalate}" if escalate is not None else ""
+
+        path = tmp_path / "fraises.yaml"
+        path.write_text(f"""
+name: myproj
+scaffold:
+  deploy_user: fraisier
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: {app}
+        database:
+          name: db
+          strategy: migrate
+          confiture_config: db/environments/production.yaml
+          post_migrate_check:
+            enabled: {str(enabled).lower()}
+            checks: {checks}
+            on_critical: {on_critical}{line}
+""")
+        return FraisierConfig(path)
+
+    def test_registered(self) -> None:
+        from fraisier import doctor
+
+        assert "post_migrate_check_constraint_coverage" in doctor.DOCTOR_CHECKS
+
+    def test_no_gate_is_a_skip_not_a_warning(self, tmp_path: Path) -> None:
+        """No gate, no promise, nothing to say."""
+        cfg = self._cfg(tmp_path, enabled=False)
+        assert self._run(cfg).status == "skip"
+
+    def test_a_signatures_only_gate_is_a_skip(self, tmp_path: Path) -> None:
+        """Only ``live-drift`` grades constraints, so only it can fail to."""
+        cfg = self._cfg(tmp_path, checks="[signatures]")
+        assert self._run(cfg).status == "skip"
+
+    def test_an_unescalated_gate_warns_and_names_the_remedy(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = self._cfg(tmp_path)
+
+        result = self._run(cfg)
+
+        assert result.status == "warn"
+        assert "missing_constraint" in result.detail
+        assert result.fix_hint is not None
+        assert "escalate" in result.fix_hint
+
+    def test_escalating_the_constraint_kind_passes(self, tmp_path: Path) -> None:
+        cfg = self._cfg(tmp_path, escalate="[missing_constraint]")
+        assert self._run(cfg).status == "pass"
+
+    def test_escalating_something_else_still_warns(self, tmp_path: Path) -> None:
+        """The check is about the lost constraint, not about escalation in general."""
+        cfg = self._cfg(tmp_path, escalate="[type_mismatch]")
+        assert self._run(cfg).status == "warn"
+
+    def test_on_critical_warn_is_a_skip(self, tmp_path: Path) -> None:
+        """``warn`` never stops a deploy, so nothing is silently not kept.
+
+        An operator who has already said "tell me, do not stop me" is told —
+        the warning reaches the log on every run. There is no gap to report.
+        """
+        cfg = self._cfg(tmp_path, on_critical="warn")
         assert self._run(cfg).status == "skip"

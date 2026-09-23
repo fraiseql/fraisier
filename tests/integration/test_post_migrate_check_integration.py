@@ -591,3 +591,179 @@ class TestTheBuildsOwnDiagnostics:
 
         assert result.passed, result.summary()
         assert result.build_notes == ()
+
+
+#: A table whose DDL declares a foreign key, a ``CHECK``, a ``UNIQUE`` and a
+#: column default — every shape confiture 1.15.0 learned to compare, and every
+#: one of them gradeable only as a warning.
+_DDL_CONSTRAINTS = """CREATE TABLE core.tb_parent (
+    id BIGINT PRIMARY KEY
+);
+
+CREATE TABLE core.tb_child (
+    id BIGINT PRIMARY KEY,
+    pid BIGINT REFERENCES core.tb_parent(id) ON DELETE CASCADE,
+    code TEXT NOT NULL UNIQUE,
+    qty NUMERIC(10,2) CHECK (qty > 0),
+    status TEXT NOT NULL DEFAULT 'new'
+);
+"""
+
+#: The migration that builds those two tables and gets **none** of it right:
+#: no foreign key, no ``UNIQUE``, no ``CHECK``, and a different default.  Every
+#: statement succeeds, so nothing before the gate has anything to say.
+_MIGRATION_NO_CONSTRAINTS = _MIGRATION_COMPLETE.replace(
+    "    def down(self):",
+    """        self.connection.execute(
+            "CREATE TABLE core.tb_parent (id BIGINT PRIMARY KEY)"
+        )
+        self.connection.execute(
+            "CREATE TABLE core.tb_child (id BIGINT PRIMARY KEY, pid BIGINT, "
+            "code TEXT NOT NULL, qty NUMERIC(10,2), "
+            "status TEXT NOT NULL DEFAULT 'old')"
+        )
+
+    def down(self):""",
+)
+
+
+class TestConstraintDriftIsAWarningThisGateCanBeToldToFailOn:
+    """confiture 1.15.0 reports a lost constraint, and grades it ``warning`` (#412).
+
+    Measured on one database, same DDL, ``--check-live-drift``: on 1.14.0 a
+    dropped foreign key, ``CHECK``, ``UNIQUE`` or primary key is exit 0 with
+    ``drift_items: []`` — indistinguishable from a clean database; on 1.15.0
+    each is exit 0 with a ``warning`` ``missing_constraint``, and a changed
+    default is a ``warning`` ``default_mismatch``
+    (fraiseql/confiture#308, #309). The recorded runs are in
+    ``.phases/2026-09-23-confiture-1-18-probe/``.
+
+    Two separate things are pinned here, because they can break apart:
+
+    * the **items now arrive** — this is upstream's, and the lock is what
+      promises it. ``pyproject.toml``'s floor is ``>=1.0.0`` and does not: the
+      floor says the gate works, the lock says what it reports. Moving the lock
+      below 1.15.0 fails these, which is the intended alarm.
+    * the **verdict still passes** without ``escalate`` — that is fraisier's,
+      and it is the half an operator running ``on_critical: fail`` is entitled
+      to find surprising. It is asserted rather than assumed so that a future
+      release cannot start failing deploys without editing this line.
+    """
+
+    def _project_without_constraints(self, tmp_path, drift_db) -> Path:
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_NO_CONSTRAINTS,
+            extra_ddl={"030_constraints.sql": _DDL_CONSTRAINTS},
+        )
+        assert _migrate(project).success is True
+        return project
+
+    def test_the_migration_itself_reports_success(self, tmp_path, drift_db) -> None:
+        """The premise: a table created without its foreign key is not an error."""
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_NO_CONSTRAINTS,
+            extra_ddl={"030_constraints.sql": _DDL_CONSTRAINTS},
+        )
+
+        result = _migrate(project)
+
+        assert result.success is True
+        assert result.steps_applied == 1
+
+    def test_the_lost_constraints_arrive_as_warnings(self, tmp_path, drift_db) -> None:
+        project = self._project_without_constraints(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert result.ran, result.error
+        kinds = {item.kind for item in result.warnings}
+        assert "missing_constraint" in kinds, result.summary()
+        assert "default_mismatch" in kinds, result.summary()
+
+    def test_the_gate_passes_anyway_which_is_the_defect(
+        self, tmp_path, drift_db
+    ) -> None:
+        """The promise ``on_critical: fail`` does not keep, stated out loud."""
+        project = self._project_without_constraints(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert result.passed, result.summary()
+        assert result.exit_code == 0
+        assert not result.critical
+
+    def test_escalating_the_kind_fails_the_same_database(
+        self, tmp_path, drift_db
+    ) -> None:
+        project = self._project_without_constraints(tmp_path, drift_db)
+
+        result = check_schema_drift(
+            project_dir=project,
+            confiture_config=project / "db" / "environments" / "production.yaml",
+            checks=["live-drift"],
+            escalate=("missing_constraint",),
+        )
+
+        assert result.ran, result.error
+        assert not result.passed, result.summary()
+        assert {item.kind for item in result.critical} == {"missing_constraint"}
+        assert "CRITICAL missing_constraint" in result.summary()
+        # The exit code is confiture's and stays confiture's: it graded this
+        # database clean-enough to ship, and fraisier's verdict disagreeing with
+        # it must not be laundered into a claim about what confiture returned.
+        assert result.exit_code == 0
+
+    def test_escalating_one_kind_leaves_the_other_a_warning(
+        self, tmp_path, drift_db
+    ) -> None:
+        project = self._project_without_constraints(tmp_path, drift_db)
+
+        result = check_schema_drift(
+            project_dir=project,
+            confiture_config=project / "db" / "environments" / "production.yaml",
+            checks=["live-drift"],
+            escalate=("missing_constraint",),
+        )
+
+        assert "default_mismatch" in {item.kind for item in result.warnings}
+        assert "default_mismatch" not in {item.kind for item in result.critical}
+
+    def test_a_database_that_has_them_all_passes_escalated(
+        self, tmp_path, drift_db
+    ) -> None:
+        """The control: escalation must discriminate, not fail on everything."""
+        migration = _MIGRATION_COMPLETE.replace(
+            "    def down(self):",
+            """        self.connection.execute(
+            "CREATE TABLE core.tb_parent (id BIGINT PRIMARY KEY)"
+        )
+        self.connection.execute(
+            "CREATE TABLE core.tb_child (id BIGINT PRIMARY KEY, "
+            "pid BIGINT REFERENCES core.tb_parent(id) ON DELETE CASCADE, "
+            "code TEXT NOT NULL UNIQUE, qty NUMERIC(10,2) CHECK (qty > 0), "
+            "status TEXT NOT NULL DEFAULT 'new')"
+        )
+
+    def down(self):""",
+        )
+        project = _project(
+            tmp_path,
+            drift_db,
+            migration,
+            extra_ddl={"030_constraints.sql": _DDL_CONSTRAINTS},
+        )
+        assert _migrate(project).success is True
+
+        result = check_schema_drift(
+            project_dir=project,
+            confiture_config=project / "db" / "environments" / "production.yaml",
+            checks=["live-drift"],
+            escalate=("missing_constraint", "default_mismatch"),
+        )
+
+        assert result.ran, result.error
+        assert result.passed, result.summary()

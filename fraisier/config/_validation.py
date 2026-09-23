@@ -546,7 +546,11 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
     someone switches the gate on is found too late, and a gate that is believed
     to be running while it quietly does nothing is worse than no gate.
     """
-    from fraisier.post_migrate_check import ON_CRITICAL, VALID_CHECKS
+    from fraisier.post_migrate_check import (
+        ON_CRITICAL,
+        VALID_CHECKS,
+        VALID_ESCALATIONS,
+    )
 
     errors: list[str] = []
     raw_block: Any = db.get("post_migrate_check")
@@ -585,6 +589,24 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
             f"{fraise_name}: {location}.on_critical must be "
             f"{' or '.join(repr(v) for v in ON_CRITICAL)}, got {on_critical!r}"
         )
+
+    # A misspelt escalation is the worst failure this gate has: the operator has
+    # said "stop the deploy that loses a foreign key", nothing says otherwise,
+    # and every such deploy ships. So the vocabulary is closed and the error
+    # names it — the same reason `checks` is validated rather than filtered.
+    escalate = block.get("escalate", [])
+    if not isinstance(escalate, list):
+        errors.append(
+            f"{fraise_name}: {location}.escalate must be a list, "
+            f"got {type(escalate).__name__}"
+        )
+    else:
+        unknown = [kind for kind in escalate if kind not in VALID_ESCALATIONS]
+        if unknown:
+            errors.append(
+                f"{fraise_name}: {location}.escalate has unknown drift kind(s) "
+                f"{unknown}; valid: {', '.join(VALID_ESCALATIONS)}"
+            )
 
     return errors
 
