@@ -7,6 +7,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.81.0] - 2026-09-23
+
+**confiture 1.15.0 reports the lost foreign key that v0.80.0 recorded as
+invisible — and grades it a warning, so the gate still passes. The item now
+exists, which is the whole difference: `escalate` is how a deploy says it will
+not accept losing one.**
+
+### Added
+
+- **`database.post_migrate_check.escalate`** — warning-graded drift kinds that
+  must fail the gate rather than warn
+  ([#412](https://github.com/fraiseql/fraisier/issues/412)).
+
+  ```yaml
+  post_migrate_check:
+    enabled: true
+    checks: [live-drift]
+    on_critical: fail
+    escalate: [missing_constraint]
+  ```
+
+  **Empty by default**, so a gate that ran yesterday returns the same verdict
+  today. The vocabulary is closed — `missing_constraint`, `default_mismatch`,
+  `type_mismatch`, `nullable_mismatch`, the four warning kinds a live confiture
+  actually emitted in the audit below — and a name outside it is a config error
+  rather than a gate that quietly declines to fire. An operator who writes
+  `missing_constraints` has asked for a promise, and silence is exactly the
+  failure this gate exists to prevent. `extra_constraint` is deliberately
+  absent: confiture grades it `info`, a constraint the database has and the DDL
+  does not name is not a loss, and accepting it would sell a promise the gate
+  cannot keep.
+
+  An escalated item is **re-graded** to critical rather than carried across at
+  its original severity, so the log reads the way the verdict now behaves. The
+  message is confiture's own words either way; only the grade is fraisier's.
+  The exit code stays confiture's too — it graded that database shippable, and
+  disagreeing with it must not be laundered into a claim about what it returned.
+
+- **`fraisier doctor` reports the gap before a deploy meets it**:
+  `post_migrate_check_constraint_coverage` warns when a `live-drift` gate runs
+  `on_critical: fail` without escalating `missing_constraint`, and names the
+  line that closes it. `on_critical: warn` is a skip — the item already reaches
+  the log on every run, so nothing is silently unkept.
+
+### Changed
+
+- **`fraiseql-confiture` is locked at 1.18.0 (was 1.14.0).** The `>=1.0.0,<2`
+  range is untouched — this is **not a cap lift**; the previous four releases
+  were. The lock moves four minors, all published within four days.
+
+  **This is the first hop under the `<2` cap that is on the gate's path.** Every
+  earlier one landed in `core/differ.py`, which `core/drift.py` does not import.
+  This one rewrites the check itself: across `v1.14.0..v1.18.0` `core/drift.py`
+  moves 772 lines, `core/live_objects.py` is deleted outright,
+  `core/schema_analyzer.py` loses two thirds of itself, and
+  `core/type_lattice.py`, `cli/commands/validate_checks.py` and
+  `core/desired_state.py` all change. So v0.80.0's "the two live-drift
+  dependencies that did change are inert" does not carry forward, and nothing
+  here was inferred from it.
+
+  **1.15.0 emits `missing_constraint` and `default_mismatch` (both warning) and
+  `extra_constraint` (info)** (confiture
+  [#308](https://github.com/fraiseql/confiture/issues/308),
+  [#309](https://github.com/fraiseql/confiture/issues/309)), comparing defaults
+  as parse trees rather than text. Measured, 1.14.0 → 1.15.0 on one database:
+
+  ```
+  I_fk_dropped          1.14.0  exit=0  drift_items: []
+                        1.15.0  exit=0  warning:missing_constraint
+  J_check_dropped       1.14.0  exit=0  drift_items: []
+                        1.15.0  exit=0  warning:missing_constraint
+  K_unique_dropped      1.14.0  exit=0  drift_items: []
+                        1.15.0  exit=0  warning:missing_constraint
+  N_table_check_dropped 1.14.0  exit=0  drift_items: []
+                        1.15.0  exit=0  warning:missing_constraint
+  O_pk_dropped          1.14.0  exit=0  drift_items: []
+                        1.15.0  exit=0  warning:missing_constraint
+  R_default_changed     1.14.0  exit=0  drift_items: []
+                        1.15.0  exit=0  warning:default_mismatch
+  ```
+
+  **1.16.0's envelope is additive**, which had to be measured rather than read:
+  `dbops/drift.py:_reports` refuses any payload that is neither a `checks`
+  envelope nor a bare report carrying `has_critical_drift`, and that refusal is
+  `passed=False` — an envelope that nested or reordered one key would have
+  failed *every* deploy, not just a drifted one. It does not. `migrate validate
+  --format json` gains exactly `ok`, `command` and `parser`;
+  `has_critical_drift` stays top level, the two-check form still carries
+  `checks`, and `confiture build --format json` gains the same three with
+  `success`, `warnings` and `duplicates` untouched.
+
+  Measured over twenty live states on one PostgreSQL 18.4 per version, each
+  reported twice — as confiture's own payload and as the `DriftResult` fraisier
+  derives from it. **Every verdict change lands in 1.15.0; 1.16.0, 1.17.0 and
+  1.18.0 are byte-identical, every line.**
+  `tests/integration/test_post_migrate_check_integration.py` pins the new
+  verdicts against a real confiture, and fails on 1.14.0 — which is the alarm
+  intended if the lock is ever moved back.
+
+  1.15.0 deletes `core/function_signature_parser.py` with no alias.
+  `FunctionSignatureParser` is not in `CONFITURE_IMPORT_SURFACE` — fraisier
+  never imported it — so the floor probe is unaffected; only the audit probe had
+  to switch to `function_signature_drift.declared_routines`. Recorded because it
+  is a removal inside the library freeze the `<2` cap rests on. No integer and
+  no symbolic code is added across all four releases:
+  `confiture --exit-codes-json` is byte-identical, so `EXIT_CODE_SEMANTIC_CLASS`
+  and `classify_confiture_failure` are untouched.
+
+### Known, not fixed
+
+- **A lost constraint is still exit 0 from confiture, and still passes an
+  unescalated gate.** The defect [#412](https://github.com/fraiseql/fraisier/issues/412)
+  names is closed on the reporting side and open on the grading side: confiture
+  sees it, fraisier can be told to stop for it, and a project that says nothing
+  deploys exactly as before. That is deliberate — the grade is upstream's to
+  set, and overriding it unasked would fail deploys that passed yesterday — but
+  it means the promise `on_critical: fail` makes is still not the promise an
+  operator is likely to read into it until they add one line.
+
+- **A column's length or precision is a warning, never critical.**
+  `VARCHAR(50)` → `VARCHAR(100)` and `NUMERIC(10,2)` → `NUMERIC(10,4)` each
+  report one `type_mismatch` and exit 0 on 1.14.0 through 1.18.0 alike. 1.15.0
+  closed the constraint half of v0.80.0's note and not this one.
+  `type_mismatch` is escalatable for a project that wants it fatal, which is as
+  far as this side can honestly go.
+
+- **`post_migrate_check_alter_safe` warns about a tree that is sound**
+  ([#415](https://github.com/fraiseql/fraisier/issues/415)). #407's repro — a
+  DDL tree reaching its final shape through `ALTER TABLE … DROP COLUMN`, and
+  through the bare `DROP <column>` — is exit 0 with no drift item on 1.14.0,
+  1.15.0, 1.16.0, 1.17.0 and 1.18.0, against a database applied verbatim from
+  that same tree. The earlier probe reproduced `CRITICAL missing_column` on
+  confiture 1.6.0 and 1.10.1, so the fold landed somewhere in 1.11.0–1.14.0 and
+  the check has been warning about a sound tree since before this bump. The
+  floor still admits a confiture where the warning is right, so it is
+  unconditional where it should be version-gated. Filed rather than fixed here:
+  it is not this bump's, and it wants its own measurement of which release
+  folded the drop.
+
 ## [0.80.0] - 2026-09-20
 
 **The confiture cap opens to the whole 1.x line, locked at 1.14.0. 1.13.0 and
