@@ -263,6 +263,86 @@ dependencies = [
   # `warnings` key 1.13.0 makes required lands on `MigrateDiffResult`, which
   # fraisier does not import.
   #
+  # **1.15.0 → 1.18.0 is the first hop under this cap that is *on* the gate's
+  # path** (issue #412). Every earlier one landed in the differ; this one
+  # rewrites the check itself. Across `v1.14.0..v1.18.0`, `core/drift.py` moves
+  # 772 lines, `core/live_objects.py` is deleted outright,
+  # `core/schema_analyzer.py` loses two thirds of itself, and
+  # `core/type_lattice.py`, `cli/commands/validate_checks.py` and
+  # `core/desired_state.py` all change. So the paragraph above — "the two live-
+  # drift dependencies that did change are inert" — does not carry forward, and
+  # nothing here is inferred from it.
+  #
+  # ⚠️ **1.15.0 closes half of what v0.80.0 recorded as "known, not fixed".**
+  # A dropped foreign key, `CHECK`, `UNIQUE` or primary key, and a column
+  # default that no longer matches, were exit 0 with `drift_items: []` — a
+  # database that had lost a constraint its DDL declares was byte-indis-
+  # tinguishable from a clean one. 1.15.0 emits `missing_constraint`,
+  # `default_mismatch` (both **warning**) and `extra_constraint` (**info**),
+  # comparing defaults as parse trees rather than text (confiture #308, #309).
+  #
+  # **The grade is the whole story, and it is why this is a release of ours.**
+  # `has_critical_drift` is blind to a warning, so `passed = not drifted` still
+  # says yes and an operator running `on_critical: fail` still deploys over the
+  # lost key. What changed is that the item now *exists*: on 1.14.0 there was
+  # nothing to escalate, and from 1.15.0 the decision is fraisier's. Hence
+  # `post_migrate_check.escalate` — empty by default, so no verdict moves
+  # without asking — and `ESCALATABLE_KINDS` in `dbops/drift.py`, whose four
+  # rows are the warning kinds a live confiture actually emitted here rather
+  # than a list read off a changelog.
+  #
+  # **1.16.0's envelope is additive, measured on both payloads this gate
+  # parses.** `dbops/drift.py:_reports` refuses any payload that is neither a
+  # `checks` envelope nor a bare report carrying `has_critical_drift`, and that
+  # refusal is `passed=False` — an envelope that nested or reordered one key
+  # would have failed **every** deploy, not just a drifted one. It does not:
+  # `migrate validate --format json` gains exactly `ok`, `command` and `parser`
+  # (`ok: true`, `command: "migrate validate"`), `has_critical_drift` stays top
+  # level, the two-check form still carries `checks`, and `confiture build
+  # --format json` gains the same three with `success`, `warnings` and
+  # `duplicates` untouched. Nothing renamed, nested or reordered.
+  #
+  # Measured the same way as 1.11.0 and 1.14.0, because reading is not
+  # measurement: twenty live states on one PostgreSQL 18.4, per version, each
+  # reported twice — as confiture's own payload and as the `DriftResult`
+  # fraisier derives from it. **Every verdict change lands in 1.15.0; 1.16.0,
+  # 1.17.0 and 1.18.0 are byte-identical, every line.** Recorded in
+  # `.phases/2026-09-23-confiture-1-18-probe/`, and pinned by
+  # `tests/integration/test_post_migrate_check_integration.py` — which fails on
+  # 1.14.0, as the alarm intends.
+  #
+  # Three more things reach this repository, and none of them moves it:
+  #   * **1.15.0 deletes `core/function_signature_parser.py`** —
+  #     `FunctionSignatureParser` and `FunctionSignature` are gone with no
+  #     alias, and the declared side is read by
+  #     `function_signature_drift.declared_routines(sql)` now. fraisier never
+  #     imported either, so `CONFITURE_IMPORT_SURFACE` does not list them and
+  #     the floor probe is unaffected; only the audit probe had to switch
+  #     parsers. Recorded because it is a removal inside the freeze the
+  #     paragraph below rests on, and because `tests/contract/` upstream is now
+  #     what makes such a removal an edit that says it breaks us.
+  #   * 1.15.0 spells a declared argument type in PostgreSQL's words
+  #     (`timestamp` → `timestamp without time zone`), and a routine taking
+  #     `timestamp`, `time`, `timetz`, `char(n)` or `bit varying` is no longer
+  #     a stale overload of itself. `--check-signatures` is measured clean and
+  #     `missing_from_db` unchanged on the probe's tree; fraisier reads
+  #     `stale_overloads`, which is strictly less noisy.
+  #   * 1.16.0 gives every command that takes `--config`, `--env`,
+  #     `--database-url` or `--output` its short form, and moves
+  #     `helpers.FINDINGS_EXIT_CODE`/`USAGE_EXIT_CODE` to `error_codes`.
+  #     fraisier spells the long forms and reads neither. **No integer and no
+  #     symbolic code is added**: `confiture --exit-codes-json` is byte-identical
+  #     across all four releases, so `EXIT_CODE_SEMANTIC_CLASS` — the table
+  #     `dbops/confiture_contract.py` imports live — and
+  #     `classify_confiture_failure` are untouched.
+  #
+  # A column's length or precision is **still** a warning, never critical:
+  # `VARCHAR(50)` → `VARCHAR(100)` and `NUMERIC(10,2)` → `NUMERIC(10,4)` each
+  # report one `type_mismatch` and exit 0 on all five versions. 1.15.0 closed
+  # the constraint half of v0.80.0's note and not this one — `type_mismatch` is
+  # in `ESCALATABLE_KINDS` for a project that wants it fatal, which is as far
+  # as this side can honestly go.
+  #
   # **The cap is the major line, `<2`, and no longer a minor.** Every lift from
   # `<0.47` to `<1.15` was a release of ours that re-audited a confiture we
   # could not see from here, because the only thing pinning what fraisier
