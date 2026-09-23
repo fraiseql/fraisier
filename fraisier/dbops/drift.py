@@ -57,13 +57,13 @@ import logging
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Collection, Iterable, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +74,30 @@ CHECK_FLAGS: dict[str, str] = {
     "live-drift": "--check-live-drift",
     "signatures": "--check-signatures",
 }
+
+#: Drift kinds confiture grades ``warning``, which a deploy may ask to be fatal
+#: (#412).  ``has_critical_drift`` is blind to all four, so each is exit 0 and
+#: passes the gate unless it is named in ``post_migrate_check.escalate``.
+#:
+#: Measured, not copied from a changelog — every one of these was emitted by a
+#: live confiture in ``.phases/2026-09-23-confiture-1-18-probe/``:
+#: ``missing_constraint`` on a dropped foreign key, ``CHECK``, ``UNIQUE``,
+#: table-level ``CHECK`` and primary key (1.15.0 and up; before it there was no
+#: item at all); ``default_mismatch`` on a changed and a dropped column default
+#: (1.15.0 and up); ``type_mismatch`` on ``VARCHAR(50)`` → ``VARCHAR(100)`` and
+#: ``NUMERIC(10,2)`` → ``NUMERIC(10,4)``; ``nullable_mismatch`` on a dropped
+#: ``NOT NULL``.
+#:
+#: The list is closed on purpose.  ``escalate`` is validated against it, so a
+#: misspelt kind is a configuration error rather than a gate that silently
+#: declines to fire — which is the #262 shape, and the one this gate exists to
+#: avoid.  A kind confiture adds later is a row here, with a probe behind it.
+ESCALATABLE_KINDS: tuple[str, ...] = (
+    "missing_constraint",
+    "default_mismatch",
+    "type_mismatch",
+    "nullable_mismatch",
+)
 
 #: ``confiture build --env NAME`` resolves this path under ``--project-dir``.
 _ENV_DIR = ("db", "environments")
@@ -358,6 +382,31 @@ def _items(reports: Iterable[dict[str, Any]], severity: str) -> tuple[DriftItem,
     )
 
 
+def _escalate(
+    warnings: tuple[DriftItem, ...], escalate: Collection[str]
+) -> tuple[tuple[DriftItem, ...], tuple[DriftItem, ...]]:
+    """Split *warnings* into the ones this deploy will not accept, and the rest.
+
+    confiture grades ``missing_constraint`` and ``default_mismatch`` ``warning``
+    and leaves ``has_critical_drift`` false, so a database that has lost a
+    foreign key its DDL declares is exit 0 and the gate passes (#412).  That
+    grade is upstream's and stays upstream's: what an operator names in
+    ``escalate`` is not a claim that confiture graded it wrongly, it is a claim
+    about *this* deploy.
+
+    The escalated item is re-graded rather than carried across at its original
+    severity, so the log reads the way the verdict now behaves — a line
+    announcing critical drift must not name a ``WARNING`` inside it.
+    :attr:`DriftItem.message` is confiture's own words either way; only the
+    grade is fraisier's.
+    """
+    if not escalate:
+        return (), warnings
+    risen = tuple(item for item in warnings if item.kind in escalate)
+    kept = tuple(item for item in warnings if item.kind not in escalate)
+    return tuple(replace(item, severity="critical") for item in risen), kept
+
+
 def _stale_overloads(reports: Iterable[dict[str, Any]]) -> tuple[DriftItem, ...]:
     """The signatures check's findings, which it does not put in ``drift_items``.
 
@@ -528,6 +577,7 @@ def check_schema_drift(
     confiture_config: Path,
     checks: Sequence[str],
     database_url: str | None = None,
+    escalate: Collection[str] = (),
 ) -> DriftResult:
     """Compare the live database against the schema *project_dir* builds.
 
@@ -538,6 +588,9 @@ def check_schema_drift(
         checks: Names from :data:`CHECK_FLAGS`.
         database_url: The URL the migration used, when the deploy overrode it.
             Used only to refuse a check aimed at a different database.
+        escalate: Names from :data:`ESCALATABLE_KINDS` that must fail this gate
+            rather than warn.  Empty — the default — leaves every verdict
+            exactly as confiture graded it.
 
     Returns:
         A :class:`DriftResult`.  It never raises for an operational failure —
@@ -674,9 +727,9 @@ def check_schema_drift(
             ),
         )
 
-    critical = _items(reports, "critical") + _stale_overloads(reports)
-    warnings = _items(reports, "warning")
-    drifted = any(report.get("has_critical_drift") for report in reports)
+    risen, warnings = _escalate(_items(reports, "warning"), escalate)
+    critical = _items(reports, "critical") + _stale_overloads(reports) + risen
+    drifted = any(report.get("has_critical_drift") for report in reports) or bool(risen)
     return DriftResult(
         passed=not drifted,
         exit_code=validate.returncode,

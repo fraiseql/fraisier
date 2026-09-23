@@ -699,6 +699,7 @@ database:
     enabled: true
     checks: [live-drift]      # live-drift | signatures
     on_critical: fail         # fail | warn
+    escalate: []              # warning kinds that must fail the gate
 ```
 
 The gate builds the schema this checkout would produce (`confiture build
@@ -822,6 +823,57 @@ column drop belongs anyway, since the DDL tree describes the schema you
 want rather than how you got there — or run this gate with
 `on_critical: warn`. `fraisier doctor` reports an affected tree as
 `post_migrate_check_alter_safe` so you find it before a deploy does.
+
+#### A lost constraint is a warning (#412)
+
+`live-drift` reports a dropped foreign key, `CHECK`, `UNIQUE` or primary
+key as `missing_constraint`, and a column default that no longer matches
+as `default_mismatch` — and confiture grades both **warning**, not
+critical. `has_critical_drift` is what this gate fails on, and a warning
+never sets it. So a database that has lost a foreign key its DDL declares
+is exit 0, and a deploy running `on_critical: fail` ships over it:
+
+```
+post_migrate_check: no critical schema drift (1 warning(s))
+```
+
+That is upstream's grade and fraisier does not argue with it. What it
+offers is a way for one deploy to say the loss is not acceptable to *it*:
+
+```yaml
+post_migrate_check:
+  enabled: true
+  checks: [live-drift]
+  on_critical: fail
+  escalate: [missing_constraint]
+```
+
+Now the same database fails the gate, with confiture's own words:
+
+```
+post_migrate_check: 1 critical schema drift item(s) after migration —
+CRITICAL missing_constraint core.tb_widget: Constraint
+'tb_widget_pid_fkey' on 'core.tb_widget' is declared but missing from the
+database
+```
+
+The kinds `escalate` accepts are the warning-graded ones —
+`missing_constraint`, `default_mismatch`, `type_mismatch` and
+`nullable_mismatch`. A name outside that list is a config error rather
+than a gate that quietly declines to fire: an operator who writes
+`missing_constraints` has asked for a promise, and getting silence
+instead is the failure this whole gate exists to avoid.
+`extra_constraint` is deliberately not among them — confiture grades it
+`info`, a constraint the database has and the DDL does not name is not a
+loss, and accepting it here would sell a promise the gate cannot keep.
+
+**Requires `fraiseql-confiture >= 1.15.0`.** Before it there was no item
+to escalate at all: a dropped foreign key was exit 0 with an *empty*
+`drift_items`, so nothing distinguished it from a clean database
+(fraiseql/confiture#308, #309). `escalate` on an older confiture is
+accepted and inert. `fraisier doctor` reports a `fail` gate that does not
+escalate `missing_constraint` as
+`post_migrate_check_constraint_coverage`.
 
 ### `database.post_migrate`: SQL hooks after migrate
 

@@ -614,6 +614,8 @@ class _DriftGate:
     app_path: str
     confiture_config: str
     checks: tuple[str, ...]
+    on_critical: str
+    escalate: tuple[str, ...]
 
     @property
     def project_dir(self) -> Path:
@@ -650,6 +652,8 @@ def _enabled_drift_gates(config: FraisierConfig | None) -> list[_DriftGate]:
                     app_path=str(app_path),
                     confiture_config=str(db.get("confiture_config", "confiture.yaml")),
                     checks=gate.checks,
+                    on_critical=gate.on_critical,
+                    escalate=gate.escalate,
                 )
             )
     return gates
@@ -795,6 +799,64 @@ def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> Check
         )
     return CheckResult(
         name, "pass", f"{scanned} DDL file(s) fold into the built schema"
+    )
+
+
+#: The drift kind that carries the promise #412 is about.  ``default_mismatch``
+#: is the other constraint-shaped thing 1.15.0 added, but a changed default is
+#: not a lost guarantee — only this one is worth stopping a deploy over unasked.
+_LOST_CONSTRAINT = "missing_constraint"
+
+
+@register_check("post_migrate_check_constraint_coverage")
+def _check_post_migrate_check_constraint_coverage(
+    config: FraisierConfig | None,
+) -> CheckResult:
+    """The gate sees a lost foreign key and passes anyway, unless told not to (#412).
+
+    confiture 1.15.0 reports a dropped foreign key, ``CHECK``, ``UNIQUE``,
+    primary key or changed default — and grades every one of them ``warning``
+    (fraiseql/confiture#308, #309; measured in
+    ``.phases/2026-09-23-confiture-1-18-probe/``).  ``has_critical_drift`` is
+    blind to a warning, so ``passed`` stays true and a deploy running
+    ``on_critical: fail`` ships over a constraint the DDL declares and the
+    database has lost.
+
+    An operator who set ``on_critical: fail`` bought a specific promise, and
+    that one is outside it with nothing saying so.  ``escalate`` is the word
+    that buys it; this is what says the word exists.
+
+    ``on_critical: warn`` is a skip rather than a warning: the item already
+    reaches the log on every run, so nothing is silently unkept — which is the
+    only thing this check is about.
+    """
+    name = "post_migrate_check_constraint_coverage"
+    gates = [
+        g
+        for g in _enabled_drift_gates(config)
+        if "live-drift" in g.checks and g.on_critical == "fail"
+    ]
+    if not gates:
+        return CheckResult(
+            name, "skip", "no post_migrate_check live-drift gate fails on drift"
+        )
+
+    silent = [g.fraise for g in gates if _LOST_CONSTRAINT not in g.escalate]
+    if silent:
+        return CheckResult(
+            name,
+            "warn",
+            f"{', '.join(silent)} runs on_critical: fail, but confiture grades a "
+            f"lost foreign key, CHECK, UNIQUE or primary key "
+            f"`{_LOST_CONSTRAINT}` — a *warning* — so the deploy that loses one "
+            f"still passes this gate (fraiseql/confiture#308)",
+            fix_hint=(
+                f"add `escalate: [{_LOST_CONSTRAINT}]` to post_migrate_check to "
+                f"stop that deploy, or leave it and read the warning in the log"
+            ),
+        )
+    return CheckResult(
+        name, "pass", f"{len(gates)} drift gate(s) fail on a lost constraint"
     )
 
 
