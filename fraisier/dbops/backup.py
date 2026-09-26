@@ -244,6 +244,11 @@ class CleanupOutcome:
     validity decides whether a dump may *hold a floor slot* — it does not
     create a new fate. Adding it to the sum would double-count the corpus and
     break :attr:`floor_was_load_bearing`, which reads the partition.
+
+    :attr:`removed_by_ceiling` is a **second overlay** on the same terms
+    (#419). Every name in it also appears in ``removed``; it records *why* a
+    dump inside its retention window was deleted, which the age rule alone
+    could never do.
     """
 
     removed: tuple[str, ...]
@@ -256,6 +261,14 @@ class CleanupOutcome:
     verified, so this is not a corpus audit. A full sweep would shell out once
     per dump on every nightly prune. ``doctor`` is where the thorough check
     belongs, and the restore path verifies the dump it is about to restore.
+    """
+
+    removed_by_ceiling: tuple[str, ...] = ()
+    """Dumps ``keep_last`` removed that the age rule would have kept (#419).
+
+    A subset of :attr:`removed`, never a fourth partition member. These are
+    the deletions ``retention_hours`` alone could not make, so a caller that
+    reports "pruned N old dumps" is wrong about them — they were not old.
     """
 
     @property
@@ -279,9 +292,10 @@ def _candidates(backup_dir: Path, match: str) -> list[tuple[Path, float]]:
 def cleanup_old_backups(
     backup_dir: Path,
     *,
-    retention_hours: int,
+    retention_hours: int | None = None,
     match: str = "*.dump",
     keep_minimum: int = 0,
+    keep_last: int | None = None,
     dry_run: bool = False,
 ) -> CleanupOutcome:
     """Remove backup files and directory dumps older than *retention_hours*.
@@ -333,16 +347,58 @@ def cleanup_old_backups(
     from a second implementation of "what expires" is not a preview of
     this one.
 
+    *keep_last* is a **ceiling**, and it is not the mirror of the floor
+    (#419). *keep_minimum* exempts dumps from the age rule; *keep_last* has to
+    create a removal path the age rule does not have, because every dump
+    inside the retention window is otherwise kept without being a deletion
+    candidate at all. Only the newest *keep_last* survivors are kept; the rest
+    go however young they are, and are named in
+    :attr:`CleanupOutcome.removed_by_ceiling`.
+
+    ``keep_last < keep_minimum`` is **rejected rather than resolved**. Asking
+    for "at least 3" and "at most 2" is a mistake, and silently honouring
+    either one is how a configuration ends up meaning something nobody chose.
+    Config validation rejects it too; this guard is for callers that bypass
+    validation. Rejecting it is also what keeps the two rules from fighting
+    over one dump, which is what
+    :attr:`CleanupOutcome.floor_was_load_bearing` depends on.
+
+    Both rules are optional and independent. *retention_hours* of ``None`` is
+    no age rule, so *keep_last* alone bounds the corpus by count; neither set
+    removes nothing.
+
     Returns a :class:`CleanupOutcome` describing all three groups, plus the
-    ``invalid`` overlay.
+    ``invalid`` and ``removed_by_ceiling`` overlays.
     """
-    cutoff = time.time() - retention_hours * 3600
+    if keep_last is not None:
+        if keep_last < 1:
+            msg = (
+                f"keep_last must be at least 1, got {keep_last}: the newest dump "
+                f"is the rollback point for the migration about to run"
+            )
+            raise ValueError(msg)
+        if keep_last < keep_minimum:
+            msg = (
+                f"keep_last={keep_last} is below keep_minimum={keep_minimum}: "
+                f"a corpus cannot hold at least {keep_minimum} and at most "
+                f"{keep_last} dumps. Raise keep_last or lower keep_minimum."
+            )
+            raise ValueError(msg)
+
+    # No age rule means nothing is ever past the cutoff, so the ceiling (if
+    # any) is the only thing that removes.
+    cutoff = (
+        float("-inf")
+        if retention_hours is None
+        else time.time() - retention_hours * 3600
+    )
     resolved_root = backup_dir.resolve()
     candidates = _candidates(backup_dir, match)
     removed: list[str] = []
     kept: list[str] = []
     exempted: list[str] = []
     invalid: list[str] = []
+    ceiling_removed: list[str] = []
 
     # Slots consumed so far, not the enumerate index. They coincide exactly
     # when every candidate is valid — which is what keeps a corpus this
@@ -350,11 +406,17 @@ def cleanup_old_backups(
     slots = 0
 
     for f, mtime in candidates:
-        if mtime >= cutoff:
+        # Newest first, so this is "the ceiling is already full". A dump that
+        # trips it is removed even when the age rule would have kept it —
+        # which is the whole point, and why it is recorded separately.
+        beyond_ceiling = keep_last is not None and slots >= keep_last
+        within_retention = mtime >= cutoff
+
+        if within_retention and not beyond_ceiling:
             kept.append(str(f))
             slots += 1
             continue
-        if slots < keep_minimum:
+        if not beyond_ceiling and slots < keep_minimum:
             check = verify_archive(f)
             if check.is_bad:
                 # No slot spent, so the next valid dump takes this one. Falls
@@ -380,12 +442,17 @@ def cleanup_old_backups(
             else:
                 f.unlink()
         removed.append(str(f))
+        if within_retention:
+            # It was not old. Only the ceiling can have taken it, and saying
+            # so is the difference between "pruned 9 old dumps" and the truth.
+            ceiling_removed.append(str(f))
 
     return CleanupOutcome(
         removed=tuple(removed),
         kept=tuple(kept),
         exempted_by_minimum=tuple(exempted),
         invalid=tuple(invalid),
+        removed_by_ceiling=tuple(ceiling_removed),
     )
 
 

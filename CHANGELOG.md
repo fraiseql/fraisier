@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pre_migrate_dump.keep_last`: a count ceiling on the gate's dump corpus**
+  ([#419](https://github.com/fraiseql/fraisier/issues/419)). `retention_hours`
+  bounds the corpus by age, which on a busy day bounds nothing — the number of
+  dumps kept is the number of migrating deploys in the window. Measured on
+  production: 12 migrating deploys in 72 h at ~3.5 GB each, about 42 GB held by
+  the gate, on the partition that also carries PGDATA.
+
+  ```yaml
+  pre_migrate_dump:
+    retention_hours: 72   # prune dumps older than this…
+    keep_last: 3          # …and anything beyond the newest 3 valid dumps
+  ```
+
+  Either rule alone is a complete policy; set together, a dump goes when it
+  fails *either* one.
+
+  **It is not the mirror of `keep_minimum`.** The floor exempts dumps from a
+  removal rule that already exists; the ceiling has to create one, because
+  every dump inside the retention window was kept without being a deletion
+  candidate at all. `CleanupOutcome.removed_by_ceiling` is a second overlay on
+  `removed` — like `invalid`, never a fourth partition member — so the log can
+  distinguish dumps that were deleted despite not being old.
+
+  **A ceiling below the floor is rejected, not resolved.** `keep_last <
+  keep_minimum` asks for a corpus that cannot exist, and silently honouring
+  either value is how a configuration ends up meaning something nobody chose.
+  Config validation rejects it and `cleanup_old_backups` raises for callers
+  that bypass validation. That also keeps the two rules from contending for
+  one dump, which `floor_was_load_bearing` depends on.
+
+  `keep_last >= 1` is enforced: the newest dump is the rollback point for the
+  migration about to run, the same reason the gate passes `keep_minimum=1`.
+
+- **`database.pre_migrate_dump` is validated at all.** The block was read with
+  `.get()` and never checked. Only `keep_last` is validated for now — a wrong
+  value there is worse than an absent one — and, as with `post_migrate_check`,
+  it is validated whether or not the gate is enabled, because a typo found on
+  the day someone switches the gate on is found too late.
+
+### Known, not fixed
+
+- Pruning still runs only inside a deploy, so a busy stretch followed by a
+  quiet week holds the whole corpus until someone deploys. `keep_last` bounds
+  the worst case; the steady state needs a prune that is not a side effect of
+  deploying, filed as
+  [#420](https://github.com/fraiseql/fraisier/issues/420).
+
 ## [0.82.0] - 2026-09-26
 
 **A halted migration reported a successful deploy.** Plus the confiture work
