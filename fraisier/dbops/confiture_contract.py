@@ -151,6 +151,31 @@ def classify_confiture_failure(
     return ConfitureFailureClass.INTERNAL_ERROR
 
 
+def envelope_error_message(output: str) -> str | None:
+    """The ``error.message`` from a confiture ``--format json`` error envelope.
+
+    Under ``--format json`` confiture writes the envelope to **stdout** and
+    leaves stderr empty, so a caller that adds the flag and keeps reading
+    ``stderr`` reports an empty error. Measured on 1.23.1, a failing
+    ``migrate up``: text mode is 154 bytes on stderr and nothing on stdout;
+    JSON mode is a 417-byte envelope on stdout and nothing on stderr.
+
+    Returns ``None`` on anything that is not that envelope, so a caller can
+    fall back to whatever stream did carry something.
+    """
+    try:
+        data = json.loads(output)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    error = data.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        return message if isinstance(message, str) else None
+    return None
+
+
 def envelope_error_code(output: str) -> str | None:
     """The ``error.code`` from a confiture ``--format json`` error envelope.
 

@@ -14,6 +14,7 @@ a gate you believe is running and is not is worse than none.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -278,9 +279,23 @@ class TestDoctorFindsTheAlterTrap:
     """
 
     def _run(self, cfg: FraisierConfig) -> CheckResult:
+        """Drive the check as a project on a confiture that still has the trap.
+
+        The version is pinned to 1.10.1 — the last release that reproduces it
+        (#415) — so these tests keep exercising the *detection*: which DDL
+        spellings are the trap and which are not.  Whether the warning should
+        fire at all on a given confiture is the gate's question, and
+        ``TestTheAlterTrapIsVersionGated`` below asks it.  Left unpinned, these
+        would silently stop testing anything the day the lock moved past 1.11.0.
+        """
+        from packaging.version import Version
+
         from fraisier import doctor
 
-        return doctor.DOCTOR_CHECKS["post_migrate_check_alter_safe"].fn(cfg)
+        with patch.object(
+            doctor, "_confiture_cli_version", return_value=Version("1.10.1")
+        ):
+            return doctor.DOCTOR_CHECKS["post_migrate_check_alter_safe"].fn(cfg)
 
     def _cfg(
         self, tmp_path: Path, ddl: str, *, checks: str = "[live-drift]"
@@ -489,3 +504,72 @@ fraises:
         """
         cfg = self._cfg(tmp_path, on_critical="warn")
         assert self._run(cfg).status == "skip"
+
+
+class TestTheAlterTrapIsVersionGated:
+    """#415 — confiture 1.11.0 folded the drop, so the warning must stop there.
+
+    Bisected with ``.phases/2026-09-23-confiture-1-18-probe/driver7.py``, which
+    applies #407's tree verbatim to a live database, so anything the gate
+    reports there is a false positive by construction::
+
+        1.10.1  GATE passed=False  critical=[missing_column core.tb_thing.legacy,
+                                             missing_column core.tb_widget.legacy_drop]
+        1.11.0  GATE passed=True   critical=[]
+        1.12.0  GATE passed=True   critical=[]
+        1.13.0  GATE passed=True   critical=[]
+        1.14.0  GATE passed=True   critical=[]
+
+    1.10.1 is the control, and it is the reason this gate can be trusted: with
+    no version that still reproduces, "clean everywhere" would equally describe
+    a probe that measures nothing.
+
+    The floor is ``>=1.0.0``, so a project resolving 1.10.1 is inside the
+    declared range and the warning is right for it.  Deleting the check would
+    take a true warning away from those projects; the defect was that it was
+    unconditional, not that it was wrong.
+    """
+
+    #: The release whose inventory folds ``ALTER TABLE … DROP COLUMN``.
+    FOLDED = "1.11.0"
+
+    def _run(self, cfg, version: str | None):
+        from packaging.version import Version
+
+        from fraisier import doctor
+
+        with patch.object(
+            doctor,
+            "_confiture_cli_version",
+            return_value=None if version is None else Version(version),
+        ):
+            return doctor.DOCTOR_CHECKS["post_migrate_check_alter_safe"].fn(cfg)
+
+    def _dropping_cfg(self, tmp_path: Path) -> FraisierConfig:
+        return TestDoctorFindsTheAlterTrap()._cfg(
+            tmp_path,
+            "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, legacy TEXT);\n"
+            "ALTER TABLE core.tb_widget DROP COLUMN legacy;\n",
+        )
+
+    def test_at_the_release_that_folded_it_the_tree_passes(self, tmp_path: Path):
+        assert self._run(self._dropping_cfg(tmp_path), self.FOLDED).status == "pass"
+
+    def test_above_that_release_the_tree_passes(self, tmp_path: Path):
+        assert self._run(self._dropping_cfg(tmp_path), "1.23.1").status == "pass"
+
+    def test_below_that_release_it_still_warns(self, tmp_path: Path):
+        result = self._run(self._dropping_cfg(tmp_path), "1.10.1")
+        assert result.status == "warn"
+        assert "010_tables.sql" in result.detail
+
+    def test_the_pass_names_the_release_that_fixed_it(self, tmp_path: Path):
+        detail = self._run(self._dropping_cfg(tmp_path), "1.23.1").detail
+        assert self.FOLDED in detail, (
+            "a check that goes quiet without saying why leaves the next reader "
+            f"to re-derive the bisect: {detail!r}"
+        )
+
+    def test_an_unreadable_version_still_warns(self, tmp_path: Path):
+        """Unknown is not proof of safety, so the advisory warning stands."""
+        assert self._run(self._dropping_cfg(tmp_path), None).status == "warn"

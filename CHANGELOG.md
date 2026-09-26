@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.82.0] - 2026-09-26
+
+**A halted migration reported a successful deploy.** Plus the confiture work
+fraisier had not picked up: the subprocess wrappers now read the contract
+instead of the console, and a doctor check that warns about a bug confiture
+fixed goes quiet at the release that fixed it.
+
+### Fixed
+
+- **⚠️ `migrate_up()` reported `success=True` when confiture halted with
+  migrations unapplied** ([#417](https://github.com/fraiseql/fraisier/issues/417)).
+  `MigrateUpResult.has_errors` is `not success and len(errors) > 0` — it needs
+  **both**. Confiture halts the chain at a `requires_superuser` migration and
+  returns `success=False` passing *no* `errors` argument, so `has_errors` is
+  `False` and the halt read as a clean run. fraisier branched on `has_errors`
+  and never on `success`, at two sites: `migrate_up()` — the live path for
+  every deploy strategy — and the `pre_migrate_verify` rehearsal, which logged
+  "Dry-run-execute passed" for a rehearsal that stopped early, so the
+  verification licensing the real run had verified less than it claimed.
+  `result.pending` and `result.skipped_superuser` were discarded on both.
+
+  Both now branch on `success` and name the migration that stopped the chain
+  and how many are left unapplied.
+
+  **This fails deploys that previously passed.** That is the point — the
+  alternative is an app started against a half-migrated schema — but it is a
+  new failure mode. fraisier never sets or scaffolds `requires_superuser`, so
+  it fires only for a project whose own migration declares it.
+
+  No test caught this because every fixture built results that either succeed
+  or carry errors: `mock_result.has_errors = False` on a `MagicMock` never
+  executes the property. The new tests build real `MigrateUpResult` objects,
+  and `ty` immediately rejected the first one for putting `str` where
+  `MigrationApplied` belongs — which is the argument for real objects in one
+  line.
+
+- **Every `confiture migrate rebuild` reported 0 migrations**
+  ([#414](https://github.com/fraiseql/fraisier/issues/414)). It prints
+  `Migrations marked: N`, which matched neither text pattern, so the count
+  fell through to zero and nothing failed, so nothing noticed. `migrate` and
+  `rebuild` now pass `--format json` and read `applied` / `rolled_back` /
+  `marked` from the typed payload. A console layout is not a contract.
+
+  Note those are the **serialized** names, not the result objects' attribute
+  names — `to_dict` writes `migrations_applied` as `applied`. This fix first
+  shipped the attribute spelling, which appears in no payload, so it would
+  have counted every run as zero: the defect being fixed, reintroduced by its
+  own fix, and invisible because the tests were hand-written dicts using the
+  same wrong names. The fixtures are now captured from live runs
+  (`REAL_UP_PAYLOAD`), with a premise test asserting the attribute name is
+  absent from a real payload. Caught in review, not by the suite.
+
+  Only `applied` has a published schema (`migrate-up`).
+  `migrate-down-to.schema.json` covers a *different* command — `migrate
+  down-to`, whose payload is `{from, to, rolled_back, skipped, errors}` —
+  while fraisier runs plain `migrate down`, which has none; nor has `migrate
+  rebuild`. So `rolled_back` and `marked` rest on `to_dict` alone upstream,
+  which is why all three are pinned here by captured payloads.
+
+### Changed
+
+- **A confiture failure is classified by its exit code, not by its English.**
+  `classify_error` matched substrings of confiture's prose and answered in a
+  vocabulary that is not the contract's — `lock_error` where the contract says
+  `lock_contention`, `connection_error` where it says `db_unreachable`. Worse,
+  prose was matched *first* and the frozen exit code was only the fallback, so
+  one tool answered to two names depending on which wrapper you called. Both
+  subprocess wrappers now use `classify_confiture_failure(returncode,
+  envelope_error_code(stdout))`, as the preflight path already did.
+  `classify_error` stays for `docker_compose`, a different tool with no
+  contract.
+
+  **The prose is demoted, not discarded.** Exit 1 is the contract's
+  deliberately unclassified bucket — "generic failure: SQL or hook execution" —
+  and there a message reading `column does not exist` carries strictly more
+  than the exit code does, so it still refines the class. What the old order
+  got wrong was letting prose overrule a class confiture *had* committed to:
+  that is how a retriable exit 6 became `lock_error`, a string that is not a
+  member of `ConfitureFailureClass` at all, putting the one retriable failure
+  outside the vocabulary that marks it retriable.
+
+  ⚠️ `--format json` **moves the error between streams**: measured on 1.23.1, a
+  failing `migrate up` writes 154 bytes to stderr and nothing to stdout in text
+  mode, and a 417-byte envelope to stdout with nothing on stderr in JSON mode.
+  Adding the flag while still reading `stderr` would have silently blanked the
+  error in every deploy report. `envelope_error_message()` reads the envelope,
+  with stderr kept as the fallback.
+
+- **`post_migrate_check_alter_safe` goes quiet on confiture 1.11.0 and above**
+  ([#415](https://github.com/fraiseql/fraisier/issues/415)). It warns about a
+  DDL tree that reaches its final shape through `ALTER TABLE … DROP COLUMN`,
+  because confiture's expected schema did not fold the drop and a correct
+  database was reported `CRITICAL missing_column`. Confiture fixed that, and
+  the check had gone on warning about a failure that can no longer happen.
+
+  Bisected against a live database, applying #407's tree verbatim so anything
+  reported is a false positive by construction:
+
+  | confiture | verdict on a correct database |
+  |---|---|
+  | 1.10.1 | **gate fails** — 2 × CRITICAL `missing_column` |
+  | 1.11.0 | passes, no items |
+  | 1.12.0 – 1.14.0 | passes, no items |
+
+  1.10.1 is the control: with no version that still reproduces, "clean
+  everywhere" would equally describe a probe that measures nothing.
+
+  Gated rather than deleted. The floor is `>=1.0.0`, a project resolving 1.10.1
+  is inside the declared range, and there the warning is true — the defect was
+  that the check was unconditional, not that it was wrong.
+
 ## [0.81.0] - 2026-09-23
 
 **confiture 1.15.0 reports the lost foreign key that v0.80.0 recorded as

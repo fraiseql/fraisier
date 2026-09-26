@@ -255,5 +255,13 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        (subprocess output), not
 #                                                        a fraises.yaml value.
 #
+#   dbops/confiture_contract.py:envelope_error_message   non-config  The sibling
+#                                                        of the row above, on the
+#                                                        same envelope's
+#                                                        ``error.message``. Read
+#                                                        because ``--format json``
+#                                                        moves the error from
+#                                                        stderr to stdout (#414).
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.

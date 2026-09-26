@@ -32,6 +32,7 @@ from fraisier.dbops.confiture_contract import (
     ConfitureFailureClass,
     classify_confiture_failure,
     envelope_error_code,
+    envelope_error_message,
 )
 from fraisier.errors import MigrationError as FraisierMigrationError
 
@@ -295,6 +296,49 @@ def preflight(
                     )
 
 
+def _incomplete_reason(result: object) -> str | None:
+    """Why a confiture migrate result is not a completed run, or ``None``.
+
+    ``MigrateUpResult.has_errors`` is ``not success and len(errors) > 0`` — it
+    needs **both**.  Confiture halts the chain at a ``requires_superuser``
+    migration and returns ``success=False`` carrying no errors at all, so a
+    halt is invisible to ``has_errors`` and reads as a clean run (#417).
+
+    Branching on ``success`` catches the halt and the ordinary failure alike;
+    this names whichever happened, because "did not complete" is not an
+    actionable thing to tell an operator holding a half-migrated database.
+
+    confiture#432 (unreleased, expected in 1.24.0) makes ``success=False``
+    always carry an error and redefines ``has_errors`` as ``not success``.
+    Both shapes are handled here and pinned by tests: on that release the halt
+    carries its own message, so ``error_summary`` wins and confiture's wording
+    is reported; below it, the ``skipped_superuser`` branch builds one. The
+    floor is ``>=1.0.0``, so both remain reachable, and ``success`` is the one
+    reading that is correct on either.
+    """
+    if getattr(result, "success", False):
+        return None
+
+    summary = getattr(result, "error_summary", None)
+    if summary:
+        return str(summary)
+
+    halted = tuple(getattr(result, "skipped_superuser", ()) or ())
+    pending = tuple(getattr(result, "pending", ()) or ())
+    if halted:
+        first = halted[0]
+        detail = getattr(first, "reason", "") or "the migration requires a superuser"
+        return (
+            f"halted at migration {first.version} ({first.name}): {detail}. "
+            f"{len(pending)} further migration(s) left unapplied"
+        )
+
+    # success=False with neither an error nor a halt. Report it rather than
+    # inventing a cause: confiture has said the run did not finish, and that
+    # is enough to stop a deploy.
+    return "the migration run did not complete, and confiture reported no error"
+
+
 def dry_run_execute(
     config_path: Path | str,
     *,
@@ -334,11 +378,12 @@ def dry_run_execute(
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
-        if result.has_errors:  # pragma: no cover
+        reason = _incomplete_reason(result)
+        if reason is not None:
             return MigrationResult(
                 success=False,
                 steps_applied=0,
-                errors=[result.error_summary or "dry-run-execute failed"],
+                errors=[f"dry-run-execute did not complete: {reason}"],
                 execution_time_ms=elapsed_ms,
             )
 
@@ -474,15 +519,16 @@ def migrate_up(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
-    if result.has_errors:
+    reason = _incomplete_reason(result)
+    if reason is not None:
         # Carry how many migrations DID apply. Confiture commits each migration
         # as it goes, so a batch that fails part-way leaves the earlier ones
         # applied and tracked. Dropping this count made the deployer believe
         # nothing had been applied and skip the DB rollback entirely (#272).
         raise FraisierMigrationError(
-            message=f"Migration failed: {result.error_summary}",
+            message=f"Migration failed: {reason}",
             direction="up",
-            db_error=result.error_summary or "Unknown migration error",
+            db_error=reason,
             rollback_attempted=False,
             steps_applied=len(result.migrations_applied),
         )
@@ -632,6 +678,93 @@ def parse_migration_count(output: str) -> int:
     return 0
 
 
+#: The count-bearing key of each migrate payload: ``up`` and ``down`` list what
+#: they touched, ``rebuild`` lists what it marked.
+#:
+#: These are the **serialized** names, which differ from the attribute names on
+#: the result objects — ``to_dict`` writes ``migrations_applied`` as ``applied``,
+#: ``migrations_rolled_back`` as ``rolled_back`` and ``migrations_marked`` as
+#: ``marked``. Captured from a live run rather than read off the dataclass; the
+#: attribute spelling appears in no payload, so using it here counts every run
+#: as zero, which is the defect #414 exists to fix.
+_COUNT_KEYS = ("applied", "rolled_back", "marked")
+
+
+def _count_from_payload(stdout: str) -> int:
+    """How many migrations a ``--format json`` migrate payload accounts for.
+
+    Reads the typed result rather than the console line.  ``migrate rebuild``
+    prints ``Migrations marked: 7``, which :data:`_MIGRATION_COUNT_RES` never
+    matched — the second pattern needs digits straight after ``Migrations:`` —
+    so every rebuild reported zero, and nothing failed, so nothing noticed
+    (#414).  A console layout is not a contract.
+
+    Only ``applied`` has a published schema behind it (``migrate-up``).
+    ``migrate-down-to.schema.json`` covers a **different command** — its title
+    is ``confiture migrate down-to <revision>`` and its payload is
+    ``{from, to, rolled_back, skipped, errors}`` — while fraisier runs plain
+    ``migrate down``, which has no schema; nor has ``migrate rebuild``. So
+    ``rolled_back`` and ``marked`` rest on ``to_dict`` alone, which is why all
+    three keys are pinned here by captured payloads rather than trusted.
+
+    The two ``down`` shapes do agree on ``rolled_back``, so the count key holds
+    whichever one arrives.
+
+    Zero for output that is not a payload: the count is a line in a report, not
+    grounds to fail a deploy that already succeeded.
+    """
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    for key in _COUNT_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return len(value)
+    return 0
+
+
+def _subprocess_failure(proc: subprocess.CompletedProcess[str]) -> ConfitureResult:
+    """A failed confiture subprocess, classified by contract rather than prose.
+
+    The exit integer is frozen at confiture 1.0.0 and the error envelope
+    carries a registered code; :func:`classify_error` matched confiture's
+    **English**, and answered in a vocabulary that is not the contract's —
+    ``lock_error`` where the contract says ``lock_contention``, which is the
+    one class :attr:`ConfitureFailureClass.is_retriable` is true for.  So the
+    same failure had two names depending on which wrapper you called.
+
+    The prose is not discarded, it is **demoted**.  Exit 1 is the contract's
+    deliberately unclassified bucket — "generic failure: SQL or hook
+    execution" — and there a message saying ``column does not exist`` carries
+    strictly more than the exit code does.  So the contract decides, and the
+    prose refines only when the contract itself declined to be specific.  What
+    the old order got wrong was letting prose overrule a class confiture *had*
+    committed to, which is how a retriable exit 6 became ``lock_error``.
+
+    stderr is the fallback, not the source: under ``--format json`` confiture
+    puts the envelope on stdout and leaves stderr empty.
+    """
+    message = envelope_error_message(proc.stdout) or (proc.stderr or "").strip()
+    failure_class = classify_confiture_failure(
+        proc.returncode, envelope_error_code(proc.stdout)
+    )
+    error_type = str(failure_class)
+    if failure_class is ConfitureFailureClass.INTERNAL_ERROR:
+        refined = classify_error(proc.stderr or message)
+        if refined != "unknown":
+            error_type = refined
+    return ConfitureResult(
+        success=False,
+        exit_code=proc.returncode,
+        stdout=proc.stdout,
+        error=message or f"confiture exited {proc.returncode}",
+        error_type=error_type,
+    )
+
+
 def classify_error(stderr: str) -> str:
     """Classify a confiture error message."""
     lower = stderr.lower()
@@ -644,20 +777,6 @@ def classify_error(stderr: str) -> str:
     return "unknown"
 
 
-def _classify_exit_code(exit_code: int) -> str:
-    """Classify an error type from a confiture exit code.
-
-    A thin projection of the canonical contract table
-    (:func:`fraisier.dbops.confiture_contract.classify_confiture_failure`,
-    mirrored from confiture's ``exit-codes.md``). The returned value is a
-    canonical class name — e.g. exit ``2`` is ``precondition_failed`` (no
-    migration ledger), ``3`` is ``db_unreachable``, ``5`` is ``invalid_config``,
-    ``6`` is ``lock_contention`` — **not** the pre-#146 ad-hoc strings that read
-    exit ``2`` as a validation error and ``3`` as a migration error.
-    """
-    return str(classify_confiture_failure(exit_code))
-
-
 def confiture_migrate(
     *,
     config_path: str = "confiture.yaml",
@@ -666,28 +785,19 @@ def confiture_migrate(
     auto_detect_baseline: bool = False,
 ) -> ConfitureResult:
     """Run ``confiture migrate up`` or ``confiture migrate down``."""
-    cmd = ["confiture", "migrate", direction, "-c", config_path]
+    cmd = ["confiture", "migrate", direction, "-c", config_path, "--format", "json"]
     if auto_detect_baseline and direction == "up":
         cmd.append("--auto-detect-baseline")
 
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
 
     if result.returncode != 0:
-        error_type = classify_error(result.stderr)
-        if error_type == "unknown":
-            error_type = _classify_exit_code(result.returncode)
-        return ConfitureResult(
-            success=False,
-            exit_code=result.returncode,
-            stdout=result.stdout,
-            error=result.stderr.strip(),
-            error_type=error_type,
-        )
+        return _subprocess_failure(result)
 
     return ConfitureResult(
         success=True,
         exit_code=0,
-        migration_count=parse_migration_count(result.stdout),
+        migration_count=_count_from_payload(result.stdout),
         stdout=result.stdout,
     )
 
@@ -699,25 +809,28 @@ def confiture_rebuild(
     drop_schemas: bool = True,
 ) -> ConfitureResult:
     """Run ``confiture migrate rebuild``."""
-    cmd = ["confiture", "migrate", "rebuild", "-c", config_path, "-y"]
+    cmd = [
+        "confiture",
+        "migrate",
+        "rebuild",
+        "-c",
+        config_path,
+        "-y",
+        "--format",
+        "json",
+    ]
     if drop_schemas:
         cmd.append("--drop-schemas")
 
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
 
     if result.returncode != 0:
-        return ConfitureResult(
-            success=False,
-            exit_code=result.returncode,
-            stdout=result.stdout,
-            error=result.stderr.strip(),
-            error_type=classify_error(result.stderr),
-        )
+        return _subprocess_failure(result)
 
     return ConfitureResult(
         success=True,
         exit_code=0,
-        migration_count=parse_migration_count(result.stdout),
+        migration_count=_count_from_payload(result.stdout),
         stdout=result.stdout,
     )
 
