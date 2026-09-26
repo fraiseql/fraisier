@@ -161,6 +161,34 @@ skip.** Use it for any run whose result you intend to trust. Ten preflight
 tests once skipped on every CI run for months — including the one gating the
 PyPI upload — while the checkmark reported a healthy passed count (#370).
 
+#### This suite is I/O-heavy, and it takes a lock (#418)
+
+These tests build and drop real databases. On a shared cluster that is enough
+to stall anything latency-sensitive using the same server: measured, an
+unrelated project's HTTP suite saw **no request for 10.3 seconds** while its
+own slowest query was 5 ms, tripped a 10-second client timeout and lost a
+test. The cost lands on whoever has a timeout, not on whoever caused the load,
+so it is hard to diagnose from the affected side.
+
+Two things follow.
+
+**The suite serialises with itself.** On a discovered server it takes a
+PostgreSQL advisory lock for the whole run, so a second run waits instead of
+competing — slower, rather than someone else failing. It prints a line when it
+waits. The lock is released by disconnecting, so a run that dies holding it
+cannot wedge the next; if it is still held after ten minutes the suite says so
+and runs anyway. A container the harness starts itself is private and takes no
+lock.
+
+**It does not serialise with other projects.** Nothing here can lock a suite
+that does not participate. If you run this alongside anything latency-sensitive
+on one cluster, give it its own:
+
+```bash
+FRAISIER_TEST_PG_URL="postgresql:///fraisier_test?host=/run/postgresql&port=5433" \
+FRAISIER_INTEGRATION=1 uv run pytest
+```
+
 **Point it at a database you are willing to lose.** Tests create and drop
 databases on the server they find. `fraisier_test` is the conventional name and
 the one all three workflows use.
