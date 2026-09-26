@@ -23,11 +23,13 @@ was found — so no test module has to know which one it got.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import multiprocessing
 import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import quote, unquote, urlparse
@@ -246,16 +248,108 @@ def unavailable(reason: str) -> NoReturn:
     pytest.skip(reason)  # ty: ignore[too-many-positional-arguments]
 
 
+#: The name the suite's cross-run lock is derived from. One name, one key —
+#: a bare number repeated in two places drifts apart silently.
+SUITE_LOCK_NAME = "fraisier-integration-suite"
+
+#: Seconds to wait for another run of this suite to finish before giving up
+#: and running anyway. Generous, because the thing being waited for is a full
+#: integration run; bounded, because a wedged holder must not hang CI.
+SUITE_LOCK_WAIT_SECONDS = 600
+
+
+def _key_for(name: str) -> int:
+    """A stable signed 64-bit key for *name*.
+
+    ``hash()`` is salted per process and would give two runs different keys —
+    two locks, no serialisation, and a green suite proving nothing.
+    """
+    digest = hashlib.sha256(name.encode()).digest()[:8]
+    return int.from_bytes(digest, "big", signed=True)
+
+
+SUITE_LOCK_KEY = _key_for(SUITE_LOCK_NAME)
+
+
+def suite_lock_sql() -> str:
+    """SQL that *tries* for the suite lock, returning whether it got it.
+
+    Deliberately ``pg_try_advisory_lock`` rather than ``pg_advisory_lock``: the
+    blocking form waits forever, so a run that died holding the lock would hang
+    every later run instead of slowing it.
+
+    There is no matching unlock anywhere, and that is the design. PostgreSQL
+    releases session advisory locks **on disconnect**, so the lock outlives
+    nothing — not a crash, not a ``SIGKILL``, not a timed-out CI job. An
+    orderly release would have to run, and the cases that matter are exactly
+    the ones where nothing runs.
+    """
+    return f"SELECT pg_try_advisory_lock({SUITE_LOCK_KEY})"
+
+
+def _take_suite_lock(target: PgTarget) -> Any | None:
+    """Hold the suite lock for this run, or proceed without it.
+
+    Returns the connection holding the lock, which the caller keeps open for
+    the session; closing it is the release. ``None`` means the lock could not
+    be taken and the run proceeds anyway — slower and noisier is better than
+    a suite that refuses to run because of a stale holder.
+    """
+    import psycopg
+
+    try:
+        conn = psycopg.connect(target.dsn(_MAINTENANCE_DB), autocommit=True)
+    except Exception as exc:  # a server we cannot hold a lock on still runs tests
+        print(f"\n[integration] no suite lock ({type(exc).__name__}); running anyway")
+        return None
+
+    deadline = time.monotonic() + SUITE_LOCK_WAIT_SECONDS
+    waited = False
+    while True:
+        got = conn.execute(suite_lock_sql()).fetchone()  # ty: ignore[no-matching-overload]
+        if got and got[0]:
+            if waited:
+                print("\n[integration] suite lock acquired; continuing")
+            return conn
+        if time.monotonic() >= deadline:
+            print(
+                f"\n[integration] suite lock still held after "
+                f"{SUITE_LOCK_WAIT_SECONDS}s; running anyway — expect contention"
+            )
+            conn.close()
+            return None
+        if not waited:
+            print(
+                "\n[integration] another run of this suite holds the lock on "
+                "this cluster; waiting rather than competing with it (#418)"
+            )
+            waited = True
+        time.sleep(2)
+
+
 @pytest.fixture(scope="session")
 def _pg_server() -> Iterator[PgTarget | None]:
     """The server for the whole session: env URL, local socket, or a container.
 
     Session-scoped because starting a container per test would be absurd, and
     because "is a database reachable here" is one fact, not one per test.
+
+    The suite lock is taken here, around the **whole run** rather than around
+    each database build. Per-build locking would let two runs interleave
+    between builds, and that interleaving is what produced the stall in #418:
+    an unrelated process on the same cluster saw no request for 10.3 seconds
+    and tripped its own client timeout, while this suite was mid-build.
     """
     already_running = _discover_target()
     if already_running is not None:
-        yield already_running
+        # A container we start is private, so it cannot be contended and needs
+        # no lock. A discovered server is shared by construction.
+        holder = _take_suite_lock(already_running)
+        try:
+            yield already_running
+        finally:
+            if holder is not None:
+                holder.close()
         return
     with _container_target() as started:
         yield started

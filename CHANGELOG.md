@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The integration suite no longer competes with another run of itself**
+  ([#418](https://github.com/fraiseql/fraisier/issues/418)). These tests build
+  and drop real databases on whatever cluster they discover, which on a
+  developer machine is the default local one. That is enough to stall anything
+  latency-sensitive sharing the server: measured, an unrelated project's HTTP
+  suite saw **no request for 10.3 seconds** while its own slowest query was
+  5 ms, tripped a 10-second client timeout and lost a test. The cost lands on
+  whoever has a timeout rather than whoever caused the load, so it is close to
+  undiagnosable from the affected side — the evidence is in a third process's
+  journal.
+
+  On a discovered server the suite now takes a PostgreSQL advisory lock for the
+  **whole run**, so a second run waits instead of competing. Per-build locking
+  would have let two runs interleave between builds, which is the interleaving
+  that produced the stall.
+
+  Deliberately `pg_try_advisory_lock` in a bounded poll, not the blocking form:
+  a run that died holding the lock must not hang every later one. Release is by
+  **disconnect** — PostgreSQL drops session advisory locks when the connection
+  goes, so no orderly unlock is needed in exactly the cases where nothing
+  orderly runs. After ten minutes the suite says so and runs anyway. A
+  container the harness starts itself is private, cannot be contended, and
+  takes no lock.
+
+  This serialises the suite with *itself* only; nothing here can lock a process
+  that does not participate. `development.md` now says so, and shows how to
+  point `FRAISIER_TEST_PG_URL` at a dedicated cluster.
+
 ### Added
 
 - **`pre_migrate_dump.keep_last`: a count ceiling on the gate's dump corpus**
