@@ -20,10 +20,23 @@ from fraisier.errors import MigrationError
 class _FakeMigrateUpResult:
     """Stand-in for confiture's MigrateUpResult."""
 
-    def __init__(self, applied: list[str], has_errors: bool, summary: str = ""):
+    def __init__(
+        self,
+        applied: list[str],
+        has_errors: bool,
+        summary: str = "",
+        success: bool | None = None,
+    ):
         self.migrations_applied = applied
         self.has_errors = has_errors
         self.error_summary = summary
+        # Real results always carry `success`, and it is what `migrate_up`
+        # branches on (#417): `has_errors` is `not success and errors`, so a
+        # halt — `success=False` with no errors — is invisible to it. A fake
+        # without `success` models a result confiture cannot produce.
+        self.success = (not has_errors) if success is None else success
+        self.skipped_superuser: list[object] = []
+        self.pending: list[str] = []
 
 
 class _FakeMigrator:

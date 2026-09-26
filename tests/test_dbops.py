@@ -125,9 +125,11 @@ class TestConfitureBuild:
         from fraisier.dbops.confiture import confiture_build
 
         with patch("subprocess.run") as mock_run:
+            # fraisier asks for `--format json`, so this is what confiture
+            # returns; console text here would model a call that cannot happen.
             mock_run.return_value = MagicMock(
                 returncode=0,
-                stdout="Applied 3 migrations\n",
+                stdout='{"success": true, "applied": [{"version": "1"}, {"version": "2"}, {"version": "3"}]}',
                 stderr="",
             )
             result = confiture_build(config_path="confiture.yaml", cwd="/var/app")
@@ -306,7 +308,7 @@ class TestConfitureMigrate:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
-                stdout="Applied 2 migrations\n",
+                stdout='{"success": true, "applied": [{"version": "1"}, {"version": "2"}]}',
                 stderr="",
             )
             result = confiture_migrate(

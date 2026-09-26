@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from packaging.version import InvalidVersion, Version
+
 from fraisier.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -741,6 +743,53 @@ def _drops_a_column(sql: str) -> bool:
     )
 
 
+#: The confiture release whose linting inventory folds ``ALTER TABLE … DROP
+#: COLUMN`` into the table it alters, so the expected schema the drift gate
+#: grades against stops carrying the dropped column (#415,
+#: fraiseql/confiture#301).
+#:
+#: Bisected against a live database with
+#: ``.phases/2026-09-23-confiture-1-18-probe/driver7.py``, which applies #407's
+#: tree verbatim so anything reported is a false positive by construction:
+#: 1.10.1 reports two CRITICAL ``missing_column`` items and fails the gate;
+#: 1.11.0, 1.12.0, 1.13.0 and 1.14.0 report none.  1.10.1 is the control —
+#: without a version that still reproduces, "clean everywhere" would equally
+#: describe a probe that measures nothing.
+_ALTER_DROP_FOLDED_IN = Version("1.11.0")
+
+
+def _confiture_cli_version() -> Version | None:
+    """The version of the ``confiture`` the gate will run, or ``None``.
+
+    Read from the binary on PATH rather than from installed package metadata:
+    ``dbops/drift.py`` spells the executable ``confiture`` and lets PATH
+    resolve it, the two can differ, and it is the binary's answer that decides
+    what the gate does.
+    """
+    binary = shutil.which("confiture")
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    match = re.search(r"\d+\.\d+\.\d+\S*", proc.stdout or "")
+    if match is None:
+        return None
+    try:
+        return Version(match.group(0))
+    except InvalidVersion:
+        return None
+
+
 @register_check("post_migrate_check_alter_safe")
 def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> CheckResult:
     """A DDL tree that drops a column fails the drift gate on a *correct* database.
@@ -753,6 +802,12 @@ def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> Check
     ``on_critical: fail`` that is a failed deploy on a correct migration, and
     the failure names a column rather than the cause (#407,
     fraiseql/confiture#301; reproduced on confiture 1.6.0 and 1.10.1).
+
+    **confiture fixed this in 1.11.0**, so above that release the warning
+    describes a failure that can no longer happen and the check passes
+    (:data:`_ALTER_DROP_FOLDED_IN`, bisected — see #415).  It is gated rather
+    than deleted because the floor is ``>=1.0.0``: a project resolving 1.10.1
+    is inside the declared range, and there the warning is still true.
 
     Only ``live-drift`` reads that inventory, so a gate running ``signatures``
     alone is unaffected.
@@ -784,6 +839,20 @@ def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> Check
             name, "skip", "no DDL files readable from here for the enabled gate(s)"
         )
     if offenders:
+        # confiture fixed this upstream, so above that release the warning is
+        # about a failure that can no longer happen.  The floor is `>=1.0.0`
+        # and a project resolving 1.10.1 is inside the declared range, where
+        # the warning is still true — hence a gate rather than a deletion.
+        installed = _confiture_cli_version()
+        if installed is not None and installed >= _ALTER_DROP_FOLDED_IN:
+            return CheckResult(
+                name,
+                "pass",
+                f"{scanned} DDL file(s) scanned; confiture {installed} folds "
+                f"ALTER TABLE … DROP COLUMN into the expected schema, as every "
+                f"release since {_ALTER_DROP_FOLDED_IN} does, so a dropped "
+                f"column no longer reads as missing from a correct database",
+            )
         return CheckResult(
             name,
             "warn",
@@ -792,9 +861,10 @@ def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> Check
             f"ALTER TABLE … DROP COLUMN, so the dropped column reads as missing "
             f"from a correct database (fraiseql/confiture#301)",
             fix_hint=(
-                "declare the table's final shape in its CREATE TABLE and move "
-                "the drop to a migration, or set on_critical: warn until "
-                "confiture#301 ships"
+                f"upgrade confiture to {_ALTER_DROP_FOLDED_IN} or later, where "
+                f"the drop is folded and this stops being a trap; or declare "
+                f"the table's final shape in its CREATE TABLE and move the "
+                f"drop to a migration, or set on_critical: warn"
             ),
         )
     return CheckResult(
