@@ -289,6 +289,10 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
     if isinstance(db, dict) and db.get("post_migrate_check") is not None:
         errors.extend(_validate_post_migrate_check(fraise_name, db))
 
+    # pre_migrate_dump gate validation (#419)
+    if isinstance(db, dict) and db.get("pre_migrate_dump") is not None:
+        errors.extend(_validate_pre_migrate_dump(fraise_name, db))
+
     # smoke_tests validation (#204 PR B)
     if env.get("smoke_tests") is not None:
         errors.extend(_validate_smoke_tests(fraise_name, env))
@@ -536,6 +540,50 @@ def _validate_post_migrate(fraise_name: str, db: dict) -> list[str]:
                 f"'warn', got {on_error!r}"
             )
 
+    return errors
+
+
+def _validate_pre_migrate_dump(fraise_name: str, db: dict) -> list[str]:
+    """Return validation errors for a ``database.pre_migrate_dump`` block (#419).
+
+    Validated whether or not the gate is ``enabled``, for the reason
+    :func:`_validate_post_migrate_check` is: a typo found only when someone
+    switches the gate on is found too late.
+
+    Only ``keep_last`` is checked. The other keys were read with ``.get()``
+    and defaulted long before this function existed, and widening the block's
+    validation is not this issue's job; ``keep_last`` earns it because a wrong
+    value is worse than an absent one — ``0`` would delete the rollback point
+    for the migration about to run.
+    """
+    errors: list[str] = []
+    raw_block: Any = db.get("pre_migrate_dump")
+    location = "database.pre_migrate_dump"
+    if not isinstance(raw_block, dict):
+        errors.append(
+            f"{fraise_name}: {location} must be a mapping, "
+            f"got {type(raw_block).__name__}"
+        )
+        return errors
+
+    block = cast("dict[str, Any]", raw_block)
+    if "keep_last" not in block:
+        return errors
+
+    keep_last = block["keep_last"]
+    # `bool` is an `int` in Python, so `keep_last: true` would otherwise read
+    # as 1 — a plausible typo silently becoming a one-dump corpus.
+    if isinstance(keep_last, bool) or not isinstance(keep_last, int):
+        errors.append(
+            f"{fraise_name}: {location}.keep_last must be an integer, "
+            f"got {type(keep_last).__name__}"
+        )
+    elif keep_last < 1:
+        errors.append(
+            f"{fraise_name}: {location}.keep_last must be at least 1, got "
+            f"{keep_last}; the newest dump is the rollback point for the "
+            f"migration about to run"
+        )
     return errors
 
 
