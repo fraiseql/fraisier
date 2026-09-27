@@ -177,6 +177,20 @@ class TestValidation:
             _config(enabled=True, escalate=["missing_constraint", "type_mismatch"]),
         )
 
+    def test_constraint_mismatch_is_escalatable(self) -> None:
+        """confiture 1.25.1 grades it ``warning``, so the gate can promote it.
+
+        A foreign key re-pointed at another table keeps its name, so it is not
+        ``missing_constraint``; before 1.25.1 confiture reported nothing at all
+        and the deploy passed clean.  ``escalate`` promotes a reported item and
+        cannot invent one, so this row is what makes a re-pointed key stoppable.
+        """
+        validate_one_fraise_environment(
+            "api",
+            "production",
+            _config(enabled=True, escalate=["constraint_mismatch"]),
+        )
+
     def test_an_info_graded_kind_is_not_escalatable(self) -> None:
         """``extra_constraint`` is ``info``, and info never reaches the verdict.
 

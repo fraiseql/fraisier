@@ -299,22 +299,28 @@ def preflight(
 def _incomplete_reason(result: object) -> str | None:
     """Why a confiture migrate result is not a completed run, or ``None``.
 
-    ``MigrateUpResult.has_errors`` is ``not success and len(errors) > 0`` — it
-    needs **both**.  Confiture halts the chain at a ``requires_superuser``
-    migration and returns ``success=False`` carrying no errors at all, so a
-    halt is invisible to ``has_errors`` and reads as a clean run (#417).
+    Up to confiture 1.23.1, ``MigrateUpResult.has_errors`` is ``not success and
+    len(errors) > 0`` — it needs **both**.  Confiture halts the chain at a
+    ``requires_superuser`` migration and returns ``success=False`` carrying no
+    errors at all, so a halt is invisible to ``has_errors`` and reads as a clean
+    run (#417).
 
     Branching on ``success`` catches the halt and the ordinary failure alike;
     this names whichever happened, because "did not complete" is not an
     actionable thing to tell an operator holding a half-migrated database.
 
-    confiture#432 (unreleased, expected in 1.24.0) makes ``success=False``
-    always carry an error and redefines ``has_errors`` as ``not success``.
-    Both shapes are handled here and pinned by tests: on that release the halt
-    carries its own message, so ``error_summary`` wins and confiture's wording
-    is reported; below it, the ``skipped_superuser`` branch builds one. The
-    floor is ``>=1.0.0``, so both remain reachable, and ``success`` is the one
-    reading that is correct on either.
+    confiture#432, released in 1.24.0, makes ``success=False`` always carry an
+    error and redefines ``has_errors`` as ``not success`` — so from 1.24.0 the
+    two readings coincide, and below it they do not. Both shapes are handled
+    here and pinned by tests: from 1.24.0 the halt carries its own message, so
+    ``error_summary`` wins and confiture's wording is reported; below it, the
+    ``skipped_superuser`` branch builds one. The floor is ``>=1.0.0``, so both
+    remain reachable, and ``success`` is the one reading that is correct on
+    either.
+
+    ``result.halted`` arrives with 1.24.0 and says the same thing as the
+    ``skipped_superuser`` test below, but that attribute answers on every
+    version in range and carries the migration this message has to name.
     """
     if getattr(result, "success", False):
         return None
