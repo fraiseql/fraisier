@@ -362,6 +362,89 @@ dependencies = [
   # resolve a confiture whose preflight JSON we could not parse (issues #262,
   # #362, #368, #395, #397, #405, #410); `<2` is not that width, because the
   # thing that went unpinned then is pinned now, upstream, in CI.
+  # 1.24.0 closes the upstream half of #417 (confiture#432), and the cap does
+  # not move — it is already the major line. `MigrateUpResult.has_errors` is
+  # redefined from `not success and len(errors) > 0` to `not self.success`, a
+  # halt always carries its error, and `migrate-up.schema.json` requires one
+  # when `success` is false. A read-only `halted` property arrives beside it,
+  # `bool(self.skipped_superuser)`.
+  #
+  # That is a *semantic* change to a 1.x library property fraisier reads, in a
+  # minor. It widens rather than narrows — True in strictly more cases — so a
+  # consumer that failed on it still fails and one that passed may now fail.
+  # Recorded because the upstream consumer contract tests
+  # (`tests/contract/test_consumer_symbols.py`) pin symbols and call shapes,
+  # which a redefined property body passes unchanged: the thing that moved is
+  # the one thing that side cannot see.
+  #
+  # Measured on both versions rather than read from the changelog:
+  #   * `dataclasses.fields(MigrateUpResult)` is identical on 1.23.1 and
+  #     1.24.0 — no field added, renamed or dropped — so the real-object
+  #     fixtures in `tests/test_migrate_halt_is_not_success.py` keep building.
+  #     Only the `has_errors` body, the new `halted` property and docstrings
+  #     moved.
+  #   * The pre-1.24 halt shape (`success=False`, `errors=[]`) constructs on
+  #     both, and `has_errors` answers False on 1.23.1 and True on 1.24.0.
+  #     Exactly one test in this tree flipped — the premise test that asserted
+  #     that False — and no behaviour test moved, because `_incomplete_reason`
+  #     branches on `success`. The premise now reads the installed
+  #     distribution, because a premise pinned to one side of the floor is
+  #     false on the other.
+  #   * The JSON error envelope is unchanged. The same failing command under
+  #     `--format json` gives a 433-byte payload on stdout and an empty stderr
+  #     on both versions, one identical key set, `CONFIG_004` and exit 5;
+  #     `envelope_error_code` / `envelope_error_message` read it and
+  #     `classify_confiture_failure(5, …)` still answers `invalid_config`.
+  #     1.24.0's redaction runs inside `cli/error_json.fail()` and masks
+  #     credentials in an error's message, hint, context and attributes without
+  #     moving a key or a stream — an improvement on a path fraisier persists
+  #     into a deploy report, where a DSN password now reads `***`.
+  #
+  # Operator-visible here: from 1.24.0 a halt fills `errors`, so
+  # `error_summary` is non-empty and `_incomplete_reason` reports confiture's
+  # own wording instead of the line it builds from `skipped_superuser`. Both
+  # paths are pinned by tests, because the floor keeps both reachable.
+  #
+  # The rest of 1.24.0 is `confiture lint` — `db/project.yaml`, the
+  # `tenant_002`–`tenant_005` family, `sec_003` — and inert: fraisier never
+  # invokes that command (`config/schema.py`'s `lint_command` is fraisier's own
+  # `uv run ruff check`).
+  #
+  # 1.25.0 is breaking on the model's wire and inert here, measured rather than
+  # reasoned. A foreign key's `ref_table` and an index's `table` become
+  # `RelationName(schema, name)` objects in `SchemaModel.to_json()` and in a
+  # change's `details`, and confiture's changelog names *drift* among the
+  # consumers that used to misread a dotted name — which is this gate's path, so
+  # "inert" had to be measured. fraisier reads none of it: no `ref_table`,
+  # `RelationName` or `SchemaModel` anywhere, and the gate parses only
+  # `drift_items` with `kind`/`severity`/`object`/`message` plus the counters.
+  # `.phases/2026-09-27-confiture-1-25-probe/driver9.py` drives fraisier's own
+  # `check_schema_drift` over a cross-schema foreign key and an index on both
+  # versions: same verdicts, and the payloads are byte-identical — 816 bytes for
+  # a dropped key, 558 for no drift. `naming_003`/`naming_004` and `DIFFER_403`
+  # ride on `confiture lint` and `migrate diff`, neither of which fraisier
+  # invokes.
+  #
+  # 1.25.1 is a behaviour change on the gate's own path, and it exists because
+  # that probe ran. Its scenario Z re-points a foreign key at a same-named table
+  # in another schema; every version up to 1.25.0 answered `has_drift: false`
+  # and passed a database whose key referenced the wrong table, because
+  # `core/drift.py::_same_constraint` compared a *named* constraint by its name
+  # and never reached the definition (confiture#501, filed off this probe).
+  # 1.25.1 pairs by name and then compares columns, referenced table and
+  # columns, referential actions and deferrability, reporting a difference as
+  # the new warning kind `constraint_mismatch`: on the same scenario, 558 bytes
+  # and no items becomes 914 bytes and one warning. A CHECK stays name-only,
+  # because PostgreSQL stores its text analysed.
+  #
+  # `constraint_mismatch` is therefore a new row in `ESCALATABLE_KINDS`. The
+  # gate still passes it by default — every warning kind does — but `escalate`
+  # can now be asked to make a re-pointed key fatal, which the closed list
+  # refused before. `escalate` promotes a reported item and cannot invent one,
+  # so before 1.25.1 no configuration could stop that deploy.
+  #
+  # None of 1.24.0, 1.25.0 or 1.25.1 moves fraisier's suite: 5910 passed and 1
+  # skipped on each, `ty` and both ruff gates clean on each.
   "fraiseql-confiture>=1.0.0,<2",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",

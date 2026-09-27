@@ -5,9 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.82.0] - 2026-09-27
+
+**A halted migration reported a successful deploy.** Plus the confiture work
+fraisier had not picked up: the subprocess wrappers now read the contract
+instead of the console, and a doctor check that warns about a bug confiture
+fixed goes quiet at the release that fixed it.
+
+A count ceiling bounds the pre-migrate dump corpus, the integration suite stops
+competing with another run of itself, and the confiture lock moves to 1.25.1 —
+whose own fix for a foreign key re-pointed at the wrong table came out of the
+probe written to audit it for this release.
 
 ### Fixed
+
+- **⚠️ `migrate_up()` reported `success=True` when confiture halted with
+  migrations unapplied** ([#417](https://github.com/fraiseql/fraisier/issues/417)).
+  `MigrateUpResult.has_errors` is `not success and len(errors) > 0` — it needs
+  **both**. Confiture halts the chain at a `requires_superuser` migration and
+  returns `success=False` passing *no* `errors` argument, so `has_errors` is
+  `False` and the halt read as a clean run. fraisier branched on `has_errors`
+  and never on `success`, at two sites: `migrate_up()` — the live path for
+  every deploy strategy — and the `pre_migrate_verify` rehearsal, which logged
+  "Dry-run-execute passed" for a rehearsal that stopped early, so the
+  verification licensing the real run had verified less than it claimed.
+  `result.pending` and `result.skipped_superuser` were discarded on both.
+
+  Both now branch on `success` and name the migration that stopped the chain
+  and how many are left unapplied.
+
+  **This fails deploys that previously passed.** That is the point — the
+  alternative is an app started against a half-migrated schema — but it is a
+  new failure mode. fraisier never sets or scaffolds `requires_superuser`, so
+  it fires only for a project whose own migration declares it.
+
+  No test caught this because every fixture built results that either succeed
+  or carry errors: `mock_result.has_errors = False` on a `MagicMock` never
+  executes the property. The new tests build real `MigrateUpResult` objects,
+  and `ty` immediately rejected the first one for putting `str` where
+  `MigrationApplied` belongs — which is the argument for real objects in one
+  line.
+
+- **Every `confiture migrate rebuild` reported 0 migrations**
+  ([#414](https://github.com/fraiseql/fraisier/issues/414)). It prints
+  `Migrations marked: N`, which matched neither text pattern, so the count
+  fell through to zero and nothing failed, so nothing noticed. `migrate` and
+  `rebuild` now pass `--format json` and read `applied` / `rolled_back` /
+  `marked` from the typed payload. A console layout is not a contract.
+
+  Note those are the **serialized** names, not the result objects' attribute
+  names — `to_dict` writes `migrations_applied` as `applied`. This fix first
+  shipped the attribute spelling, which appears in no payload, so it would
+  have counted every run as zero: the defect being fixed, reintroduced by its
+  own fix, and invisible because the tests were hand-written dicts using the
+  same wrong names. The fixtures are now captured from live runs
+  (`REAL_UP_PAYLOAD`), with a premise test asserting the attribute name is
+  absent from a real payload. Caught in review, not by the suite.
+
+  Only `applied` has a published schema (`migrate-up`).
+  `migrate-down-to.schema.json` covers a *different* command — `migrate
+  down-to`, whose payload is `{from, to, rolled_back, skipped, errors}` —
+  while fraisier runs plain `migrate down`, which has none; nor has `migrate
+  rebuild`. So `rolled_back` and `marked` rest on `to_dict` alone upstream,
+  which is why all three are pinned here by captured payloads.
 
 - **The integration suite no longer competes with another run of itself**
   ([#418](https://github.com/fraiseql/fraisier/issues/418)). These tests build
@@ -78,73 +138,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is validated whether or not the gate is enabled, because a typo found on
   the day someone switches the gate on is found too late.
 
-### Known, not fixed
-
-- Pruning still runs only inside a deploy, so a busy stretch followed by a
-  quiet week holds the whole corpus until someone deploys. `keep_last` bounds
-  the worst case; the steady state needs a prune that is not a side effect of
-  deploying, filed as
-  [#420](https://github.com/fraiseql/fraisier/issues/420).
-
-## [0.82.0] - 2026-09-26
-
-**A halted migration reported a successful deploy.** Plus the confiture work
-fraisier had not picked up: the subprocess wrappers now read the contract
-instead of the console, and a doctor check that warns about a bug confiture
-fixed goes quiet at the release that fixed it.
-
-### Fixed
-
-- **⚠️ `migrate_up()` reported `success=True` when confiture halted with
-  migrations unapplied** ([#417](https://github.com/fraiseql/fraisier/issues/417)).
-  `MigrateUpResult.has_errors` is `not success and len(errors) > 0` — it needs
-  **both**. Confiture halts the chain at a `requires_superuser` migration and
-  returns `success=False` passing *no* `errors` argument, so `has_errors` is
-  `False` and the halt read as a clean run. fraisier branched on `has_errors`
-  and never on `success`, at two sites: `migrate_up()` — the live path for
-  every deploy strategy — and the `pre_migrate_verify` rehearsal, which logged
-  "Dry-run-execute passed" for a rehearsal that stopped early, so the
-  verification licensing the real run had verified less than it claimed.
-  `result.pending` and `result.skipped_superuser` were discarded on both.
-
-  Both now branch on `success` and name the migration that stopped the chain
-  and how many are left unapplied.
-
-  **This fails deploys that previously passed.** That is the point — the
-  alternative is an app started against a half-migrated schema — but it is a
-  new failure mode. fraisier never sets or scaffolds `requires_superuser`, so
-  it fires only for a project whose own migration declares it.
-
-  No test caught this because every fixture built results that either succeed
-  or carry errors: `mock_result.has_errors = False` on a `MagicMock` never
-  executes the property. The new tests build real `MigrateUpResult` objects,
-  and `ty` immediately rejected the first one for putting `str` where
-  `MigrationApplied` belongs — which is the argument for real objects in one
-  line.
-
-- **Every `confiture migrate rebuild` reported 0 migrations**
-  ([#414](https://github.com/fraiseql/fraisier/issues/414)). It prints
-  `Migrations marked: N`, which matched neither text pattern, so the count
-  fell through to zero and nothing failed, so nothing noticed. `migrate` and
-  `rebuild` now pass `--format json` and read `applied` / `rolled_back` /
-  `marked` from the typed payload. A console layout is not a contract.
-
-  Note those are the **serialized** names, not the result objects' attribute
-  names — `to_dict` writes `migrations_applied` as `applied`. This fix first
-  shipped the attribute spelling, which appears in no payload, so it would
-  have counted every run as zero: the defect being fixed, reintroduced by its
-  own fix, and invisible because the tests were hand-written dicts using the
-  same wrong names. The fixtures are now captured from live runs
-  (`REAL_UP_PAYLOAD`), with a premise test asserting the attribute name is
-  absent from a real payload. Caught in review, not by the suite.
-
-  Only `applied` has a published schema (`migrate-up`).
-  `migrate-down-to.schema.json` covers a *different* command — `migrate
-  down-to`, whose payload is `{from, to, rolled_back, skipped, errors}` —
-  while fraisier runs plain `migrate down`, which has none; nor has `migrate
-  rebuild`. So `rolled_back` and `marked` rest on `to_dict` alone upstream,
-  which is why all three are pinned here by captured payloads.
-
 ### Changed
 
 - **A confiture failure is classified by its exit code, not by its English.**
@@ -196,6 +189,87 @@ fixed goes quiet at the release that fixed it.
   Gated rather than deleted. The floor is `>=1.0.0`, a project resolving 1.10.1
   is inside the declared range, and there the warning is true — the defect was
   that the check was unconditional, not that it was wrong.
+
+- **confiture: the lock moves 1.23.1 → 1.25.1, and the upstream half of #417 is
+  fixed** (confiture#432). A `requires_superuser` halt now always carries its
+  error, and `MigrateUpResult.has_errors` is redefined from `not success and
+  len(errors) > 0` to plain `not success`. fraisier's own fix is unaffected —
+  it branches on `success` — and it stays necessary, because the floor is
+  `>=1.0.0` and every confiture below 1.24.0 still reports the halt as a clean
+  run.
+
+  The cap does not move; it is already `<2`. These are retrospective audits of
+  versions users resolve today, not lifts.
+
+  **1.24.0**, measured on both versions rather than read from the changelog:
+
+  - `dataclasses.fields(MigrateUpResult)` is identical on 1.23.1 and 1.24.0 —
+    no field added, renamed or dropped — so nothing fraisier constructs or
+    reads moved. Only the `has_errors` body, a new read-only `halted` property
+    and docstrings.
+  - The JSON error envelope is unchanged: the same failing command gives one
+    identical key set, `CONFIG_004`, exit 5, a 433-byte payload on stdout and
+    an empty stderr on both. `envelope_error_message()` and
+    `classify_confiture_failure()` are untouched. 1.24.0's credential
+    redaction masks a password inside an error without moving a key or a
+    stream — a straight improvement on a path fraisier persists into a deploy
+    report.
+  - From 1.24.0 a halt fills `errors`, so fraisier reports **confiture's**
+    wording for it instead of the line it builds from `skipped_superuser`.
+    Both paths are pinned, because the floor keeps both reachable.
+  - The rest of it is `confiture lint` — `db/project.yaml`, the
+    `tenant_002`–`tenant_005` family, `sec_003` — a command fraisier never
+    invokes.
+
+  **1.25.0** is breaking on the model's wire and inert here — but its changelog
+  names *drift* among the consumers that used to misread a dotted name, and
+  that is this gate's path, so the inertness was measured rather than reasoned.
+  A foreign key's `ref_table` and an index's `table` become
+  `RelationName(schema, name)` objects in `SchemaModel.to_json()` and in a
+  change's `details`; fraisier reads none of them, and the gate parses only
+  `drift_items` with `kind`/`severity`/`object`/`message` plus the counters.
+  `.phases/2026-09-27-confiture-1-25-probe/driver9.py` drives fraisier's own
+  `check_schema_drift` over a cross-schema foreign key and an index on both
+  versions: same verdicts, byte-identical payloads. `naming_003`/`naming_004`
+  and `DIFFER_403` ride on `confiture lint` and `migrate diff`, neither of
+  which fraisier invokes.
+
+- **A re-pointed foreign key can now be made to stop a deploy**
+  (confiture#501, found by the probe above and fixed in confiture 1.25.1).
+  Scenario Z re-points a foreign key at a same-named table in another schema.
+  Every confiture up to 1.25.0 answered `has_drift: false` and passed that
+  database clean — `_same_constraint` compared a *named* constraint by its name
+  and never reached the definition, so a key referencing the wrong table was
+  not drift at all. 1.25.1 pairs by name and then compares columns, referenced
+  table and columns, referential actions and deferrability, reporting a
+  difference as the new warning kind `constraint_mismatch`: on that scenario,
+  558 bytes and no items becomes 914 bytes and one warning. A `CHECK` stays
+  name-only, because PostgreSQL stores its text analysed.
+
+  `constraint_mismatch` joins `ESCALATABLE_KINDS`. The gate still passes it by
+  default, as it does every warning kind, but `post_migrate_check.escalate` can
+  now be asked to make a re-pointed key fatal — the closed list refused that
+  configuration before, so the request was a validation error. Note what this
+  says about `escalate` generally: it promotes an item confiture reported and
+  cannot invent one, so no setting on this side could have stopped that deploy
+  before 1.25.1.
+
+- **A premise test was pinned to one side of the floor.**
+  `test_migrate_halt_is_not_success.py` asserted `has_errors is False` for a
+  halt — the whole point of #417, and false on 1.24.0, where that same
+  constructed shape answers `True`. It failed the day 1.24.0 published, on a
+  tree whose behaviour was correct the entire time. It now reads the installed
+  distribution, pins both answers, and pins the invariant that holds on every
+  version in range: `success` is `False` for either halt shape. A premise that
+  only holds on half the versions a floor admits is not a premise.
+
+### Known, not fixed
+
+- Pruning still runs only inside a deploy, so a busy stretch followed by a
+  quiet week holds the whole corpus until someone deploys. `keep_last` bounds
+  the worst case; the steady state needs a prune that is not a side effect of
+  deploying, filed as
+  [#420](https://github.com/fraiseql/fraisier/issues/420).
 
 ## [0.81.0] - 2026-09-23
 

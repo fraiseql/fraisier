@@ -88,12 +88,22 @@ CHECK_FLAGS: dict[str, str] = {
 #: ``NUMERIC(10,2)`` → ``NUMERIC(10,4)``; ``nullable_mismatch`` on a dropped
 #: ``NOT NULL``.
 #:
+#: ``constraint_mismatch`` is confiture 1.25.1's (confiture#501): a named
+#: constraint that kept its name and changed what it says.  Measured in
+#: ``.phases/2026-09-27-confiture-1-25-probe/`` on a foreign key dropped and
+#: re-added against a same-named table in another schema — on 1.25.0 that
+#: database is ``has_drift: false`` and the gate passes it clean; on 1.25.1 it
+#: is one ``constraint_mismatch`` warning.  ``escalate`` is the only way to make
+#: a re-pointed key stop a deploy, and it cannot promote a kind that is not a
+#: row here, so without this the configuration asking for it was refused.
+#:
 #: The list is closed on purpose.  ``escalate`` is validated against it, so a
 #: misspelt kind is a configuration error rather than a gate that silently
 #: declines to fire — which is the #262 shape, and the one this gate exists to
 #: avoid.  A kind confiture adds later is a row here, with a probe behind it.
 ESCALATABLE_KINDS: tuple[str, ...] = (
     "missing_constraint",
+    "constraint_mismatch",
     "default_mismatch",
     "type_mismatch",
     "nullable_mismatch",
