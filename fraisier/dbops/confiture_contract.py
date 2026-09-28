@@ -176,6 +176,30 @@ def envelope_error_message(output: str) -> str | None:
     return None
 
 
+def envelope_error_actionable(output: str) -> str | None:
+    """The ``error.actionable`` from a confiture ``--format json`` error envelope.
+
+    Confiture fills this with the remedy, not a restatement of the failure: a
+    ``DIFFER_403`` carries "Rename it so it needs no quotes, e.g. …; `confiture
+    lint` lists every such name". A report that names what broke and drops what
+    to do about it makes the operator go and find that sentence themselves.
+
+    Returns ``None`` when *output* is not that envelope, or carries no remedy —
+    it is optional, unlike ``code`` and ``message``.
+    """
+    try:
+        data = json.loads(output)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    error = data.get("error")
+    if isinstance(error, dict):
+        actionable = error.get("actionable")
+        return actionable if isinstance(actionable, str) else None
+    return None
+
+
 def envelope_error_code(output: str) -> str | None:
     """The ``error.code`` from a confiture ``--format json`` error envelope.
 

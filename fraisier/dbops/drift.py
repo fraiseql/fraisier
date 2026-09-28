@@ -62,6 +62,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
+from fraisier.dbops.confiture_contract import (
+    envelope_error_actionable,
+    envelope_error_code,
+    envelope_error_message,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, Sequence
 
@@ -562,23 +568,50 @@ def _build_error(build: subprocess.CompletedProcess[str]) -> str:
 
     Falls back to the raw streams for the failures that emit no envelope at
     all: a missing binary, a kill, a wrapper script.
+
+    Reads the envelope through the same helpers as :func:`_no_verdict_reason`,
+    which needed the identical treatment on the validate path and did not have
+    it — the fix had sat twenty lines from the defect since #401. One way in
+    means the next path to need it borrows rather than re-derives.
     """
-    try:
-        payload = json.loads(build.stdout)
-    except json.JSONDecodeError:
-        payload = None
-    error = payload.get("error") if isinstance(payload, dict) else None
-    if isinstance(error, dict) and error.get("message"):
-        hint = error.get("actionable")
-        return f"{error.get('code', '?')}: {error['message']}" + (
-            f" ({hint})" if hint else ""
-        )
+    message = envelope_error_message(build.stdout)
+    if message:
+        hint = envelope_error_actionable(build.stdout)
+        code = envelope_error_code(build.stdout) or "?"
+        return f"{code}: {message}" + (f" ({hint})" if hint else "")
     return (build.stderr or build.stdout).strip()[:400]
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     log.debug("post_migrate_check: %s", " ".join(cmd))
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+
+def _no_verdict_reason(run: subprocess.CompletedProcess[str], exc: ValueError) -> str:
+    """Why ``migrate validate`` gave no readable report — in confiture's words.
+
+    Under ``--format json`` confiture writes its error envelope to **stdout** and
+    leaves stderr empty, so reaching for ``stderr`` here reported nothing at all.
+    Measured on a ``DIFFER_403``: 573 bytes of envelope on stdout, 0 on stderr,
+    and the operator was told only which keys we had failed to recognise — while
+    the name that caused it and the rename that fixes it sat unread. That is
+    #414's lesson (``--format json`` moves the error between streams) at the call
+    site that fix did not reach, and it matters now that confiture refuses a
+    schema whose names need quotes on this path too, not only in ``migrate diff``.
+
+    ``stderr`` stays the fallback for a run that wrote no envelope — one that died
+    before it could, where what it managed to say is all there is.
+    """
+    code = envelope_error_code(run.stdout)
+    message = envelope_error_message(run.stdout)
+    if code or message:
+        said = " ".join(part for part in (code, message) if part)
+        remedy = envelope_error_actionable(run.stdout)
+        tail = f" {remedy}" if remedy else ""
+        return f"confiture migrate validate exit {run.returncode}: {said}{tail}"
+    stderr = run.stderr.strip()[:200]
+    detail = f"; {stderr}" if stderr else ""
+    return f"{exc} (confiture migrate validate exit {run.returncode}{detail})"
 
 
 def check_schema_drift(
@@ -725,16 +758,12 @@ def check_schema_drift(
     try:
         reports = _reports(validate.stdout)
     except ValueError as exc:
-        stderr = validate.stderr.strip()[:200]
-        detail = f"; {stderr}" if stderr else ""
         return DriftResult(
             passed=False,
             exit_code=validate.returncode,
             checks=selected,
             build_notes=notes,
-            error=(
-                f"{exc} (confiture migrate validate exit {validate.returncode}{detail})"
-            ),
+            error=_no_verdict_reason(validate, exc),
         )
 
     risen, warnings = _escalate(_items(reports, "warning"), escalate)
