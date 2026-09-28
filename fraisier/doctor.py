@@ -891,16 +891,26 @@ def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> Check
 #:    exists to make revisiting this a decision rather than an oversight.
 _QUOTED_NAMES_REFUSED_IN = Version("1.26.0")
 
-#: PostgreSQL's reserved keywords: the words that cannot be an identifier
-#: unquoted no matter where they appear.  Generated, not recalled --
-#: ``SELECT word FROM pg_get_keywords() WHERE catcode = 'R'`` on PostgreSQL
-#: 18.4, which is the grammar confiture parses with (pglast 8.4).
+#: The keywords PostgreSQL cannot read as a bare identifier.  Generated, not
+#: recalled -- ``SELECT word FROM pg_get_keywords() WHERE catcode IN ('R', 'T')``
+#: on PostgreSQL 18.4, the grammar confiture parses with (pglast 8.4).
 #:
-#: The other categories are deliberately out: ``catcode 'C'`` and ``'T'`` are
-#: bare-legal as a column name, so including them would warn about names
-#: confiture accepts.  This check errs towards silence on the ambiguous cases
-#: and certainty on these.
-_RESERVED_WORDS: frozenset[str] = frozenset(
+#: The two categories that matter are not the ones their names suggest, so
+#: both were measured as a **column** name rather than reasoned about:
+#:
+#: * ``R`` (reserved, 78) and ``T`` (type/function-name, 23) are syntax
+#:   errors bare -- ``CREATE TABLE t (left text)`` does not parse.
+#: * ``C`` (column-name, 63) parses bare and is deliberately **excluded**:
+#:   ``CREATE TABLE t (between text)`` is accepted, and confiture does not
+#:   refuse it either.  Including it would warn about names confiture takes.
+#:
+#: This matches confiture's own predicate, ``quote_identifier(name) != name``.
+#: It inherits one over-report with it: a ``T`` word *is* bare-legal as a
+#: **function** name (``CREATE FUNCTION similar()`` parses), and confiture
+#: flags it anyway because its predicate does not look at the object's kind.
+#: This check exists to predict the refusal rather than to be right about
+#: PostgreSQL, so it follows confiture there on purpose.
+_QUOTE_REQUIRING_KEYWORDS: frozenset[str] = frozenset(
     {
         "all",
         "analyse",
@@ -911,17 +921,23 @@ _RESERVED_WORDS: frozenset[str] = frozenset(
         "as",
         "asc",
         "asymmetric",
+        "authorization",
+        "binary",
         "both",
         "case",
         "cast",
         "check",
         "collate",
+        "collation",
         "column",
+        "concurrently",
         "constraint",
         "create",
+        "cross",
         "current_catalog",
         "current_date",
         "current_role",
+        "current_schema",
         "current_time",
         "current_timestamp",
         "current_user",
@@ -937,36 +953,52 @@ _RESERVED_WORDS: frozenset[str] = frozenset(
         "fetch",
         "for",
         "foreign",
+        "freeze",
         "from",
+        "full",
         "grant",
         "group",
         "having",
+        "ilike",
         "in",
         "initially",
+        "inner",
         "intersect",
         "into",
+        "is",
+        "isnull",
+        "join",
         "lateral",
         "leading",
+        "left",
+        "like",
         "limit",
         "localtime",
         "localtimestamp",
+        "natural",
         "not",
+        "notnull",
         "null",
         "offset",
         "on",
         "only",
         "or",
         "order",
+        "outer",
+        "overlaps",
         "placing",
         "primary",
         "references",
         "returning",
+        "right",
         "select",
         "session_user",
+        "similar",
         "some",
         "symmetric",
         "system_user",
         "table",
+        "tablesample",
         "then",
         "to",
         "trailing",
@@ -976,6 +1008,7 @@ _RESERVED_WORDS: frozenset[str] = frozenset(
         "user",
         "using",
         "variadic",
+        "verbose",
         "when",
         "where",
         "window",
@@ -983,8 +1016,6 @@ _RESERVED_WORDS: frozenset[str] = frozenset(
     }
 )
 
-#: What PostgreSQL writes bare: a lower-case letter or underscore, then
-#: lower-case letters, digits, underscores or dollars.
 _BARE_IDENTIFIER_RE = re.compile(r"[a-z_][a-z0-9_$]*\Z")
 
 #: A double-quoted identifier in SQL, with ``""`` standing for one quote.
@@ -1018,7 +1049,7 @@ def _needs_quotes(name: str) -> bool:
     """
     if not _BARE_IDENTIFIER_RE.match(name):
         return True
-    return name in _RESERVED_WORDS
+    return name in _QUOTE_REQUIRING_KEYWORDS
 
 
 def _conforming_rename(name: str) -> str:
@@ -1026,7 +1057,7 @@ def _conforming_rename(name: str) -> str:
     folded = "".join(ch if ch.isalnum() or ch in "_$" else "_" for ch in name.lower())
     if not folded or not (folded[0].isalpha() or folded[0] == "_"):
         folded = f"_{folded}"
-    return f"{folded}_" if folded in _RESERVED_WORDS else folded
+    return f"{folded}_" if folded in _QUOTE_REQUIRING_KEYWORDS else folded
 
 
 def _offending_identifiers(sql: str) -> list[str]:

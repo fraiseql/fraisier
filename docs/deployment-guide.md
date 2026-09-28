@@ -856,8 +856,11 @@ compares no built schema.
 
 Two spellings fail for different reasons, and the distinction is worth
 keeping. `naming_004` is everything that merely needs quotes — a capital, a
-space, punctuation, a leading digit, a non-ASCII letter, or a reserved word
-such as `user`. `naming_003` is a name containing a dot, which is worse: it
+space, punctuation, a leading digit, a non-ASCII letter, or one of the 101
+keywords PostgreSQL cannot read as a bare column name. That last group holds
+the surprises: `user` and `order`, but also `left`, `right`, `join`, `like`
+and `is`. Not every keyword is one — `between`, `int` and `time` are legal
+bare column names, and confiture accepts them. `naming_003` is a name containing a dot, which is worse: it
 *misreads* as `schema.name`, so whatever refers to it resolves somewhere
 else.
 

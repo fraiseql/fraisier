@@ -150,7 +150,8 @@ class TestTheCheckSeesAQuotedName:
         """``user`` is lower-case and alphanumeric, and still needs quotes.
 
         A predicate built only from "has a capital or punctuation" misses this
-        whole class.  PostgreSQL 18 reserves 78 words; this is one.
+        whole class.  PostgreSQL 18.4 has 101 words that need quotes as a
+        column name; this is one.
         """
         schema = 'CREATE TABLE app.tb_account (\n    "user" TEXT NOT NULL\n);\n'
         result = _run(_cfg(tmp_path), schema)
@@ -365,3 +366,43 @@ class TestAFunctionBodyIsNotADeclaration:
         result = _run(_cfg(tmp_path), schema)
         assert result.status == "warn"
         assert "createdAt" in result.detail
+
+
+class TestTheKeywordCategoriesThatActuallyNeedQuotes:
+    """Which ``pg_get_keywords()`` categories are bare-legal, measured.
+
+    Not all of them, and not the ones a reading of the category names
+    suggests.  On PostgreSQL 18.4, as a **column** name:
+
+    ``CREATE TABLE t (left text)``      → syntax error   (catcode ``T``, 23)
+    ``CREATE TABLE t (between text)``   → accepted       (catcode ``C``, 63)
+
+    So ``T`` needs quotes and ``C`` does not, which is the opposite of what
+    "type/function-name keyword" sounds like next to "column-name keyword".
+    confiture agrees: its predicate is ``quote_identifier(name) != name``,
+    which covers ``R`` and ``T`` and leaves ``C`` alone.
+    """
+
+    def test_a_type_func_name_keyword_is_an_offender(self, tmp_path: Path) -> None:
+        schema = 'CREATE TABLE app.tb_span ("left" INT, "right" INT);\n'
+        result = _run(_cfg(tmp_path), schema)
+        assert result.status == "warn"
+        assert "left" in result.detail
+
+    def test_a_col_name_keyword_is_not_an_offender(self, tmp_path: Path) -> None:
+        """``between``, ``int`` and ``time`` are bare-legal columns; confiture takes them."""
+        schema = 'CREATE TABLE app.tb_slot ("between" TEXT, "int" TEXT, "time" TEXT);\n'
+        assert _run(_cfg(tmp_path), schema).status == "pass"
+
+    def test_a_type_func_name_keyword_is_flagged_even_as_a_routine_name(
+        self, tmp_path: Path
+    ) -> None:
+        """confiture over-reports here, and this check mirrors it on purpose.
+
+        ``CREATE FUNCTION similar()`` parses bare — measured — so a quoted
+        routine name is one confiture need not refuse.  Its predicate does not
+        look at the object's kind, so it refuses anyway.  This check exists to
+        predict the refusal, not to be right about PostgreSQL, so it follows.
+        """
+        schema = 'CREATE FUNCTION app."similar"() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql;\n'
+        assert _run(_cfg(tmp_path), schema).status == "warn"
