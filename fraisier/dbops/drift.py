@@ -614,6 +614,45 @@ def _no_verdict_reason(run: subprocess.CompletedProcess[str], exc: ValueError) -
     return f"{exc} (confiture migrate validate exit {run.returncode}{detail})"
 
 
+def build_expected_schema(
+    *, project_dir: Path, env_name: str, output: Path
+) -> subprocess.CompletedProcess[str]:
+    """Build the schema the gate grades a live database against, into *output*.
+
+    One spelling of this argv, because two callers need the *same* schema to be
+    talking about the same thing: the gate compares it, and
+    ``doctor``'s ``post_migrate_check_names_conform`` reads it to predict
+    whether confiture will refuse to compare it at all.  A second, drifting copy
+    would let the doctor bless a build the gate never runs.
+
+    Returns the completed process rather than the schema text: the caller needs
+    the exit code, and the ``--format json`` envelope on **stdout** carries the
+    build's notes (see :func:`_build_notes`).
+    """
+    return _run(
+        [
+            "confiture",
+            "build",
+            "--project-dir",
+            str(project_dir),
+            "--env",
+            env_name,
+            "--schema-only",
+            # Reports duplicate definitions and builds anyway. Without it
+            # nothing reaches the envelope's `warnings[]` on a schema-only
+            # build, so the channel below would read a key confiture never
+            # fills. Measured cost on a 1001-file DDL tree: +0.25s.
+            "--warn-duplicates",
+            "--output",
+            str(output),
+            # The schema still goes to --output; this is the envelope, on
+            # stdout, with the progress lines moved to stderr.
+            "--format",
+            "json",
+        ]
+    )
+
+
 def check_schema_drift(
     *,
     project_dir: Path,
@@ -664,27 +703,8 @@ def check_schema_drift(
 
     with tempfile.TemporaryDirectory(prefix="fraisier-drift-") as tmp:
         expected = Path(tmp) / "expected_schema.sql"
-        build = _run(
-            [
-                "confiture",
-                "build",
-                "--project-dir",
-                str(project_dir),
-                "--env",
-                env_name,
-                "--schema-only",
-                # Reports duplicate definitions and builds anyway. Without it
-                # nothing reaches the envelope's `warnings[]` on a schema-only
-                # build, so the channel below would read a key confiture never
-                # fills. Measured cost on a 1001-file DDL tree: +0.25s.
-                "--warn-duplicates",
-                "--output",
-                str(expected),
-                # The schema still goes to --output; this is the envelope, on
-                # stdout, with the progress lines moved to stderr.
-                "--format",
-                "json",
-            ]
+        build = build_expected_schema(
+            project_dir=project_dir, env_name=env_name, output=expected
         )
         if build.returncode != 0:
             return DriftResult(
