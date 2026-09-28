@@ -263,5 +263,14 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        moves the error from
 #                                                        stderr to stdout (#414).
 #
+#   dbops/confiture_contract.py:envelope_error_actionable non-config  The third of
+#                                                        the same set, on
+#                                                        ``error.actionable`` —
+#                                                        confiture's remedy line.
+#                                                        Added so the drift gate
+#                                                        reports what to do about
+#                                                        a DIFFER_403, not only
+#                                                        that one happened.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.

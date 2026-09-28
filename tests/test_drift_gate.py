@@ -200,6 +200,38 @@ def project(tmp_path: Path) -> Path:
 
 
 #: "no build payload given", distinct from "the build printed nothing".
+#: A real ``migrate validate --check-live-drift --format json`` failure, captured
+#: from confiture at `aa430dad` (#505) against a database built from its own DDL
+#: — so it carries **zero** drift and the refusal is the only thing wrong with it.
+#: The schema names `"createdAt"`, which confiture no longer supports on any path.
+#:
+#: Captured rather than written, and the capture is the point: stdout carried 573
+#: bytes and **stderr carried 0**, which is why the gate's stderr fallback had
+#: nothing to report. A hand-written fixture would have put the message on stderr
+#: and agreed with the code being fixed.
+#:
+#: Probe: `.phases/2026-09-28-confiture-next-probe/probe_quoted.py`.
+REAL_DIFFER_403_ENVELOPE: dict[str, object] = {
+    "ok": False,
+    "parser": {"pglast": "8.4", "pg_major": 18},
+    "error": {
+        "code": "DIFFER_403",
+        "message": "The expected schema names column "
+        'app.tb_user."createdAt" (and 1 more), which needs '
+        "quotes: confiture supports a name only as PostgreSQL "
+        "writes it bare",
+        "severity": "error",
+        "details": {},
+        "migration": None,
+        "file": None,
+        "line": None,
+        "actionable": "Rename it so it needs no quotes, e.g. "
+        "app.tb_user.createdat; `confiture lint` lists "
+        "every such name (naming_003, naming_004)",
+    },
+    "command": "migrate validate",
+}
+
 _UNSET = "\u0000unset"
 
 
@@ -208,12 +240,13 @@ def _runs(mock_run: MagicMock) -> list[list[str]]:
 
 
 def _fake_confiture(
-    payload: dict | None,
+    payload: dict | str | None,
     *,
     build_rc: int = 0,
     validate_rc: int = 0,
     build_payload: dict | str | None = _UNSET,
     build_stderr: str = BUILD_PROGRESS,
+    validate_stderr: str = "",
     built_schema: str = "CREATE TABLE part",
 ):
     """A ``subprocess.run`` double that also writes the built schema file.
@@ -227,6 +260,12 @@ def _fake_confiture(
     under ``--format json``: the envelope on stdout, the progress lines on
     stderr. Passing ``build_payload`` as a ``str`` puts that string on stdout
     verbatim, for the case where it is not an envelope at all.
+
+    *validate_stderr* defaults to empty because that is what confiture leaves
+    there under ``--format json`` — measured, a 573-byte envelope on stdout and
+    0 bytes on stderr. Set it for a run that died without writing a payload at
+    all, the only case where stderr is the best thing to report. A ``str``
+    *payload* goes to stdout verbatim, for output that is no envelope.
 
     *built_schema* is what lands at ``--output``.  The default is deliberately
     not valid SQL: nothing here parses it, and a plausible-looking schema would
@@ -242,6 +281,11 @@ def _fake_confiture(
             return build_payload
         return json.dumps(build_payload) if build_payload is not None else ""
 
+    def _validate_stdout() -> str:
+        if isinstance(payload, str):
+            return payload
+        return json.dumps(payload) if payload is not None else ""
+
     def run(cmd: list[str], **_kwargs: object) -> MagicMock:
         if cmd[1] == "build":
             Path(cmd[cmd.index("--output") + 1]).write_text(built_schema)
@@ -250,8 +294,8 @@ def _fake_confiture(
             )
         return MagicMock(
             returncode=validate_rc,
-            stdout=json.dumps(payload) if payload is not None else "",
-            stderr="",
+            stdout=_validate_stdout(),
+            stderr=validate_stderr,
         )
 
     return run
@@ -1142,3 +1186,92 @@ class TestTheBuildsOwnDiagnostics:
         assert result.ran
         assert result.passed
         assert result.build_notes == ()
+
+
+class TestAGateThatCannotReachAVerdictSaysWhy:
+    """An envelope is an answer, not an unreadable report.
+
+    `--format json` puts confiture's error on **stdout** and leaves stderr empty,
+    so the gate's fallback — append stderr — had nothing to append, and the
+    operator got the keys we failed to recognise instead of the reason. Measured
+    on a captured `DIFFER_403`: 573 bytes of stdout, 0 of stderr.
+
+    This is v0.82.0's #414 lesson (`--format json` moves the error between
+    streams) at the call site that fix did not reach. It matters more now that
+    #505 makes `DIFFER_403` an expected answer from a path every deploy drives.
+    """
+
+    def _result(self, project: Path, payload: dict | str, rc: int) -> DriftResult:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(payload, validate_rc=rc)
+            return check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+            )
+
+    def test_the_gate_still_fails_closed(self, project: Path) -> None:
+        """First, the part that was already right: no verdict is not a pass."""
+        result = self._result(project, REAL_DIFFER_403_ENVELOPE, rc=5)
+
+        assert not result.passed
+        assert result.exit_code == 5
+
+    def test_the_error_names_confitures_code(self, project: Path) -> None:
+        result = self._result(project, REAL_DIFFER_403_ENVELOPE, rc=5)
+
+        assert result.error is not None
+        assert "DIFFER_403" in result.error, (
+            "the envelope carried a code and the gate reported only the shape "
+            f"it failed to parse: {result.error!r}"
+        )
+
+    def test_the_error_names_the_offending_identifier(self, project: Path) -> None:
+        """What the operator has to act on: which name, not which keys."""
+        result = self._result(project, REAL_DIFFER_403_ENVELOPE, rc=5)
+
+        assert result.error is not None
+        assert 'app.tb_user."createdAt"' in result.error, (
+            f"the identifier confiture named is missing: {result.error!r}"
+        )
+
+    def test_the_remedy_reaches_the_operator(self, project: Path) -> None:
+        """The envelope's `actionable` says what to do; discarding it wastes it."""
+        result = self._result(project, REAL_DIFFER_403_ENVELOPE, rc=5)
+
+        assert result.error is not None
+        assert "Rename it so it needs no quotes" in result.error, (
+            f"the remedy confiture supplied is missing: {result.error!r}"
+        )
+
+    def test_a_payload_that_is_no_envelope_still_says_so(self, project: Path) -> None:
+        """The shape complaint must survive for a report that really is unknown.
+
+        Otherwise the fix turns every unparseable payload into a misleading
+        "confiture reported no error" — reading an absent envelope as silence.
+        """
+        result = self._result(project, {"ok": True, "something": "else"}, rc=1)
+
+        assert not result.passed
+        assert result.error is not None
+        assert "matches no known shape" in result.error, (
+            f"an unrecognisable report lost its explanation: {result.error!r}"
+        )
+
+    def test_stderr_is_still_the_fallback(self, project: Path) -> None:
+        """A run that wrote nothing parseable at all still reports what it wrote."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(
+                "not json at all", validate_rc=2, validate_stderr="Killed"
+            )
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+            )
+
+        assert not result.passed
+        assert result.error is not None
+        assert "Killed" in result.error, (
+            f"stderr was the only thing said and it was dropped: {result.error!r}"
+        )
