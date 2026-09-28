@@ -824,6 +824,48 @@ want rather than how you got there — or run this gate with
 `on_critical: warn`. `fraisier doctor` reports an affected tree as
 `post_migrate_check_alter_safe` so you find it before a deploy does.
 
+#### A name confiture will not compare (#505)
+
+confiture supports an identifier only as PostgreSQL writes it bare. From
+confiture 1.26.0 that is enforced rather than advised: everywhere confiture
+compares or generates a schema — `migrate diff`, `confiture diff`, and the
+DDL side of `migrate validate --check-live-drift` — a name needing quotes is
+refused outright with `DIFFER_403`, exit 5.
+
+`live-drift` runs that command, so an ORM-shaped schema does not *drift*; it
+becomes ungradable:
+
+```sql
+CREATE TABLE app.tb_user (
+    id BIGINT PRIMARY KEY,
+    "createdAt" TIMESTAMPTZ NOT NULL,   -- naming_004: needs quotes
+    "userName"  TEXT NOT NULL
+);
+```
+
+Build a database verbatim from that file and it has zero drift by
+construction, yet the gate stops the deploy — with the migrations already
+applied, and with `on_critical: fail` that is a failed deploy on a correct
+migration.
+
+There is no opt-out flag, and a `confiture lint --baseline` that absorbs the
+`naming_003`/`naming_004` findings does **not** absorb this: `lint` reports,
+while `diff` and drift refuse. The fix is the rename, in the DDL and in a
+migration. Until then, run the gate with `checks: [signatures]`, which
+compares no built schema.
+
+Two spellings fail for different reasons, and the distinction is worth
+keeping. `naming_004` is everything that merely needs quotes — a capital, a
+space, punctuation, a leading digit, a non-ASCII letter, or a reserved word
+such as `user`. `naming_003` is a name containing a dot, which is worse: it
+*misreads* as `schema.name`, so whatever refers to it resolves somewhere
+else.
+
+`fraisier doctor` reports an affected tree as
+`post_migrate_check_names_conform`, reading the built schema rather than the
+DDL files, so you find it before a deploy does. The check is version-gated:
+below the release that refuses, it says nothing.
+
 #### A lost constraint is a warning (#412)
 
 `live-drift` reports a dropped foreign key, `CHECK`, `UNIQUE` or primary

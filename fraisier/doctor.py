@@ -27,6 +27,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -869,6 +870,313 @@ def _check_post_migrate_check_alter_safe(config: FraisierConfig | None) -> Check
         )
     return CheckResult(
         name, "pass", f"{scanned} DDL file(s) fold into the built schema"
+    )
+
+
+#: The confiture release that refuses to *compare* a schema whose identifiers
+#: need quotes: ``DIFFER_403``, exit 5, on ``migrate validate
+#: --check-live-drift`` — the command ``post_migrate_check`` runs
+#: (fraiseql/confiture#505).
+#:
+#: Measured against a database applied verbatim from its own DDL, so every
+#: finding is a false positive by construction: on 1.25.1 the gate answers
+#: ``passed=True exit=0``; with #505 merged, ``passed=False exit=5``
+#: (``.phases/2026-09-28-confiture-next-probe/probe_quoted.py``).
+#:
+#: .. note::
+#:    #505 is on confiture's ``main`` under *Unreleased* and 1.25.1 is the
+#:    latest tag, so this number is the *expected* home rather than a measured
+#:    one — both probe venvs self-report 1.25.1 because confiture bumps its
+#:    version in the release PR.  ``test_the_refusing_release_is_pinned``
+#:    exists to make revisiting this a decision rather than an oversight.
+_QUOTED_NAMES_REFUSED_IN = Version("1.26.0")
+
+#: PostgreSQL's reserved keywords: the words that cannot be an identifier
+#: unquoted no matter where they appear.  Generated, not recalled --
+#: ``SELECT word FROM pg_get_keywords() WHERE catcode = 'R'`` on PostgreSQL
+#: 18.4, which is the grammar confiture parses with (pglast 8.4).
+#:
+#: The other categories are deliberately out: ``catcode 'C'`` and ``'T'`` are
+#: bare-legal as a column name, so including them would warn about names
+#: confiture accepts.  This check errs towards silence on the ambiguous cases
+#: and certainty on these.
+_RESERVED_WORDS: frozenset[str] = frozenset(
+    {
+        "all",
+        "analyse",
+        "analyze",
+        "and",
+        "any",
+        "array",
+        "as",
+        "asc",
+        "asymmetric",
+        "both",
+        "case",
+        "cast",
+        "check",
+        "collate",
+        "column",
+        "constraint",
+        "create",
+        "current_catalog",
+        "current_date",
+        "current_role",
+        "current_time",
+        "current_timestamp",
+        "current_user",
+        "default",
+        "deferrable",
+        "desc",
+        "distinct",
+        "do",
+        "else",
+        "end",
+        "except",
+        "false",
+        "fetch",
+        "for",
+        "foreign",
+        "from",
+        "grant",
+        "group",
+        "having",
+        "in",
+        "initially",
+        "intersect",
+        "into",
+        "lateral",
+        "leading",
+        "limit",
+        "localtime",
+        "localtimestamp",
+        "not",
+        "null",
+        "offset",
+        "on",
+        "only",
+        "or",
+        "order",
+        "placing",
+        "primary",
+        "references",
+        "returning",
+        "select",
+        "session_user",
+        "some",
+        "symmetric",
+        "system_user",
+        "table",
+        "then",
+        "to",
+        "trailing",
+        "true",
+        "union",
+        "unique",
+        "user",
+        "using",
+        "variadic",
+        "when",
+        "where",
+        "window",
+        "with",
+    }
+)
+
+#: What PostgreSQL writes bare: a lower-case letter or underscore, then
+#: lower-case letters, digits, underscores or dollars.
+_BARE_IDENTIFIER_RE = re.compile(r"[a-z_][a-z0-9_$]*\Z")
+
+#: A double-quoted identifier in SQL, with ``""`` standing for one quote.
+_QUOTED_IDENTIFIER_RE = re.compile(r'"((?:[^"]|"")*)"')
+
+#: Everything that can hold a ``"`` without *declaring* an identifier: a
+#: ``$tag$ … $tag$`` body, a line comment, a block comment, and a single-quoted
+#: literal.  Stripped before scanning, or ``-- renamed "createdAt"`` reads as an
+#: offender.
+#:
+#: A function or view body is in here because it *refers* to names rather than
+#: declaring them, and what it refers to may live in a schema this project does
+#: not own — reporting that as a rename this project owes is the one outcome
+#: that makes the whole check not worth believing.  Every declaration, the
+#: routine's own name included, sits outside the body.
+#:
+#: Ordering within the alternation is immaterial: no two of these can start at
+#: the same character.
+_NOT_IDENTIFIERS_RE = re.compile(
+    r"\$(\w*)\$.*?\$\1\$|--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'",
+    re.DOTALL,
+)
+
+
+def _needs_quotes(name: str) -> bool:
+    """Would PostgreSQL have to quote *name* to write it?
+
+    One predicate with one table of cases, so the message and the finding
+    cannot disagree about what an offender is.  A dot, a capital, a space or
+    punctuation, a leading digit, a non-ASCII letter, or a reserved word.
+    """
+    if not _BARE_IDENTIFIER_RE.match(name):
+        return True
+    return name in _RESERVED_WORDS
+
+
+def _conforming_rename(name: str) -> str:
+    """The name confiture's own ``actionable`` would suggest: bare, lower-case."""
+    folded = "".join(ch if ch.isalnum() or ch in "_$" else "_" for ch in name.lower())
+    if not folded or not (folded[0].isalpha() or folded[0] == "_"):
+        folded = f"_{folded}"
+    return f"{folded}_" if folded in _RESERVED_WORDS else folded
+
+
+def _offending_identifiers(sql: str) -> list[str]:
+    """Every identifier in *sql* that PostgreSQL cannot write bare, in order.
+
+    Deduplicated but order-preserving: a column repeated across twenty tables
+    is one thing to rename, and the operator should see the twenty *distinct*
+    names rather than the first name twenty times.
+    """
+    scannable = _NOT_IDENTIFIERS_RE.sub(" ", sql)
+    seen: dict[str, None] = {}
+    for match in _QUOTED_IDENTIFIER_RE.finditer(scannable):
+        name = match.group(1).replace('""', '"')
+        if _needs_quotes(name):
+            seen.setdefault(name, None)
+    return list(seen)
+
+
+#: How many offenders the message names before it falls back to a count.  An
+#: ORM tree can carry hundreds, and a doctor line nobody reads to the end
+#: reports nothing.
+_NAMES_SHOWN = 5
+
+
+def _built_schema(gate: _DriftGate) -> str | None:
+    """The schema *gate* builds, as the drift check would build it.
+
+    ``None`` when it cannot be built from here — an unresolvable environment,
+    a failing build, an unreadable output.  The doctor says nothing rather
+    than guessing; :func:`_check_post_migrate_check_config_resolves` is the
+    check that reports an unbuildable gate.
+    """
+    from fraisier.dbops import drift
+
+    try:
+        env_name = drift._env_for_build(gate.project_dir, gate.config_path)
+    except (ValueError, OSError):
+        return None
+    with tempfile.TemporaryDirectory(prefix="fraisier-doctor-names-") as tmp:
+        output = Path(tmp) / "expected_schema.sql"
+        try:
+            build = drift.build_expected_schema(
+                project_dir=gate.project_dir, env_name=env_name, output=output
+            )
+        except OSError:
+            return None
+        if build.returncode != 0 or not output.is_file():
+            return None
+        try:
+            return output.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+
+@register_check("post_migrate_check_names_conform")
+def _check_post_migrate_check_names_conform(
+    config: FraisierConfig | None,
+) -> CheckResult:
+    """A schema whose names need quotes cannot be compared at all (#505).
+
+    confiture supports an identifier only as PostgreSQL writes it bare.  From
+    :data:`_QUOTED_NAMES_REFUSED_IN` that stopped being advice: everywhere
+    confiture *compares or generates* a schema it now refuses one — and the DDL
+    side of ``migrate validate --check-live-drift`` is one of those places,
+    which is the command ``post_migrate_check`` runs.  The refusal is
+    ``DIFFER_403`` at exit 5, it has no opt-out flag, and a ``lint --baseline``
+    that absorbs ``naming_003``/``naming_004`` does not absorb it.
+
+    So an ORM-shaped schema — ``"createdAt"``, ``"userName"`` — does not drift:
+    it becomes *ungradable*, and a deploy running ``on_critical: fail`` stops
+    with the migrations already applied.  Nothing about that deploy was wrong,
+    which is why it belongs at doctor time.
+
+    The check reads the **built** schema rather than the DDL files, because the
+    built schema is what confiture is handed and the two differ: a name can be
+    introduced by an included directory the tree does not obviously own.  It is
+    version-gated for the same reason :data:`_ALTER_DROP_FOLDED_IN` is — below
+    the refusing release the advice describes a refusal the project will not
+    meet.
+
+    Only ``live-drift`` compares a built schema, so a gate running
+    ``signatures`` alone is unaffected.
+    """
+    name = "post_migrate_check_names_conform"
+    gates = [g for g in _enabled_drift_gates(config) if "live-drift" in g.checks]
+    if not gates:
+        return CheckResult(
+            name, "skip", "no post_migrate_check live-drift gate enabled"
+        )
+
+    # Cheapest question first: below the refusing release there is nothing to
+    # warn about, and asking costs a `--version` instead of a whole build.
+    installed = _confiture_cli_version()
+    if installed is not None and installed < _QUOTED_NAMES_REFUSED_IN:
+        return CheckResult(
+            name,
+            "skip",
+            f"confiture {installed} compares a schema whose names need quotes; "
+            f"the refusal arrives in {_QUOTED_NAMES_REFUSED_IN}",
+        )
+
+    built = 0
+    offenders: dict[str, None] = {}
+    for gate in gates:
+        schema = _built_schema(gate)
+        if schema is None:
+            continue
+        built += 1
+        for identifier in _offending_identifiers(schema):
+            offenders.setdefault(identifier, None)
+
+    if not built:
+        return CheckResult(
+            name, "skip", "no gate's expected schema could be built from here"
+        )
+    if not offenders:
+        return CheckResult(
+            name,
+            "pass",
+            f"every identifier in {built} built schema(s) is one PostgreSQL "
+            f"writes bare",
+        )
+
+    found = list(offenders)
+    shown = found[:_NAMES_SHOWN]
+    listing = ", ".join(f'"{n}" → {_conforming_rename(n)}' for n in shown)
+    more = len(found) - len(shown)
+    tail = f", and {more} more" if more else ""
+    dotted = [n for n in found if "." in n]
+    misparse = (
+        f'; "{dotted[0]}" carries a dot, so it is misread as '
+        f"{dotted[0].split('.', 1)[0]}.{dotted[0].split('.', 1)[1]} — whatever "
+        f"refers to it resolves somewhere else (naming_003)"
+        if dotted
+        else ""
+    )
+    return CheckResult(
+        name,
+        "warn",
+        f"the drift gate cannot compare this schema: {len(found)} identifier(s) "
+        f"need quotes, which confiture refuses from "
+        f"{_QUOTED_NAMES_REFUSED_IN} on every path that compares a schema "
+        f"(DIFFER_403, exit 5) — {listing}{tail}{misparse}",
+        fix_hint=(
+            "rename each to a name PostgreSQL writes bare, in the DDL and in "
+            "a migration; `confiture lint` lists every one (naming_003, "
+            "naming_004). There is no opt-out flag, and a lint baseline does "
+            "not absorb this — until they are renamed, set post_migrate_check."
+            "checks to [signatures], which compares no built schema"
+        ),
     )
 
 
