@@ -281,6 +281,88 @@ class TestOnlyIdentifiersAreScanned:
         assert "createdAt" in result.detail
 
 
+class TestAnApostropheInsideAQuotedIdentifier:
+    """An identifier may contain a ``'``, and it does not open a string literal.
+
+    Found on a real schema: printoptim_backend declares
+    ``"Licence d'impression sécurisée intégrée"`` — a quoted identifier with a
+    French apostrophe in it. The scan blanked string literals *before* it knew
+    where identifiers were, so that apostrophe opened a literal that ran to the
+    next one anywhere in the file, and everything between them was erased.
+
+    Both directions of that are bugs, and the second is the dangerous one:
+
+    * garbage is reported — on the real schema, a single "identifier" several
+      kilobytes long, built from two view definitions and the comment bodies
+      between them; and
+    * ⚠️ **a real offender inside the erased span is missed** — which is this
+      check's entire job. It would bless a schema the gate then refuses
+      mid-deploy, with the migrations already applied.
+    """
+
+    #: Two occurrences, because one apostrophe opens nothing — the literal has
+    #: to close somewhere for the span between to be erased. The real schema
+    #: has exactly two, 89 lines apart.
+    _APOSTROPHE = (
+        'CREATE VIEW app.v{n} AS SELECT a AS "Licence d\'impression" FROM t;\n'
+    )
+
+    def test_a_real_offender_between_two_of_them_is_still_found(
+        self, tmp_path: Path
+    ) -> None:
+        """The one that matters: the check must not go quiet on a real name."""
+        schema = (
+            self._APOSTROPHE.format(n=1)
+            + 'CREATE TABLE app.tb_user ("createdAt" TIMESTAMPTZ);\n'
+            + self._APOSTROPHE.format(n=2)
+        )
+
+        result = _run(_cfg(tmp_path), schema)
+
+        assert result.status == "warn", (
+            "a quoted column that will refuse the deploy was reported clean "
+            f"because an apostrophe erased it: {result.detail}"
+        )
+        assert "createdAt" in result.detail
+
+    def test_the_identifier_itself_is_reported_whole(self, tmp_path: Path) -> None:
+        """It is a real offender — a space alone means it needs quotes."""
+        schema = self._APOSTROPHE.format(n=1) + self._APOSTROPHE.format(n=2)
+
+        result = _run(_cfg(tmp_path), schema)
+
+        assert result.status == "warn"
+        assert "Licence d'impression" in result.detail
+
+    def test_nothing_between_them_is_swallowed_into_one_name(
+        self, tmp_path: Path
+    ) -> None:
+        """The garbage half: no finding may span the gap between the two."""
+        schema = (
+            self._APOSTROPHE.format(n=1)
+            + "COMMENT ON TABLE app.tb_user IS 'a comment';\n"
+            + self._APOSTROPHE.format(n=2)
+        )
+
+        result = _run(_cfg(tmp_path), schema)
+
+        assert "a comment" not in result.detail, (
+            f"a comment body was read as part of an identifier: {result.detail}"
+        )
+
+    def test_a_double_quote_inside_a_string_literal_is_still_not_an_identifier(
+        self, tmp_path: Path
+    ) -> None:
+        """The control this fix must not break — literals still win over quotes."""
+        schema = (
+            "CREATE TABLE app.tb_user (\n"
+            "    id BIGINT PRIMARY KEY,\n"
+            "    note TEXT DEFAULT 'he said \"createdAt\" once'\n"
+            ");\n"
+        )
+        assert _run(_cfg(tmp_path), schema).status == "pass"
+
+
 class TestTheAdviceIsActionable:
     """Cycle 3.3 — the message names a rename and stays readable at scale."""
 
