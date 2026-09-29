@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.83.0] - 2026-09-29
 
-**Two changes to what a deploy does, both arriving through confiture 1.26.0.**
+**Three changes to what a deploy does — two from confiture 1.26.0, one ours.**
 A database that has lost or re-pointed a foreign key, a `CHECK`, a `UNIQUE` or a
 primary key now **fails** a `post_migrate_check` gate that nobody reconfigured —
-upstream regraded it critical, and the cap adopts that forward. And a DDL tree
-whose identifiers need quotes is now **refused** rather than compared, so a
-schema that has never drifted can stop a deploy.
+upstream regraded it critical, and the cap adopts that forward. A DDL tree whose
+identifiers need quotes is now **refused** rather than compared, so a schema that
+has never drifted can stop a deploy. And the gate itself is now **on by
+default**, which is the fraisier half of the same argument: `on_critical: fail`
+was already the opinionated default and it protected nobody, because it sat
+behind `enabled: false`.
 
 The second one is why this release is mostly about legibility. A gate that
 refuses has to say so in words an operator can act on, and it has to say it
@@ -25,6 +28,33 @@ Closes [#412](https://github.com/fraiseql/fraisier/issues/412) — upstream fixe
 it properly, which also retires the doctor check v0.82.0 added to work around it.
 
 ### Changed
+
+- **⚠️ The schema-drift gate is on by default.** `database.post_migrate_check`
+  now declines or tunes the gate rather than switching it on. `on_critical:
+  fail` was already the opinionated default and was unreachable: it sat behind
+  `enabled: false`, the scaffold emitted no block, and the example config had it
+  commented out — so a project deployed with no drift gate and had to go and
+  find one. Declining is one line:
+
+  ```yaml
+  database:
+    post_migrate_check:
+      enabled: false
+  ```
+
+  **An unrunnable gate costs different things depending on who asked for it.**
+  The gate needs `confiture_config` to be a file `confiture build --env` can
+  resolve, and the default value of that key — `confiture.yaml` — cannot satisfy
+  it by construction. A project that predates this release therefore meets the
+  gate without having chosen either, so a **defaulted** gate that cannot run
+  reports loudly and the deploy continues. A gate the config **declares** fails
+  closed, unchanged: writing `enabled: true` is what buys "stop me", and #262
+  holds an operator to that however the gate failed.
+
+  That is the one place fraisier proceeds past a verdict it could not reach, and
+  it is narrow on purpose — only "could not run", and only for a gate nobody
+  wrote. Real drift fails the deploy either way. `fraisier doctor` names the
+  configuration problem as `post_migrate_check_buildable` beforehand.
 
 - **⚠️ A lost or re-pointed constraint fails the gate, unasked**
   ([#412](https://github.com/fraiseql/fraisier/issues/412)). confiture 1.26.0

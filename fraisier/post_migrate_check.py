@@ -62,26 +62,39 @@ _DEFAULT_CHECKS: tuple[str, ...] = ("live-drift",)
 class PostMigrateCheck:
     """The gate's resolved configuration."""
 
-    enabled: bool = False
+    enabled: bool = True
     checks: tuple[str, ...] = _DEFAULT_CHECKS
     on_critical: Literal["fail", "warn"] = "fail"
     escalate: tuple[str, ...] = ()
+    #: Did a human write this gate, or is it the default arriving on its own?
+    #:
+    #: Only one thing turns on it, and it is not what the gate *checks* — a
+    #: declared gate and a defaulted one grade identical drift identically.
+    #: It decides what an **unrunnable** gate costs: see
+    #: :meth:`fraisier.deployers.api.APIDeployer._run_post_migrate_check`.
+    declared: bool = False
 
 
 def load_post_migrate_check(database_config: dict[str, Any]) -> PostMigrateCheck:
-    """Parse ``database.post_migrate_check``; disabled when absent.
+    """Parse ``database.post_migrate_check``; on unless the project declines.
 
     Shape validation happens at config-load time in
     :mod:`fraisier.config._validation`, so this reads a block already known
-    to be well-formed.
+    to be well-formed.  A block that is absent entirely — the shape every
+    project that predates the default has — resolves to the default gate.
     """
-    raw = database_config.get("post_migrate_check") or {}
-    if not isinstance(raw, dict) or not raw.get("enabled", False):
-        return PostMigrateCheck(enabled=False)
+    block = database_config.get("post_migrate_check")
+    if isinstance(block, dict):
+        raw, declared = block, True
+    else:
+        raw, declared = {}, False
+    if not raw.get("enabled", True):
+        return PostMigrateCheck(enabled=False, declared=True)
     checks = raw.get("checks")
     return PostMigrateCheck(
         enabled=True,
         checks=tuple(checks) if checks else _DEFAULT_CHECKS,
         on_critical=raw.get("on_critical", "fail"),
         escalate=tuple(raw.get("escalate") or ()),
+        declared=declared,
     )

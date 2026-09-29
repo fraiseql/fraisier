@@ -683,6 +683,28 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         if result.passed:
             logger.info("%s", result.summary())
             return
+        # A gate nobody wrote must not fail a deploy over a configuration
+        # nobody wrote either. The gate is on by default now, so a project
+        # that predates the default meets it without having pointed
+        # `confiture_config` at a file `confiture build --env` can resolve —
+        # and failing closed there stops a correct deploy, after the
+        # migrations, for a check the project never asked for.
+        #
+        # The distinction is the *promise*, not the check: an operator who
+        # wrote `enabled: true` bought "stop me", and #262 holds them to it
+        # however the gate failed. Nobody bought anything here, so an
+        # unreachable verdict is reported loudly and the deploy continues.
+        # Real drift still fails: this is only the `could not run` branch,
+        # and `post_migrate_check_buildable` names it at doctor time.
+        if not result.ran and not gate.declared:
+            logger.warning(
+                "%s\nthis gate is fraisier's default rather than this "
+                "project's choice, so the deploy continues; declare "
+                "database.post_migrate_check to make it binding, or set "
+                "enabled: false to turn it off",
+                result.summary(),
+            )
+            return
         # A check that did not run has cleared nothing, so `on_critical`
         # governs both outcomes: `fail` means "stop me", `warn` means "tell me,
         # do not stop me" — and that intent holds however the check failed.

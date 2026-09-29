@@ -690,6 +690,17 @@ The pre-migration dump gate does not catch this and is not wrong to miss
 it: it predicts whether the migrations *apply*, and they do. The fault is
 in what was applied.
 
+**The gate is on by default.** The block below tunes or declines it; it is
+not what switches it on. Until v0.83.0 the gate was opt-in, which meant the
+opinionated `on_critical: fail` default protected only projects that had
+already gone looking for it. To decline:
+
+```yaml
+database:
+  post_migrate_check:
+    enabled: false
+```
+
 ```yaml
 database:
   database_url: !envvar DATABASE_URL
@@ -725,6 +736,15 @@ under the project directory; a config anywhere else (a root
 `confiture.yaml`, say) leaves the gate nothing to build and it refuses.
 `fraisier doctor` reports that as `post_migrate_check_buildable` so you
 find it before a deploy does.
+
+What that refusal *costs* depends on who asked for the gate. A gate this
+block **declares** fails closed, because declaring it is what buys "stop
+me". A gate that is merely fraisier's default — no `post_migrate_check`
+block at all — reports the refusal loudly and lets the deploy continue,
+since the default value of `confiture_config` cannot satisfy `confiture
+build --env` by construction and a project that predates the default never
+chose either. Real drift fails the deploy either way; only "could not
+run" is softened, and only for a gate nobody wrote.
 
 **`on_critical` also governs a gate that could reach no verdict** — a
 failed schema build, an unreachable database, a report fraisier cannot
