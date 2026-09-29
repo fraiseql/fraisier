@@ -1021,23 +1021,46 @@ _BARE_IDENTIFIER_RE = re.compile(r"[a-z_][a-z0-9_$]*\Z")
 #: A double-quoted identifier in SQL, with ``""`` standing for one quote.
 _QUOTED_IDENTIFIER_RE = re.compile(r'"((?:[^"]|"")*)"')
 
-#: Everything that can hold a ``"`` without *declaring* an identifier: a
-#: ``$tag$ … $tag$`` body, a line comment, a block comment, and a single-quoted
-#: literal.  Stripped before scanning, or ``-- renamed "createdAt"`` reads as an
-#: offender.
+#: Every span that ends where it begins, scanned in one left-to-right pass: a
+#: quoted identifier, a ``$tag$ … $tag$`` body, a line comment, a block
+#: comment, and a single-quoted literal.  All but the first are blanked before
+#: the identifier scan, or ``-- renamed "createdAt"`` reads as an offender.
 #:
-#: A function or view body is in here because it *refers* to names rather than
+#: A function or view body is blanked because it *refers* to names rather than
 #: declaring them, and what it refers to may live in a schema this project does
 #: not own — reporting that as a rename this project owes is the one outcome
 #: that makes the whole check not worth believing.  Every declaration, the
 #: routine's own name included, sits outside the body.
 #:
+#: **The quoted identifier has to be in this alternation**, even though it is
+#: kept rather than blanked, because an identifier may contain a ``'`` and that
+#: apostrophe must not open a string literal.  Blanking literals first —  which
+#: is what this did — erased everything from a name like
+#: ``"Licence d'impression"`` to the next apostrophe anywhere in the file.  On a
+#: real schema that swallowed 89 lines into one multi-kilobyte "identifier" and,
+#: far worse, **hid a genuine offender inside the erased span** — the one thing
+#: this check exists to find.
+#:
 #: Ordering within the alternation is immaterial: no two of these can start at
-#: the same character.
-_NOT_IDENTIFIERS_RE = re.compile(
-    r"\$(\w*)\$.*?\$\1\$|--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'",
+#: the same character, so the leftmost match always belongs to whichever span
+#: really opens first.  A ``"`` inside a literal is consumed by the literal, and
+#: a ``'`` inside an identifier by the identifier, precisely because both are
+#: matched here rather than in two passes.
+_SQL_SPANS_RE = re.compile(
+    r'"(?:[^"]|"")*"|\$(\w*)\$.*?\$\1\$|--[^\n]*|/\*.*?\*/|\'(?:[^\']|\'\')*\'',
     re.DOTALL,
 )
+
+
+def _identifier_scannable(sql: str) -> str:
+    """*sql* with every non-identifier span blanked and identifiers left in place.
+
+    Length is not preserved and does not need to be: nothing downstream reports
+    an offset, only the names themselves.
+    """
+    return _SQL_SPANS_RE.sub(
+        lambda m: m.group(0) if m.group(0).startswith('"') else " ", sql
+    )
 
 
 def _needs_quotes(name: str) -> bool:
@@ -1067,7 +1090,7 @@ def _offending_identifiers(sql: str) -> list[str]:
     is one thing to rename, and the operator should see the twenty *distinct*
     names rather than the first name twenty times.
     """
-    scannable = _NOT_IDENTIFIERS_RE.sub(" ", sql)
+    scannable = _identifier_scannable(sql)
     seen: dict[str, None] = {}
     for match in _QUOTED_IDENTIFIER_RE.finditer(scannable):
         name = match.group(1).replace('""', '"')

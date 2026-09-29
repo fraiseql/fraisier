@@ -160,6 +160,23 @@ it properly, which also retires the doctor check v0.82.0 added to work around it
   The gate now refuses a kind outside `ESCALATABLE_KINDS` before it runs
   anything, the way it already refused an unknown check name.
 
+- **⚠️ An apostrophe inside a quoted identifier blinded the names check.** It
+  blanked string literals *before* it knew where identifiers were, so a name
+  like `"Licence d'impression sécurisée intégrée"` opened a literal that ran to
+  the next apostrophe anywhere in the file and erased everything between.
+
+  Found by running the check over a real 700-file, 4MB production schema rather
+  than over its own fixtures. There it swallowed 89 lines into a single
+  multi-kilobyte "identifier" built out of two view definitions and the comment
+  bodies between them — and, far worse, **any genuine offender inside the
+  erased span went unreported**. A schema the gate will refuse would have been
+  blessed by doctor and failed mid-deploy with the migrations applied, which is
+  the exact failure this check exists to prevent.
+
+  Identifiers, literals, comments and `$tag$` bodies are now matched in one
+  left-to-right pass, so a `'` inside an identifier is consumed by the
+  identifier and a `"` inside a literal by the literal.
+
 - **The names check missed 23 keywords it should have refused.** Its keyword
   table came from `pg_get_keywords()` `catcode = 'R'` alone, excluding `'T'` on
   the premise that a type/function-name keyword is bare-legal as a column name.
