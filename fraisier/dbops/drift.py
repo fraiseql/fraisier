@@ -417,12 +417,17 @@ def _escalate(
 ) -> tuple[tuple[DriftItem, ...], tuple[DriftItem, ...]]:
     """Split *warnings* into the ones this deploy will not accept, and the rest.
 
-    confiture grades ``missing_constraint`` and ``default_mismatch`` ``warning``
-    and leaves ``has_critical_drift`` false, so a database that has lost a
-    foreign key its DDL declares is exit 0 and the gate passes (#412).  That
-    grade is upstream's and stays upstream's: what an operator names in
-    ``escalate`` is not a claim that confiture graded it wrongly, it is a claim
-    about *this* deploy.
+    confiture grades ``missing_index`` and ``default_mismatch`` ``warning`` and
+    leaves ``has_critical_drift`` false, so a database that has lost an index
+    its DDL declares is exit 0 and the gate passes (#412).  That grade is
+    upstream's and stays upstream's: what an operator names in ``escalate`` is
+    not a claim that confiture graded it wrongly, it is a claim about *this*
+    deploy.
+
+    Every name reaching here is in :data:`ESCALATABLE_KINDS` —
+    :func:`check_schema_drift` refuses the run otherwise — so a kind that
+    matches no warning means the drift did not happen, never that the word was
+    wrong.
 
     The escalated item is re-graded rather than carried across at its original
     severity, so the log reads the way the verdict now behaves — a line
@@ -601,6 +606,48 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
+#: confiture's refusal to compare a schema whose identifiers need quotes (#505).
+_REFUSED_TO_COMPARE = "DIFFER_403"
+
+
+def _coverage_lost(code: str | None) -> str:
+    """The sentence a ``DIFFER_403`` needs and its own message does not carry.
+
+    Every other no-verdict cause announces itself as one: a build that failed, a
+    database that could not be reached, a payload in no known shape.  This one
+    names *a single column* and suggests a rename, which reads like a naming nit
+    — and an operator running ``on_critical: warn`` reads a naming nit and
+    ships.
+
+    What it actually is: confiture refuses **before** it compares, so nothing
+    about the schema was measured.  Measured here rather than reasoned about —
+    ``.phases/2026-09-29-confiture-1-26-probe/probe_403_masks.py``, confiture
+    1.26.0, one table, three databases:
+
+    ====================  ==========================================
+    tree                  what the gate reported
+    ====================  ==========================================
+    bare names, column
+    dropped live          ``CRITICAL missing_column app.tb_item.extra``
+    ``"createdAt"``,
+    nothing dropped       ``DIFFER_403``
+    ``"createdAt"``,
+    column dropped live   ``DIFFER_403`` — **byte-identical to the row above**
+    ====================  ==========================================
+
+    The dropped column was critical drift on the first tree and invisible on the
+    third.  So the refusal is not "this name, plus the real findings"; it is the
+    loss of every finding, and a message that does not say so lets a schema that
+    has lost a table read as one that has lost a capital letter.
+    """
+    if code != _REFUSED_TO_COMPARE:
+        return ""
+    return (
+        " — confiture refuses before it compares, so NO drift was measured: "
+        "this schema is unchecked, not clean"
+    )
+
+
 def _no_verdict_reason(run: subprocess.CompletedProcess[str], exc: ValueError) -> str:
     """Why ``migrate validate`` gave no readable report — in confiture's words.
 
@@ -622,7 +669,8 @@ def _no_verdict_reason(run: subprocess.CompletedProcess[str], exc: ValueError) -
         said = " ".join(part for part in (code, message) if part)
         remedy = envelope_error_actionable(run.stdout)
         tail = f" {remedy}" if remedy else ""
-        return f"confiture migrate validate exit {run.returncode}: {said}{tail}"
+        lost = _coverage_lost(code)
+        return f"confiture migrate validate exit {run.returncode}: {said}{tail}{lost}"
     stderr = run.stderr.strip()[:200]
     detail = f"; {stderr}" if stderr else ""
     return f"{exc} (confiture migrate validate exit {run.returncode}{detail})"
@@ -686,7 +734,9 @@ def check_schema_drift(
             Used only to refuse a check aimed at a different database.
         escalate: Names from :data:`ESCALATABLE_KINDS` that must fail this gate
             rather than warn.  Empty — the default — leaves every verdict
-            exactly as confiture graded it.
+            exactly as confiture graded it.  A name outside that list refuses
+            the run: it would promote nothing, and a gate that silently
+            declines to fire is what this one exists to prevent.
 
     Returns:
         A :class:`DriftResult`.  It never raises for an operational failure —
@@ -702,6 +752,24 @@ def check_schema_drift(
                 f"no runnable checks: {sorted(unknown)} not in {sorted(CHECK_FLAGS)}"
                 if unknown
                 else "no checks configured"
+            ),
+        )
+
+    # The same closed vocabulary as `checks`, enforced in the same place. The
+    # config layer validates `escalate` too, but a kind it rejects reaches here
+    # unexamined from any other caller, and `_escalate` filters by membership —
+    # so a misspelt kind matched no warning, promoted nothing, and the gate
+    # passed while the operator believed it would stop. That is the #262 shape
+    # the closed list exists to avoid, and it was open on this side of it.
+    stray = sorted(set(escalate) - set(ESCALATABLE_KINDS))
+    if stray:
+        return DriftResult(
+            passed=False,
+            checks=selected,
+            error=(
+                f"cannot escalate {stray}: not a drift kind confiture grades "
+                f"warning ({', '.join(ESCALATABLE_KINDS)}). Refusing rather "
+                f"than running a gate that would never fire on it"
             ),
         )
 
