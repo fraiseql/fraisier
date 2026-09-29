@@ -87,29 +87,43 @@ CHECK_FLAGS: dict[str, str] = {
 #:
 #: Measured, not copied from a changelog — every one of these was emitted by a
 #: live confiture in ``.phases/2026-09-23-confiture-1-18-probe/``:
-#: ``missing_constraint`` on a dropped foreign key, ``CHECK``, ``UNIQUE``,
-#: table-level ``CHECK`` and primary key (1.15.0 and up; before it there was no
-#: item at all); ``default_mismatch`` on a changed and a dropped column default
-#: (1.15.0 and up); ``type_mismatch`` on ``VARCHAR(50)`` → ``VARCHAR(100)`` and
+#: ``default_mismatch`` on a changed and a dropped column default (1.15.0 and
+#: up); ``type_mismatch`` on ``VARCHAR(50)`` → ``VARCHAR(100)`` and
 #: ``NUMERIC(10,2)`` → ``NUMERIC(10,4)``; ``nullable_mismatch`` on a dropped
 #: ``NOT NULL``.
 #:
-#: ``constraint_mismatch`` is confiture 1.25.1's (confiture#501): a named
-#: constraint that kept its name and changed what it says.  Measured in
-#: ``.phases/2026-09-27-confiture-1-25-probe/`` on a foreign key dropped and
-#: re-added against a same-named table in another schema — on 1.25.0 that
-#: database is ``has_drift: false`` and the gate passes it clean; on 1.25.1 it
-#: is one ``constraint_mismatch`` warning.  ``escalate`` is the only way to make
-#: a re-pointed key stop a deploy, and it cannot promote a kind that is not a
-#: row here, so without this the configuration asking for it was refused.
+#: ``missing_index`` on a dropped index is the fourth, and it was measured but
+#: unlisted until now: ``escalate: [missing_index]`` was a validation error, so
+#: no configuration could make a dropped index fatal.  Measured on 1.26.0 in
+#: ``.phases/2026-09-29-confiture-1-26-probe/`` (scenario ``Y_index_dropped``):
+#: still ``warning``, still exit 0, unchanged from 1.25.1.
+#:
+#: ⚠️ ``missing_constraint`` and ``constraint_mismatch`` are **not** rows here,
+#: and their absence is the point.  confiture 1.26.0 grades both ``critical``
+#: (confiture#506/#518), so each fails the gate on its own and ``escalate``
+#: has nothing left to promote.  Measured on the published artifact rather
+#: than read from the changelog — ``driver10.py`` on 1.25.1 and 1.26.0, same
+#: tree:
+#:
+#: ====================  ======================  ==============================
+#: scenario              1.25.1                  1.26.0
+#: ====================  ======================  ==============================
+#: ``X_fk_dropped``      warn, exit 0, passes    critical, exit 1, fails
+#: ``C_check_dropped``   warn, exit 0, passes    critical, exit 1, fails
+#: ``Z_fk_repointed``    warn, exit 0, passes    critical, exit 1, fails
+#: ``Y_index_dropped``   warn, exit 0, passes    warn, exit 0, passes
+#: ====================  ======================  ==============================
+#:
+#: Listing them anyway would make ``escalate`` accept a word that changes
+#: nothing.  Leaving them out makes a configuration that names one a
+#: validation error, which says the true thing: the deploy already stops.
 #:
 #: The list is closed on purpose.  ``escalate`` is validated against it, so a
 #: misspelt kind is a configuration error rather than a gate that silently
 #: declines to fire — which is the #262 shape, and the one this gate exists to
 #: avoid.  A kind confiture adds later is a row here, with a probe behind it.
 ESCALATABLE_KINDS: tuple[str, ...] = (
-    "missing_constraint",
-    "constraint_mismatch",
+    "missing_index",
     "default_mismatch",
     "type_mismatch",
     "nullable_mismatch",

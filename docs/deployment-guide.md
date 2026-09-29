@@ -869,31 +869,13 @@ else.
 DDL files, so you find it before a deploy does. The check is version-gated:
 below the release that refuses, it says nothing.
 
-#### A lost constraint is a warning (#412)
+#### A lost constraint fails the deploy (#412, confiture#506)
 
 `live-drift` reports a dropped foreign key, `CHECK`, `UNIQUE` or primary
-key as `missing_constraint`, and a column default that no longer matches
-as `default_mismatch` — and confiture grades both **warning**, not
-critical. `has_critical_drift` is what this gate fails on, and a warning
-never sets it. So a database that has lost a foreign key its DDL declares
-is exit 0, and a deploy running `on_critical: fail` ships over it:
-
-```
-post_migrate_check: no critical schema drift (1 warning(s))
-```
-
-That is upstream's grade and fraisier does not argue with it. What it
-offers is a way for one deploy to say the loss is not acceptable to *it*:
-
-```yaml
-post_migrate_check:
-  enabled: true
-  checks: [live-drift]
-  on_critical: fail
-  escalate: [missing_constraint]
-```
-
-Now the same database fails the gate, with confiture's own words:
+key as `missing_constraint`, and a foreign key that kept its name and
+changed what it points at as `constraint_mismatch`. **confiture 1.26.0
+grades both `critical`**, so each sets `has_critical_drift` and a deploy
+running `on_critical: fail` stops on it with nothing asked for:
 
 ```
 post_migrate_check: 1 critical schema drift item(s) after migration —
@@ -902,23 +884,44 @@ CRITICAL missing_constraint core.tb_widget: Constraint
 database
 ```
 
-The kinds `escalate` accepts are the warning-graded ones —
-`missing_constraint`, `default_mismatch`, `type_mismatch` and
+Until confiture 1.25.1 both were graded `warning`, `has_critical_drift`
+stayed false, and the deploy shipped over the loss unless the config named
+the kind in `escalate`. That is why `escalate` exists, and why it no
+longer accepts either kind: naming one would be asking for something the
+gate already does. A config that still names one is a validation error
+rather than a silent no-op — the point of the closed list.
+
+##### Escalating the kinds that are still warnings
+
+A column default that no longer matches, a widened type, a dropped
+`NOT NULL` and a dropped index are all still graded `warning`, so each is
+exit 0 and ships. `escalate` is how one deploy says a given loss is not
+acceptable to *it*:
+
+```yaml
+post_migrate_check:
+  enabled: true
+  checks: [live-drift]
+  on_critical: fail
+  escalate: [missing_index]
+```
+
+The kinds `escalate` accepts are exactly the warning-graded ones —
+`missing_index`, `default_mismatch`, `type_mismatch` and
 `nullable_mismatch`. A name outside that list is a config error rather
 than a gate that quietly declines to fire: an operator who writes
-`missing_constraints` has asked for a promise, and getting silence
-instead is the failure this whole gate exists to avoid.
-`extra_constraint` is deliberately not among them — confiture grades it
-`info`, a constraint the database has and the DDL does not name is not a
-loss, and accepting it here would sell a promise the gate cannot keep.
+`missing_indexes` has asked for a promise, and getting silence instead is
+the failure this whole gate exists to avoid. `extra_constraint` is
+deliberately not among them — confiture grades it `info`, a constraint the
+database has and the DDL does not name is not a loss, and accepting it
+here would sell a promise the gate cannot keep.
 
-**Requires `fraiseql-confiture >= 1.15.0`.** Before it there was no item
-to escalate at all: a dropped foreign key was exit 0 with an *empty*
-`drift_items`, so nothing distinguished it from a clean database
-(fraiseql/confiture#308, #309). `escalate` on an older confiture is
-accepted and inert. `fraisier doctor` reports a `fail` gate that does not
-escalate `missing_constraint` as
-`post_migrate_check_constraint_coverage`.
+**Requires `fraiseql-confiture >= 1.26.0`**, which fraisier's dependency
+range pins exactly. A dropped index has been reported since 1.0.1 but was
+not offered here until the constraint kinds became critical and freed the
+list to carry it; before 1.15.0 a dropped foreign key was exit 0 with an
+*empty* `drift_items`, so nothing distinguished it from a clean database
+(fraiseql/confiture#308, #309).
 
 ### `database.post_migrate`: SQL hooks after migrate
 

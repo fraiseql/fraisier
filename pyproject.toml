@@ -343,12 +343,9 @@ dependencies = [
   # in `ESCALATABLE_KINDS` for a project that wants it fatal, which is as far
   # as this side can honestly go.
   #
-  # **The cap is the major line, `<2`, and no longer a minor.** Every lift from
-  # `<0.47` to `<1.15` was a release of ours that re-audited a confiture we
-  # could not see from here, because the only thing pinning what fraisier
-  # depends on was this repository's floor probe — `import_module` + `hasattr`,
-  # which a narrowed signature passes. From confiture's 1.15 train on, the pin
-  # lives on the side that can see the change (fraiseql/confiture#324):
+  # **The cap is one minor, and adopting the next one is a release.** It was
+  # `<2` until 1.26.0, on the reasoning that upstream's consumer contract
+  # tests (fraiseql/confiture#324) had taken over the pinning:
   # `tests/contract/test_consumer_symbols.py` imports every symbol
   # `CONFITURE_IMPORT_SURFACE` lists, plus `exceptions.ValidationError`, and
   # asserts the call shapes we use (`Migrator.from_config`, `up(lock_timeout=,
@@ -357,11 +354,26 @@ dependencies = [
   # resolves every argv we spell, flag by flag; and the exit integers are
   # closed at `0..8` with `--exit-codes-json` recorded. Each row names our
   # file:line, so a removal upstream is an edit that says it breaks fraisier.
-  # confiture's release policy (`docs/operations/release-trains.md`) makes 1.x
-  # envelopes additive-only. `<1.0` is still precisely the width that let #262
-  # resolve a confiture whose preflight JSON we could not parse (issues #262,
-  # #362, #368, #395, #397, #405, #410); `<2` is not that width, because the
-  # thing that went unpinned then is pinned now, upstream, in CI.
+  # All of that still holds, and it is still what makes a *break* visible.
+  #
+  # What it does not cover is a **regrade**. 1.26.0 moved `missing_constraint`
+  # and `constraint_mismatch` from `warning` to `critical` (confiture#506,
+  # #518) and taught live drift to refuse a DDL name needing quotes
+  # (`DIFFER_403`, exit 5; confiture#505). Neither removes a symbol or narrows
+  # a signature, so the contract tests pass unchanged — and both change what a
+  # deploy does. Under `<2` that reached every user the day confiture
+  # published, with no fraisier release involved: measured here on 2026-09-29,
+  # a database built from its own ORM-shaped DDL went from passing its gate to
+  # `exit 5` between one `uv sync` and the next.
+  #
+  # confiture#510 says the same thing from the other side: the 1.x contracts
+  # are stable by **intent, not guarantee**, and a minor may break one when
+  # that is the right fix. A cap of one minor is what makes that honest here —
+  # a new confiture is adopted by editing this line, running the probes under
+  # `.phases/`, and shipping a release that says what changed. `<1.0` was
+  # precisely the width that let #262 resolve a confiture whose preflight JSON
+  # we could not parse (issues #262, #362, #368, #395, #397, #405, #410); `<2`
+  # was a wider bet on a freeze that upstream has since declined to promise.
   # 1.24.0 closes the upstream half of #417 (confiture#432), and the cap does
   # not move — it is already the major line. `MigrateUpResult.has_errors` is
   # redefined from `not success and len(errors) > 0` to `not self.success`, a
@@ -445,7 +457,35 @@ dependencies = [
   #
   # None of 1.24.0, 1.25.0 or 1.25.1 moves fraisier's suite: 5910 passed and 1
   # skipped on each, `ty` and both ruff gates clean on each.
-  "fraiseql-confiture>=1.0.0,<2",
+  #
+  # **1.26.0 is the first minor adopted under the one-minor cap, and the first
+  # that changes a deploy's verdict.** Two things reach fraisier, both
+  # measured on the published artifact in
+  # `.phases/2026-09-29-confiture-1-26-probe/` rather than read from the
+  # changelog:
+  #   * `missing_constraint` and `constraint_mismatch` are graded **critical**
+  #     (confiture#506, #518). `driver10.py` drives the same tree on 1.25.1
+  #     and 1.26.0: a dropped foreign key, a dropped `CHECK` and a foreign key
+  #     re-pointed at a same-named table in another schema each go from
+  #     `warning`/exit 0/passes to `critical`/exit 1/fails. A dropped index
+  #     stays `warning`/exit 0/passes on both. So a deploy running
+  #     `on_critical: fail` now stops on a lost constraint with nothing asked
+  #     for, and `escalate` no longer accepts either kind — naming one would
+  #     be asking for what already happens. `missing_index` takes their place
+  #     in `ESCALATABLE_KINDS`, which is what finally makes a dropped index
+  #     stoppable at all.
+  #   * Live drift **refuses** a DDL tree naming an object that needs quotes
+  #     (`DIFFER_403`, exit 5; confiture#505). Measured on a zero-drift
+  #     ORM-shaped schema — `"createdAt"`, `"userName"` — built from the very
+  #     DDL it is compared against: `passed=False exit=5`, a false positive by
+  #     construction. `confiture build` still exits 0, which is the only
+  #     reason `fraisier doctor`'s `post_migrate_check_names_conform` can read
+  #     the built schema and predict this before a deploy meets it.
+  #
+  # ⚠️ Both arrived at users under the old `<2` cap the day confiture
+  # published, which is the argument for the cap above, written down where the
+  # next person will read it.
+  "fraiseql-confiture>=1.26.0,<1.27",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

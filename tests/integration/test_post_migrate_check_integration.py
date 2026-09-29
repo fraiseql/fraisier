@@ -627,27 +627,33 @@ _MIGRATION_NO_CONSTRAINTS = _MIGRATION_COMPLETE.replace(
 )
 
 
-class TestConstraintDriftIsAWarningThisGateCanBeToldToFailOn:
-    """confiture 1.15.0 reports a lost constraint, and grades it ``warning`` (#412).
+class TestConstraintDriftFailsTheGateUnasked:
+    """confiture 1.26.0 grades a lost constraint ``critical`` (#506, #518).
 
-    Measured on one database, same DDL, ``--check-live-drift``: on 1.14.0 a
-    dropped foreign key, ``CHECK``, ``UNIQUE`` or primary key is exit 0 with
-    ``drift_items: []`` — indistinguishable from a clean database; on 1.15.0
-    each is exit 0 with a ``warning`` ``missing_constraint``, and a changed
-    default is a ``warning`` ``default_mismatch``
-    (fraiseql/confiture#308, #309). The recorded runs are in
-    ``.phases/2026-09-23-confiture-1-18-probe/``.
+    This class asserted the opposite until confiture 1.26.0, and the history
+    is the point. On 1.14.0 a dropped foreign key, ``CHECK``, ``UNIQUE`` or
+    primary key was exit 0 with ``drift_items: []`` — indistinguishable from a
+    clean database. 1.15.0 started *reporting* each as a ``warning``, which
+    ``has_critical_drift`` is blind to, so the deploy still shipped and
+    ``escalate`` was the only word that stopped it. 1.26.0 grades both
+    ``missing_constraint`` and ``constraint_mismatch`` ``critical``, so the
+    gate fails on each with nothing asked for.
+
+    Measured on the published artifacts rather than read from the changelog —
+    ``.phases/2026-09-29-confiture-1-26-probe/driver10.py``, same tree on
+    1.25.1 and 1.26.0: a dropped foreign key and a dropped ``CHECK`` each go
+    from ``warning``/exit 0/passes to ``critical``/exit 1/fails, while a
+    dropped index stays ``warning``/exit 0/passes on both.
 
     Two separate things are pinned here, because they can break apart:
 
-    * the **items now arrive** — this is upstream's, and the lock is what
-      promises it. ``pyproject.toml``'s floor is ``>=1.0.0`` and does not: the
-      floor says the gate works, the lock says what it reports. Moving the lock
-      below 1.15.0 fails these, which is the intended alarm.
-    * the **verdict still passes** without ``escalate`` — that is fraisier's,
-      and it is the half an operator running ``on_critical: fail`` is entitled
-      to find surprising. It is asserted rather than assumed so that a future
-      release cannot start failing deploys without editing this line.
+    * the **items arrive as critical** — this is upstream's, and the pin is
+      the ``<1.27`` cap: adopting a confiture minor is a fraisier release, so
+      a regrade upstream cannot reach a deploy without this file being run.
+    * the **verdict now fails** unasked — that is fraisier's, and it is a
+      deploy-behaviour change an operator is entitled to find surprising. It
+      is asserted rather than assumed so a future release cannot quietly stop
+      failing these deploys either.
     """
 
     def _project_without_constraints(self, tmp_path, drift_db) -> Path:
@@ -674,59 +680,72 @@ class TestConstraintDriftIsAWarningThisGateCanBeToldToFailOn:
         assert result.success is True
         assert result.steps_applied == 1
 
-    def test_the_lost_constraints_arrive_as_warnings(self, tmp_path, drift_db) -> None:
+    def test_the_lost_constraints_arrive_as_critical(self, tmp_path, drift_db) -> None:
         project = self._project_without_constraints(tmp_path, drift_db)
 
         result = _gate(project)
 
         assert result.ran, result.error
-        kinds = {item.kind for item in result.warnings}
-        assert "missing_constraint" in kinds, result.summary()
-        assert "default_mismatch" in kinds, result.summary()
+        assert "missing_constraint" in {item.kind for item in result.critical}, (
+            result.summary()
+        )
+        # A changed default is still only a warning, which is what keeps
+        # `escalate` a live control rather than a no-op everywhere.
+        assert "default_mismatch" in {item.kind for item in result.warnings}, (
+            result.summary()
+        )
 
-    def test_the_gate_passes_anyway_which_is_the_defect(
-        self, tmp_path, drift_db
-    ) -> None:
-        """The promise ``on_critical: fail`` does not keep, stated out loud."""
+    def test_the_gate_fails_without_being_asked_to(self, tmp_path, drift_db) -> None:
+        """The promise ``on_critical: fail`` now keeps, stated out loud.
+
+        This is the deploy-behaviour change in adopting confiture 1.26.0: a
+        database that shipped yesterday with a warning in the log stops the
+        deploy today, and no fraisier configuration asked for it.
+        """
         project = self._project_without_constraints(tmp_path, drift_db)
 
         result = _gate(project)
 
-        assert result.passed, result.summary()
-        assert result.exit_code == 0
-        assert not result.critical
+        assert not result.passed, result.summary()
+        assert result.exit_code == 1
+        assert result.critical
 
-    def test_escalating_the_kind_fails_the_same_database(
+    def test_escalating_a_warning_kind_fails_the_same_database(
         self, tmp_path, drift_db
     ) -> None:
+        """``escalate`` still promotes the kinds confiture leaves a warning.
+
+        ``default_mismatch`` is the subject now that the constraint kinds are
+        critical on their own. The database here is already failing on those,
+        so the discriminating assertion is that the *changed default* moved
+        from ``warnings`` into ``critical`` — not that the verdict is false.
+        """
         project = self._project_without_constraints(tmp_path, drift_db)
 
         result = check_schema_drift(
             project_dir=project,
             confiture_config=project / "db" / "environments" / "production.yaml",
             checks=["live-drift"],
-            escalate=("missing_constraint",),
+            escalate=("default_mismatch",),
         )
 
         assert result.ran, result.error
         assert not result.passed, result.summary()
-        assert {item.kind for item in result.critical} == {"missing_constraint"}
-        assert "CRITICAL missing_constraint" in result.summary()
-        # The exit code is confiture's and stays confiture's: it graded this
-        # database clean-enough to ship, and fraisier's verdict disagreeing with
-        # it must not be laundered into a claim about what confiture returned.
-        assert result.exit_code == 0
+        assert "default_mismatch" in {item.kind for item in result.critical}
+        assert "default_mismatch" not in {item.kind for item in result.warnings}
+        assert "CRITICAL default_mismatch" in result.summary()
 
-    def test_escalating_one_kind_leaves_the_other_a_warning(
+    def test_not_escalating_a_kind_leaves_it_a_warning(
         self, tmp_path, drift_db
     ) -> None:
+        """The control for the test above: without the word, nothing rises."""
         project = self._project_without_constraints(tmp_path, drift_db)
 
         result = check_schema_drift(
             project_dir=project,
             confiture_config=project / "db" / "environments" / "production.yaml",
             checks=["live-drift"],
-            escalate=("missing_constraint",),
+            escalate=(),
         )
 
         assert "default_mismatch" in {item.kind for item in result.warnings}
@@ -762,8 +781,97 @@ class TestConstraintDriftIsAWarningThisGateCanBeToldToFailOn:
             project_dir=project,
             confiture_config=project / "db" / "environments" / "production.yaml",
             checks=["live-drift"],
-            escalate=("missing_constraint", "default_mismatch"),
+            escalate=("default_mismatch", "type_mismatch"),
         )
 
         assert result.ran, result.error
         assert result.passed, result.summary()
+
+
+#: A table whose DDL declares an index.  ``missing_index`` is the one warning
+#: kind confiture 1.26.0 left a warning when it graded the constraint kinds
+#: critical, so it is what keeps ``escalate`` a control that still does
+#: something on a lost object rather than only on a changed one.
+_DDL_INDEXED = """CREATE TABLE core.tb_indexed (
+    id BIGINT PRIMARY KEY,
+    label TEXT NOT NULL
+);
+
+CREATE INDEX idx_indexed_label ON core.tb_indexed (label);
+"""
+
+#: The migration that builds that table and never creates the index.
+_MIGRATION_NO_INDEX = _MIGRATION_COMPLETE.replace(
+    "    def down(self):",
+    """        self.connection.execute(
+            "CREATE TABLE core.tb_indexed (id BIGINT PRIMARY KEY, "
+            "label TEXT NOT NULL)"
+        )
+
+    def down(self):""",
+)
+
+
+class TestALostIndexIsAWarningThisGateCanBeToldToFailOn:
+    """``missing_index`` became escalatable when the constraint kinds stopped being.
+
+    Until this release ``ESCALATABLE_KINDS`` did not list it, so
+    ``escalate: [missing_index]`` was a validation error and **no**
+    configuration could make a dropped index fail a deploy. confiture has
+    emitted it as a warning since 1.0.1 and still does on 1.26.0 — measured in
+    ``.phases/2026-09-29-confiture-1-26-probe/`` (scenario ``Y_index_dropped``:
+    ``warning``, exit 0, passes, on both 1.25.1 and 1.26.0).
+
+    A dropped index is a performance loss rather than a lost guarantee, which
+    is why it is offered rather than graded critical here.
+    """
+
+    def _project_without_the_index(self, tmp_path, drift_db) -> Path:
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_NO_INDEX,
+            extra_ddl={"030_indexed.sql": _DDL_INDEXED},
+        )
+        assert _migrate(project).success is True
+        return project
+
+    def test_the_lost_index_arrives_as_a_warning(self, tmp_path, drift_db) -> None:
+        project = self._project_without_the_index(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert result.ran, result.error
+        assert "missing_index" in {item.kind for item in result.warnings}, (
+            result.summary()
+        )
+
+    def test_the_gate_passes_it_unless_told_otherwise(self, tmp_path, drift_db) -> None:
+        """The control: adding the row must not start failing deploys by itself."""
+        project = self._project_without_the_index(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert result.passed, result.summary()
+        assert result.exit_code == 0
+        assert not result.critical
+
+    def test_escalating_it_fails_the_same_database(self, tmp_path, drift_db) -> None:
+        project = self._project_without_the_index(tmp_path, drift_db)
+
+        result = check_schema_drift(
+            project_dir=project,
+            confiture_config=project / "db" / "environments" / "production.yaml",
+            checks=["live-drift"],
+            escalate=("missing_index",),
+        )
+
+        assert result.ran, result.error
+        assert not result.passed, result.summary()
+        assert "missing_index" in {item.kind for item in result.critical}
+        assert "CRITICAL missing_index" in result.summary()
+        # The exit code is confiture's and stays confiture's: it graded this
+        # database clean-enough to ship, and fraisier's verdict disagreeing
+        # with it must not be laundered into a claim about what confiture
+        # returned.
+        assert result.exit_code == 0
