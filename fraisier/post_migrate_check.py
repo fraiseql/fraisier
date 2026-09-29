@@ -23,13 +23,17 @@ failed schema build, an unreachable database, a report fraisier cannot parse.
 ``warn`` means "tell me, do not stop me", and that intent holds however the
 check failed.
 
-``escalate`` is the answer to #412.  confiture 1.15.0 reports a lost foreign
-key, ``CHECK``, ``UNIQUE``, primary key or changed default — and grades every
-one of them ``warning``, so ``has_critical_drift`` stays false and even
-``on_critical: fail`` deploys over it.  That grade is confiture's to set and
-fraisier does not argue with it; naming a kind here says only that *this*
-deploy will not accept losing it.  Empty by default: a gate that ran yesterday
-returns the same verdict today.
+``escalate`` is the answer to #412.  confiture grades a dropped index, a
+changed default, a widened type and a lost ``NOT NULL`` ``warning``, so
+``has_critical_drift`` stays false and even ``on_critical: fail`` deploys over
+them.  That grade is confiture's to set and fraisier does not argue with it;
+naming a kind here says only that *this* deploy will not accept losing it.
+Empty by default: a gate that ran yesterday returns the same verdict today.
+
+A lost or re-pointed constraint is **not** on that list and needs no
+escalation: confiture 1.26.0 grades it ``critical``, so the gate already stops
+on it (confiture#506/#518).  Naming one is a configuration error, which says
+the true thing — the deploy stops either way.
 """
 
 from __future__ import annotations

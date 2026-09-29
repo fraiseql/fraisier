@@ -25,7 +25,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fraisier.dbops.drift import CHECK_FLAGS, DriftResult, check_schema_drift
+from fraisier.dbops.drift import (
+    CHECK_FLAGS,
+    ESCALATABLE_KINDS,
+    DriftResult,
+    check_schema_drift,
+)
 
 CLEAN_BARE = {
     "check": "live_drift",
@@ -74,6 +79,41 @@ CONSTRAINT_LOST = {
     "has_drift": True,
     "warning_count": 1,
     "drift_items": [LOST_CONSTRAINT_ITEM],
+}
+
+#: A dropped index, copied from a confiture **1.26.0** run — the wire bytes are
+#: preserved at ``.phases/2026-09-29-confiture-1-26-probe/wire-index-dropped.json``,
+#: captured by ``capture_index_wire.py`` against a live database rather than
+#: composed here.
+#:
+#: This is what escalation is exercised on now.  ``LOST_CONSTRAINT_ITEM`` above
+#: is a 1.18.0 capture and its grade no longer exists: from 1.26.0 a lost
+#: constraint is ``critical`` with ``has_critical_drift: true``, so escalating
+#: it is a configuration error and these tests were measuring a confiture the
+#: dependency cap does not admit.  It stays as a fixture because the shape it
+#: pins — a warning-graded item on a report whose ``has_critical_drift`` is
+#: false — is still the shape escalation acts on.
+LOST_INDEX_ITEM = {
+    "type": "missing_index",
+    "severity": "warning",
+    "object": "app.tb_item.idx_item_label",
+    "expected": "idx_item_label",
+    "actual": None,
+    "message": "Index 'idx_item_label' on 'app.tb_item' is missing",
+    "subject": {
+        "schema": "app",
+        "relation": "tb_item",
+        "name": "idx_item_label",
+        "arguments": None,
+        "role": None,
+    },
+}
+
+INDEX_LOST = {
+    **CLEAN_BARE,
+    "has_drift": True,
+    "warning_count": 1,
+    "drift_items": [LOST_INDEX_ITEM],
 }
 
 #: A clean ``confiture build --format json`` envelope, copied from a 1.6.0 run
@@ -211,24 +251,29 @@ def project(tmp_path: Path) -> Path:
 #: and agreed with the code being fixed.
 #:
 #: Probe: `.phases/2026-09-28-confiture-next-probe/probe_quoted.py`.
+#:
+#: Named apart from the envelope it sits in so a test can re-key *one* field —
+#: the code — without hand-writing the rest of a captured payload back.
+REAL_DIFFER_403_ERROR: dict[str, object] = {
+    "code": "DIFFER_403",
+    "message": "The expected schema names column "
+    'app.tb_user."createdAt" (and 1 more), which needs '
+    "quotes: confiture supports a name only as PostgreSQL "
+    "writes it bare",
+    "severity": "error",
+    "details": {},
+    "migration": None,
+    "file": None,
+    "line": None,
+    "actionable": "Rename it so it needs no quotes, e.g. "
+    "app.tb_user.createdat; `confiture lint` lists "
+    "every such name (naming_003, naming_004)",
+}
+
 REAL_DIFFER_403_ENVELOPE: dict[str, object] = {
     "ok": False,
     "parser": {"pglast": "8.4", "pg_major": 18},
-    "error": {
-        "code": "DIFFER_403",
-        "message": "The expected schema names column "
-        'app.tb_user."createdAt" (and 1 more), which needs '
-        "quotes: confiture supports a name only as PostgreSQL "
-        "writes it bare",
-        "severity": "error",
-        "details": {},
-        "migration": None,
-        "file": None,
-        "line": None,
-        "actionable": "Rename it so it needs no quotes, e.g. "
-        "app.tb_user.createdat; `confiture lint` lists "
-        "every such name (naming_003, naming_004)",
-    },
+    "error": REAL_DIFFER_403_ERROR,
     "command": "migrate validate",
 }
 
@@ -684,11 +729,10 @@ class TestVerdicts:
 class TestEscalation:
     """A warning this deploy has said it will not accept (#412).
 
-    confiture 1.15.0 emits ``missing_constraint`` and ``default_mismatch``, and
-    grades both ``warning`` — ``has_critical_drift`` is blind to them, so a
-    dropped foreign key is exit 0 and a deploy running ``on_critical: fail``
-    ships over it.  Measured on 1.15.0 through 1.18.0 in
-    ``.phases/2026-09-23-confiture-1-18-probe/``.
+    confiture emits ``missing_index`` and grades it ``warning`` —
+    ``has_critical_drift`` is blind to it, so a dropped index is exit 0 and a
+    deploy running ``on_critical: fail`` ships over it.  Measured on 1.26.0:
+    the payload below is the wire bytes of a live run, not a composition.
 
     The grade is upstream's to set and fraisier does not argue with it.  What it
     adds is a way for one deploy to say that losing *this* kind is not a deploy
@@ -697,40 +741,41 @@ class TestEscalation:
 
     def test_an_escalated_warning_fails_the_gate(self, project: Path) -> None:
         with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            mock_run.side_effect = _fake_confiture(INDEX_LOST)
             result = check_schema_drift(
                 project_dir=project,
                 confiture_config=project / "db/environments/production.yaml",
                 checks=["live-drift"],
-                escalate=("missing_constraint",),
+                escalate=("missing_index",),
             )
 
         assert not result.passed
         assert result.ran  # a verdict, not a failure to reach one
-        assert [item.object_name for item in result.critical] == ["core.tb_widget"]
+        assert [item.object_name for item in result.critical] == [
+            "app.tb_item.idx_item_label"
+        ]
         assert not result.warnings
 
     def test_the_escalated_item_says_it_is_critical(self, project: Path) -> None:
         """The log has to read the way the verdict now behaves.
 
         Leaving the item graded ``warning`` would print ``WARNING
-        missing_constraint`` inside a line announcing critical drift.  The
-        message is confiture's own words either way — only the grade is
-        fraisier's.
+        missing_index`` inside a line announcing critical drift.  The message is
+        confiture's own words either way — only the grade is fraisier's.
         """
         with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            mock_run.side_effect = _fake_confiture(INDEX_LOST)
             result = check_schema_drift(
                 project_dir=project,
                 confiture_config=project / "db/environments/production.yaml",
                 checks=["live-drift"],
-                escalate=("missing_constraint",),
+                escalate=("missing_index",),
             )
 
         item = result.critical[0]
         assert item.severity == "critical"
-        assert item.kind == "missing_constraint"
-        assert "tb_widget_pid_fkey" in item.message
+        assert item.kind == "missing_index"
+        assert "idx_item_label" in item.message
         assert "1 critical schema drift item(s)" in result.summary()
 
     def test_escalating_nothing_is_the_default_and_moves_no_verdict(
@@ -738,7 +783,7 @@ class TestEscalation:
     ) -> None:
         """The whole point: an operator who says nothing deploys as before."""
         with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            mock_run.side_effect = _fake_confiture(INDEX_LOST)
             result = check_schema_drift(
                 project_dir=project,
                 confiture_config=project / "db/environments/production.yaml",
@@ -746,12 +791,12 @@ class TestEscalation:
             )
 
         assert result.passed
-        assert [item.kind for item in result.warnings] == ["missing_constraint"]
+        assert [item.kind for item in result.warnings] == ["missing_index"]
 
     def test_a_kind_that_did_not_fire_escalates_nothing(self, project: Path) -> None:
         """Naming a kind is not asserting it happened."""
         with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            mock_run.side_effect = _fake_confiture(INDEX_LOST)
             result = check_schema_drift(
                 project_dir=project,
                 confiture_config=project / "db/environments/production.yaml",
@@ -760,17 +805,17 @@ class TestEscalation:
             )
 
         assert result.passed
-        assert [item.kind for item in result.warnings] == ["missing_constraint"]
+        assert [item.kind for item in result.warnings] == ["missing_index"]
 
     def test_an_unescalated_warning_stays_a_warning_beside_one_that_rose(
         self, project: Path
     ) -> None:
         """Escalation is per kind, not a switch that makes warnings fatal."""
         payload = {
-            **CONSTRAINT_LOST,
+            **INDEX_LOST,
             "warning_count": 2,
             "drift_items": [
-                LOST_CONSTRAINT_ITEM,
+                LOST_INDEX_ITEM,
                 {
                     "type": "type_mismatch",
                     "severity": "warning",
@@ -785,45 +830,12 @@ class TestEscalation:
                 project_dir=project,
                 confiture_config=project / "db/environments/production.yaml",
                 checks=["live-drift"],
-                escalate=("missing_constraint",),
+                escalate=("missing_index",),
             )
 
         assert not result.passed
-        assert [item.kind for item in result.critical] == ["missing_constraint"]
+        assert [item.kind for item in result.critical] == ["missing_index"]
         assert [item.kind for item in result.warnings] == ["type_mismatch"]
-
-    def test_an_info_item_cannot_be_escalated(self, project: Path) -> None:
-        """``extra_constraint`` is ``info``, and info never reaches fraisier.
-
-        A constraint the live database has and the DDL does not name is not a
-        loss, and confiture grades it accordingly.  Escalation reads the
-        warnings, so naming it here is inert rather than a second way in.
-        """
-        payload = {
-            **CLEAN_BARE,
-            "has_drift": True,
-            "info_count": 1,
-            "drift_items": [
-                {
-                    "type": "extra_constraint",
-                    "severity": "info",
-                    "object": "core.tb_widget",
-                    "message": "Constraint 'tb_widget_extra_check' is not declared",
-                }
-            ],
-        }
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = _fake_confiture(payload)
-            result = check_schema_drift(
-                project_dir=project,
-                confiture_config=project / "db/environments/production.yaml",
-                checks=["live-drift"],
-                escalate=("extra_constraint",),
-            )
-
-        assert result.passed
-        assert not result.critical
-        assert not result.warnings
 
     def test_escalation_does_not_rescue_a_gate_that_never_ran(
         self, project: Path
@@ -835,11 +847,121 @@ class TestEscalation:
                 project_dir=project,
                 confiture_config=project / "db/environments/production.yaml",
                 checks=["live-drift"],
+                escalate=("missing_index",),
+            )
+
+        assert not result.passed
+        assert not result.ran
+
+
+class TestEscalationVocabularyIsClosedHereToo:
+    """``escalate`` is validated by the gate, not only by the config loader.
+
+    The config layer refuses an unknown kind at load time, and that is the path
+    a deploy takes — but it is not the only caller, and :func:`_escalate` works
+    by membership: a word no kind matches promoted nothing and left the gate
+    passing.  An operator who wrote ``missing_indexes`` had said "stop the
+    deploy that loses an index", nothing said otherwise, and every such deploy
+    shipped.  That is #262's shape, and ``checks`` was already guarded against
+    it ten lines above while ``escalate`` was not.
+    """
+
+    def test_a_misspelt_kind_refuses_the_run_rather_than_promoting_nothing(
+        self, project: Path
+    ) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(INDEX_LOST)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("missing_indexes",),
+            )
+
+        assert not result.passed
+        assert not result.ran
+        assert "missing_indexes" in str(result.error)
+        assert "missing_index" in str(result.error)  # what to write instead
+
+    def test_a_kind_confiture_grades_critical_is_refused_not_accepted(
+        self, project: Path
+    ) -> None:
+        """``missing_constraint`` left the vocabulary when it stopped warning.
+
+        confiture 1.26.0 grades a lost constraint ``critical``
+        (confiture#506/#518), so the gate stops on it with no help from
+        ``escalate`` and there is no warning left for escalation to promote.
+        Accepting the word anyway would be a control that does nothing; the
+        refusal says the true thing.
+        """
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(CONSTRAINT_LOST)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
                 escalate=("missing_constraint",),
             )
 
         assert not result.passed
         assert not result.ran
+        assert "missing_constraint" in str(result.error)
+
+    def test_an_info_kind_is_refused_rather_than_silently_inert(
+        self, project: Path
+    ) -> None:
+        """``extra_constraint`` is ``info``, and info never reaches escalation.
+
+        A constraint the live database has and the DDL does not name is not a
+        loss, and confiture grades it accordingly.  Escalation reads only the
+        warnings, so naming it here could never fire — which is exactly the
+        thing the operator must be told rather than left to assume.
+        """
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(CLEAN_BARE)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("extra_constraint",),
+            )
+
+        assert not result.passed
+        assert "extra_constraint" in str(result.error)
+
+    def test_the_gate_never_runs_confiture_on_a_kind_it_cannot_honour(
+        self, project: Path
+    ) -> None:
+        """The refusal precedes the work, so nothing touches the database."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(INDEX_LOST)
+            check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("nope",),
+            )
+
+        assert mock_run.call_count == 0
+
+    def test_every_valid_kind_is_accepted(self, project: Path) -> None:
+        """The guard must not narrow the vocabulary it is guarding.
+
+        Asserted against :data:`ESCALATABLE_KINDS` itself rather than a copy, so
+        a kind added there is exercised here without a second edit.
+        """
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(INDEX_LOST)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=ESCALATABLE_KINDS,
+            )
+
+        assert result.ran
+        assert not result.passed  # missing_index is in the list, so it rose
+        assert [item.kind for item in result.critical] == ["missing_index"]
 
 
 class TestCannotReachAVerdict:
@@ -1243,6 +1365,51 @@ class TestAGateThatCannotReachAVerdictSaysWhy:
         assert "Rename it so it needs no quotes" in result.error, (
             f"the remedy confiture supplied is missing: {result.error!r}"
         )
+
+    def test_the_refusal_says_the_schema_is_unchecked_not_clean(
+        self, project: Path
+    ) -> None:
+        """A `DIFFER_403` is the loss of every finding, not one naming nit.
+
+        confiture refuses *before* it compares, so a tree carrying a
+        quote-requiring name reports nothing at all — identically to a tree
+        with no drift. Measured on confiture 1.26.0 in
+        `.phases/2026-09-29-confiture-1-26-probe/probe_403_masks.py`: a dropped
+        column was `CRITICAL missing_column` with bare names and *invisible*
+        beside a `"createdAt"`, byte for byte the same output as the clean
+        tree.
+
+        Everything confiture says here is about one column and a rename. An
+        operator running `on_critical: warn` reads that as cosmetic and ships a
+        schema nothing checked, which is the one reading the gate must not
+        allow.
+        """
+        result = self._result(project, REAL_DIFFER_403_ENVELOPE, rc=5)
+
+        assert result.error is not None
+        assert "NO drift was measured" in result.error, (
+            "a refusal that hides every other finding read like a naming "
+            f"complaint: {result.error!r}"
+        )
+        assert "not clean" in result.error
+
+    def test_only_the_refusal_carries_that_warning(self, project: Path) -> None:
+        """It must not become boilerplate on every no-verdict path.
+
+        The other causes announce themselves as a gate that did not run. This
+        one names a single column and suggests a rename, which is why it alone
+        needs the consequence spelled out — and why a sentence printed
+        everywhere would stop carrying the distinction.
+        """
+        other = {
+            **REAL_DIFFER_403_ENVELOPE,
+            "error": {**REAL_DIFFER_403_ERROR, "code": "DIFFER_500"},
+        }
+        result = self._result(project, other, rc=1)
+
+        assert result.error is not None
+        assert "DIFFER_500" in result.error
+        assert "NO drift was measured" not in result.error
 
     def test_a_payload_that_is_no_envelope_still_says_so(self, project: Path) -> None:
         """The shape complaint must survive for a report that really is unknown.

@@ -875,3 +875,106 @@ class TestALostIndexIsAWarningThisGateCanBeToldToFailOn:
         # with it must not be laundered into a claim about what confiture
         # returned.
         assert result.exit_code == 0
+
+
+#: A table whose column needs quotes — the ORM-shaped name confiture refuses to
+#: compare from 1.26.0 (``DIFFER_403``, exit 5).  Declared in the DDL *and*
+#: created live below, so it contributes no drift of its own: the only thing it
+#: changes between the two runs below is that one identifier needs quoting.
+_DDL_QUOTED_NAME = """CREATE TABLE core.tb_audit (
+    id BIGINT PRIMARY KEY,
+    "createdAt" TIMESTAMPTZ NOT NULL
+);
+"""
+
+_LIVE_QUOTED_NAME = (
+    "CREATE TABLE core.tb_audit (id BIGINT PRIMARY KEY, "
+    '"createdAt" TIMESTAMPTZ NOT NULL)'
+)
+
+
+class TestARefusedComparisonHidesEveryOtherFinding:
+    """A ``DIFFER_403`` means drift is UNKNOWN, and the gate must not read otherwise.
+
+    confiture refuses a schema whose identifiers need quotes **before** it
+    compares anything, so one such name anywhere in the tree suppresses every
+    other finding — it is not "this name, plus the real drift".  That is the
+    load-bearing fact under the sentence :func:`_coverage_lost` appends, and it
+    is upstream's behaviour rather than fraisier's, so it is pinned by
+    execution here: the day confiture reports the drift alongside the refusal,
+    that sentence becomes a lie and this test says so.
+
+    The two runs differ by one column name and nothing else.  The drift — a
+    migration that never added ``core.tb_widget.label`` — is identical in both,
+    and ``core.tb_audit`` is created live exactly as the DDL declares it, so it
+    contributes no drift itself.
+    """
+
+    def test_the_drift_is_critical_while_every_name_is_bare(
+        self, tmp_path, drift_db
+    ) -> None:
+        """The control, and the half that makes the other half mean something."""
+        project = _project(tmp_path, drift_db, _MIGRATION_MISSING_COLUMN)
+        assert _migrate(project).success is True
+
+        result = _gate(project)
+
+        assert result.ran, result.error
+        assert not result.passed
+        assert "missing_column" in {item.kind for item in result.critical}, (
+            result.summary()
+        )
+
+    def _project_with_a_quoted_name(self, tmp_path, drift_db) -> Path:
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_MISSING_COLUMN,
+            extra_ddl={"040_quoted.sql": _DDL_QUOTED_NAME},
+        )
+        assert _migrate(project).success is True
+        _exec(_DB, drift_db, _LIVE_QUOTED_NAME)
+        return project
+
+    def test_that_same_critical_drift_becomes_invisible(
+        self, tmp_path, drift_db
+    ) -> None:
+        """The whole point: the finding above is simply gone."""
+        project = self._project_with_a_quoted_name(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert not result.critical, (
+            "confiture reported drift alongside the refusal — the refusal no "
+            f"longer masks findings, so _coverage_lost() is now wrong: "
+            f"{result.summary()}"
+        )
+        assert not result.warnings
+
+    def test_it_is_a_gate_that_did_not_run_not_a_gate_that_passed(
+        self, tmp_path, drift_db
+    ) -> None:
+        project = self._project_with_a_quoted_name(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert not result.passed
+        assert not result.ran
+        assert result.exit_code == 5
+        assert "DIFFER_403" in str(result.error)
+
+    def test_the_operator_is_told_the_schema_is_unchecked(
+        self, tmp_path, drift_db
+    ) -> None:
+        """Everything confiture says here is about one column and a rename.
+
+        Without the added sentence an operator on ``on_critical: warn`` reads a
+        naming nit and ships a database with a column missing — which is
+        precisely what the run above proves is sitting there unreported.
+        """
+        project = self._project_with_a_quoted_name(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert "NO drift was measured" in result.summary(), result.summary()
+        assert "not clean" in result.summary()
