@@ -39,8 +39,47 @@ def _config(**check: object) -> dict:
 
 
 class TestLoader:
-    def test_absent_block_is_disabled(self) -> None:
-        assert load_post_migrate_check({}) == PostMigrateCheck(enabled=False)
+    def test_an_absent_block_still_gets_a_gate(self) -> None:
+        """The reverse of what this asserted until the gate became a default.
+
+        It read "an absent block is disabled", which was the right promise
+        while the gate was opt-in: ``on_critical: fail`` was the opinionated
+        default and it was unreachable, sitting behind ``enabled=False`` with
+        no scaffold entry and a commented-out example. So a project deployed
+        with no drift gate and had to go and find one.
+
+        Reversing it belongs in a release note, not in a line quietly deleted
+        here — hence the rewrite rather than the removal.
+        """
+        loaded = load_post_migrate_check({})
+
+        assert loaded.enabled
+        assert loaded.checks == ("live-drift",)
+        assert loaded.on_critical == "fail"
+
+    def test_an_absent_block_is_not_declared(self) -> None:
+        """Nobody wrote it, and what that costs is decided at deploy time."""
+        assert load_post_migrate_check({}).declared is False
+
+    def test_an_absent_database_block_gets_a_gate(self) -> None:
+        """The shape a project that never heard of this feature has."""
+        assert load_post_migrate_check({"other_key": 1}).enabled
+
+    def test_an_explicit_gate_is_declared(self) -> None:
+        loaded = load_post_migrate_check({"post_migrate_check": {"enabled": True}})
+
+        assert loaded.enabled
+        assert loaded.declared is True
+
+    def test_declining_is_declared_too(self) -> None:
+        """``enabled: false`` is a decision, and the deploy never sees it again."""
+        loaded = load_post_migrate_check({"post_migrate_check": {"enabled": False}})
+
+        assert not loaded.enabled
+        assert loaded.declared is True
+
+    def test_the_dataclass_default_is_enabled(self) -> None:
+        assert PostMigrateCheck().enabled is True
 
     def test_explicitly_disabled_stays_disabled(self) -> None:
         loaded = load_post_migrate_check({"post_migrate_check": {"enabled": False}})

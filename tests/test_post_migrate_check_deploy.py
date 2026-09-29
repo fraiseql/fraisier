@@ -101,13 +101,21 @@ def app(tmp_path: Path) -> Path:
     return app_dir
 
 
-class TestDefaultOff:
-    def test_no_block_runs_no_check(self, app: Path) -> None:
+class TestDefaultOn:
+    """A Fraise project is gated because it is a Fraise project.
+
+    Until this release the gate had to be discovered and switched on, so the
+    ``on_critical: fail`` default protected nobody who had not already gone
+    looking for it.
+    """
+
+    def test_no_block_still_runs_the_check(self, app: Path) -> None:
         with patch("fraisier.dbops.drift.check_schema_drift") as check:
+            check.return_value = CLEAN
             result = _deploy(_deployer(app))
 
         assert result.success
-        check.assert_not_called()
+        check.assert_called_once()
 
     def test_disabled_block_runs_no_check(self, app: Path) -> None:
         with patch("fraisier.dbops.drift.check_schema_drift") as check:
@@ -166,6 +174,69 @@ class TestOnCriticalFail:
 
         assert not result.success
         assert "database unreachable" in (result.error_message or "")
+
+
+class TestADefaultedGateThatCannotRun:
+    """A gate nobody wrote must not fail a deploy over config nobody wrote.
+
+    The gate is on by default now, so a project that predates the default
+    meets it without having pointed ``confiture_config`` at a file
+    ``confiture build --env`` can resolve — and the default for that key,
+    ``confiture.yaml``, cannot satisfy it by construction. Failing closed
+    there stops a correct deploy, after the migrations, for a check the
+    project never asked for.
+
+    The distinction is the **promise**, not the check. Writing
+    ``enabled: true`` buys "stop me", and #262 holds an operator to that
+    however the gate failed — ``TestOnCriticalFail`` above is unchanged and
+    still asserts it. Nobody bought anything here.
+
+    ⚠️ This is the one place fraisier proceeds past a verdict it could not
+    reach. It is narrow on purpose: only ``could not run``, and only for a
+    gate that was never declared. Real drift still fails the deploy.
+    """
+
+    def test_it_reports_and_the_deploy_continues(
+        self, app: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with (
+            patch("fraisier.dbops.drift.check_schema_drift", return_value=UNRUNNABLE),
+            caplog.at_level("WARNING"),
+        ):
+            result = _deploy(_deployer(app))
+
+        assert result.success
+        assert "database unreachable" in caplog.text, (
+            f"the gate failed silently: {caplog.text!r}"
+        )
+
+    def test_the_report_says_it_was_fraisiers_choice_and_how_to_bind_it(
+        self, app: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Otherwise it reads as fraisier shrugging at a real failure."""
+        with (
+            patch("fraisier.dbops.drift.check_schema_drift", return_value=UNRUNNABLE),
+            caplog.at_level("WARNING"),
+        ):
+            _deploy(_deployer(app))
+
+        assert "default rather than this project's choice" in caplog.text
+        assert "enabled: false" in caplog.text
+
+    def test_a_declared_gate_still_fails_closed(self, app: Path) -> None:
+        """The #262 promise, unchanged — this is the control for the whole class."""
+        with patch("fraisier.dbops.drift.check_schema_drift", return_value=UNRUNNABLE):
+            result = _deploy(_deployer(app, enabled=True))
+
+        assert not result.success
+
+    def test_real_drift_still_fails_an_undeclared_gate(self, app: Path) -> None:
+        """Only the `could not run` branch is softened, never a verdict."""
+        with patch("fraisier.dbops.drift.check_schema_drift", return_value=DRIFTED):
+            result = _deploy(_deployer(app))
+
+        assert not result.success
+        assert "core.tb_widget.label" in (result.error_message or "")
 
 
 class TestOnCriticalWarn:
