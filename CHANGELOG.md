@@ -5,6 +5,194 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.83.0] - 2026-09-29
+
+**Two changes to what a deploy does, both arriving through confiture 1.26.0.**
+A database that has lost or re-pointed a foreign key, a `CHECK`, a `UNIQUE` or a
+primary key now **fails** a `post_migrate_check` gate that nobody reconfigured —
+upstream regraded it critical, and the cap adopts that forward. And a DDL tree
+whose identifiers need quotes is now **refused** rather than compared, so a
+schema that has never drifted can stop a deploy.
+
+The second one is why this release is mostly about legibility. A gate that
+refuses has to say so in words an operator can act on, and it has to say it
+*before* the migrations are applied where that is possible at all — so the
+refusal now carries confiture's own reason, `fraisier doctor` predicts it from
+the built schema, and a refusal no longer reads like a naming nit when it is
+the loss of every finding.
+
+Closes [#412](https://github.com/fraiseql/fraisier/issues/412) — upstream fixed
+it properly, which also retires the doctor check v0.82.0 added to work around it.
+
+### Changed
+
+- **⚠️ A lost or re-pointed constraint fails the gate, unasked**
+  ([#412](https://github.com/fraiseql/fraisier/issues/412)). confiture 1.26.0
+  grades `missing_constraint` and `constraint_mismatch` **critical**
+  (confiture#506/#518) where every earlier version graded them `warning` and
+  left `has_critical_drift` false. A deploy running `on_critical: fail` over a
+  database missing a foreign key its DDL declares shipped yesterday and stops
+  today.
+
+  Measured on the published artifacts rather than read from the changelog —
+  `.phases/2026-09-29-confiture-1-26-probe/driver10.py`, same tree, both
+  versions:
+
+  ```
+  scenario           1.25.1                 1.26.0
+  X_fk_dropped       warn, exit 0, passes   critical, exit 1, fails
+  C_check_dropped    warn, exit 0, passes   critical, exit 1, fails
+  Z_fk_repointed     warn, exit 0, passes   critical, exit 1, fails
+  Y_index_dropped    warn, exit 0, passes   warn, exit 0, passes
+  ```
+
+  That is the outcome `on_critical: fail` was always asking for, and #412 was
+  filed because it was not delivered.
+
+- **⚠️ A DDL name that needs quotes refuses the live-drift comparison**
+  (`DIFFER_403`, exit 5). confiture supports an identifier only as PostgreSQL
+  writes it bare, and from 1.26.0 that is enforced wherever it compares or
+  generates a schema — which includes the DDL side of `migrate validate
+  --check-live-drift`, the command the gate runs. An ORM-shaped schema —
+  `"createdAt"`, `"userName"` — does not drift; it becomes **ungradable**.
+  Measured against a database applied verbatim from its own DDL, so with zero
+  drift by construction: `passed=True exit=0` on 1.25.1, `passed=False exit=5`
+  on 1.26.0.
+
+  With `on_critical: fail` that is a failed deploy on a correct migration,
+  found with the migrations already applied. `post_migrate_check_names_conform`
+  below moves the discovery to doctor time; there is no opt-out flag, and a
+  `confiture lint --baseline` absorbs `naming_003`/`naming_004` but not
+  `DIFFER_403`.
+
+- **The confiture pin caps on the minor: `>=1.26.0,<1.27`.** It was `<2`, so
+  every user resolved the newest confiture on their next sync whatever fraisier
+  shipped — which is how both changes above reached deploys with no fraisier
+  release involved, four confiture versions in two days across v0.82.0, every
+  audit retrospective. Adopting the next minor is now an edit someone makes on
+  purpose.
+
+  The pin comment's rationale is rewritten with it. It argued for `<2` on the
+  strength of upstream's consumer contract tests, which pin symbols and call
+  shapes — and therefore cannot see a **regrade**, which is exactly what
+  1.26.0 was.
+
+- **`escalate` swaps two kinds it could no longer promote for one it never
+  could.** `missing_constraint` and `constraint_mismatch` leave
+  `ESCALATABLE_KINDS`: confiture grades both critical now, so the gate stops on
+  them by itself and naming one was a control that did nothing. `missing_index`
+  takes their place — confiture has reported it as a warning since 1.0.1 but it
+  was never listed, so `escalate: [missing_index]` was a validation error and
+  **no** configuration could make a dropped index fail a deploy.
+
+  A config naming a constraint kind is now a validation error, which says the
+  true thing: that deploy already stops.
+
+- **The confiture floor assertion is restated, not deleted.** It read "the
+  declared range contains 1.0.0", which a cap on the minor cannot satisfy; it
+  now reads "the declared floor is at or above the capability floor".
+  `SCHEMA_QUALIFIED_DRIFT_FLOOR` stays, because it documents why 1.0.0 mattered.
+
+### Added
+
+- **`post_migrate_check_names_conform` predicts the refusal before the deploy
+  meets it.** A doctor check that scans each enabled `live-drift` gate's **built**
+  schema — not the DDL files, because the built schema is what confiture is
+  handed, and a name can arrive from an included directory the tree does not
+  obviously own. It names the first five offenders with a conforming rename
+  each, plus a total, and calls out a dotted name's second failure: it is
+  *misread* as `schema.name`, so whatever refers to it resolves somewhere else
+  (`naming_003` rather than `naming_004`).
+
+  Version-gated on 1.26.0 via the `confiture` binary on `PATH` — the gate shells
+  out, so the binary is the thing that decides — and the gate is checked before
+  the build, so a project on a confiture that still compares pays a `--version`
+  rather than a whole build. Severity is `warn`.
+
+  `build_expected_schema()` is extracted from the drift gate so the check and
+  the gate cannot disagree about what "the built schema" means.
+
+  ⚠️ This check dies the day `confiture build` starts refusing quote-requiring
+  names too — it can only read a schema the build produced. That `build` exits
+  0 on a tree live drift refuses is a contract confiture recorded upstream on
+  2026-09-29, with a commitment to warn fraisier before changing it.
+
+### Fixed
+
+- **The gate reported the shape it could not parse instead of confiture's
+  reason.** Under `--format json` confiture writes its error envelope to
+  **stdout** and leaves stderr empty, and the no-verdict path appended stderr —
+  so on a `DIFFER_403` the operator was handed "confiture's JSON report matches
+  no known shape (keys: …)" while the column that caused it and the rename that
+  fixes it sat unread. Measured on a captured failure: 573 bytes on stdout, **0
+  on stderr**.
+
+  This is v0.82.0's #414 lesson — `--format json` moves the error between
+  streams — at the call site that fix did not reach; `_build_error` had done the
+  right thing twenty lines away since #401. Both now read the envelope through
+  the same helpers, with stderr kept as the fallback for a run that died before
+  writing one.
+
+- **⚠️ A `DIFFER_403` said nothing about the coverage it had just destroyed.**
+  confiture refuses **before** it compares, so one quote-requiring identifier
+  anywhere in the tree suppresses *every other finding* — it is not "this name,
+  plus the real drift". Everything the refusal says is about one column and a
+  rename, which reads like a cosmetic nit, and an operator running
+  `on_critical: warn` reads a cosmetic nit and ships.
+
+  Measured on confiture 1.26.0, one table, three databases
+  (`.phases/2026-09-29-confiture-1-26-probe/probe_403_masks.py`): a dropped
+  column was `CRITICAL missing_column` with bare names, and **byte-identically
+  invisible** beside a `"createdAt"` — the same output as a tree with no drift
+  at all. The refusal now ends "confiture refuses before it compares, so NO
+  drift was measured: this schema is unchecked, not clean", and only that
+  refusal carries it, so the sentence keeps meaning something.
+
+- **`escalate` was validated by the config loader and by nothing else**
+  ([#262](https://github.com/fraiseql/fraisier/issues/262)'s shape).
+  `check_schema_drift(escalate=…)` accepted any string, and `_escalate` filters
+  warnings by membership — so a misspelt kind matched nothing, promoted nothing,
+  and left the gate passing. An operator who wrote `missing_indexes` had said
+  "stop the deploy that loses an index", nothing said otherwise, and every such
+  deploy shipped. `checks` was already guarded against exactly this ten lines
+  above in the same function.
+
+  The gate now refuses a kind outside `ESCALATABLE_KINDS` before it runs
+  anything, the way it already refused an unknown check name.
+
+- **The names check missed 23 keywords it should have refused.** Its keyword
+  table came from `pg_get_keywords()` `catcode = 'R'` alone, excluding `'T'` on
+  the premise that a type/function-name keyword is bare-legal as a column name.
+  It is not — and the categories read backwards from what their names suggest:
+
+  ```
+  CREATE TABLE t (left text)      -- syntax error   (catcode T)
+  CREATE TABLE t (between text)   -- accepted       (catcode C)
+  ```
+
+  `left`, `right`, `join`, `inner`, `outer`, `like`, `is`, `similar` and
+  `verbose` among them, so a project carrying one passed `fraisier doctor` and
+  then had its deploy refused — the exact failure the check exists to prevent.
+  `_QUOTE_REQUIRING_KEYWORDS` is now 101 words from catcodes `R` and `T`,
+  regenerated from PostgreSQL 18.4, the grammar confiture parses with. `'C'`
+  stays excluded, now measured rather than assumed.
+
+  This matches confiture's own predicate — `quote_identifier(name) != name` —
+  and **deliberately** inherits its one over-report: a `T` word really is
+  bare-legal as a function name, and confiture flags it anyway because its
+  predicate does not look at the object's kind. The check exists to predict the
+  refusal, not to be right about PostgreSQL, so it follows. A test says so.
+
+### Removed
+
+- **`post_migrate_check_constraint_coverage`**, the doctor check v0.82.0 added
+  for [#412](https://github.com/fraiseql/fraisier/issues/412). Its premise was
+  "confiture grades a lost constraint a warning", which is false on every
+  confiture this range admits — it could only emit advice that is now wrong,
+  and once the constraint kinds left `ESCALATABLE_KINDS` its fix hint told the
+  operator to write a config that fails validation. The signal it existed to
+  provide is now the gate failing.
+
 ## [0.82.0] - 2026-09-27
 
 **A halted migration reported a successful deploy.** Plus the confiture work
