@@ -73,11 +73,22 @@ def _declared_specifier() -> SpecifierSet:
     raise AssertionError(msg)
 
 
+def _declared_floor() -> Version:
+    """The lowest confiture the declared range admits."""
+    for clause in _declared_specifier():
+        if clause.operator in (">=", "=="):
+            return Version(clause.version)
+    msg = "the fraiseql-confiture requirement declares no lower bound"
+    raise AssertionError(msg)
+
+
 def test_declared_floor_admits_only_schema_qualified_drift() -> None:
     """The declared range must reject every confiture whose drift check is blind.
 
-    Asserted as "the floor rejects 0.99" rather than as a literal string, so
-    the test still holds when the cap moves.
+    Stated as the floor's *purpose* — that nothing below the capability floor
+    is admitted — rather than as "the floor is exactly 1.0.0".  Adopting a
+    newer confiture then satisfies this more strictly instead of breaking it,
+    which is what happened when the cap moved to one minor at a time.
     """
     specifier = _declared_specifier()
     assert not specifier.contains("0.46.0"), (
@@ -85,7 +96,30 @@ def test_declared_floor_admits_only_schema_qualified_drift() -> None:
         "the post-migration drift gate cannot trust it"
     )
     assert not specifier.contains("0.99.0")
-    assert specifier.contains(str(SCHEMA_QUALIFIED_DRIFT_FLOOR))
+    assert _declared_floor() >= SCHEMA_QUALIFIED_DRIFT_FLOOR, (
+        f"the declared floor {_declared_floor()} is below "
+        f"{SCHEMA_QUALIFIED_DRIFT_FLOOR}, the release that taught "
+        "--check-live-drift to see schema-qualified DDL"
+    )
+
+
+def test_the_cap_admits_exactly_one_confiture_minor() -> None:
+    """Adopting a confiture minor is a fraisier release, not a resolver outcome.
+
+    While the cap was ``<2`` a user resolved the newest 1.x whatever fraisier
+    locked, so every confiture audit here was retrospective by construction --
+    1.26.0 published and changed a deploy's verdict with no fraisier release
+    involved.  The cap is one minor so that adopting the next one is an edit
+    someone makes on purpose.
+    """
+    specifier = _declared_specifier()
+    floor = _declared_floor()
+    next_minor = Version(f"{floor.major}.{floor.minor + 1}.0")
+    assert specifier.contains(str(floor))
+    assert not specifier.contains(str(next_minor)), (
+        f"the declared range admits {next_minor}: confiture would be adopted "
+        "by the user's resolver rather than by a fraisier release"
+    )
 
 
 def test_installed_confiture_satisfies_the_declared_range() -> None:
