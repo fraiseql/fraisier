@@ -5,7 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.84.0] - 2026-10-01
+
+**Three open issues and a confiture minor, in one release.** A restore can now
+come from pgBackRest instead of a `pg_dump` archive (#424); a restore rebuilds, and
+a deploy refuses, a pg_tviews TVIEW that came back empty (#422); and the
+pre-migrate dump corpus is pruned without waiting for a deploy (#420). All of it
+adds to what a host runs; nothing is removed.
+
+### ⚠️ Upgrade notes, in order
+
+1. **Before installing:** upgrade pg_tviews to 0.1.0-beta.20 or later on every
+   host that has a TVIEW project (confiture 1.29 requires read contract 1).
+   `fraisier doctor` (`pg_tviews_contract`) checks it.
+2. **After installing:** run `fraisier scaffold && sudo fraisier scaffold-install
+   --yes` on each host. It installs the pre-migrate prune timer (#420) and, for any
+   environment using `restore.source: pgbackrest`, the root helper (#424).
+3. **Behaviour change:** a TVIEW that is empty while its backing view has rows now
+   fails a deploy. `database.post_migrate_check.on_empty: warn` softens it.
 
 ### Changed
 
