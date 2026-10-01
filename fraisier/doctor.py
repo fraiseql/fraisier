@@ -1672,6 +1672,10 @@ def _check_backup_corpus_free_space(config: FraisierConfig | None) -> CheckResul
 def _check_backup_retention(config: FraisierConfig | None) -> CheckResult:
     """Corpora this host says it keeps, and whether anything prunes them.
 
+    Both kinds: a received corpus (``backup.retain``, #339) and a
+    ``pre_migrate_dump`` gate's own directory (#420), whose prune used to run
+    only inside a deploy.
+
     #339's incident: a destination host received a nightly corpus, the
     unit meant to prune it was hand-written in the consuming repo, and it
     was never installed there. The disk filled. Nothing reported it,
@@ -1689,10 +1693,14 @@ def _check_backup_retention(config: FraisierConfig | None) -> CheckResult:
         return CheckResult(name, "skip", "no config loaded")
 
     from fraisier.scaffold.renderer import ScaffoldRenderer
-    from fraisier.scaffold.retention import retention_report
+    from fraisier.scaffold.retention import (
+        pre_migrate_prune_report,
+        retention_report,
+    )
 
     try:
-        report = retention_report(ScaffoldRenderer(config))
+        renderer = ScaffoldRenderer(config)
+        report = [*retention_report(renderer), *pre_migrate_prune_report(renderer)]
     except ValidationError as exc:
         return CheckResult(name, "skip", f"invalid retention config: {exc}")
     except (OSError, ValueError) as exc:

@@ -104,7 +104,7 @@ class MigrateStrategy(Strategy):
         abort the deploy, or None to proceed."""
         from fraisier.dbops.backup import (
             check_disk_space,
-            cleanup_old_backups,
+            prune_pre_migrate_corpus,
             run_backup,
         )
         from fraisier.dbops.confiture import has_pending
@@ -145,35 +145,18 @@ class MigrateStrategy(Strategy):
             )
 
         log.info("pre_migrate_dump: verified dump at %s", result.backup_path)
-        retention_hours = self._dump_config.get("retention_hours")
-        keep_last = self._dump_config.get("keep_last")
-        # Either rule alone is a complete retention policy (#419). Pruning only
-        # when `retention_hours` is set would accept `keep_last` and do nothing
-        # with it, which is the shape of a silent no-op.
-        if retention_hours is not None or keep_last is not None:
-            # keep_minimum=1: this gate's dump is the rollback point for the
-            # migration about to run. Expiring the newest one leaves that
-            # migration with nothing to fall back to.
-            outcome = cleanup_old_backups(
-                Path(output_dir),
-                retention_hours=None
-                if retention_hours is None
-                else int(retention_hours),
-                keep_minimum=1,
-                keep_last=None if keep_last is None else int(keep_last),
+        outcome = prune_pre_migrate_corpus(self._dump_config)
+        if outcome is not None and outcome.removed:
+            # The ceiling's removals were not old, so reporting them all as
+            # "old dump(s)" would misdescribe exactly the ones an operator
+            # watching disk use is looking for.
+            by_ceiling = len(outcome.removed_by_ceiling)
+            keep_last = self._dump_config.get("keep_last")
+            log.info(
+                "pre_migrate_dump: pruned %d dump(s)%s",
+                len(outcome.removed),
+                f" ({by_ceiling} beyond keep_last={keep_last})" if by_ceiling else "",
             )
-            if outcome.removed:
-                # The ceiling's removals were not old, so reporting them all as
-                # "old dump(s)" would misdescribe exactly the ones an operator
-                # watching disk use is looking for.
-                by_ceiling = len(outcome.removed_by_ceiling)
-                log.info(
-                    "pre_migrate_dump: pruned %d dump(s)%s",
-                    len(outcome.removed),
-                    f" ({by_ceiling} beyond keep_last={keep_last})"
-                    if by_ceiling
-                    else "",
-                )
         return None
 
     def execute(

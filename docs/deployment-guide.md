@@ -1399,6 +1399,43 @@ fraisier deploy my_api production --if-changed
 
 Useful in cron jobs or CI pipelines where you want to avoid no-op deployments.
 
+### Pruning the pre-migrate dump corpus without a deploy (#420)
+
+`pre_migrate_dump.retention_hours` and `keep_last` used to be applied only inside
+a deploy, after a successful dump. A quiet week — a freeze, a holiday — therefore
+left the whole corpus on disk, and on a host where the dump directory shares a
+partition with PGDATA that is exactly when it is largest.
+
+`fraisier backup prune --pre-migrate FRAISE -e ENV` applies the same rules, with
+the same call the gate makes, whenever you run it. `scaffold` also renders a
+timer for each fraise and environment whose gate is enabled **and** has a rule:
+
+```yaml
+pre_migrate_dump:
+  enabled: true
+  output_dir: /var/lib/postgresql/pre_migrate
+  retention_hours: 72          # an integer >= 1
+  keep_last: 10                # optional; either rule alone is a complete policy
+  prune_schedule: daily        # optional; systemd OnCalendar text, default daily
+```
+
+- **The newest dump is never pruned**, and that is not configuration. It is the
+  rollback point for the next migration, so a timer cannot empty the corpus —
+  an all-expired directory keeps its newest dump and the command warns that only
+  the floor is holding it open.
+- **It takes the per-fraise deployment lock** and skips (exit 0) when a deploy
+  holds it, because a gate may be mid-dump. `--dry-run` takes no lock and deletes
+  nothing.
+- **A gate with no rule renders no timer**, and the command called by hand exits 1
+  rather than 0: a prune that was asked for and did nothing must not report
+  success. A disabled gate has nothing to do and exits 0.
+- It runs as `scaffold.deploy_user`, the account whose deploys write the dumps.
+  The unit grants `ReadWritePaths=` to the directory and the lock directory, and
+  nothing above them.
+- The timer exists on a host only after `fraisier scaffold && sudo fraisier
+  scaffold-install --yes`; `fraisier doctor` (`backup_retention`) says so until it
+  does.
+
 ### Retention for a corpus you receive
 
 A host that is rsync'd backups from somewhere else has no fraise producing

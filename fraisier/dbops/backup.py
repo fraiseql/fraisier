@@ -8,9 +8,11 @@ import logging
 import re
 import shutil
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
 from fraisier.dbops.archive import ArchiveVerdict, verify_archive
@@ -453,6 +455,56 @@ def cleanup_old_backups(
         exempted_by_minimum=tuple(exempted),
         invalid=tuple(invalid),
         removed_by_ceiling=tuple(ceiling_removed),
+    )
+
+
+def has_prune_rule(dump_config: Mapping[str, Any]) -> bool:
+    """Does a ``pre_migrate_dump`` gate say how to prune its corpus?
+
+    The one definition: :func:`prune_pre_migrate_corpus` acts on it and the
+    scaffold renders a timer only where it holds, so a timer can never be
+    installed for a gate the command would refuse every night.
+    """
+    return (
+        dump_config.get("retention_hours") is not None
+        or dump_config.get("keep_last") is not None
+    )
+
+
+def prune_pre_migrate_corpus(
+    dump_config: Mapping[str, Any], *, dry_run: bool = False
+) -> CleanupOutcome | None:
+    """Apply a ``pre_migrate_dump`` gate's retention rules to its ``output_dir`` (#420).
+
+    The one call behind both callers — the dump gate after a successful dump, and
+    ``fraisier backup prune --pre-migrate`` (and its timer) with no deploy at all.
+    A prune that only ran inside a deploy left a quiet week's whole corpus on
+    disk; two spellings of this call would be how the two drift apart, so there
+    is exactly one.
+
+    ``keep_minimum=1`` is fixed here and is not configuration: this gate's newest
+    dump is the rollback point for the migration about to run, and a prune on a
+    timer must not be able to empty a corpus the next deploy will want to fall
+    back to.
+
+    Either rule alone is a complete policy (#419).  Pruning only when
+    ``retention_hours`` is set would accept ``keep_last`` and do nothing with it,
+    which is the shape of a silent no-op.
+
+    Returns ``None`` when the gate configures neither rule — "nothing to do" is a
+    different answer from "pruned and removed nothing", and a caller that must
+    refuse the first (the CLI) needs to tell them apart.
+    """
+    if not has_prune_rule(dump_config):
+        return None
+    retention_hours = dump_config.get("retention_hours")
+    keep_last = dump_config.get("keep_last")
+    return cleanup_old_backups(
+        Path(dump_config["output_dir"]),
+        retention_hours=None if retention_hours is None else int(retention_hours),
+        keep_minimum=1,
+        keep_last=None if keep_last is None else int(keep_last),
+        dry_run=dry_run,
     )
 
 

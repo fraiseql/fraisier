@@ -440,6 +440,56 @@ fraises:
           strategy: restore_migrate
 """
 
+# #420's shape: the pre-migrate dump gate's prune timer. Unlike the retain pair
+# above it has an owner — the fraise whose deploys fill the directory — so it
+# gates on `_scope_active`. Both fraises have a gate with a rule, so each host
+# installs and ENABLES exactly its own fraise's pair and plans nothing for the
+# other's: a host that does not deploy a fraise there must never prune, or
+# enable a timer for, that fraise's directory. ("A gate with no rule renders no
+# timer" is pinned in test_pre_migrate_prune_units.py, where it is the subject.)
+_PRE_MIGRATE_PRUNE = """\
+name: proj
+servers:
+  a.example.io:
+    machine_hostnames: [abox]
+  b.example.io:
+    machine_hostnames: [bbox]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        server: a.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+        database:
+          strategy: apply
+          name: api
+          pre_migrate_dump:
+            enabled: true
+            output_dir: /var/lib/postgresql/pre_migrate
+            retention_hours: 72
+  worker:
+    type: api
+    environments:
+      production:
+        server: b.example.io
+        app_path: /var/www/worker
+        systemd_service: worker.service
+        git_repo: /var/git/worker.git
+        database:
+          strategy: apply
+          name: worker
+          pre_migrate_dump:
+            enabled: true
+            output_dir: /var/lib/postgresql/worker_pre
+            keep_last: 3
+            prune_schedule: "*-*-* 04:15:00 UTC"
+"""
+
 # (case name, config, hostname). Two entries for the asymmetric config: the
 # whole point is that the two hosts must plan *different* installs.
 MATRIX = [
@@ -464,6 +514,8 @@ MATRIX = [
     ),
     ("timer_families_off", _TIMER_FAMILIES_OFF, "solo"),
     ("timer_families_on", _TIMER_FAMILIES_ON, "solo"),
+    ("pre_migrate_prune_owning_host", _PRE_MIGRATE_PRUNE, "abox"),
+    ("pre_migrate_prune_other_host", _PRE_MIGRATE_PRUNE, "bbox"),
 ]
 
 

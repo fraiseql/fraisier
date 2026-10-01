@@ -447,7 +447,7 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
     # test proves the two move together by patching the authority. A
     # module-level `from … import` here would make that test pass while the
     # two sites disagreed, which is the drift it exists to catch.
-    from fraisier.naming import retention_unit_names
+    from fraisier.naming import pre_migrate_prune_unit_names, retention_unit_names
     from fraisier.scaffold.renderer import _collect_unit_installer_envs
 
     project = renderer.context["project_name"]
@@ -561,6 +561,26 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
                 Disposition.TIMER,
                 destination=f"{SYSTEMD_DIR}/{stem}",
                 environment=entry.environment,
+            )
+
+    # The pre-migrate dump gate's prune pair (#420), one per (fraise, environment)
+    # whose gate says how to prune. Matched against the entries the renderer
+    # actually wrote units for, and against names from the same helper it used.
+    #
+    # Unlike the retain pair this one has an owner — the fraise whose deploys fill
+    # the directory — so it carries `fraise=` and gates on `_scope_active`: a host
+    # that does not deploy that fraise there must neither install nor enable it.
+    # TIMER, because a prune that does not fire is the corpus #420 is about.
+    for prune in renderer.pre_migrate_prune_entries():
+        if stem in pre_migrate_prune_unit_names(
+            project, prune.fraise, prune.environment
+        ):
+            return RenderedArtifact(
+                source,
+                Disposition.TIMER,
+                destination=f"{SYSTEMD_DIR}/{stem}",
+                fraise=prune.fraise,
+                environment=prune.environment,
             )
 
     # backup.service's OnFailure= target. Installed unconditionally, like the

@@ -567,23 +567,68 @@ def _validate_pre_migrate_dump(fraise_name: str, db: dict) -> list[str]:
         return errors
 
     block = cast("dict[str, Any]", raw_block)
-    if "keep_last" not in block:
-        return errors
 
-    keep_last = block["keep_last"]
-    # `bool` is an `int` in Python, so `keep_last: true` would otherwise read
-    # as 1 — a plausible typo silently becoming a one-dump corpus.
-    if isinstance(keep_last, bool) or not isinstance(keep_last, int):
-        errors.append(
-            f"{fraise_name}: {location}.keep_last must be an integer, "
-            f"got {type(keep_last).__name__}"
+    # `bool` is an `int` in Python, so `true` would otherwise read as 1 — and a
+    # plausible typo silently becoming a one-hour window, or a one-dump corpus.
+    if "keep_last" in block:
+        keep_last = block["keep_last"]
+        if isinstance(keep_last, bool) or not isinstance(keep_last, int):
+            errors.append(
+                f"{fraise_name}: {location}.keep_last must be an integer, "
+                f"got {type(keep_last).__name__}"
+            )
+        elif keep_last < 1:
+            errors.append(
+                f"{fraise_name}: {location}.keep_last must be at least 1, got "
+                f"{keep_last}; the newest dump is the rollback point for the "
+                f"migration about to run"
+            )
+
+    # Applied by a timer now (#420), with nobody watching: 0 would expire every
+    # dump the moment it is written, and `"72"` would raise at prune time.
+    if "retention_hours" in block:
+        hours = block["retention_hours"]
+        if isinstance(hours, bool) or not isinstance(hours, int):
+            errors.append(
+                f"{fraise_name}: {location}.retention_hours must be an integer, "
+                f"got {type(hours).__name__}"
+            )
+        elif hours < 1:
+            errors.append(
+                f"{fraise_name}: {location}.retention_hours must be at least 1, "
+                f"got {hours}"
+            )
+
+    # Both reach a unit file verbatim now (#420), where `ReadWritePaths=` splits
+    # on whitespace — so a space would grant a second path — a newline appends
+    # a directive and `%` expands.
+    output_dir = block.get("output_dir")
+    if output_dir and not isinstance(output_dir, LazyEnv):
+        text = str(output_dir)
+        where = f"{fraise_name}: {location}.output_dir"
+        if _reject_unit_unsafe(text, where, errors) and any(
+            char.isspace() for char in text
+        ):
+            errors.append(
+                f"{where} {text!r} contains whitespace, which splits it into "
+                f"several paths in ReadWritePaths="
+            )
+
+    if "prune_schedule" in block:
+        prune_errors: list[str] = []
+        schedule = _retain_str(
+            block, "prune_schedule", f"{fraise_name}: {location}", prune_errors
         )
-    elif keep_last < 1:
-        errors.append(
-            f"{fraise_name}: {location}.keep_last must be at least 1, got "
-            f"{keep_last}; the newest dump is the rollback point for the "
-            f"migration about to run"
-        )
+        errors.extend(prune_errors)
+        if schedule is not None and not (
+            schedule.lower() in _SCHEDULE_KEYWORDS or _SCHEDULE_RE.match(schedule)
+        ):
+            errors.append(
+                f"{fraise_name}: {location}.prune_schedule {schedule!r} does not "
+                f"look like a systemd OnCalendar expression (e.g. 'daily' or "
+                f"'*-*-* 05:30:00 UTC'). Check it on the host with "
+                f"`systemd-analyze calendar`"
+            )
     return errors
 
 

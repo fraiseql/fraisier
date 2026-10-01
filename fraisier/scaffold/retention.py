@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fraisier.naming import retention_unit_names
+from fraisier.naming import pre_migrate_prune_unit_names, retention_unit_names
 from fraisier.scaffold.artifacts import SYSTEMD_DIR
 
 if TYPE_CHECKING:
@@ -57,7 +57,7 @@ class RetentionStatus:
 def retention_report(
     renderer: ScaffoldRenderer,
     *,
-    systemd_dir: Path | str = SYSTEMD_DIR,
+    systemd_dir: Path | str | None = None,
 ) -> list[RetentionStatus]:
     """Status of every retention entry this host declares.
 
@@ -76,7 +76,7 @@ def retention_report(
         One entry per declared corpus, in config order. Empty for a config
         with no ``retain:`` block, which is every config before #339.
     """
-    root = Path(systemd_dir)
+    root = Path(SYSTEMD_DIR if systemd_dir is None else systemd_dir)
     project = renderer.context["project_name"]
 
     report: list[RetentionStatus] = []
@@ -89,6 +89,44 @@ def retention_report(
                 name=entry.name,
                 environment=entry.environment,
                 dir=entry.dir,
+                schedule=entry.schedule,
+                service_unit=service_unit,
+                timer_unit=timer_unit,
+                service_installed=(root / service_unit).exists(),
+                timer_installed=(root / timer_unit).exists(),
+            )
+        )
+    return report
+
+
+def pre_migrate_prune_report(
+    renderer: ScaffoldRenderer,
+    *,
+    systemd_dir: Path | str | None = None,
+) -> list[RetentionStatus]:
+    """Status of every ``pre_migrate_dump`` gate this host can prune (#420).
+
+    Reported in the same shape as a received corpus, because it answers the same
+    question — *is anything pruning what this host keeps?* — and the same remedy
+    applies: the timer exists on a host only after ``scaffold-install``, so an
+    upgrade that adds it changes nothing until someone installs it.
+
+    Entries and unit names come from the renderer's own accessor and the same
+    naming authority it writes units with.
+    """
+    root = Path(SYSTEMD_DIR if systemd_dir is None else systemd_dir)
+    project = renderer.context["project_name"]
+
+    report: list[RetentionStatus] = []
+    for entry in renderer.pre_migrate_prune_entries():
+        service_unit, timer_unit = pre_migrate_prune_unit_names(
+            project, entry.fraise, entry.environment
+        )
+        report.append(
+            RetentionStatus(
+                name=f"pre_migrate_dump:{entry.fraise}",
+                environment=entry.environment,
+                dir=entry.output_dir,
                 schedule=entry.schedule,
                 service_unit=service_unit,
                 timer_unit=timer_unit,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -1310,16 +1311,147 @@ def _stalled_producer_warning(entry, outcome) -> str:
     )
 
 
+@dataclass(frozen=True)
+class _PreMigrateCorpus:
+    """A ``pre_migrate_dump`` corpus in the shape the prune warnings read."""
+
+    name: str
+    dir: str
+    min_free_gb: float | None
+    keep_minimum: int = 1
+
+
+def _prune_pre_migrate(
+    config, fraise: str, env: str, *, dry_run: bool, as_json: bool
+) -> None:
+    """Prune *fraise*'s pre-migration dump corpus without a deploy (#420).
+
+    The deletion is :func:`fraisier.dbops.backup.prune_pre_migrate_corpus`, the
+    very call the dump gate makes after a successful dump.  What this adds is
+    only what a deploy used to supply: the lock, and the refusal to let a
+    corpus that cannot be pruned look like one that was.
+    """
+    from fraisier.dbops import backup
+    from fraisier.errors import DeploymentLockError
+    from fraisier.locking import deployment_lock
+
+    fraise_cfg, env_config = _get_db_config(config, fraise, env)
+    if not fraise_cfg or not env_config:
+        console.print(
+            f"[red]Error:[/red] Fraise '{fraise}' environment '{env}' not found"
+        )
+        raise SystemExit(1)
+    dump_cfg = (env_config.get("database") or {}).get("pre_migrate_dump") or {}
+    if not dump_cfg.get("enabled", False):
+        console.print(
+            f"Nothing to do: '{fraise}' ({env}) has no enabled pre_migrate_dump gate."
+        )
+        return
+
+    output_dir = dump_cfg["output_dir"]
+    if not Path(output_dir).is_dir():
+        click.echo(
+            f"Error: {fraise}: {output_dir} is not a directory. A retention "
+            f"policy pointed at a path that is not there prunes nothing, every "
+            f"night, reporting success",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    def _apply():
+        outcome = backup.prune_pre_migrate_corpus(dump_cfg, dry_run=dry_run)
+        if outcome is None:
+            click.echo(
+                f"Error: {fraise}: pre_migrate_dump in '{env}' sets neither "
+                f"retention_hours nor keep_last, so there is nothing to prune "
+                f"by. A prune that is asked for and does nothing must not "
+                f"report success",
+                err=True,
+            )
+            raise SystemExit(1)
+        return outcome
+
+    try:
+        if dry_run:
+            # Changes nothing, so it has nothing to contend with.
+            outcome = _apply()
+        else:
+            with deployment_lock(fraise):
+                outcome = _apply()
+    except DeploymentLockError as exc:
+        console.print(f"[yellow]Skipping prune:[/yellow] {exc}")
+        return
+    except OSError as exc:
+        # "I cannot tell whether a deploy is running" is not "none is".
+        console.print(f"[red]Error:[/red] cannot acquire the deployment lock: {exc}")
+        raise SystemExit(1) from exc
+
+    corpus = _PreMigrateCorpus(
+        name=f"pre_migrate_dump:{fraise}",
+        dir=output_dir,
+        min_free_gb=dump_cfg.get("min_free_gb"),
+    )
+    report = {
+        "name": corpus.name,
+        "dir": corpus.dir,
+        "keep_minimum": corpus.keep_minimum,
+        "retention_hours": dump_cfg.get("retention_hours"),
+        "keep_last": dump_cfg.get("keep_last"),
+        "dry_run": dry_run,
+        "removed": list(outcome.removed),
+        "kept": list(outcome.kept),
+        "exempted_by_minimum": list(outcome.exempted_by_minimum),
+        "floor_was_load_bearing": outcome.floor_was_load_bearing,
+        "removed_by_ceiling": list(outcome.removed_by_ceiling),
+        "invalid": list(outcome.invalid),
+    }
+    if as_json:
+        click.echo(_json.dumps({"environment": env, "entries": [report]}, indent=2))
+    else:
+        verb = "would remove" if dry_run else "removed"
+        console.print(
+            f"[cyan]{corpus.name}[/cyan] ({corpus.dir}): {verb} "
+            f"{len(outcome.removed)}, kept {len(outcome.kept)}, "
+            f"floor held {len(outcome.exempted_by_minimum)}"
+        )
+        for path in outcome.removed:
+            console.print(f"    - {path}")
+
+    if outcome.invalid:
+        click.echo(_unreadable_dump_warning(corpus, outcome), err=True)
+    if outcome.floor_was_load_bearing:
+        click.echo(_stalled_producer_warning(corpus, outcome), err=True)
+    low_disk = _low_disk_warning(corpus)
+    if low_disk:
+        click.echo(low_disk, err=True)
+
+
 @backup_group.command(name="prune")
 @click.option("--env", "-e", required=True, help="Environment whose policy to apply")
 @click.option("--name", default=None, help="Apply one entry rather than all of them")
+@click.option(
+    "--pre-migrate",
+    "pre_migrate_fraise",
+    default=None,
+    metavar="FRAISE",
+    help=(
+        "Prune FRAISE's pre_migrate_dump corpus instead of a received one, by "
+        "the gate's own retention_hours / keep_last and keep_minimum=1 — the "
+        "prune a deploy runs, without the deploy"
+    ),
+)
 @click.option(
     "--dry-run", is_flag=True, help="List what would be removed, remove nothing"
 )
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable report")
 @click.pass_context
 def backup_prune(
-    ctx: click.Context, env: str, name: str | None, dry_run: bool, as_json: bool
+    ctx: click.Context,
+    env: str,
+    name: str | None,
+    pre_migrate_fraise: str | None,
+    dry_run: bool,
+    as_json: bool,
 ) -> None:
     """Apply the retention policy for a backup corpus this host receives.
 
@@ -1327,13 +1459,30 @@ def backup_prune(
     reaches back to the producer, so a compromised sender key cannot erase
     the corpus it pushed.
 
+    With --pre-migrate it prunes a fraise's own pre-migration dump directory
+    instead: the gate only ever pruned inside a deploy, so a quiet week left the
+    whole corpus on disk (#420). The newest dump is never pruned, and a held
+    deployment lock skips the run, since a gate may be mid-dump.
+
     \b
     Examples:
         fraisier backup prune -e development
         fraisier backup prune -e development --name production-full
         fraisier backup prune -e development --dry-run
+        fraisier backup prune --pre-migrate api -e production
     """
     config = ctx.obj["config"]
+
+    if pre_migrate_fraise is not None:
+        if name is not None:
+            raise click.UsageError(
+                "--name selects a received-corpus entry; it cannot be "
+                "combined with --pre-migrate"
+            )
+        _prune_pre_migrate(
+            config, pre_migrate_fraise, env, dry_run=dry_run, as_json=as_json
+        )
+        return
 
     entries, problem = _select_retain_entries(config, env, name)
     if entries is None:

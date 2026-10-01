@@ -118,6 +118,23 @@ def retention_unit_names(
     return f"{base}.service", f"{base}.timer"
 
 
+def pre_migrate_prune_unit_names(
+    project_name: str, fraise_name: str, env_name: str
+) -> tuple[str, str]:
+    """Return ``(service_unit, timer_unit)`` for one pre-migrate prune (#420).
+
+    One pair per ``(fraise, environment)``: unlike a received corpus, a gate's
+    dump directory has an owner — the fraise whose deploys fill it — and two
+    fraises in one environment have two gates.
+
+    The renderer names the files it writes and the artifact manifest names the
+    files it installs; both call here (#337's lesson, before a second call site
+    can drift).
+    """
+    base = f"fraisier-{project_name}-{fraise_name}-{env_name}-pre-migrate-prune"
+    return f"{base}.service", f"{base}.timer"
+
+
 def app_service_name(
     project_name: str,
     fraise_name: str,
