@@ -11,6 +11,15 @@ from pathlib import PurePosixPath
 from typing import Any, cast
 
 from fraisier.config._lazy_env import LazyEnv, is_string_like
+from fraisier.config.restore_source import (
+    CLUSTER_RE,
+    LATEST,
+    MIN_TIMEOUT_SECONDS,
+    NAME_RE,
+    PGBACKREST_KEYS,
+    RESTORE_SOURCES,
+    TARGET_INSTANT_RE,
+)
 from fraisier.config.schema import (
     _UNIT_NAME_RE,
     _VALID_STRATEGIES,
@@ -418,10 +427,24 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
     """Return validation errors for a restore_migrate database config."""
     errors: list[str] = []
     restore = db.get("restore", {})
-    if not isinstance(restore, dict) or not restore.get("backup_dir"):
+    source = restore.get("source", "dump") if isinstance(restore, dict) else "dump"
+    if source not in RESTORE_SOURCES:
+        errors.append(
+            f"{fraise_name}: restore.source must be one of "
+            f"{', '.join(RESTORE_SOURCES)}, got {source!r}"
+        )
+    elif source == "pgbackrest":
+        errors.extend(_validate_pgbackrest_source(fraise_name, restore))
+    elif not isinstance(restore, dict) or not restore.get("backup_dir"):
         errors.append(
             f"{fraise_name}: strategy 'restore_migrate' requires "
             "database.restore.backup_dir"
+        )
+    elif "pgbackrest" in restore:
+        errors.append(
+            f"{fraise_name}: restore.pgbackrest is set but restore.source is "
+            f"{source!r}, so the dump would run and pgBackRest would not. Set "
+            "restore.source: pgbackrest, or remove the block"
         )
     if not db.get("name"):
         errors.append(
@@ -443,6 +466,78 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
                     f"{fraise_name}: restore.preferred_compression must be one "
                     f"of {', '.join(sorted(valid_algos))}, got {pref!r}"
                 )
+    return errors
+
+
+def _validate_pgbackrest_source(fraise_name: str, restore: dict) -> list[str]:
+    """Validate ``restore.pgbackrest`` (#424).
+
+    Strict, because it is a physical restore: every database in the cluster is
+    replaced.  Every string here reaches a root helper's unit file, hence
+    :func:`_retain_str`'s refusal of ``!envvar`` and of anything unit-unsafe.
+    """
+    errors: list[str] = []
+    path = f"{fraise_name}: restore.pgbackrest"
+    block = restore.get("pgbackrest")
+    if not isinstance(block, dict):
+        return [
+            f"{fraise_name}: restore.source 'pgbackrest' requires a "
+            f"restore.pgbackrest mapping (stanza, repo, cluster)"
+        ]
+
+    unknown = sorted(set(block) - PGBACKREST_KEYS)
+    if unknown:
+        errors.append(
+            f"{path}: unknown key(s) {unknown}; valid: "
+            f"{', '.join(sorted(PGBACKREST_KEYS))}"
+        )
+
+    for key, pattern, shape in (
+        ("stanza", NAME_RE, "a plain name (letters, digits, '_', '-', '.')"),
+        ("cluster", CLUSTER_RE, "<major>/<name>, e.g. 18/staging"),
+    ):
+        if key not in block:
+            errors.append(f"{path}.{key} is required")
+            continue
+        scratch: list[str] = []
+        value = _retain_str(block, key, path, scratch)
+        errors.extend(scratch)
+        if value is not None and not pattern.fullmatch(value):
+            errors.append(f"{path}.{key} {value!r} must be {shape}")
+
+    if "repo" not in block:
+        errors.append(f"{path}.repo is required")
+    else:
+        repo = block["repo"]
+        if isinstance(repo, bool) or not isinstance(repo, int) or not 1 <= repo <= 256:
+            errors.append(f"{path}.repo must be an integer from 1 to 256, got {repo!r}")
+
+    if "target" in block:
+        scratch = []
+        target = _retain_str(block, "target", path, scratch)
+        errors.extend(scratch)
+        if (
+            target is not None
+            and target != LATEST
+            and not TARGET_INSTANT_RE.fullmatch(target)
+        ):
+            errors.append(
+                f"{path}.target {target!r} must be 'latest' or an instant with "
+                f"an offset, e.g. '2026-10-01 14:18:37+00' — without one it is "
+                f"read in the server's own time zone"
+            )
+
+    if "timeout_seconds" in block:
+        timeout = block["timeout_seconds"]
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int)
+            or timeout < MIN_TIMEOUT_SECONDS
+        ):
+            errors.append(
+                f"{path}.timeout_seconds must be an integer of at least "
+                f"{MIN_TIMEOUT_SECONDS}, got {timeout!r}"
+            )
     return errors
 
 
@@ -710,6 +805,114 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
             )
 
     return errors
+
+
+def _endpoint(url: Any) -> tuple[str, int] | None:
+    """``(host, port)`` a database URL reaches, or ``None`` if it cannot be known.
+
+    A ``!envvar`` is not resolved here — this runs at load, before secrets are
+    necessarily present — so it cannot prove a collision.  Never guesses.
+    """
+    if isinstance(url, LazyEnv) or not url:
+        return None
+    from urllib.parse import parse_qs, urlsplit
+
+    parts = urlsplit(str(url))
+    query = parse_qs(parts.query)
+    host = parts.hostname or (query.get("host") or [""])[0]
+    if not host:
+        return None
+    port_text = (query.get("port") or [""])[0]
+    port = parts.port or (int(port_text) if port_text.isdigit() else 5432)
+    return host, port
+
+
+def validate_restore_clusters(fraises: dict) -> None:
+    """Refuse a pgBackRest restore whose cluster another database lives in (#424).
+
+    A physical restore replaces the **whole** cluster: every database in it, and
+    its roles and password hashes.  So a cluster has to belong to one restoring
+    fraise and environment, and two ways of breaking that are detectable here:
+
+    * two environments naming the same ``cluster`` on the same host, and
+    * another database reached through the same ``host:port`` — two clusters by
+      name and one by address, which is the case that costs somebody else's data.
+
+    Hosts are told apart by an environment's ``server:``; ``!envvar`` URLs are not
+    inspected and so cannot prove a collision.  Cheap and structural, run at load.
+    """
+    restoring: list[tuple[str, str, Any, str, tuple[str, int] | None]] = []
+    others: list[tuple[str, str, Any, tuple[str, int]]] = []
+    for fraise_name, fraise in (fraises or {}).items():
+        if not isinstance(fraise, dict):
+            continue
+        for env_name, env in (fraise.get("environments") or {}).items():
+            db = env.get("database") if isinstance(env, dict) else None
+            if not isinstance(db, dict):
+                continue
+            server = env.get("server")
+            restore = db.get("restore")
+            if isinstance(restore, dict) and restore.get("source") == "pgbackrest":
+                block = restore.get("pgbackrest")
+                cluster = str(block.get("cluster")) if isinstance(block, dict) else ""
+                restoring.append(
+                    (
+                        fraise_name,
+                        env_name,
+                        server,
+                        cluster,
+                        _endpoint(db.get("admin_url")),
+                    )
+                )
+                continue
+            for key in ("admin_url", "database_url"):
+                endpoint = _endpoint(db.get(key))
+                if endpoint is not None:
+                    others.append((fraise_name, env_name, server, endpoint))
+                    break
+
+    errors: list[str] = []
+    for i, (fraise, env, server, cluster, endpoint) in enumerate(restoring):
+        for (
+            other_fraise,
+            other_env,
+            other_server,
+            other_cluster,
+            other_endpoint,
+        ) in restoring[i + 1 :]:
+            if other_server == server and other_cluster == cluster:
+                errors.append(
+                    f"{fraise}/{env} and {other_fraise}/{other_env} both restore "
+                    f"cluster {cluster!r}"
+                    f"{f' on {server}' if server else ''}: a physical restore replaces "
+                    f"every database in it, so each cluster needs one fraise and "
+                    f"environment"
+                )
+            elif (
+                other_server == server
+                and endpoint is not None
+                and endpoint == other_endpoint
+            ):
+                errors.append(
+                    f"{fraise}/{env} and {other_fraise}/{other_env} both reach "
+                    f"{endpoint[0]}:{endpoint[1]}, one cluster: a physical restore "
+                    f"would replace the other's database"
+                )
+        for other_fraise, other_env, other_server, other_endpoint in others:
+            if (
+                other_server == server
+                and endpoint is not None
+                and endpoint == other_endpoint
+            ):
+                errors.append(
+                    f"{fraise}/{env} restores cluster {cluster!r}, which "
+                    f"{other_fraise}/{other_env} also uses "
+                    f"({endpoint[0]}:{endpoint[1]}): a physical restore replaces "
+                    f"every database in the cluster, "
+                    f"{other_fraise}'s included"
+                )
+    if errors:
+        raise ValidationError("Invalid restore clusters: " + "; ".join(errors))
 
 
 def validate_branch_mapping(branch_mapping: dict, fraises: dict) -> None:

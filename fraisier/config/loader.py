@@ -42,6 +42,7 @@ from fraisier.config._validation import (
     validate_hooks,
     validate_notifications,
     validate_one_fraise_environment,
+    validate_restore_clusters,
     validate_servers,
     validate_service_manager,
 )
@@ -208,6 +209,7 @@ class FraisierConfig:
             self._config.get("branch_mapping", {}),
             self._config.get("fraises", {}),
         )
+        validate_restore_clusters(self._config.get("fraises", {}))
         validate_service_manager(self._config.get("service_manager"))
         # Drop any cached Stage-2 results from a prior load.
         for prop in ("notifications", "hooks", "backup_retention"):
