@@ -14,9 +14,12 @@ from fraisier.config.schema import PreflightConfig
 from fraisier.dbops.confiture import migrate_down, migrate_up
 
 from ._base import Strategy, StrategyResult
+from ._restore_sources import DumpSource
 
 if TYPE_CHECKING:
     from fraisier.dbops.receipt import ActuationCheck
+
+    from ._restore_sources import RestoreSource
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +72,7 @@ class RestoreMigrateStrategy(Strategy):
         service_manager=None,
         service_name: str | None = None,
         project_dir: Path | None = None,
+        source: RestoreSource | None = None,
     ) -> None:
         from fraisier.dbops._validation import validate_pg_identifier
 
@@ -84,6 +88,9 @@ class RestoreMigrateStrategy(Strategy):
         # The directory the migrate step runs in (#371). ``fraisier db restore``
         # runs from wherever the operator invoked it, which is not the project.
         self._project_dir = project_dir
+        # Where the data comes from (#424). The dump is the original source and
+        # the default: a config that names none restores exactly as it always did.
+        self._source: RestoreSource = source or DumpSource(config)
 
     @property
     def _resolved_template_name(self) -> str:
@@ -202,6 +209,20 @@ class RestoreMigrateStrategy(Strategy):
         run_id: str,
         floor_schema: str | None = None,
     ) -> ActuationCheck:
+        """:meth:`_record_actuation_of` for a dump archive on disk."""
+        from ._restore_sources import _size_or_zero
+
+        return self._record_actuation_of(
+            str(backup_file), _size_or_zero(backup_file), run_id, floor_schema
+        )
+
+    def _record_actuation_of(
+        self,
+        backup_ref: str,
+        backup_bytes: int,
+        run_id: str,
+        floor_schema: str | None = None,
+    ) -> ActuationCheck:
         """Leave *run_id* in the restored database, then read it back.
 
         The token is what makes this a check rather than a formality: a restore
@@ -212,6 +233,9 @@ class RestoreMigrateStrategy(Strategy):
 
         Reading it back is a round trip through the database rather than trust
         in a variable this process just set.
+
+        *backup_ref* is what the receipt names as the source: the archive's path
+        for a dump, ``pgbackrest:<stanza>/<label>`` for a physical restore (#424).
 
         *floor_schema* is the schema this run derived its table-count floor for.
         It is recorded because here is the only place it is known: it comes off
@@ -233,16 +257,9 @@ class RestoreMigrateStrategy(Strategy):
             write_receipt,
         )
 
-        try:
-            backup_bytes = backup_file.stat().st_size
-        except OSError:
-            # The archive was readable minutes ago; if it is not now, that is
-            # worth recording as unknown rather than guessing a size.
-            backup_bytes = 0
-
         receipt = RestoreReceipt(
             run_id=run_id,
-            backup_path=str(backup_file),
+            backup_path=backup_ref,
             backup_bytes=backup_bytes,
             restored_at=datetime.now(UTC),
             age_seconds=0.0,
@@ -278,18 +295,12 @@ class RestoreMigrateStrategy(Strategy):
         hooks_config: dict[str, Any] | None = None,
         skip_preflight: bool = False,
     ) -> StrategyResult:
-        from fraisier.dbops.archive import ArchiveVerdict, verify_archive
         from fraisier.dbops.operations import (
             create_db,
             drop_db,
             terminate_backends,
         )
-        from fraisier.dbops.restore import (
-            find_latest_backup,
-            restore_backup,
-            validate_backup_age,
-            validate_table_count,
-        )
+        from fraisier.dbops.restore import validate_table_count
         from fraisier.errors import DatabaseError
 
         cfg = self._config
@@ -301,158 +312,20 @@ class RestoreMigrateStrategy(Strategy):
         # database from a fresh one whose counts happen to match (#358).
         run_id = uuid.uuid4().hex
 
-        # Step 1: Resolve backup file
-        if cfg.backup_path is not None:
-            backup_file = cfg.backup_path
-            log.info("Using explicit backup: %s", backup_file)
-        else:
-            backup_file = find_latest_backup(
-                cfg.backup_dir,
-                pattern=cfg.backup_pattern,
-                preferred_compression=cfg.preferred_compression,
-            )
-            if backup_file is None:
-                raise DatabaseError(
-                    f"No backup matching '{cfg.backup_pattern}' in {cfg.backup_dir}",
-                )
-            log.info("Found backup: %s", backup_file)
-
-            # Step 2: Validate backup age (only when not explicit)
-            if not validate_backup_age(backup_file, max_age_hours=cfg.max_age_hours):
-                raise DatabaseError(
-                    f"Backup {backup_file.name} is older than {cfg.max_age_hours}h",
-                )
-
-        # Step 2.4: Prove the archive is readable before anything destructive
-        # happens (#343). Steps 1 and 2 look like validation and are not —
-        # find_latest_backup sorts by mtime and validate_backup_age compares
-        # mtime to a cutoff, so neither opens the file. Until this check, the
-        # first real read was step 6, three steps after the database was
-        # dropped: a dump pg_restore rejects in a second cost the staging
-        # database it was meant to replace, which is the #339 incident.
-        #
-        # Deliberately outside both preflight conditions. --skip-preflight
-        # exists for emergency restores and preflight can be disabled outright;
-        # an emergency restore may skip *migration* validation, but not "is this
-        # a file pg_restore can read", because that is what protects the
-        # database this is about to drop. It also runs *before* preflight, whose
-        # extract_schema_only would otherwise fail on the same file with a
-        # murkier message.
-        #
-        # UNVERIFIABLE is not a bad dump — a host without the PostgreSQL client
-        # tools cannot check, and must not lose the ability to restore because
-        # of it. Warn and continue; is_bad is INVALID-only for this reason.
-        check = verify_archive(backup_file)
-        if check.is_bad:
-            raise DatabaseError(
-                f"Backup {backup_file} is not a readable archive: {check.detail}",
-            )
-        if check.verdict is ArchiveVerdict.UNVERIFIABLE:
-            log.warning(
-                "Could not verify %s before restoring: %s", backup_file, check.detail
-            )
-
-        # Step 2.5: Preflight check (before any destructive operations)
-        # Service is still running here — preflight only uses a temp DB.
-        if not skip_preflight and self._preflight_enabled():
-            self._run_preflight(
-                backup_path=backup_file,
-                confiture_config=confiture_config,
-                migrations_dir=migrations_dir,
-            )
-
-        # Step 3: Stop service to prevent connection reconnect race
-        if self._service_manager and self._service_name:
-            try:
-                self._service_manager.stop(self._service_name)
-                self._service_manager.wait_stopped(self._service_name)
-            except Exception as exc:
-                raise DatabaseError(
-                    f"Failed to stop service {self._service_name}: {exc}"
-                ) from exc
-            log.info("Stopped service %s", self._service_name)
-
-        # Step 4: Terminate connections
-        terminate_backends(cfg.db_name, connection_url=self._admin_url)
-        log.info("Terminated connections to %s", cfg.db_name)
-
-        # Step 5: Drop and recreate database
-        code, _, stderr = drop_db(
-            cfg.db_name, force=True, connection_url=self._admin_url
+        # Steps 1-2.5: everything that can refuse before anything is destroyed.
+        prepared = self._source.prepare(
+            self,
+            confiture_config=confiture_config,
+            migrations_dir=migrations_dir,
+            skip_preflight=skip_preflight,
         )
-        if code != 0:
-            raise DatabaseError(
-                f"Failed to drop database {cfg.db_name}: {stderr.strip()}",
-            )
-        code, _, stderr = create_db(cfg.db_name, connection_url=self._admin_url)
-        if code != 0:  # pragma: no cover
-            raise DatabaseError(
-                f"Failed to create database {cfg.db_name}: {stderr.strip()}",
-            )
-        log.info("Recreated database %s", cfg.db_name)
 
-        # The archive states the floor it can satisfy, so nobody has to invent
-        # a number (#343). confiture's pre-migration counter is the instrument:
-        # `pg_class WHERE relkind='r'` in a parameterised schema, which is
-        # apples-to-apples with the TOC's TABLE DATA entries. Pre-migration is
-        # the right checkpoint too — the TOC describes the archive, so the
-        # database that must satisfy it is the one before `migrate up`; applied
-        # after, any migration that drops or renames a table false-fails.
-        #
-        # None means the archive stated nothing — UNVERIFIABLE, or a
-        # --schema-only dump with no TABLE DATA entries. That falls back to the
-        # operator's floor and is reported as unchecked, never as a floor of 0.
-        derived = check.schema_floor
-        if derived is not None:
-            floor_schema, floor_tables = derived
-        else:
-            floor_schema, floor_tables = "public", cfg.min_tables
-
-        # Step 6 + 7: pg_restore (with optional ownership fix)
-        t_total = time.monotonic()
-        restore_result = restore_backup(
-            backup_path=str(backup_file),
-            db_name=cfg.db_name,
-            db_owner=cfg.target_owner,
-            connection_url=self._admin_url,
-            jobs=cfg.jobs,
-            min_tables=floor_tables,
-            min_tables_schema=floor_schema,
-        )
-        restore_secs = restore_result.duration_seconds
-        if not restore_result.success:
-            # The message names the step that failed. It used to say
-            # "pg_restore failed" for an ownership reassignment that runs
-            # *after* a successful restore (#380).
-            raise DatabaseError(restore_result.error)
-        log.info(
-            "Restored backup into %s (%dms)",
-            cfg.db_name,
-            int(restore_secs * 1000),
-        )
-        # Surface confiture's deferred-matview accounting (#172) so the deploy
-        # log shows when a matview refresh was held past ANALYZE. None means the
-        # backup carried no materialized views (classic three-phase restore).
-        if restore_result.matviews_deferred is not None:
-            log.info(
-                "Deferred %d matview refresh(es) past ANALYZE (analyze_ran=%s), "
-                "refreshed %s on real statistics",
-                restore_result.matviews_deferred,
-                restore_result.analyze_ran,
-                restore_result.matviews_refreshed,
-            )
-
-        # Said whether or not anything was empty: a restore that rebuilt nothing
-        # and one that never looked must not read alike (#422). None means the
-        # database has no pg_tviews.
-        if restore_result.tviews_rebuilt is not None:
-            log.info(
-                "pg_tviews: rebuilt %d empty TVIEW(s)%s",
-                len(restore_result.tviews_rebuilt),
-                "".join(
-                    f" {r.entity}={r.rows}rows" for r in restore_result.tviews_rebuilt
-                ),
-            )
+        # Steps 3-7: the destructive part, ending with the data back and the
+        # service still stopped.
+        restored = self._source.restore(self, prepared)
+        t_total = restored.started_at
+        restore_secs = restored.restore_secs
+        derived = restored.schema_floor
 
         # Step 8: Create rollback template
         if cfg.create_template:
@@ -553,8 +426,11 @@ class RestoreMigrateStrategy(Strategy):
         # the floor has somewhere to count, but recording that would be
         # indistinguishable from an archive that actually stated `public`. Only
         # what the archive said is recorded.
-        actuation = self._record_actuation(
-            backup_file, run_id, derived[0] if derived else None
+        actuation = self._record_actuation_of(
+            prepared.backup_ref,
+            prepared.backup_bytes,
+            run_id,
+            derived[0] if derived else None,
         )
 
         # Step 11: Start service
@@ -573,9 +449,10 @@ class RestoreMigrateStrategy(Strategy):
         # Record Prometheus metrics
         from fraisier.metrics import DeploymentMetrics
 
-        DeploymentMetrics.restore_duration_seconds.labels(phase="pg_restore").observe(
-            restore_secs
-        )
+        for phase, seconds in restored.phases.items():
+            DeploymentMetrics.restore_duration_seconds.labels(phase=phase).observe(
+                seconds
+            )
         DeploymentMetrics.restore_duration_seconds.labels(phase="migration").observe(
             migration_secs
         )
@@ -590,7 +467,7 @@ class RestoreMigrateStrategy(Strategy):
             migration_duration_seconds=migration_secs,
             total_duration_seconds=total_secs,
             schema_floor=derived,
-            unchecked_schemas=check.unchecked_schemas,
+            unchecked_schemas=restored.unchecked_schemas,
             actuation=actuation,
         )
 
