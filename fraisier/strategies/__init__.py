@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from fraisier.config.restore_source import parse_pgbackrest
+
 from ._alembic import AlembicMigrateStrategy
 from ._base import (
     MigrationResult,
@@ -86,7 +88,13 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
         backup_path = Path(kwargs["backup_path"]) if kwargs.get("backup_path") else None
         config = RestoreConfig(
             db_name=db_name,
-            backup_dir=Path(restore_cfg["backup_dir"]),
+            # A pgBackRest source has no backup directory (validated at load);
+            # a dump source still must name one, and a missing key stays an error.
+            backup_dir=Path(
+                "."
+                if restore_cfg.get("source") == "pgbackrest"
+                else restore_cfg["backup_dir"]
+            ),
             backup_pattern=restore_cfg.get("backup_pattern", "*.dump"),
             max_age_hours=float(restore_cfg.get("max_age_hours", 48.0)),
             target_owner=restore_cfg.get("target_owner"),
@@ -97,6 +105,8 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             preferred_compression=restore_cfg.get("preferred_compression"),
             backup_path=backup_path,
             on_empty_tview=str(kwargs.get("on_empty_tview", "fail")),
+            pgbackrest=parse_pgbackrest(restore_cfg),
+            pgbackrest_socket=kwargs.get("pgbackrest_socket"),
         )
         service_manager = kwargs.get("service_manager")
         service_name = kwargs.get("service_name")

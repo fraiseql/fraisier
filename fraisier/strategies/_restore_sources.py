@@ -32,11 +32,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
+    from fraisier.config.restore_source import PgBackRestSpec
     from fraisier.dbops.archive import ArchiveCheck
 
     from ._restore import RestoreConfig, RestoreMigrateStrategy
@@ -55,6 +58,8 @@ class PreparedSource:
     archive_check: ArchiveCheck | None = None
     #: The archive itself, for a dump.
     backup_file: Path | None = None
+    #: The backup a physical restore will restore, by pgBackRest label (#424).
+    backup_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -309,3 +314,252 @@ def _size_or_zero(path: Path) -> int:
         return path.stat().st_size
     except OSError:
         return 0
+
+
+class PgBackRestSource:
+    """A pgBackRest ``--delta`` restore of a dedicated staging cluster (#424).
+
+    Where :class:`DumpSource` rebuilds one database from a logical archive, this
+    refreshes a **whole cluster** from the physical backup production already makes
+    for disaster recovery, rewriting only the files that changed.  The cluster
+    stop, the restore and the start happen as root in the helper
+    (:mod:`fraisier.pgbackrest_helper`); this class decides, orders and **checks**.
+
+    ``prepare`` chooses the backup — its label, stop time and age are validated and
+    logged while the cluster is still up.  ``restore`` is destructive, and has one
+    rule: once the cluster has been stopped, *any* failure stops it again and raises
+    :class:`~fraisier.errors.RestoreFailedClosed`, because what is on disk is a
+    half-restored production copy that must be neither served nor allowed to
+    archive into production's repository.
+    """
+
+    def __init__(
+        self,
+        config: RestoreConfig,
+        *,
+        client: Any = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._config = config
+        self._client = client
+        self._now = now or (lambda: datetime.now(UTC))
+
+    def _helper(self) -> Any:
+        """The helper client, built on first use."""
+        if self._client is None:
+            from fraisier.dbops.pgbackrest import HelperClient
+
+            spec = self._spec()
+            assert self._config.pgbackrest_socket, "pgbackrest_socket not configured"
+            self._client = HelperClient(
+                self._config.pgbackrest_socket,
+                long_timeout=spec.timeout_seconds + 60,
+            )
+        return self._client
+
+    def _spec(self) -> PgBackRestSpec:
+        assert self._config.pgbackrest is not None
+        return self._config.pgbackrest
+
+    # -- phase 1: choose --------------------------------------------------------
+
+    def prepare(
+        self,
+        strategy: RestoreMigrateStrategy,
+        *,
+        confiture_config: Path,
+        migrations_dir: Path,
+        skip_preflight: bool,
+    ) -> PreparedSource:
+        from fraisier.dbops import pgbackrest
+        from fraisier.errors import DatabaseError
+
+        spec = self._spec()
+        try:
+            backups = pgbackrest.parse_info(self._helper().info(), stanza=spec.stanza)
+            choice = pgbackrest.select_backup(backups, spec)
+        except (pgbackrest.HelperUnavailableError, pgbackrest.BackupChoiceError) as exc:
+            raise DatabaseError(f"Cannot choose a pgBackRest backup: {exc}") from exc
+
+        age_hours = (self._now() - choice.stop).total_seconds() / 3600
+        # An instant is the point of a point-in-time refresh: an old backup is not
+        # a stale one there, only for `latest`.
+        if spec.is_latest and age_hours > self._config.max_age_hours:
+            raise DatabaseError(
+                f"Backup {choice.label} stopped {age_hours:.1f}h ago, which is "
+                f"older than {self._config.max_age_hours}h"
+            )
+        log.info(
+            "pgBackRest backup %s (%s) stopped %s (%.1fh ago), %.1f MB, stanza %s "
+            "repo %d -> cluster %s",
+            choice.label,
+            choice.kind,
+            choice.stop.isoformat(),
+            age_hours,
+            choice.size_bytes / 1024**2,
+            spec.stanza,
+            spec.repo,
+            spec.cluster,
+        )
+        if not skip_preflight and strategy._preflight_enabled():
+            # Said, not silent: the migration preflight reads a pg_dump archive,
+            # and a physical restore has none. A rehearsal against the restored
+            # cluster is a separate piece of work.
+            log.info(
+                "Migration preflight skipped: it reads a pg_dump archive and a "
+                "pgBackRest restore has none"
+            )
+        return PreparedSource(
+            backup_ref=f"pgbackrest:{spec.stanza}/{choice.label}",
+            backup_bytes=choice.size_bytes,
+            backup_label=choice.label,
+        )
+
+    # -- phase 2: destroy and rebuild --------------------------------------------
+
+    def restore(
+        self, strategy: RestoreMigrateStrategy, prepared: PreparedSource
+    ) -> SourceRestored:
+        from fraisier.dbops import pgbackrest
+        from fraisier.errors import DatabaseError, RestoreFailedClosed
+
+        # Before the cluster is touched: failing here leaves a running cluster and
+        # a service that can simply be restarted, so these are ordinary errors.
+        _stop_service(strategy)
+        try:
+            self._helper().stop()
+        except pgbackrest.HelperUnavailableError as exc:
+            raise DatabaseError(
+                f"Failed to stop cluster {self._spec().cluster}: {exc}"
+            ) from exc
+
+        started_at = time.monotonic()
+        try:
+            phases = self._refresh(strategy, prepared)
+        except RestoreFailedClosed:
+            raise
+        except Exception as exc:
+            raise self._fail_closed(str(exc)) from exc
+        return SourceRestored(
+            started_at=started_at,
+            restore_secs=sum(phases.values()),
+            schema_floor=None,  # no archive table of contents to state one
+            phases=phases,
+        )
+
+    def _fail_closed(self, reason: str) -> Exception:
+        """Stop the cluster again and build the error that keeps the service down."""
+        from fraisier.dbops import pgbackrest
+        from fraisier.errors import RestoreFailedClosed
+
+        try:
+            self._helper().stop()
+        except pgbackrest.HelperUnavailableError as exc:
+            log.critical(
+                "Could not stop cluster %s after a failed restore: %s",
+                self._spec().cluster,
+                exc,
+            )
+            reason += f" (and the cluster could not be stopped again: {exc})"
+        return RestoreFailedClosed(
+            f"{reason}. Failed closed: the cluster was stopped and the service was "
+            f"not started."
+        )
+
+    def _refresh(
+        self, strategy: RestoreMigrateStrategy, prepared: PreparedSource
+    ) -> dict[str, float]:
+        """Restore, start, wait for promotion, verify, hand back; failures raise."""
+        from fraisier.dbops import pgbackrest, tviews
+        from fraisier.dbops import restore as dbrestore
+        from fraisier.dbops._url import replace_db_name
+        from fraisier.errors import DatabaseError
+
+        cfg = self._config
+        spec = self._spec()
+        admin_url = strategy._admin_url
+        client = self._helper()
+        label = prepared.backup_label
+        assert label is not None
+        phases: dict[str, float] = {}
+
+        def timed(phase: str, started: float) -> None:
+            phases[phase] = time.monotonic() - started
+
+        t = time.monotonic()
+        reply = client.restore(label)
+        timed("pgbackrest_restore", t)
+        summary = reply.get("summary") or {}
+        log.info(
+            "pgBackRest restored %s into cluster %s in %dms: %s of %s files "
+            "rewritten (~%.1f MB written; the rest already matched)",
+            summary.get("label") or label,
+            spec.cluster,
+            int(phases["pgbackrest_restore"] * 1000),
+            summary.get("files_rewritten", "?"),
+            summary.get("files_total", "?"),
+            (summary.get("bytes_rewritten") or 0) / 1024**2,
+        )
+
+        t = time.monotonic()
+        client.start()
+        timed("cluster_start", t)
+
+        t = time.monotonic()
+        pgbackrest.wait_until_promoted(admin_url, timeout_seconds=spec.timeout_seconds)
+        timed("recovery", t)
+
+        t = time.monotonic()
+        mode = pgbackrest.read_setting(admin_url, "archive_mode")
+        if mode != "off":
+            raise DatabaseError(
+                f"archive_mode is {mode!r} on the restored cluster, not 'off': it "
+                f"would archive WAL into stanza {spec.stanza!r}, corrupting "
+                f"production's disaster-recovery timeline"
+            )
+        leftovers = {
+            name: value
+            for name, value in pgbackrest.reset_replication_settings(admin_url).items()
+            if value
+        }
+        if leftovers:
+            raise DatabaseError(
+                f"replication settings survived the reset on the restored cluster: "
+                f"{', '.join(sorted(leftovers))}"
+            )
+        status = client.status()
+        if status.get("signals"):
+            raise DatabaseError(
+                f"{', '.join(status['signals'])} still present in the restored "
+                f"cluster's data directory: it would re-enter recovery on its "
+                f"next start"
+            )
+        if not pgbackrest.database_exists(admin_url, cfg.db_name):
+            raise DatabaseError(
+                f"the restored cluster has no database {cfg.db_name!r}. A physical "
+                f"restore carries production's databases under production's names, so "
+                f"database.name must be the name inside the backup"
+            )
+        timed("safety", t)
+
+        if cfg.target_owner:
+            code, _, stderr = dbrestore._reassign_owner(
+                cfg.db_name, cfg.target_owner, connection_url=admin_url
+            )
+            if code != 0:
+                raise DatabaseError(
+                    f"reassign_owner failed: ownership reassignment to "
+                    f"{cfg.target_owner} did not run: {stderr.strip()}"
+                )
+
+        # The same chain the dump path runs, and load-bearing here: a physical
+        # restore empties every UNLOGGED TVIEW (#422).
+        restored_url = replace_db_name(admin_url, cfg.db_name)
+        if tviews.tviews_installed(restored_url):
+            rebuilt = tviews.rebuild_empty_tviews(restored_url)
+            log.info(
+                "pg_tviews: rebuilt %d empty TVIEW(s)%s",
+                len(rebuilt),
+                "".join(f" {r.entity}={r.rows}rows" for r in rebuilt),
+            )
+        return phases

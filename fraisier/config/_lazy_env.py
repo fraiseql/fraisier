@@ -272,5 +272,12 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        a DIFFER_403, not only
 #                                                        that one happened.
 #
+#   pgbackrest_protocol.py:parse_request     non-config  Validates the ``set``
+#                                                        field of an IPC request
+#                                                        read from the pgBackRest
+#                                                        helper's Unix socket
+#                                                        (#424); the bytes never
+#                                                        come from fraises.yaml.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.

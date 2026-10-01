@@ -233,6 +233,24 @@ class DatabaseError(FrameworkError):
     )
 
 
+class RestoreFailedClosed(DatabaseError):
+    """A physical restore failed after the cluster had been stopped (#424).
+
+    What is on disk at that point is a half-restored copy of production, and the
+    application must not be started against it — nor restarted by whatever handles
+    the failure, which is what ``keep_service_stopped`` tells those handlers.  The
+    cluster has been stopped again, so nothing is serving it either.
+    """
+
+    code = "RESTORE_FAILED_CLOSED"
+    keep_service_stopped = True
+    recovery_hint = (
+        "The staging cluster was stopped and the application service was not "
+        "started. Read the error, fix its cause, then run the restore again — a "
+        "--delta restore re-checks every file, so a partial one is safe to repeat."
+    )
+
+
 class DatabaseConnectionError(DatabaseError):
     """Failed to connect to database."""
 

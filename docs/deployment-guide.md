@@ -521,6 +521,121 @@ This disables the automatic rollback-on-health-check-failure. Combined with `--s
 fraisier deploy my_api production --no-rollback --skip-health
 ```
 
+### Refreshing staging from pgBackRest (`restore.source: pgbackrest`) (#424)
+
+A `restore_migrate` environment refreshes from a `pg_dump` archive by default. If
+production is already protected with [pgBackRest](https://pgbackrest.org), that
+means running two backup systems: the WAL archive for disaster recovery and a
+nightly logical dump kept only so staging can be refreshed. `restore.source:
+pgbackrest` refreshes staging from the backup production already makes, with a
+`--delta` restore that rewrites only the files that changed — and so makes the
+nightly refresh a daily restore test of the disaster-recovery backup.
+
+```yaml
+database:
+  name: myapp                 # the name INSIDE the backup — see below
+  strategy: restore_migrate
+  admin_url: postgresql://postgres@localhost:5433/postgres   # the staging cluster
+  restore:
+    source: pgbackrest        # default: dump
+    pgbackrest:
+      stanza: main
+      repo: 1
+      cluster: 18/staging     # <major>/<name>, as `pg_lsclusters` lists it
+      target: latest          # or an instant with an offset: "2026-10-01 14:18:37+00"
+      timeout_seconds: 21600  # restore and cluster start; default 6h
+    target_owner: myapp_user  # optional, as for a dump
+    create_template: true     # optional, as for a dump
+```
+
+The config loader checks the block, so `fraisier validate` and every other
+command refuse a bad one: stanza, repo and cluster are required, the
+cluster is `<major>/<name>`, a `target` is `latest` or an instant **with an
+offset** (without one pgBackRest reads it in the server's own zone, a different
+instant on every host), and unknown keys are refused — a misspelt `targt:` would
+silently restore `latest`. A `restore.pgbackrest` block under the default `dump`
+source is an error rather than a setting that quietly does nothing.
+
+**What a refresh does**, in order, under the same per-fraise deployment lock as a
+dump restore:
+
+1. Reads `pgbackrest info` through the helper and chooses the backup — the one that
+   stopped last for `latest`, or the latest that stopped before an instant — and
+   **applies `max_age_hours` to its stop time** (not for an instant: an old backup
+   is the point of a point-in-time refresh). Its label, kind, stop time and size are
+   logged while the cluster is still up. The migration preflight reads a `pg_dump`
+   archive and a physical restore has none, so it is skipped and the log says so.
+2. Stops the service, then the staging cluster.
+3. `pgbackrest restore --delta --archive-mode=off --set=<label>` into the
+   cluster's data directory (`--type=time --target=… --target-action=promote` for an
+   instant). The label is the one chosen in step 1, so the backup that was
+   validated is the backup that is restored.
+4. Starts the cluster and waits for recovery to end.
+5. **Verifies, and fails closed** (below), then runs the rest of the usual chain:
+   `REASSIGN OWNED` if `target_owner` is set, the pg_tviews rebuild (a physical
+   restore empties every UNLOGGED TVIEW — see [TVIEWs after a restore](#tviews-after-a-restore-or-a-failover-422)),
+   the rollback template, `migrate up`, the schema floor, the actuation receipt
+   (which names `pgbackrest:<stanza>/<label>`) and the service start.
+
+The log reports the label and stop time, the number of files rewritten out of the
+total, and the duration of each phase (`restore_duration_seconds{phase=…}` for
+`pgbackrest_restore`, `cluster_start`, `recovery` and `safety`). pgBackRest prints
+only the whole backup's size, never the delta, so the rewritten **bytes** are an
+estimate summed from the sizes its detail log gives (rounded, e.g. `824KB`); the
+file counts are exact.
+
+**It fails closed.** The restored cluster is a copy of production, and one that
+archives into production's repository would corrupt the disaster-recovery
+timeline. So after the restore:
+
+- `SHOW archive_mode` must be `off` — what the server is *running with*, not what
+  was written to a file: a command-line setting beats `postgresql.auto.conf`, which
+  is where pgBackRest writes it;
+- `restore_command`, `primary_conninfo` and the recovery targets are reset with
+  `ALTER SYSTEM RESET` and a reload, then **read back**; pgBackRest leaves them in
+  `postgresql.auto.conf` after promotion;
+- no `recovery.signal` or `standby.signal` may remain;
+- the database named by `database.name` must exist in the restored cluster.
+
+Any failure from the moment the cluster is stopped — those checks, a failed
+restore, a cluster that will not start, recovery that never ends — **stops the
+cluster again and leaves the application service stopped**: neither `fraisier db
+restore` nor a failed deploy restarts it against a half-restored copy. The error
+says so (`Failed closed: the cluster was stopped and the service was not started`).
+A `--delta` restore re-checks every file, so repeating it once the cause is fixed
+is safe. A failure *before* the cluster is touched (no such stanza, a backup that
+is too old, an unreachable helper) is an ordinary error and the service restarts.
+
+**Prerequisites and what to know:**
+
+- **A dedicated staging cluster**, Debian/Ubuntu style (`pg_lsclusters` lists it;
+  RHEL-style hosts are not supported). A physical restore replaces **every
+  database in the cluster** — and production's **roles and password hashes come
+  across with it**, which is a security consideration for who can reach staging.
+  The config loader refuses a cluster named by two environments on one host, and
+  another database reached through the same `host:port`.
+- **`database.name` is the name inside the backup**: a physical restore carries
+  production's databases under production's names.
+- The stanza and repository must be readable from the staging host (its own
+  `pgbackrest.conf`). `admin_url` is a superuser connection to the **staging**
+  cluster.
+- **A root helper, per fraise and environment.** Stopping and starting a cluster
+  needs root, and deploy units are `NoNewPrivileges`, so there is no `sudo`. A
+  socket-activated helper (`fraisier-<project>-<fraise>-<env>-pgbackrest-helper`)
+  does it. Its request names an operation and nothing else — no path, argv, cluster
+  or stanza — and the helper takes its stanza, repository, cluster and target from
+  its **root-owned unit file**, baked in by `scaffold`, **not** from `fraises.yaml`
+  at run time: that file sits under a directory the deploy user owns, and a root
+  daemon that trusted it would let anyone who could write it retarget a restore.
+  The data directory is read from `pg_lsclusters`; pgBackRest runs as the cluster's
+  owner; a running cluster is never restored over. It is installed by `fraisier
+  scaffold && sudo fraisier scaffold-install --yes`, and `fraisier doctor`
+  (`pgbackrest_helper`) says which environments lack it.
+- The integration test runs the real source, client, socket, helper operations and
+  pgBackRest against two real clusters in Docker; it has **not** run the helper
+  under a real systemd (socket activation and the unit's sandbox — the unit is
+  `ProtectSystem=full` because the data directory is only known at run time).
+
 ### Running migrations manually
 
 ```bash
