@@ -30,8 +30,9 @@ from typing import Any
 ACTIONS: tuple[str, ...] = ("info", "status", "stop", "restore", "start")
 
 #: pgBackRest's own label format: a full (``F``), or a differential/incremental
-#: (``D``/``I``) naming the full it hangs off.
-LABEL_RE = re.compile(r"\d{8}-\d{6}F(?:_\d{8}-\d{6}[DI])?")
+#: (``D``/``I``) naming the full it hangs off.  ``[0-9]``, not ``\d``: Python's
+#: ``\d`` matches every Unicode decimal digit, and this reaches a root helper's argv.
+LABEL_RE = re.compile(r"[0-9]{8}-[0-9]{6}F(?:_[0-9]{8}-[0-9]{6}[DI])?")
 
 #: Upper bound on a request line.  Nothing legitimate is near it.
 MAX_REQUEST_BYTES = 4096
@@ -151,7 +152,7 @@ def parse_lsclusters(text: str) -> list[ClusterRow]:
 
 _SIZE_UNITS = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 _FILE_LINE = re.compile(
-    r"restore file \S+ (?P<rest>.*)\((?P<size>[\d.]+)(?P<unit>[KMGT]?B), "
+    r"restore file \S+ (?P<rest>.*)\((?P<size>[0-9]+(?:\.[0-9]+)?)(?P<unit>[KMGT]?B), "
 )
 _SET_LINE = re.compile(r"restore backup set (?P<label>\S+?),")
 _SIZE_LINE = re.compile(r"restore size = (?P<size>\S+), file total = (?P<total>\d+)")

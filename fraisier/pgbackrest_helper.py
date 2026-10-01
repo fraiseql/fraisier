@@ -11,11 +11,16 @@ baked into its root-owned unit file at scaffold time::
     fraisier-pgbackrest-helper --deploy-user deployer --stanza main --repo 1 \\
         --cluster 18/staging --target latest --timeout 21600
 
-It deliberately does **not** read ``fraises.yaml`` when it runs: that file lives
-under a directory the deploy user owns, and a root daemon that trusts it would let
-anyone who can write it retarget a cluster restore.  The unit file is installed by
-``scaffold-install``, which is a privileged, reviewed step — the same reasoning as
-the install helper's baked allowlist (#279).
+Its authority is fixed when its unit is installed — visible in ``systemctl cat``,
+and not decided per request or read from ``fraises.yaml`` at run time.  Be clear
+about the limit of that: a deploy regenerates and installs the scaffold, as root,
+from the repository's ``fraises.yaml``, so whoever can land a commit on the deploy
+branch chooses what is baked in (and the deploy user already reaches root through
+that pipeline).  What the helper adds *on its own authority*, reading only
+root-owned state, is what protects against a wrong or hostile ``cluster:``: it
+refuses any cluster whose configuration archives into its stanza — the stanza's
+source, in practice production — and any cluster that is root-owned, that is
+running, or whose data directory is not a directory.
 
 The wire protocol (``fraisier.pgbackrest_protocol``) names an operation and nothing
 else.  The data directory is read from ``pg_lsclusters`` for the configured
@@ -34,9 +39,11 @@ import dataclasses
 import logging
 import os
 import pwd
+import re
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -62,7 +69,7 @@ from fraisier.pgbackrest_protocol import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +80,12 @@ _PG_LSCLUSTERS = "/usr/bin/pg_lsclusters"
 #: Clusters stop in seconds; a stuck stop is a failure, not something to outwait.
 _STOP_TIMEOUT_SECONDS = 900
 _QUICK_TIMEOUT_SECONDS = 60
+#: How long a peer may take, **in total**, to send its one request line.  The helper
+#: serves one connection at a time, so a peer that connects and says nothing — or
+#: sends a byte every few seconds — must not hold it.
+_READ_TIMEOUT_SECONDS = 30.0
+#: Where Debian's ``postgresql-common`` keeps each cluster's configuration.
+_ETC_POSTGRESQL = Path("/etc/postgresql")
 #: Lines of a failed restore's output handed back for the operator to read.
 _TAIL_LINES = 30
 #: Files whose presence means PostgreSQL will (re)enter recovery on its next start.
@@ -112,7 +125,10 @@ def _run_command(
     env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
     extra: dict[str, Any] = {}
     if user is not None:
-        entry = pwd.getpwnam(user)
+        try:
+            entry = pwd.getpwnam(user)
+        except KeyError as exc:
+            raise HelperError(f"cluster owner {user!r} is not a known user") from exc
         env["HOME"] = entry.pw_dir
         # `user=` alone would leave the child's group as root's.
         extra = {"user": entry.pw_uid, "group": entry.pw_gid, "extra_groups": []}
@@ -135,9 +151,18 @@ class HelperError(Exception):
 class Operations:
     """The five operations, over an injectable command runner."""
 
-    def __init__(self, config: HelperConfig, run: _Run = _run_command) -> None:
+    def __init__(
+        self,
+        config: HelperConfig,
+        run: _Run = _run_command,
+        *,
+        is_dir: Callable[[str], bool] = os.path.isdir,
+        etc_root: Path = _ETC_POSTGRESQL,
+    ) -> None:
         self._config = config
         self._run = run
+        self._is_dir = is_dir
+        self._etc_root = etc_root
 
     # -- reading the cluster ------------------------------------------------
 
@@ -154,8 +179,58 @@ class Operations:
             raise HelperError(f"pg_lsclusters failed: {listed.stderr.strip()}")
         for row in parse_lsclusters(listed.stdout):
             if (row.version, row.name) == (self._config.version, self._config.name):
+                if row.owner == "root":
+                    raise HelperError(
+                        f"cluster {self._config.cluster} is owned by root: "
+                        f"pgBackRest would run as root inside its data directory"
+                    )
+                if not self._is_dir(row.datadir):
+                    # `pg_lsclusters` splits on whitespace, so a data directory with
+                    # a space in it arrives truncated to a different path.
+                    raise HelperError(
+                        f"data directory {row.datadir!r} of cluster "
+                        f"{self._config.cluster} is not a directory"
+                    )
                 return row
         raise HelperError(f"cluster {self._config.cluster} not found by pg_lsclusters")
+
+    def _refuse_the_stanzas_source(self, row: ClusterRow) -> None:
+        """Refuse a cluster whose configuration archives into this helper's stanza.
+
+        That cluster is the stanza's **producer** — in practice, production — and
+        stopping or restoring it is the disaster this helper exists to avoid.  A
+        deploy regenerates and installs the scaffold as root from the repository's
+        ``fraises.yaml``, so a wrong ``cluster:`` (or a hostile commit) retargets a
+        baked helper; this check is on the helper's own authority and reads only
+        root-owned configuration, never the request or ``fraises.yaml``.
+
+        Best-effort by construction: a cluster that archives into the stanza through
+        a wrapper script that does not name it is not recognised.
+        """
+        stanza = re.compile(
+            rf"--stanza[=\s]+['\"]?{re.escape(self._config.stanza)}(?![A-Za-z0-9_.-])"
+        )
+        base = self._etc_root / row.version / row.name
+        data = Path(row.datadir)
+        files = [
+            base / "postgresql.conf",
+            *sorted((base / "conf.d").glob("*.conf")),
+            data / "postgresql.conf",
+            data / "postgresql.auto.conf",
+        ]
+        for path in files:
+            try:
+                text = path.read_text()
+            except OSError:
+                continue
+            for line in text.splitlines():
+                setting = line.strip()
+                if setting.startswith("archive_command") and stanza.search(setting):
+                    raise HelperError(
+                        f"cluster {self._config.cluster} archives into stanza "
+                        f"{self._config.stanza!r} ({path}): it is that stanza's "
+                        f"source, not a cluster to stop or refresh"
+                    )
 
     def _pgbackrest(self, *args: str) -> list[str]:
         return [
@@ -179,6 +254,13 @@ class Operations:
         except OSError as exc:
             logger.error("could not run a command: %s", exc)
             return {"ok": False, "error": f"could not run a command: {exc}"}
+        except Exception as exc:
+            # A root daemon answers; it does not die on a surprise in one request.
+            logger.exception("unexpected error handling %s", request.action)
+            return {
+                "ok": False,
+                "error": f"internal error: {type(exc).__name__}: {exc}",
+            }
 
     # -- the operations -----------------------------------------------------
 
@@ -213,6 +295,7 @@ class Operations:
 
     def _do_stop(self, _request: Request) -> dict[str, Any]:
         row = self._cluster()
+        self._refuse_the_stanzas_source(row)
         if row.is_online:
             stopped = self._run(
                 [_PG_CTLCLUSTER, row.version, row.name, "stop", "-m", "fast"],
@@ -231,6 +314,7 @@ class Operations:
 
     def _do_restore(self, request: Request) -> dict[str, Any]:
         row = self._cluster()
+        self._refuse_the_stanzas_source(row)
         if row.is_online:
             return {
                 "ok": False,
@@ -285,11 +369,22 @@ class Operations:
 # ---------------------------------------------------------------------------
 
 
-def _read_request(conn: socket.socket) -> bytes | None:
-    """One request line, or ``None`` if the peer sent nothing or too much."""
+def _read_request(conn: socket.socket, *, deadline_seconds: float) -> bytes | None:
+    """One request line, or ``None`` if the peer sent none, too much, or too slowly.
+
+    *deadline_seconds* bounds the **whole** read: a timeout per ``recv`` alone lets a
+    peer that sends one byte every few seconds hold the single-threaded loop for
+    hours.
+    """
+    deadline = time.monotonic() + deadline_seconds
     buffer = bytearray()
     while b"\n" not in buffer:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning("request not complete within %.0fs", deadline_seconds)
+            return None
         try:
+            conn.settimeout(remaining)
             chunk = conn.recv(4096)
         except OSError as exc:
             logger.warning("read error: %s", exc)
@@ -309,11 +404,17 @@ def _send(conn: socket.socket, **fields: Any) -> None:
         logger.warning("failed to send a response: %s", exc)
 
 
-def _handle_connection(conn: socket.socket, operations: Operations) -> None:
+def _handle_connection(
+    conn: socket.socket,
+    operations: Operations,
+    *,
+    read_timeout: float = _READ_TIMEOUT_SECONDS,
+) -> None:
     """Read, validate and execute one request; nothing runs before validation."""
     with conn:
         try:
-            raw = _read_request(conn)
+            raw = _read_request(conn, deadline_seconds=read_timeout)
+            conn.settimeout(None)  # the reply may follow a long job
             if raw is None:
                 return
             request = parse_request(raw)

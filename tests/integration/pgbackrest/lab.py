@@ -142,6 +142,20 @@ class Lab:
         """The helper's runner: its commands, executed in the container."""
         return self.exec(*argv, user=user, check=False, timeout=timeout)
 
+    def is_dir(self, path: str) -> bool:
+        """The helper's ``is_dir`` hook: the data directory is in the container."""
+        return self.exec("test", "-d", path, check=False).returncode == 0
+
+    def copy_etc_postgresql(self, destination: Path) -> Path:
+        """A host copy of the container's ``/etc/postgresql``, for the helper's
+        production-cluster guard, which reads cluster configuration files."""
+        subprocess.run(
+            ["docker", "cp", f"{self.container}:/etc/postgresql", str(destination)],
+            check=True,
+            capture_output=True,
+        )
+        return destination / "postgresql"
+
     def admin_url(self) -> str:
         return f"postgresql://postgres@127.0.0.1:{self.staging_port}/postgres"
 

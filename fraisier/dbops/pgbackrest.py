@@ -31,8 +31,15 @@ log = logging.getLogger(__name__)
 #: Seconds to wait for the helper on anything quick (``info``, ``stop``, ``status``).
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
-#: Operations that can take as long as the restore itself.
-_LONG_ACTIONS = frozenset({"restore", "start"})
+#: Operations that can take as long as the restore itself.  ``stop`` is one: the
+#: helper allows a cluster 900s to stop, and a client that gave up sooner would
+#: report a failure while the helper went on stopping it.
+_LONG_ACTIONS = frozenset({"restore", "start", "stop"})
+
+#: Largest reply the client will read.  Nothing legitimate is near it (an ``info``
+#: of a large repository is the biggest); a listener that never ends a line is not
+#: one to buffer.
+_MAX_REPLY_BYTES = 8 * 1024 * 1024
 
 
 class BackupChoiceError(RuntimeError):
@@ -196,14 +203,18 @@ class HelperClient:
             )
         return reply
 
-    @staticmethod
-    def _read_line(conn: socket.socket) -> bytes:
+    def _read_line(self, conn: socket.socket) -> bytes:
         buffer = bytearray()
         while b"\n" not in buffer:
             chunk = conn.recv(65536)
             if not chunk:
                 break
             buffer.extend(chunk)
+            if len(buffer) > _MAX_REPLY_BYTES:
+                raise HelperUnavailableError(
+                    f"reply from the pgBackRest helper at {self._path} is too large "
+                    f"(over {_MAX_REPLY_BYTES} bytes)"
+                )
         return bytes(buffer)
 
     # -- the five operations ------------------------------------------------

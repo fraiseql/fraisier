@@ -29,9 +29,11 @@ NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 CLUSTER_RE = re.compile(r"[0-9]+/[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 #: An instant **with** an offset.  Without one pgBackRest reads it in the
-#: server's own zone, which is a different instant on every host.
+#: server's own zone, which is a different instant on every host.  ASCII digits
+#: only: Python's ``\d`` matches every Unicode decimal digit.
 TARGET_INSTANT_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}(?::?[0-9]{2})?)"
 )
 
 LATEST = "latest"

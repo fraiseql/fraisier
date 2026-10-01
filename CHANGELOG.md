@@ -42,9 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewritten and the duration of each phase; the receipt names
   `pgbackrest:<stanza>/<label>`. The config loader refuses a cluster shared with
   another environment. **Needs a root helper per fraise and environment**
-  (`fraisier-pgbackrest-helper`: its request names an operation and nothing else,
-  and its stanza, repository, cluster and target are baked into its root-owned unit
-  rather than read from the deploy-user-writable `fraises.yaml`); **host action:**
+  (`fraisier-pgbackrest-helper`: its request names an operation and nothing else; its
+  stanza, repository, cluster and target are baked into its unit by `scaffold`; and,
+  on its own authority, it refuses any cluster whose configuration archives into its
+  stanza — the production cluster — as well as a root-owned or running cluster).
+  `admin_url` must reach the cluster being restored, which is verified before
+  anything is stopped. **Host action:**
   `fraisier scaffold && sudo fraisier scaffold-install --yes`. A physical restore is
   cluster-scoped and carries production's **roles and password hashes** across.
   Debian-style clusters only. Tested against real pgBackRest 2.59.2 and two

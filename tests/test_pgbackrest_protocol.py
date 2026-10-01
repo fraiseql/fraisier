@@ -216,3 +216,51 @@ class TestReadingARestore:
         line = f"2026-10-01 14:00:00.000 P01 DETAIL: restore file /x/y ({size}, 1.00%) checksum abc\n"
 
         assert parse_restore_log(line).bytes_rewritten == bytes_
+
+
+def arabic_indic(text: str) -> str:
+    """*text* with its ASCII digits replaced by Arabic-Indic ones (U+0660..U+0669)."""
+    return "".join(chr(0x0660 + int(c)) if c.isdigit() else c for c in text)
+
+
+class TestOnlyAsciiDigitsAreDigits:
+    """Python's ``\\d`` matches every Unicode decimal digit, so the patterns say ``[0-9]``.
+
+    These reach a root helper's argv and a root-owned unit file: a label or an
+    instant written in Arabic-Indic digits is not one pgBackRest wrote, and is not
+    something to pass along.
+    """
+
+    def test_a_label_in_non_ascii_digits_is_refused(self) -> None:
+        label = arabic_indic("20261001-141744") + "F"
+
+        with pytest.raises(RequestRejected, match="label"):
+            parse_request(json.dumps({"action": "restore", "set": label}))
+
+    def test_a_target_in_non_ascii_digits_is_refused_at_validation(self) -> None:
+        from fraisier.config.restore_source import TARGET_INSTANT_RE
+
+        assert (
+            TARGET_INSTANT_RE.fullmatch(arabic_indic("2026-10-01 14:18:37+00")) is None
+        )
+        assert TARGET_INSTANT_RE.fullmatch("2026-10-01 14:18:37+00")
+
+    def test_a_cluster_major_in_non_ascii_digits_is_refused(self) -> None:
+        from fraisier.config.restore_source import CLUSTER_RE
+
+        assert CLUSTER_RE.fullmatch(arabic_indic("18") + "/staging") is None
+        assert CLUSTER_RE.fullmatch("18/staging")
+
+
+class TestAMalformedLogIsNotACrash:
+    def test_a_size_with_two_dots_does_not_raise(self) -> None:
+        line = "2026-10-01 14:00:00.000 P01 DETAIL: restore file /x/y (1.2.3KB, 1.00%) checksum abc\n"
+
+        summary = parse_restore_log(line)
+
+        assert summary.files_rewritten == 0  # not a size pgBackRest prints
+
+    def test_a_size_with_no_digits_does_not_raise(self) -> None:
+        line = "2026-10-01 14:00:00.000 P01 DETAIL: restore file /x/y (...KB, 1.00%) checksum abc\n"
+
+        assert parse_restore_log(line).files_rewritten == 0

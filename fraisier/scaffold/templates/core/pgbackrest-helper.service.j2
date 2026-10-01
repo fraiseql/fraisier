@@ -9,12 +9,13 @@ Type=simple
 {# No User=: it runs as root, because stopping and starting a PostgreSQL cluster
    needs it. pgBackRest itself is run as the cluster's owner, by the helper.
 
-   The stanza, repository, cluster and target are baked into ExecStart and are
-   NOT read from fraises.yaml when it runs. That file sits under a directory the
-   deploy user owns; a root daemon that trusted it would let anyone who could
-   write it retarget a cluster restore. This unit is installed by
-   scaffold-install, which is the privileged, reviewed step — the install
-   helper's baked allowlist (#279) is the same reasoning.
+   The stanza, repository, cluster and target are baked into ExecStart: the
+   helper's authority is fixed when this unit is installed and is not decided per
+   request. That is a limit, not a wall — a deploy regenerates and installs the
+   scaffold, as root, from the repository's fraises.yaml, so whoever can land a
+   commit on the deploy branch chooses what is baked. What protects a cluster from
+   a wrong or hostile `cluster:` is the helper's own refusal, from root-owned
+   configuration, of any cluster that archives into its stanza.
 
    Comment markers here carry no minus sign. trim_blocks and lstrip_blocks
    already drop a standalone comment line; adding whitespace-control markers
