@@ -127,6 +127,10 @@ fraises:
           #   jobs: 1                # >1 switches to directory-format -Fd -j N
           #   min_free_gb: 20        # abort if output_dir has less free space
           #   retention_hours: 168   # prune older gate dumps after a SUCCESSFUL dump
+          #   keep_last: 10          # ...and keep at most the newest N, however young
+          #   prune_schedule: daily  # systemd OnCalendar for the timer that applies
+          #                          # both rules between deploys (#420); needs
+          #                          # `scaffold-install`. The newest dump is never pruned.
           # Post-migration schema-drift gate (#395). ON BY DEFAULT — this
           # block declines or tunes it, it is not what turns it on. Asks
           # confiture whether the live database matches the schema this

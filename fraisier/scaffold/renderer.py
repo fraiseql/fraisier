@@ -11,6 +11,7 @@ import logging
 import re
 import shutil
 import socket
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -835,6 +836,16 @@ def local_webhook_source(config: FraisierConfig, server: str | None = None) -> s
     return webhook_source_for_server(config, resolved)
 
 
+@dataclass(frozen=True)
+class PreMigratePrune:
+    """One ``pre_migrate_dump`` gate that a timer prunes (#420)."""
+
+    fraise: str
+    environment: str
+    output_dir: str
+    schedule: str
+
+
 class ScaffoldRenderer:
     """Renders Jinja2 templates using fraises.yaml context."""
 
@@ -1074,6 +1085,10 @@ class ScaffoldRenderer:
         # Retention for corpora this host receives (#339). Env-owned: a
         # received corpus has no producing fraise here.
         rendered_files.extend(self._render_retention_units(dry_run))
+
+        # The pre-migrate dump gate's prune without a deploy (#420). Fraise-owned:
+        # the deploys of that fraise are what fill the directory.
+        rendered_files.extend(self._render_pre_migrate_prune_units(dry_run))
 
         # Restore-staging only if there are fraises with restore_migrate strategy
         if self._has_restore_migrate_fraise():
@@ -1637,6 +1652,73 @@ class ScaffoldRenderer:
             for entry in self.config.all_retain_entries()
             if entry.environment in local_envs
         ]
+
+    def pre_migrate_prune_entries(self) -> list[PreMigratePrune]:
+        """``(fraise, environment)`` pairs on this host whose gate can be pruned (#420).
+
+        A gate that is enabled **and** says how to prune: a timer for one with no
+        retention rule would exit 1 every night, which is the loud refusal the
+        command is meant to give a mistaken config, not a schedule to put on a
+        host.  "Has a rule" is :func:`fraisier.dbops.backup.has_prune_rule` — the
+        same definition the command acts on.
+
+        Local fraises only, as the unit-installer helper is: the unit would
+        otherwise be rendered for a host that never deploys the fraise.  The
+        directory is deliberately *not* registered as a managed path; it is
+        created by whoever provisions the database host, and one install.sh
+        conjured into existence would turn a typo into a prune that finds
+        nothing.
+        """
+        from fraisier.dbops.backup import has_prune_rule
+
+        entries: list[PreMigratePrune] = []
+        for fraise in self.context["local_fraises"]:
+            for env_name, env_config in fraise.get("environments", {}).items():
+                if not isinstance(env_config, dict):
+                    continue
+                gate = (env_config.get("database") or {}).get("pre_migrate_dump")
+                if not isinstance(gate, dict) or not gate.get("enabled", False):
+                    continue
+                if not has_prune_rule(gate) or not gate.get("output_dir"):
+                    continue
+                entries.append(
+                    PreMigratePrune(
+                        fraise=fraise["name"],
+                        environment=env_name,
+                        output_dir=str(gate["output_dir"]),
+                        schedule=str(gate.get("prune_schedule", "daily")),
+                    )
+                )
+        return entries
+
+    def _render_pre_migrate_prune_units(self, dry_run: bool) -> list[str]:
+        """Render one ``.service``/``.timer`` pair per prunable gate (#420)."""
+        from fraisier.naming import pre_migrate_prune_unit_names
+
+        project_name = self.context["project_name"]
+        rendered: list[str] = []
+        for entry in self.pre_migrate_prune_entries():
+            service_unit, timer_unit = pre_migrate_prune_unit_names(
+                project_name, entry.fraise, entry.environment
+            )
+            service_rel = f"systemd/{service_unit}"
+            timer_rel = f"systemd/{timer_unit}"
+            rendered.extend([service_rel, timer_rel])
+            if dry_run:
+                continue
+            ctx = {**self.context, "prune": entry, "prune_service_unit": service_unit}
+            # The service first: the timer names it, and a timer enabled before
+            # its target is on disk fires into nothing.
+            for template_path, out_name in (
+                ("core/pre-migrate-prune.service.j2", service_rel),
+                ("core/pre-migrate-prune.timer.j2", timer_rel),
+            ):
+                try:
+                    content = self.env.get_template(template_path).render(**ctx)
+                except jinja2.TemplateNotFound:
+                    content = f"# Placeholder: {template_path}\n"
+                self._write_output(out_name, content)
+        return rendered
 
     def _render_retention_units(self, dry_run: bool) -> list[str]:
         """Render one ``.service``/``.timer`` pair per retain entry."""

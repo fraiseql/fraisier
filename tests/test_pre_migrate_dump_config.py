@@ -79,3 +79,77 @@ class TestTheBlockItself:
 
     def test_an_absent_block_is_fine(self) -> None:
         validate_one_fraise_environment("api", "production", {"database": {}})
+
+
+class TestRetentionHours:
+    """``retention_hours`` was read with ``.get()`` and never validated (#420).
+
+    The same trap #419 recorded for ``keep_last``, and one step worse now that a
+    timer applies it with nobody watching: ``true`` reads as 1 hour, and ``0``
+    expires every dump the moment it is written.
+    """
+
+    def test_a_sane_window_is_accepted(self) -> None:
+        validate_one_fraise_environment(
+            "api", "production", _config(enabled=True, retention_hours=72)
+        )
+
+    @pytest.mark.parametrize("bad", [True, False, 0, -5, "72", 1.5])
+    def test_anything_but_a_positive_integer_is_rejected(self, bad: object) -> None:
+        with pytest.raises(ValidationError, match="retention_hours"):
+            validate_one_fraise_environment(
+                "api", "production", _config(enabled=True, retention_hours=bad)
+            )
+
+    def test_it_is_validated_even_when_the_gate_is_off(self) -> None:
+        with pytest.raises(ValidationError, match="retention_hours"):
+            validate_one_fraise_environment(
+                "api", "production", _config(enabled=False, retention_hours=0)
+            )
+
+
+class TestPruneSchedule:
+    @pytest.mark.parametrize("good", ["daily", "hourly", "*-*-* 05:30:00 UTC"])
+    def test_systemd_calendar_text_is_accepted(self, good: str) -> None:
+        validate_one_fraise_environment(
+            "api", "production", _config(enabled=True, prune_schedule=good)
+        )
+
+    @pytest.mark.parametrize("bad", [42, True, "", "whenever", ["daily"]])
+    def test_anything_else_is_rejected(self, bad: object) -> None:
+        with pytest.raises(ValidationError, match="prune_schedule"):
+            validate_one_fraise_environment(
+                "api", "production", _config(enabled=True, prune_schedule=bad)
+            )
+
+
+class TestWhatReachesAUnitFile:
+    """``output_dir`` and ``prune_schedule`` are written verbatim into a unit (#420).
+
+    ``ReadWritePaths=`` is space-separated, so a space in ``output_dir`` would
+    silently grant a second path; a newline appends a directive and ``%`` expands.
+    """
+
+    @pytest.mark.parametrize("bad", ["/var/a\n/etc", "/var/a b", "/var/%h", "/a\tb"])
+    def test_an_output_dir_that_cannot_be_written_into_a_unit_is_rejected(
+        self, bad: str
+    ) -> None:
+        with pytest.raises(ValidationError, match="output_dir"):
+            validate_one_fraise_environment(
+                "api", "production", _config(enabled=True, output_dir=bad)
+            )
+
+    def test_a_plain_output_dir_is_accepted(self) -> None:
+        validate_one_fraise_environment(
+            "api",
+            "production",
+            _config(enabled=True, output_dir="/var/lib/postgresql/pre_migrate"),
+        )
+
+    def test_a_prune_schedule_with_a_newline_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="prune_schedule"):
+            validate_one_fraise_environment(
+                "api",
+                "production",
+                _config(enabled=True, prune_schedule="daily\nExecStartPre=/bin/x"),
+            )

@@ -9,6 +9,7 @@ import pytest
 from fraisier.naming import (
     app_service_name,
     deploy_socket_name,
+    pre_migrate_prune_unit_names,
     retention_unit_names,
     unit_installer_socket_path,
     unit_installer_unit_names,
@@ -124,6 +125,13 @@ class TestRetentionUnitNames:
         assert retention_unit_names("myapp", "development", "production-full") == (
             "fraisier-myapp-development-retain-production-full.service",
             "fraisier-myapp-development-retain-production-full.timer",
+        )
+
+    def test_pre_migrate_prune_unit_names_name_the_fraise_and_the_environment(self):
+        """One pair per (fraise, environment): a gate's directory has an owner (#420)."""
+        assert pre_migrate_prune_unit_names("myapp", "api", "production") == (
+            "fraisier-myapp-api-production-pre-migrate-prune.service",
+            "fraisier-myapp-api-production-pre-migrate-prune.timer",
         )
 
     def test_the_pair_shares_a_stem(self):

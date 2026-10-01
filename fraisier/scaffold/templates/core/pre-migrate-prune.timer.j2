@@ -1,0 +1,16 @@
+[Unit]
+Description=Prune {{ prune.fraise }} pre-migration dumps for {{ project_name }} ({{ prune.environment }})
+
+[Timer]
+{# Exactly one OnCalendar=. systemd *accumulates* triggers — the list is reset
+   only by assigning the empty string — so a second non-empty assignment is a
+   second firing, not an override (#311). #}
+OnCalendar={{ prune.schedule }}
+Unit={{ prune_service_unit }}
+{# A host down at the hour still prunes on boot: the corpus is largest exactly
+   when nothing is deploying to clean it up (#420). #}
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

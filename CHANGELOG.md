@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The pre-migrate dump corpus is pruned without a deploy**
+  ([#420](https://github.com/fraiseql/fraisier/issues/420)). `retention_hours` and
+  `keep_last` were applied only inside a deploy, so a quiet week left the whole
+  corpus on disk. `fraisier backup prune --pre-migrate FRAISE -e ENV [--dry-run]
+  [--json]` applies them through the very call the dump gate makes
+  (`prune_pre_migrate_corpus`, with `keep_minimum=1` fixed: the newest dump is
+  never pruned), under the deployment lock, skipping when a deploy holds it. A
+  gate with no rule makes it exit 1, not 0. `scaffold` renders a
+  `…-pre-migrate-prune.{service,timer}` pair per fraise and environment whose gate
+  is enabled and has a rule (`prune_schedule`, default `daily`), gated by
+  `_scope_active`; `doctor`'s `backup_retention` reports it until it is installed.
+  **Host action:** run `fraisier scaffold && sudo fraisier scaffold-install --yes`
+  to install the timer. `retention_hours` is now validated (an integer >= 1).
 - **A restore rebuilds, and a deploy refuses, an empty pg_tviews TVIEW**
   ([#422](https://github.com/fraiseql/fraisier/issues/422)). An UNLOGGED TVIEW is
   emptied by a crash-recovery start, a failover or a physical restore, and every
