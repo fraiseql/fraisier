@@ -623,14 +623,37 @@ is too old, an unreachable helper) is an ordinary error and the service restarts
   needs root, and deploy units are `NoNewPrivileges`, so there is no `sudo`. A
   socket-activated helper (`fraisier-<project>-<fraise>-<env>-pgbackrest-helper`)
   does it. Its request names an operation and nothing else — no path, argv, cluster
-  or stanza — and the helper takes its stanza, repository, cluster and target from
-  its **root-owned unit file**, baked in by `scaffold`, **not** from `fraises.yaml`
-  at run time: that file sits under a directory the deploy user owns, and a root
-  daemon that trusted it would let anyone who could write it retarget a restore.
-  The data directory is read from `pg_lsclusters`; pgBackRest runs as the cluster's
-  owner; a running cluster is never restored over. It is installed by `fraisier
-  scaffold && sudo fraisier scaffold-install --yes`, and `fraisier doctor`
-  (`pgbackrest_helper`) says which environments lack it.
+  or stanza — and the helper's stanza, repository, cluster and target are baked into
+  its unit by `scaffold`, so its authority is fixed when it is installed and visible
+  in `systemctl cat`. **Know the limit of that:** a deploy regenerates and installs
+  the scaffold, as root, from the repository's `fraises.yaml`, so whoever can land a
+  commit on the deploy branch chooses what is baked (the deploy user already reaches
+  root through that pipeline). What protects a cluster from a wrong or hostile
+  `cluster:` is the helper's **own** refusal, from root-owned configuration, of any
+  cluster whose configuration archives into its stanza — the stanza's source, in
+  practice production — as well as of a root-owned cluster, a running one, or a
+  data directory that is not a directory. (It recognises an `archive_command` that
+  names the stanza; a wrapper script that hides it would not be caught.) The data
+  directory is read from `pg_lsclusters`; pgBackRest runs as the cluster's owner.
+  It is installed by `fraisier scaffold && sudo fraisier scaffold-install --yes`,
+  and `fraisier doctor` (`pgbackrest_helper`) says which environments lack it.
+- **`admin_url` must reach the cluster being restored.** The safety checks, and
+  `ALTER SYSTEM RESET`, run against it, so before anything is stopped (and again
+  before anything is changed) the data directory the server behind it reports must
+  be the one the helper restores — otherwise the refresh refuses.
+- **The restored copy is production's.** Everything in it came across: roles and
+  password hashes, but also whatever production's databases *do* by themselves —
+  `pg_cron` jobs, logical-replication subscriptions, `postgres_fdw` user mappings,
+  `dblink` connections. Nothing neutralises them before the first start; review
+  them for staging.
+- **Operational caveats.** A deploy's `timeout:` (default 600s) must cover the
+  refresh if deploys, not only the nightly `fraisier db restore` timer, run it.
+  Running `scaffold-install` *during* a refresh stops the helper's service, which
+  kills the restore in flight; a `--delta` restore is safe to repeat. Removing
+  `restore.source: pgbackrest` does not uninstall an installed helper, and nothing
+  reports it. The helper's unit is sandboxed as far as I could verify
+  (`ProtectSystem=full`, no `ProtectHome`, no capability bounding) — it has not been
+  run under a real systemd.
 - The integration test runs the real source, client, socket, helper operations and
   pgBackRest against two real clusters in Docker; it has **not** run the helper
   under a real systemd (socket activation and the unit's sandbox — the unit is

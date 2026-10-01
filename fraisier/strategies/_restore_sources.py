@@ -361,7 +361,7 @@ class PgBackRestSource:
         assert self._config.pgbackrest is not None
         return self._config.pgbackrest
 
-    # -- phase 1: choose --------------------------------------------------------
+    # -- choosing the backup (nothing is touched) --------------------------------
 
     def prepare(
         self,
@@ -378,8 +378,16 @@ class PgBackRestSource:
         try:
             backups = pgbackrest.parse_info(self._helper().info(), stanza=spec.stanza)
             choice = pgbackrest.select_backup(backups, spec)
+            status = self._helper().status()
         except (pgbackrest.HelperUnavailableError, pgbackrest.BackupChoiceError) as exc:
             raise DatabaseError(f"Cannot choose a pgBackRest backup: {exc}") from exc
+
+        # While the cluster is still up, prove that `admin_url` reaches the cluster
+        # the helper will restore, before anything is stopped. A stopped cluster (the
+        # re-run after a fail-closed refresh) cannot be asked, and is checked after
+        # the restore instead, where it is mandatory.
+        if status.get("online"):
+            self._require_the_helpers_cluster(strategy._admin_url, status)
 
         age_hours = (self._now() - choice.stop).total_seconds() / 3600
         # An instant is the point of a point-in-time refresh: an old backup is not
@@ -415,7 +423,7 @@ class PgBackRestSource:
             backup_label=choice.label,
         )
 
-    # -- phase 2: destroy and rebuild --------------------------------------------
+    # -- destroying and rebuilding the cluster -----------------------------------
 
     def restore(
         self, strategy: RestoreMigrateStrategy, prepared: PreparedSource
@@ -433,19 +441,59 @@ class PgBackRestSource:
                 f"Failed to stop cluster {self._spec().cluster}: {exc}"
             ) from exc
 
-        started_at = time.monotonic()
+        # From here the cluster is stopped. `BaseException`, not `Exception`: a
+        # deploy's `timeout:` is delivered as an exception into whatever is running,
+        # and one that escaped would reach a failed-deploy handler that restarts the
+        # service against a half-restored cluster.
         try:
+            started_at = time.monotonic()
             phases = self._refresh(strategy, prepared)
         except RestoreFailedClosed:
             raise
-        except Exception as exc:
-            raise self._fail_closed(str(exc)) from exc
+        except BaseException as exc:
+            raise self._fail_closed(str(exc) or type(exc).__name__) from exc
         return SourceRestored(
             started_at=started_at,
             restore_secs=sum(phases.values()),
             schema_floor=None,  # no archive table of contents to state one
             phases=phases,
         )
+
+    def _require_the_helpers_cluster(
+        self, admin_url: str, status: dict[str, Any]
+    ) -> None:
+        """``admin_url`` must reach the cluster the helper restores.
+
+        The safety checks — and ``ALTER SYSTEM RESET`` — run against whatever
+        ``admin_url`` (from ``fraises.yaml``) reaches. The helper reports the data
+        directory of the cluster it restores, read from ``pg_lsclusters``; the
+        server behind the URL reports its own. They must be the same directory, or
+        ``archive_mode`` would be read from the wrong server and a reset applied to
+        it.
+        """
+        import posixpath
+
+        from fraisier.dbops import pgbackrest
+        from fraisier.errors import DatabaseError
+
+        expected = status.get("datadir")
+        if not expected:
+            raise DatabaseError(
+                "the pgBackRest helper reported no data directory, so it cannot be "
+                "proven that admin_url reaches the cluster being restored"
+            )
+        try:
+            actual = pgbackrest.read_setting(admin_url, "data_directory")
+        except Exception as exc:
+            raise DatabaseError(
+                f"could not read the data directory behind admin_url: {exc}"
+            ) from exc
+        if posixpath.normpath(actual) != posixpath.normpath(str(expected)):
+            raise DatabaseError(
+                f"admin_url reaches a cluster whose data directory is {actual}, but "
+                f"the helper restores {expected}: refusing to run checks, or a reset, "
+                f"against a cluster that is not the restored one"
+            )
 
     def _fail_closed(self, reason: str) -> Exception:
         """Stop the cluster again and build the error that keeps the service down."""
@@ -510,6 +558,9 @@ class PgBackRestSource:
         timed("recovery", t)
 
         t = time.monotonic()
+        status = client.status()
+        # Before the first statement that changes anything.
+        self._require_the_helpers_cluster(admin_url, status)
         mode = pgbackrest.read_setting(admin_url, "archive_mode")
         if mode != "off":
             raise DatabaseError(
@@ -527,10 +578,15 @@ class PgBackRestSource:
                 f"replication settings survived the reset on the restored cluster: "
                 f"{', '.join(sorted(leftovers))}"
             )
-        status = client.status()
-        if status.get("signals"):
+        signals = status.get("signals")
+        if not isinstance(signals, list):
             raise DatabaseError(
-                f"{', '.join(status['signals'])} still present in the restored "
+                f"the helper's status carried no usable 'signals' list ({signals!r}), "
+                f"so the data directory cannot be shown to be clean"
+            )
+        if signals:
+            raise DatabaseError(
+                f"{', '.join(str(x) for x in signals)} still present in the restored "
                 f"cluster's data directory: it would re-enter recovery on its "
                 f"next start"
             )

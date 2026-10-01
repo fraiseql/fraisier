@@ -41,6 +41,7 @@ from fraisier.config.restore_source import PgBackRestSpec
 from fraisier.dbops.confiture import MigrationResult
 from fraisier.dbops.receipt import ActuationVerdict
 from fraisier.errors import DatabaseError, RestoreFailedClosed
+from fraisier.pgbackrest_protocol import Request
 from fraisier.strategies import RestoreConfig, RestoreMigrateStrategy
 from tests.integration.pgbackrest import lab as labmod
 
@@ -108,20 +109,29 @@ def _backup_after(lab: labmod.Lab, sql: str) -> None:
     lab.sh("su postgres -c 'pgbackrest --stanza=main --type=incr backup'")
 
 
-@pytest.fixture
-def helper_socket(lab: labmod.Lab) -> Iterator[str]:
-    """The real helper behind a real socket, with its commands run in the container."""
-    operations = helper.Operations(
+def _operations(
+    lab: labmod.Lab, etc_root: Path, *, name: str = "staging"
+) -> helper.Operations:
+    """The helper's real operations; its commands and file checks run in the container."""
+    return helper.Operations(
         helper.HelperConfig(
             stanza="main",
             repo=1,
             version="18",
-            name="staging",
+            name=name,
             target="latest",
             timeout_seconds=900,
         ),
         run=lab.run,
+        is_dir=lab.is_dir,
+        etc_root=etc_root,
     )
+
+
+@pytest.fixture
+def helper_socket(lab: labmod.Lab, tmp_path: Path) -> Iterator[str]:
+    """The real helper behind a real socket, with its commands run in the container."""
+    operations = _operations(lab, lab.copy_etc_postgresql(tmp_path))
     directory = tempfile.mkdtemp(prefix="fsr-", dir="/tmp")
     path = str(Path(directory) / "h.sock")
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -279,6 +289,31 @@ def test_a_cluster_that_comes_up_archiving_fails_closed(
     result = _refresh(lab, helper_socket, MagicMock())
     assert result.success  # ty: ignore[unresolved-attribute]
     assert lab.psql(5433, "postgres", "show archive_mode") == "off"
+
+
+def test_the_helper_refuses_the_cluster_that_produces_the_stanza(
+    lab: labmod.Lab, tmp_path: Path
+) -> None:
+    """The retargeting disaster, against a real cluster and its real configuration.
+
+    A baked helper whose ``cluster:`` was changed to ``18/prod`` — by a mistake or a
+    hostile commit that a deploy installed — must not stop or restore the cluster
+    that archives into the stanza. It reads that cluster's root-owned configuration
+    and refuses on its own authority.
+    """
+    operations = _operations(lab, lab.copy_etc_postgresql(tmp_path), name="prod")
+    before = lab.cluster_status("prod")
+
+    stop = operations.handle(Request("stop"))
+    restore = operations.handle(Request("restore", "20261001-141744F"))
+
+    assert before == "online"
+    assert stop["ok"] is False and "archives into stanza" in stop["error"]
+    assert restore["ok"] is False and "archives into stanza" in restore["error"]
+    assert lab.cluster_status("prod") == "online", "production was touched"
+    # ...and the dedicated staging cluster is not affected by the guard.
+    staging = _operations(lab, lab.copy_etc_postgresql(tmp_path / "again"))
+    assert staging.handle(Request("status"))["ok"] is True
 
 
 def test_a_missing_backup_is_refused_before_anything_is_stopped(

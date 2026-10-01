@@ -151,6 +151,9 @@ class TestTheCli:
                     .read_text()
                 )
 
+            def status(self) -> dict:
+                return {"ok": True, "online": False, "signals": [], "datadir": "/d"}
+
             def stop(self) -> dict:
                 return {"ok": True}
 

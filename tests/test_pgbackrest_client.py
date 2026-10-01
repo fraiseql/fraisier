@@ -8,6 +8,7 @@ is read from the JSON and not from the process.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import socket
 import threading
@@ -221,3 +222,30 @@ class TestTheClient:
         assert client.timeout_for("restore") == 21660
         assert client.timeout_for("start") == 21660
         assert client.timeout_for("info") == 60
+
+    def test_stop_waits_as_long_as_the_helper_does(self) -> None:
+        """The helper allows a cluster 900s to stop; a client that gave up at 120s
+        would report a failure while the helper went on stopping it."""
+        client = HelperClient("/x", timeout=60, long_timeout=960)
+
+        assert client.timeout_for("stop") == 960
+
+    def test_a_reply_that_never_ends_is_refused_at_a_size_cap(self, tmp_path) -> None:
+        path = tmp_path / "huge.sock"
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(path))
+        server.listen(1)
+
+        def flood() -> None:
+            conn, _ = server.accept()
+            with conn, contextlib.suppress(OSError):
+                conn.recv(100)
+                for _ in range(64):
+                    conn.sendall(b"x" * (1024 * 1024))
+
+        threading.Thread(target=flood, daemon=True).start()
+        try:
+            with pytest.raises(HelperUnavailableError, match="too large"):
+                HelperClient(str(path), timeout=5).info()
+        finally:
+            server.close()

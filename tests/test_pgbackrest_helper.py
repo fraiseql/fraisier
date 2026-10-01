@@ -12,10 +12,13 @@ and pgBackRest runs as the cluster's owner, not as root.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import socket
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -32,6 +35,8 @@ RESTORE_LOG = (FIXTURES / "restore-delta-detail.excerpt.log").read_text()
 INFO = (FIXTURES / "info-full-and-incrs.json").read_text()
 LABEL = "20261001-141744F_20261001-141820I"
 DATADIR = "/var/lib/postgresql/18/staging"
+#: A directory with no cluster configuration in it.
+NO_CONFIG = Path("/nonexistent-etc-postgresql")
 
 
 def config(**overrides: Any) -> helper.HelperConfig:
@@ -63,7 +68,10 @@ class FakeRunner:
 
 
 def ops(runner: FakeRunner, **overrides: Any) -> helper.Operations:
-    return helper.Operations(config(**overrides), run=runner)
+    # The listed data directories are fixtures, not real paths: say they exist.
+    return helper.Operations(
+        config(**overrides), run=runner, is_dir=lambda _path: True, etc_root=NO_CONFIG
+    )
 
 
 class TestInfo:
@@ -379,6 +387,217 @@ class TestAtTheSocket:
         with client.makefile("rb") as f:
             assert json.loads(f.readline())["ok"] is False
         assert runner.calls == []
+
+
+class TestNeverTheStanzasOwnSource:
+    """A restore (or a stop) of the cluster that *produces* the stanza is the disaster.
+
+    A deploy regenerates and installs the scaffold, as root, from the repository's
+    ``fraises.yaml`` — so a wrong ``cluster:``, or a malicious commit, retargets a
+    baked helper at production. The helper therefore refuses, on its own authority,
+    any cluster whose configuration archives into the stanza it was baked with.
+    """
+
+    def tree(self, tmp_path: Path, *, archive_command: str | None) -> Path:
+        etc = tmp_path / "etc"
+        conf_d = etc / "18" / "staging" / "conf.d"
+        conf_d.mkdir(parents=True)
+        (etc / "18" / "staging" / "postgresql.conf").write_text("port = 5433\n")
+        if archive_command is not None:
+            (conf_d / "archive.conf").write_text(
+                f"archive_mode = on\narchive_command = '{archive_command}'\n"
+            )
+        return etc
+
+    def source_ops(self, etc: Path, runner: FakeRunner) -> helper.Operations:
+        return helper.Operations(
+            config(), run=runner, is_dir=lambda _p: True, etc_root=etc
+        )
+
+    @pytest.mark.parametrize("action", ["stop", "restore"])
+    def test_a_cluster_archiving_into_the_stanza_is_refused(
+        self, tmp_path, action
+    ) -> None:
+        etc = self.tree(
+            tmp_path, archive_command="pgbackrest --stanza=main archive-push %p"
+        )
+        runner = FakeRunner(("pg_lsclusters", 0, DOWN, ""))
+        request = Request("restore", LABEL) if action == "restore" else Request(action)
+
+        reply = self.source_ops(etc, runner).handle(request)
+
+        assert reply["ok"] is False
+        assert "archives into stanza" in reply["error"]
+        assert "main" in reply["error"]
+        # nothing but the listing ran
+        assert [c["argv"][0] for c in runner.calls] == ["/usr/bin/pg_lsclusters"]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pgbackrest --stanza=main archive-push %p",
+            "/usr/bin/pgbackrest --stanza main archive-push %p",
+            "pgbackrest --config=/x.conf --stanza=main archive-push %p",
+            "pgbackrest --stanza='main' archive-push %p",
+        ],
+    )
+    def test_every_spelling_of_the_stanza_option_is_caught(
+        self, tmp_path, command
+    ) -> None:
+        etc = self.tree(tmp_path, archive_command=command)
+
+        reply = self.source_ops(etc, FakeRunner(("pg_lsclusters", 0, DOWN, ""))).handle(
+            Request("stop")
+        )
+
+        assert reply["ok"] is False
+
+    def test_a_different_stanza_does_not_trip_it(self, tmp_path) -> None:
+        etc = self.tree(
+            tmp_path, archive_command="pgbackrest --stanza=mainframe archive-push %p"
+        )
+        runner = FakeRunner(("pg_lsclusters", 0, DOWN, ""))
+
+        reply = self.source_ops(etc, runner).handle(Request("stop"))
+
+        assert reply["ok"] is True
+
+    def test_a_cluster_that_archives_nowhere_is_fine(self, tmp_path) -> None:
+        etc = self.tree(tmp_path, archive_command=None)
+
+        reply = self.source_ops(etc, FakeRunner(("pg_lsclusters", 0, DOWN, ""))).handle(
+            Request("stop")
+        )
+
+        assert reply["ok"] is True
+
+    def test_the_datadirs_own_auto_conf_counts_too(self, tmp_path) -> None:
+        """``ALTER SYSTEM`` writes there, and it overrides everything else."""
+        etc = self.tree(tmp_path, archive_command=None)
+        datadir = tmp_path / "data"
+        datadir.mkdir()
+        (datadir / "postgresql.auto.conf").write_text(
+            "archive_command = 'pgbackrest --stanza=main archive-push %p'\n"
+        )
+        listing = f"18 staging 5433 down postgres {datadir} /var/log/x.log\n"
+
+        reply = self.source_ops(
+            etc, FakeRunner(("pg_lsclusters", 0, listing, ""))
+        ).handle(Request("stop"))
+
+        assert reply["ok"] is False
+
+    def test_a_commented_out_archive_command_is_not_a_source(self, tmp_path) -> None:
+        etc = self.tree(tmp_path, archive_command=None)
+        (etc / "18" / "staging" / "postgresql.conf").write_text(
+            "#archive_command = 'pgbackrest --stanza=main archive-push %p'\n"
+        )
+
+        reply = self.source_ops(etc, FakeRunner(("pg_lsclusters", 0, DOWN, ""))).handle(
+            Request("stop")
+        )
+
+        assert reply["ok"] is True
+
+
+class TestWhatTheHelperRefusesToBelieve:
+    def test_a_cluster_owned_by_root_is_refused(self) -> None:
+        """pgBackRest would run as root and write root-owned files into a data directory."""
+        listing = (
+            "18 staging 5433 down root /var/lib/postgresql/18/staging /var/log/x.log\n"
+        )
+
+        reply = ops(FakeRunner(("pg_lsclusters", 0, listing, ""))).handle(
+            Request("stop")
+        )
+
+        assert reply["ok"] is False
+        assert "root" in reply["error"]
+
+    def test_a_data_directory_that_is_not_a_directory_is_refused(self) -> None:
+        """``pg_lsclusters`` splits on whitespace, so a path with a space is truncated."""
+        runner = FakeRunner(("pg_lsclusters", 0, DOWN, ""))
+        operations = helper.Operations(
+            config(), run=runner, is_dir=lambda _p: False, etc_root=NO_CONFIG
+        )
+
+        reply = operations.handle(Request("restore", LABEL))
+
+        assert reply["ok"] is False
+        assert "not a directory" in reply["error"]
+        assert all("restore" not in c["argv"] for c in runner.calls)
+
+    def test_an_unknown_owner_is_an_error_reply_not_a_dead_handler(self) -> None:
+        def run(argv, *, user, timeout):
+            if "pg_lsclusters" in argv[0]:
+                return subprocess.CompletedProcess(argv, 0, ONLINE, "")
+            return helper._run_command(argv, user="no-such-user-xyzzy", timeout=timeout)
+
+        reply = helper.Operations(
+            config(), run=run, is_dir=lambda _p: True, etc_root=NO_CONFIG
+        ).handle(Request("info"))
+
+        assert reply["ok"] is False
+        assert "no-such-user-xyzzy" in reply["error"]
+
+    def test_any_unexpected_exception_becomes_an_error_reply(self) -> None:
+        class Boom(FakeRunner):
+            def __call__(self, argv, *, user, timeout):
+                raise ValueError("float('1.2.3')")
+
+        reply = ops(Boom()).handle(Request("stop"))
+
+        assert reply["ok"] is False
+        assert "internal error" in reply["error"]
+
+
+class TestASilentPeerCannotWedgeTheHelper:
+    """It serves one connection at a time, so a read must not wait forever."""
+
+    def test_a_peer_that_connects_and_says_nothing_is_dropped(self) -> None:
+        server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        runner = FakeRunner()
+
+        # `client` stays open and silent: without a read timeout this blocks forever.
+        helper._handle_connection(server, ops(runner), read_timeout=0.2)
+
+        assert runner.calls == []
+        client.close()
+
+    def test_a_peer_dribbling_bytes_hits_an_overall_deadline(self) -> None:
+        """A per-``recv`` timeout alone lets one byte every few seconds hold it for hours."""
+        server, client = socket.socket(socket.AF_UNIX), None
+        server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        stop = threading.Event()
+
+        def dribble() -> None:
+            while not stop.is_set():
+                with contextlib.suppress(OSError):
+                    client.sendall(b" ")
+                time.sleep(0.05)
+
+        thread = threading.Thread(target=dribble, daemon=True)
+        thread.start()
+        runner = FakeRunner()
+        started = time.monotonic()
+
+        helper._handle_connection(server, ops(runner), read_timeout=0.3)
+
+        stop.set()
+        thread.join(timeout=2)
+        assert time.monotonic() - started < 2.0
+        assert runner.calls == []
+        client.close()
+
+    def test_a_peer_that_sends_half_a_request_is_dropped_too(self) -> None:
+        server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.sendall(b'{"action": "inf')
+        runner = FakeRunner()
+
+        helper._handle_connection(server, ops(runner), read_timeout=0.2)
+
+        assert runner.calls == []
+        client.close()
 
 
 class TestStartup:

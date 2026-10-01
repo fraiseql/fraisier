@@ -31,6 +31,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "pgbackrest"
 INFO = (FIXTURES / "info-full-and-incrs.json").read_text()
 NEWEST = "20261001-141744F_20261001-141820I"
 ADMIN_URL = "postgresql://postgres@localhost:5433/postgres"
+DATADIR = "/var/lib/postgresql/18/staging"
 SUMMARY = {
     "label": NEWEST,
     "restore_size": "30.3MB",
@@ -53,10 +54,20 @@ class FakeHelper:
         fail: dict[str, str] | None = None,
         signals: list[str] | None = None,
         order: list[str] | None = None,
+        online: bool = False,
+        datadir: str = DATADIR,
+        status_reply: dict[str, Any] | None = None,
     ) -> None:
         self.info_text = info
         self.fail = fail or {}
         self.signals = signals or []
+        #: whether ``status`` finds the cluster up (it is down for a re-run after a
+        #: fail-closed refresh, and then there is nothing to ask it)
+        self.online = online
+        self.datadir = datadir
+        self.status_reply = status_reply
+        #: raised from ``restore``, to model an interruption (a deploy timeout, ^C)
+        self.interrupt_with: BaseException | None = None
         self.calls: list[str] = []
         #: a list shared with the test, to pin the order of calls across objects
         self.order = order if order is not None else []
@@ -82,6 +93,8 @@ class FakeHelper:
 
     def restore(self, label: str) -> dict[str, Any]:
         self._record(f"restore:{label}")
+        if self.interrupt_with is not None:
+            raise self.interrupt_with
         if "restore" in self.fail:
             raise HelperUnavailableError(self.fail["restore"])
         return {"ok": True, "summary": SUMMARY, "tail": ""}
@@ -90,7 +103,13 @@ class FakeHelper:
         return self._do("start", {"ok": True})
 
     def status(self) -> dict[str, Any]:
-        return self._do("status", {"ok": True, "online": True, "signals": self.signals})
+        reply = self.status_reply or {
+            "ok": True,
+            "online": self.online,
+            "signals": self.signals,
+            "datadir": self.datadir,
+        }
+        return self._do("status", reply)
 
 
 class World:
@@ -105,7 +124,9 @@ class World:
         tviews: list[TviewRebuilt] | None = None,
         promote_fails: Exception | None = None,
         residue: dict[str, str] | None = None,
+        data_directory: str = DATADIR,
     ) -> None:
+        self.data_directory = data_directory
         self.archive_mode = archive_mode
         self.reset_fails = reset_fails
         self.database_present = database_present
@@ -159,9 +180,12 @@ class World:
             raise self.promote_fails
 
     def _setting(self, name: str) -> str:
-        return (
-            self.archive_mode if name == "archive_mode" else self.residue.get(name, "")
-        )
+        self.events.append(f"read:{name}")
+        if name == "data_directory":
+            return self.data_directory
+        if name == "archive_mode":
+            return self.archive_mode
+        return self.residue.get(name, "")
 
     def _reset(self, *_a: Any, **_k: Any) -> dict[str, str]:
         self.events.append("reset")
@@ -223,7 +247,7 @@ class TestPrepare:
         assert prepared.backup_ref == f"pgbackrest:main/{NEWEST}"
         assert prepared.backup_bytes == 31779757
         assert prepared.archive_check is None
-        assert helper.calls == ["info"]
+        assert helper.calls == ["info", "status"]
 
     def test_nothing_is_touched_while_it_chooses(self) -> None:
         helper = FakeHelper()
@@ -327,7 +351,10 @@ class TestRestore:
             "start",
             "status",
         ]
-        assert world.events == ["promoted", "reset"]
+        assert [e for e in world.events if not e.startswith("read:")] == [
+            "promoted",
+            "reset",
+        ]
 
     def test_the_helper_is_told_the_label_that_was_validated(self) -> None:
         _, helper, _, _ = self.run()
@@ -373,6 +400,127 @@ class TestRestore:
         """The restored cluster carries production's databases, under production's names."""
         with pytest.raises(RestoreFailedClosed, match=r"database\.name"):
             self.run(world=World(database_present=False))
+
+
+class TestTheCheckedClusterIsTheRestoredOne:
+    """``admin_url`` comes from ``fraises.yaml``; the restored cluster comes from the helper.
+
+    The safety checks — and ``ALTER SYSTEM RESET`` — run against whatever ``admin_url``
+    reaches. If that is not the cluster that was restored, ``archive_mode`` is read
+    from the wrong server and a false pass is the best case; the worst is a reset
+    against production. So the data directory behind ``admin_url`` must be the one the
+    helper restored.
+    """
+
+    def test_a_different_cluster_behind_the_url_is_refused_before_anything_is_stopped(
+        self,
+    ) -> None:
+        strategy, source, service = build(FakeHelper(online=True))
+
+        with (
+            World(data_directory="/var/lib/postgresql/18/prod") as world,
+            pytest.raises(DatabaseError, match=r"/var/lib/postgresql/18/prod"),
+        ):
+            prepare(strategy, source)
+
+        service.stop.assert_not_called()
+        assert "reset" not in world.events
+
+    def test_the_matching_cluster_passes(self) -> None:
+        strategy, source, _ = build(FakeHelper(online=True))
+
+        with World():
+            assert prepare(strategy, source).backup_label == NEWEST
+
+    def test_a_stopped_cluster_cannot_be_asked_so_prepare_defers_to_the_restore(
+        self,
+    ) -> None:
+        """The re-run after a fail-closed refresh: the cluster is down on purpose."""
+        strategy, source, _ = build(FakeHelper(online=False))
+
+        with World() as world:
+            prepare(strategy, source)
+
+        assert "read:data_directory" not in world.events
+
+    def test_the_restored_cluster_is_checked_again_before_anything_is_changed(
+        self,
+    ) -> None:
+        """Mandatory, and before the first ``ALTER SYSTEM``."""
+        strategy, source, _ = build(FakeHelper())
+        prepared = prepare(strategy, source)
+
+        with (
+            World(data_directory="/srv/other") as world,
+            pytest.raises(RestoreFailedClosed, match="/srv/other"),
+        ):
+            source.restore(strategy, prepared)
+
+        assert "reset" not in world.events
+        assert "read:archive_mode" not in world.events
+
+    def test_a_status_without_a_data_directory_cannot_prove_it_and_fails_closed(
+        self,
+    ) -> None:
+        helper = FakeHelper(status_reply={"ok": True, "online": False, "signals": []})
+        strategy, source, _ = build(helper)
+        prepared = prepare(strategy, source)
+
+        with World(), pytest.raises(RestoreFailedClosed, match="data directory"):
+            source.restore(strategy, prepared)
+
+
+class TestAMalformedReplyFailsClosed:
+    def test_signals_that_are_not_a_list_cannot_prove_the_directory_is_clean(
+        self,
+    ) -> None:
+        helper = FakeHelper(
+            status_reply={
+                "ok": True,
+                "online": False,
+                "signals": "none",
+                "datadir": DATADIR,
+            }
+        )
+        strategy, source, _ = build(helper)
+        prepared = prepare(strategy, source)
+
+        with World(), pytest.raises(RestoreFailedClosed, match="signals"):
+            source.restore(strategy, prepared)
+
+
+class TestAnInterruptionIsAlsoAFailure:
+    """A deploy's ``timeout:`` lands asynchronously, as an exception, wherever the code is.
+
+    If it escaped, the failed deploy's handler would restart the service against a
+    stopped, half-restored cluster. So once the cluster is stopped, *anything* that
+    interrupts the refresh fails closed.
+    """
+
+    def test_a_timeout_exception_inside_the_refresh_fails_closed(self) -> None:
+        from fraisier.timeout import DeploymentTimeoutExpired
+
+        helper = FakeHelper()
+        strategy, source, service = build(helper)
+        prepared = prepare(strategy, source)
+
+        helper.interrupt_with = DeploymentTimeoutExpired("deploy exceeded 600s")
+        with World(), pytest.raises(RestoreFailedClosed, match="exceeded 600s"):
+            source.restore(strategy, prepared)
+
+        assert helper.calls[-1] == "stop"
+        service.start.assert_not_called()
+
+    def test_a_keyboard_interrupt_fails_closed_too(self) -> None:
+        helper = FakeHelper()
+        strategy, source, _ = build(helper)
+        prepared = prepare(strategy, source)
+
+        helper.interrupt_with = KeyboardInterrupt()
+        with World(), pytest.raises(RestoreFailedClosed):
+            source.restore(strategy, prepared)
+
+        assert helper.calls[-1] == "stop"
 
 
 class TestFailingClosed:
