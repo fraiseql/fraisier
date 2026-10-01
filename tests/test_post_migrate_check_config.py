@@ -38,6 +38,38 @@ def _config(**check: object) -> dict:
     return {"database": {"post_migrate_check": check}} if check else {"database": {}}
 
 
+class TestOnEmpty:
+    """``on_empty``: what a TVIEW that is empty over a populated view costs (#422).
+
+    Fails by default — a read model that came back empty is an outage the deploy
+    would otherwise report as a success — with ``warn`` as the way to say "tell
+    me, do not stop me", the same two words ``on_critical`` uses.
+    """
+
+    def test_it_defaults_to_fail(self) -> None:
+        assert load_post_migrate_check({}).on_empty == "fail"
+        assert load_post_migrate_check(_config(enabled=True)["database"]).on_empty == (
+            "fail"
+        )
+
+    def test_warn_is_read(self) -> None:
+        loaded = load_post_migrate_check(_config(on_empty="warn")["database"])
+
+        assert loaded.on_empty == "warn"
+
+    @pytest.mark.parametrize("bad", ["ignore", True, False, 1, None])
+    def test_anything_but_fail_or_warn_is_rejected(self, bad: object) -> None:
+        with pytest.raises(ValidationError, match="on_empty"):
+            validate_one_fraise_environment(
+                "api", "production", _config(enabled=True, on_empty=bad)
+            )
+
+    def test_a_valid_value_passes(self) -> None:
+        validate_one_fraise_environment(
+            "api", "production", _config(enabled=True, on_empty="warn")
+        )
+
+
 class TestLoader:
     def test_an_absent_block_still_gets_a_gate(self) -> None:
         """The reverse of what this asserted until the gate became a default.

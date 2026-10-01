@@ -596,6 +596,7 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
     """
     from fraisier.post_migrate_check import (
         ON_CRITICAL,
+        ON_EMPTY,
         VALID_CHECKS,
         VALID_ESCALATIONS,
     )
@@ -636,6 +637,13 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
         errors.append(
             f"{fraise_name}: {location}.on_critical must be "
             f"{' or '.join(repr(v) for v in ON_CRITICAL)}, got {on_critical!r}"
+        )
+
+    on_empty = block.get("on_empty", "fail")
+    if on_empty not in ON_EMPTY:
+        errors.append(
+            f"{fraise_name}: {location}.on_empty must be "
+            f"{' or '.join(repr(v) for v in ON_EMPTY)}, got {on_empty!r}"
         )
 
     # A misspelt escalation is the worst failure this gate has: the operator has

@@ -96,6 +96,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             jobs=int(restore_cfg.get("jobs", 1)),
             preferred_compression=restore_cfg.get("preferred_compression"),
             backup_path=backup_path,
+            on_empty_tview=str(kwargs.get("on_empty_tview", "fail")),
         )
         service_manager = kwargs.get("service_manager")
         service_name = kwargs.get("service_name")

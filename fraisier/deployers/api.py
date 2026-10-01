@@ -720,6 +720,90 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             },
         )
 
+    def _migrated_url(self) -> str | None:
+        """The URL of the database this deploy migrated, or ``None`` if unreadable.
+
+        Read from what the migration used (:attr:`_migrated_config` and the
+        override), never re-resolved: a probe that looked at a different
+        database than was migrated would report on the wrong one (#376).
+        """
+        from fraisier.dbops.confiture import _load_env
+
+        try:
+            return str(
+                _load_env(
+                    self._migrated_config, database_url=self._migrated_database_url
+                ).database_url
+            )
+        except Exception:
+            logger.debug("could not read the migrated database URL", exc_info=True)
+            return None
+
+    def _run_empty_tview_check(self) -> None:
+        """Refuse a deploy over a pg_tviews TVIEW that is empty under a view (#422).
+
+        confiture's drift is schema-only, so this is the data probe it cannot
+        be: after a physical restore, a crash-recovery start or a failover an
+        UNLOGGED TVIEW is empty, every count passes, and the read model is gone.
+        Runs after the drift gate for the same reason it does — a migration may
+        create a TVIEW — and before the hooks and the restart, where failing
+        needs no rollback.
+
+        Follows ``post_migrate_check``: declining the gate declines this, and
+        ``on_empty`` says what an empty TVIEW costs.  A probe that *could not
+        run* has cleared nothing, so a gate the project declared fails on it; a
+        gate that is only the default warns, as the drift gate does.  Real
+        emptiness fails either way.  A database without pg_tviews is not asked.
+
+        Raises:
+            DeploymentError: a TVIEW is empty over a populated view, or the
+                probe could not run, and ``on_empty`` is ``fail``.
+        """
+        import psycopg
+
+        from fraisier.dbops import tviews
+        from fraisier.post_migrate_check import load_post_migrate_check
+
+        gate = load_post_migrate_check(self.database_config)
+        if not gate.enabled:
+            return
+
+        context = {"fraise": self.fraise_name, "environment": self.environment}
+        url = self._migrated_url()
+        failure: str | None = None
+        empty: list[tviews.EmptyTview] = []
+        if url is None:
+            failure = (
+                "could not check TVIEWs for emptiness: the migrated database's "
+                "URL could not be read from the confiture config"
+            )
+        else:
+            try:
+                empty = tviews.find_empty_tviews(url)
+            except (tviews.TviewError, psycopg.Error) as exc:
+                failure = f"could not check TVIEWs for emptiness: {exc}"
+
+        if failure is not None:
+            if not gate.declared or gate.on_empty == "warn":
+                logger.warning("%s", failure)
+                return
+            raise DeploymentError(failure, context=context)
+        if not empty:
+            return
+
+        pairs = ", ".join(f"{e.tview} (view {e.view})" for e in empty)
+        message = (
+            f"{len(empty)} pg_tviews TVIEW(s) are empty while their backing view "
+            f"has rows: {pairs}. A restore, a crash-recovery start or a failover "
+            f"empties an UNLOGGED TVIEW and nothing else notices. Run "
+            f"`fraisier db tviews rebuild {self.fraise_name} -e "
+            f"{self.environment}` (add --all for a LOGGED one)"
+        )
+        if gate.on_empty == "warn":
+            logger.warning("%s", message)
+            return
+        raise DeploymentError(message, context=context)
+
     def _run_post_migrate(self) -> None:
         """Run database.post_migrate SQL hooks (#204).
 
@@ -855,6 +939,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 if self.database_config:
                     self._run_database_migrations()
                     self._run_post_migrate_check()
+                    self._run_empty_tview_check()
                     self._run_post_migrate()
 
                 # Step 4: Restart service (unless strategy handles it)
@@ -1088,6 +1173,11 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             kwargs["db_name"] = self.database_config.get("name", "")
         if resolved == "restore_migrate":
             kwargs["restore_config"] = self.database_config.get("restore", {})
+            from fraisier.post_migrate_check import load_post_migrate_check
+
+            kwargs["on_empty_tview"] = load_post_migrate_check(
+                self.database_config
+            ).on_empty
             kwargs["db_name"] = self.database_config.get("name", "")
             if self.systemd_service:
                 from fraisier.service_managers import get_service_manager

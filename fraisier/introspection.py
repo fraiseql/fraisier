@@ -130,6 +130,8 @@ SUBCOMMAND_CONFIG_SECTIONS: dict[str, frozenset[ConfigPath]] = {
     "db receipt": _DB_SECTIONS,
     "db reset": _DB_SECTIONS,
     "db restore": _DB_SECTIONS,
+    "db tviews rebuild": _DB_SECTIONS,
+    "db tviews status": _DB_SECTIONS,
     "db-check": _DB_SECTIONS,
     "deployment-status": frozenset(),  # reads state files, not config
     "env-check": frozenset(),  # introspection over caller-named subcommand

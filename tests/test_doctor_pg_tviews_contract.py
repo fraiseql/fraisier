@@ -35,10 +35,11 @@ class _FakeConn:
     def __exit__(self, *_exc: object) -> None:
         return None
 
-    def execute(self, sql: str) -> Any:
+    def execute(self, query: Any) -> Any:
+        sql = query if isinstance(query, str) else query.as_string()
         self.queries.append(sql)
         if "pg_extension" in sql:
-            rows = [(1,)] if self._extension else []
+            rows = [("tviews",)] if self._extension else []
         elif "contract_version" in sql:
             if isinstance(self._contract, Exception):
                 raise self._contract

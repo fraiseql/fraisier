@@ -26,6 +26,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A restore rebuilds, and a deploy refuses, an empty pg_tviews TVIEW**
+  ([#422](https://github.com/fraiseql/fraisier/issues/422)). An UNLOGGED TVIEW is
+  emptied by a crash-recovery start, a failover or a physical restore, and every
+  count and every drift check still passes. After `pg_restore`, fraisier now calls
+  `pg_tviews_rebuild_all(only_empty => true)` (logged, and on
+  `RestoreResult.tviews_rebuilt`; a failure is `stage="tview_rebuild"` and the
+  service is not started). After every migration, and before the service starts in
+  `restore_migrate`, it reads each TVIEW and its backing view from
+  `tviews.registry` and refuses one that is empty while its view has rows.
+  `database.post_migrate_check.on_empty: fail | warn` (default `fail`) says what
+  that costs; it follows `enabled`. Databases without pg_tviews are never asked.
+- `fraisier db tviews status|rebuild FRAISE -e ENV` for the step after a failover,
+  which fraisier does not drive: `status` reads `pg_tviews_profile()` (works on a
+  standby; exits 0/1/3) and `rebuild [--all]` fills what is empty, on the primary,
+  under the deployment lock.
 - `fraisier doctor` check `pg_tviews_contract` (network): fails when a configured
   database has pg_tviews without read contract 1, skips when the extension is
   absent or the database unreachable.

@@ -711,6 +711,7 @@ database:
     checks: [live-drift]      # live-drift | signatures
     on_critical: fail         # fail | warn
     escalate: []              # warning kinds that must fail the gate
+    on_empty: fail            # fail | warn — an empty TVIEW over a populated view
 ```
 
 The gate builds the schema this checkout would produce (`confiture build
@@ -942,6 +943,57 @@ not offered here until the constraint kinds became critical and freed the
 list to carry it; before 1.15.0 a dropped foreign key was exit 0 with an
 *empty* `drift_items`, so nothing distinguished it from a clean database
 (fraiseql/confiture#308, #309).
+
+### TVIEWs after a restore or a failover (#422)
+
+A [pg_tviews](https://github.com/fraiseql/pg_tviews) TVIEW is a table kept in step
+with a backing view. An **UNLOGGED** one is emptied by a crash-recovery start, a
+failover and a physical restore, and nothing then tells the application: every
+count passes, the schema is unchanged, and the read model is gone. confiture's
+drift check is schema-only, so it cannot see this.
+
+What fraisier does about it:
+
+| When | What | Failing means |
+|---|---|---|
+| after a `pg_restore` (`db restore`, `restore_migrate`) | calls `pg_tviews_rebuild_all(only_empty => true)` on the restored database; the result is logged as `pg_tviews: rebuilt N empty TVIEW(s)` and carried on `RestoreResult.tviews_rebuilt` (`None` = the database has no pg_tviews) | the restore fails with `stage="tview_rebuild"`, before the service starts |
+| after the migration, in every deploy | reads each TVIEW and its backing view from `tviews.registry` and refuses one that is empty while its view has rows | the deploy stops, naming each `tv_*`/`v_*` pair |
+| before the service starts in `restore_migrate` | the same probe | the restore stops with the service still down |
+
+`on_empty: warn` turns the refusals into a log line, the way `on_critical: warn`
+does; `fail` is the default for the same reason it is there. The probe follows
+`enabled`: declining the gate declines it. A database without pg_tviews is never
+asked. A probe that *could not run* fails a gate you declared and only warns for
+the default one, exactly as the drift gate does.
+
+A pg_dump restore does **not** empty a TVIEW — the dump carries UNLOGGED data — so
+on that path the rebuild normally finds nothing to do and costs one query. It is
+there because a physical restore is the case where it is not a no-op.
+
+**After a failover or a crash restart** fraisier is not in the loop, so the step is
+yours. Promote, then, on the new primary:
+
+```bash
+fraisier db tviews status api -e production     # what is empty? exits 1 if any
+fraisier db tviews rebuild api -e production    # fill the empty UNLOGGED ones
+fraisier db tviews rebuild api -e production --all   # a LOGGED one, or a stale one
+```
+
+`status` reads `pg_tviews_profile()`, which is read-only and works on a standby.
+An UNLOGGED TVIEW cannot be *read* on a standby, so there the emptiness check is
+reported as unavailable rather than guessed. `rebuild` refuses on a standby —
+pg_tviews does — and says so. Both take the per-fraise deployment lock;
+`--skip-if-locked` makes a held lock a non-event for a timer.
+
+Exit codes of `status`: `0` nothing is empty, `1` a TVIEW is empty under a
+populated view, `3` it could not check (no pg_tviews, an older one, no
+connection). A host that could not look never reports what a host that looked and
+passed reports.
+
+**pg_tviews must be 0.1.0-beta.20 or later** — confiture 1.29 requires read
+contract 1, and so does everything above. `fraisier doctor` checks it
+(`pg_tviews_contract`) by calling `tviews.contract_version()`, because
+`pg_extension.extversion` reads `0.1.0` on every beta.
 
 ### `database.post_migrate`: SQL hooks after migrate
 

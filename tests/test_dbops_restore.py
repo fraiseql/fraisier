@@ -13,6 +13,7 @@ from fraisier.dbops.restore import (
     restore_backup,
     validate_table_count,
 )
+from fraisier.dbops.tviews import TviewError, TviewRebuilt
 
 _TEST_URL = "postgresql://postgres:pass@localhost:5432/postgres"
 
@@ -307,6 +308,95 @@ class TestRestoreBackup:
                 db_owner="bad;owner",
                 connection_url=_TEST_URL,
             )
+
+
+class TestTviewRebuild:
+    """A restored database gets ``pg_tviews_rebuild_all(only_empty)`` (#422).
+
+    On a pg_dump restore the rows come back and this is one query that finds
+    nothing to do.  It is here because the same chain is reused where it is not a
+    no-op: a physical restore empties every UNLOGGED TVIEW (#424).
+    """
+
+    def _restore(self):
+        return restore_backup(
+            backup_path="/backups/prod.dump",
+            db_name="staging",
+            connection_url=_TEST_URL,
+        )
+
+    def test_the_rebuild_is_reported_when_pg_tviews_is_installed(self):
+        rebuilt = [TviewRebuilt("post", 3)]
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=True),
+            patch(
+                "fraisier.dbops.restore.rebuild_empty_tviews", return_value=rebuilt
+            ) as rebuild,
+        ):
+            result = self._restore()
+
+        assert result.success
+        assert result.tviews_rebuilt == (TviewRebuilt("post", 3),)
+        # asked of the restored database, not of the maintenance one
+        assert rebuild.call_args.args[0].endswith("/staging")
+
+    def test_nothing_to_rebuild_is_an_empty_tuple_not_none(self):
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=True),
+            patch("fraisier.dbops.restore.rebuild_empty_tviews", return_value=[]),
+        ):
+            result = self._restore()
+
+        assert result.tviews_rebuilt == ()
+
+    def test_without_pg_tviews_it_is_none_and_nothing_is_rebuilt(self):
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.rebuild_empty_tviews") as rebuild,
+        ):
+            result = self._restore()
+
+        assert result.tviews_rebuilt is None
+        rebuild.assert_not_called()
+
+    def test_a_failed_rebuild_fails_the_restore_at_its_own_stage(self):
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=True),
+            patch(
+                "fraisier.dbops.restore.rebuild_empty_tviews",
+                side_effect=TviewError("refresh blew up"),
+            ),
+        ):
+            result = self._restore()
+
+        assert not result.success
+        assert result.stage == "tview_rebuild"
+        assert "refresh blew up" in result.error
+
+    def test_an_outdated_pg_tviews_fails_it_too(self):
+        with (
+            _mock_restorer(),
+            patch(
+                "fraisier.dbops.restore.tviews_installed",
+                side_effect=TviewError("predates read contract 1"),
+            ),
+        ):
+            result = self._restore()
+
+        assert result.stage == "tview_rebuild"
+
+    def test_a_failed_restore_never_reaches_the_rebuild(self):
+        with (
+            _mock_restorer(_confiture_result(success=False, errors=["boom"])),
+            patch("fraisier.dbops.restore.tviews_installed") as installed,
+        ):
+            result = self._restore()
+
+        assert result.stage == "restore"
+        installed.assert_not_called()
 
 
 class TestValidateTableCount:
