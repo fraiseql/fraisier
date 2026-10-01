@@ -16,7 +16,7 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 dependencies = [
-  # Pinned to confiture's 1.x line, floor 1.0.0 and cap below 2.
+  # Pinned to confiture's 1.x line, floor 1.0.0 and a one-minor cap (below).
   #
   # The FLOOR is a **capability** floor, not housekeeping, and must not be
   # lowered: the post-migration drift gate (#395) reads
@@ -485,7 +485,31 @@ dependencies = [
   # ⚠️ Both arrived at users under the old `<2` cap the day confiture
   # published, which is the argument for the cap above, written down where the
   # next person will read it.
-  "fraiseql-confiture>=1.26.0,<1.27",
+  #
+  # **1.29.0 is the first adoption that needs something on the host.** Measured
+  # on the published artifact against pg_tviews 0.1.0-beta.20, in
+  # `.phases/2026-09-29-confiture-1-26-probe/` (`driver10.py`, 1.26.0 vs 1.29.0)
+  # and `.phases/2026-10-01-confiture-1-29-probe/` (`driver11.py`):
+  #   * Nothing moves a verdict: the five constraint/index scenarios return the
+  #     same `passed`/`exit`/kinds on both, and the built schema is
+  #     byte-identical. 5964 passed, 3 skipped on 1.29.0; `ty` and both ruff
+  #     gates clean.
+  #   * pg_tviews **read contract 1** (0.1.0-beta.20 or later) is required,
+  #     checked through `tviews.contract_version()`; older fails `CONFIG_014`
+  #     (exit 5) on any live TVIEW read, and the drift gate is on by default.
+  #     `pg_extension.extversion` reads `0.1.0` on every beta, so
+  #     `fraisier doctor`'s `pg_tviews_contract` calls the function instead.
+  #   * `tview_option_mismatch` is `warning`/exit 0, one item per pinned option;
+  #     a TVIEW built from its own tree reports no drift; `missing_tview` is
+  #     critical; `extra_tview` is not reported. Only the first is a row in
+  #     `ESCALATABLE_KINDS`.
+  #   * Inert here: `migrate squash`, `--check-path-reads`, `generate
+  #     renumber` and `drift` are never invoked (fraisier builds five `migrate`
+  #     argvs and `build`).
+  #   * The 1.27.0 changelog credits the restorer with keeping a TVIEW
+  #     propagating. It never passed `--disable-triggers`: the restore test
+  #     passes on 1.26.0 too, so that half of #422 is the host's pg_tviews.
+  "fraiseql-confiture>=1.29.0,<1.30",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

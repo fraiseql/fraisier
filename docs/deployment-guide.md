@@ -927,8 +927,8 @@ post_migrate_check:
 ```
 
 The kinds `escalate` accepts are exactly the warning-graded ones —
-`missing_index`, `default_mismatch`, `type_mismatch` and
-`nullable_mismatch`. A name outside that list is a config error rather
+`missing_index`, `default_mismatch`, `type_mismatch`,
+`nullable_mismatch` and `tview_option_mismatch`. A name outside that list is a config error rather
 than a gate that quietly declines to fire: an operator who writes
 `missing_indexes` has asked for a promise, and getting silence instead is
 the failure this whole gate exists to avoid. `extra_constraint` is

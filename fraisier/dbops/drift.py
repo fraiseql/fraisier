@@ -98,6 +98,15 @@ CHECK_FLAGS: dict[str, str] = {
 #: ``.phases/2026-09-29-confiture-1-26-probe/`` (scenario ``Y_index_dropped``):
 #: still ``warning``, still exit 0, unchanged from 1.25.1.
 #:
+#: ``tview_option_mismatch`` is the fifth (confiture 1.29.0, measured in
+#: ``.phases/2026-10-01-confiture-1-29-probe/`` against pg_tviews 0.1.0-beta.20):
+#: ``warning``, exit 0, one item per pinned option (``logged``, ``fillfactor``)
+#: the live table does not hold, and nothing when the tree pins no option.  A
+#: TVIEW built from its own tree reports no drift at all.  It is admitted because
+#: ``logged`` is the difference between a TVIEW a physical restore empties and
+#: one it keeps.  ``missing_tview`` is critical and ``extra_tview`` is not
+#: reported as a warning, so neither is a row.
+#:
 #: ⚠️ ``missing_constraint`` and ``constraint_mismatch`` are **not** rows here,
 #: and their absence is the point.  confiture 1.26.0 grades both ``critical``
 #: (confiture#506/#518), so each fails the gate on its own and ``escalate``
@@ -127,6 +136,7 @@ ESCALATABLE_KINDS: tuple[str, ...] = (
     "default_mismatch",
     "type_mismatch",
     "nullable_mismatch",
+    "tview_option_mismatch",
 )
 
 #: ``confiture build --env NAME`` resolves this path under ``--project-dir``.

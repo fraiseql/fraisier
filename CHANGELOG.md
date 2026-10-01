@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **⚠️ Upgrade note: upgrade pg_tviews to 0.1.0-beta.20 or later on every host
+  _before_ installing this fraisier.** confiture 1.29 refuses an older pg_tviews
+  with `CONFIG_014` wherever it reads TVIEWs live, and the drift gate is on by
+  default, so every deploy of a TVIEW project would fail its gate — after the
+  migrations ran. `pg_extension.extversion` reads `0.1.0` on every beta and cannot
+  tell the versions apart; `fraisier doctor` now asks `tviews.contract_version()`
+  (see Added). Projects without pg_tviews are unaffected.
+- confiture cap `>=1.26.0,<1.27` → `>=1.29.0,<1.30` ([#425](https://github.com/fraiseql/fraisier/issues/425)).
+  Measured on the published artifact: the 1.26 probe's five scenarios return the
+  same verdicts on 1.29.0, and the built schema is byte-identical.
+- `escalate` accepts `tview_option_mismatch`: a TVIEW whose tree pins `logged` or
+  `fillfactor` and whose live table holds something else is graded `warning` by
+  confiture, so it passed the gate unasked. `missing_tview` is already critical;
+  `extra_tview` is not reported.
+
+### Added
+
+- `fraisier doctor` check `pg_tviews_contract` (network): fails when a configured
+  database has pg_tviews without read contract 1, skips when the extension is
+  absent or the database unreachable.
+- An integration test that a TVIEW restored through `restore_backup` still follows
+  its base tables. It passes on confiture 1.26.0 and 1.29.0 alike: the restore half
+  of #422 is a property of the host's pg_tviews, not of the confiture cap. It needs
+  pg_tviews on the server and skips elsewhere, so CI does not run it.
+
 ## [0.83.0] - 2026-09-29
 
 **Three changes to what a deploy does — two from confiture 1.26.0, one ours.**
