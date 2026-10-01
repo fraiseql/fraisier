@@ -98,6 +98,18 @@ fraises:
             min_tables: 300                   # post-restore validation
             jobs: 4                           # parallel pg_restore jobs (default: 1)
             preferred_compression: lz4        # prefer lz4 backups (faster decompress)
+            # Refresh from production's own pgBackRest backup instead of a
+            # pg_dump archive (#424). Physical and CLUSTER-scoped: every database
+            # in the cluster below is replaced, so it must be a cluster dedicated
+            # to this environment. Needs `fraisier scaffold-install` (root helper).
+            # source: pgbackrest              # default: dump (the keys above)
+            # pgbackrest:
+            #   stanza: main
+            #   repo: 1
+            #   cluster: 18/staging           # <major>/<name> as `pg_lsclusters` lists it
+            #   target: latest                # or an instant WITH an offset:
+            #                                 #   "2026-10-01 14:18:37+00"
+            #   timeout_seconds: 21600        # restore / cluster start (default 6h)
           # preflight:                          # Migration preflight (default: enabled)
           #   enabled: true                     # Test migrations before full restore
           #   timeout_seconds: 120              # Max wall-clock time for preflight

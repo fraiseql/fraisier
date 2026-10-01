@@ -449,6 +449,14 @@ def db_preflight(ctx: click.Context, fraise: str, env: str, fmt: str) -> None:
     )
     migrations_dir = app_path / "db" / "migrations"
 
+    if restore_cfg.get("source") == "pgbackrest":
+        console.print(
+            "[red]Error:[/red] migration preflight reads a pg_dump archive, and "
+            f"'{fraise}' restores from pgBackRest (restore.source: pgbackrest), "
+            "which has none"
+        )
+        raise SystemExit(1)
+
     backup_dir = _Path(restore_cfg["backup_dir"])
     backup_pattern = restore_cfg.get("backup_pattern", "*.dump")
     backup_file = find_latest_backup(backup_dir, pattern=backup_pattern)
@@ -609,6 +617,7 @@ def db_restore(
     """
     from pathlib import Path as _Path
 
+    from fraisier.config.restore_source import parse_pgbackrest
     from fraisier.dbops.guard import is_external_db
     from fraisier.dbops.restore import find_latest_backup, validate_backup_age
     from fraisier.errors import DatabaseError
@@ -659,6 +668,31 @@ def db_restore(
         raise SystemExit(1)
 
     # --- dry-run: resolve backup and print plan, then exit ---
+    if dry_run and restore_cfg.get("source") == "pgbackrest":
+        spec = parse_pgbackrest(restore_cfg)
+        assert spec is not None
+        console.print("[bold cyan]Dry-run restore plan (pgBackRest):[/bold cyan]")
+        console.print(
+            f"  Source:          stanza {spec.stanza}, repo {spec.repo}, "
+            f"target {spec.target}"
+        )
+        console.print(
+            f"  Cluster:         {spec.cluster}  (every database in it is replaced)"
+        )
+        console.print(f"  Database:        {db_name}")
+        console.print(f"  Migrations:      {confiture_config} (cwd: {app_path})")
+        console.print(f"  Create template: {restore_cfg.get('create_template', False)}")
+        console.print(
+            "  Service:         stop → stop cluster → pgbackrest --delta → start "
+            "cluster → verify → restart"
+            if systemd_service and not no_service_restart
+            else "  Service:         not managed"
+        )
+        console.print(
+            "\n[yellow]Dry-run complete. No changes made; the backup is chosen when "
+            "the restore runs.[/yellow]"
+        )
+        return
     if dry_run:
         if from_backup:
             backup_file = from_backup
@@ -708,6 +742,7 @@ def db_restore(
             )
 
             from fraisier.config.schema import PreflightConfig
+            from fraisier.naming import pgbackrest_helper_socket_path
             from fraisier.post_migrate_check import load_post_migrate_check
 
             preflight_cfg = db_cfg.get("preflight") or {}
@@ -735,6 +770,12 @@ def db_restore(
                     backup_path=from_backup,
                     preflight=preflight,
                     on_empty_tview=load_post_migrate_check(db_cfg).on_empty,
+                    pgbackrest=parse_pgbackrest(restore_cfg),
+                    pgbackrest_socket=str(
+                        pgbackrest_helper_socket_path(
+                            config.project_name, fraise, environment
+                        )
+                    ),
                 ),
                 admin_url=admin_url,
                 service_manager=svc_mgr,
@@ -752,6 +793,16 @@ def db_restore(
                     skip_preflight=skip_preflight,
                 )
             except DatabaseError as exc:
+                # A restore that failed *closed* (#424) stopped the cluster and
+                # must leave the application down: restarting it here would start
+                # the app against a half-restored copy of production.
+                if getattr(exc, "keep_service_stopped", False):
+                    console.print(f"[red]Restore failed:[/red] {exc}")
+                    if systemd_service:
+                        console.print(
+                            f"[yellow]{systemd_service} was left stopped.[/yellow]"
+                        )
+                    raise SystemExit(1) from exc
                 if svc_mgr and systemd_service:
                     msg = (
                         f"[yellow]Restarting {systemd_service} after error...[/yellow]"

@@ -14,9 +14,10 @@ from fraisier.config.schema import PreflightConfig
 from fraisier.dbops.confiture import migrate_down, migrate_up
 
 from ._base import Strategy, StrategyResult
-from ._restore_sources import DumpSource
+from ._restore_sources import DumpSource, PgBackRestSource
 
 if TYPE_CHECKING:
+    from fraisier.config.restore_source import PgBackRestSpec
     from fraisier.dbops.receipt import ActuationCheck
 
     from ._restore_sources import RestoreSource
@@ -43,6 +44,12 @@ class RestoreConfig:
     #: ``post_migrate_check.on_empty``: what a TVIEW that is empty over a
     #: populated view costs once the pipeline has finished rewriting the database.
     on_empty_tview: str = "fail"
+    #: ``restore.pgbackrest`` when ``restore.source`` is ``pgbackrest`` (#424);
+    #: ``None`` is the dump source, which is the default.
+    pgbackrest: PgBackRestSpec | None = None
+    #: The root helper's socket, derived from the project, fraise and environment
+    #: (:func:`fraisier.naming.pgbackrest_helper_socket_path`).
+    pgbackrest_socket: str | None = None
 
 
 class RestoreMigrateStrategy(Strategy):
@@ -90,7 +97,9 @@ class RestoreMigrateStrategy(Strategy):
         self._project_dir = project_dir
         # Where the data comes from (#424). The dump is the original source and
         # the default: a config that names none restores exactly as it always did.
-        self._source: RestoreSource = source or DumpSource(config)
+        self._source: RestoreSource = source or (
+            PgBackRestSource(config) if config.pgbackrest else DumpSource(config)
+        )
 
     @property
     def _resolved_template_name(self) -> str:

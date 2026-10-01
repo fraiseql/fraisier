@@ -26,6 +26,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`restore.source: pgbackrest` — refresh staging from production's pgBackRest
+  backup** ([#424](https://github.com/fraiseql/fraisier/issues/424)). A `--delta`
+  physical restore of a dedicated staging cluster replaces the nightly `pg_dump`
+  restore, rewriting only the files that changed and making the refresh a daily
+  restore test of the disaster-recovery backup. `dump` stays the default and
+  nothing changes for an existing config. The strategy's destructive phase is now a
+  `RestoreSource`; a pgBackRest refresh runs the identical post-restore chain
+  (ownership, the pg_tviews rebuild, template, `migrate up`, floor, receipt) under
+  the same deployment lock. It **fails closed**: `archive_mode` must be `off` as
+  the server runs, `restore_command` / `primary_conninfo` are reset and read back,
+  no `recovery.signal` may remain — and any failure after the cluster was stopped
+  stops it again and leaves the service stopped (the CLI and a failed deploy do not
+  restart it). The log reports the backup label, its stop time, the files
+  rewritten and the duration of each phase; the receipt names
+  `pgbackrest:<stanza>/<label>`. The config loader refuses a cluster shared with
+  another environment. **Needs a root helper per fraise and environment**
+  (`fraisier-pgbackrest-helper`: its request names an operation and nothing else,
+  and its stanza, repository, cluster and target are baked into its root-owned unit
+  rather than read from the deploy-user-writable `fraises.yaml`); **host action:**
+  `fraisier scaffold && sudo fraisier scaffold-install --yes`. A physical restore is
+  cluster-scoped and carries production's **roles and password hashes** across.
+  Debian-style clusters only. Tested against real pgBackRest 2.59.2 and two
+  PostgreSQL 18 clusters in Docker; not yet exercised under a real systemd.
 - **The pre-migrate dump corpus is pruned without a deploy**
   ([#420](https://github.com/fraiseql/fraisier/issues/420)). `retention_hours` and
   `keep_last` were applied only inside a deploy, so a quiet week left the whole

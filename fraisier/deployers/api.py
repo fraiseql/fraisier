@@ -984,7 +984,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             duration = time.time() - start_time
             logger.exception(f"Deployment failed: {e}")
             wrapped = self._wrap_error(e)
-            outcome = self._restore_previous_state()
+            outcome = self._restore_previous_state(
+                keep_service_stopped=bool(getattr(e, "keep_service_stopped", False))
+            )
             self._restore_version_json()
 
             status, state, message = self._classify_failure(outcome, str(e))
@@ -1089,8 +1091,16 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             "the deployed commit and the schema before restarting."
         )
 
-    def _restore_previous_state(self) -> RestoreOutcome:
+    def _restore_previous_state(
+        self, *, keep_service_stopped: bool = False
+    ) -> RestoreOutcome:
         """Restore database, git, and service to previous state after a failure.
+
+        ``keep_service_stopped`` is set by a failure that *closed* (#424): a
+        physical restore that stopped the cluster and could not finish leaves a
+        half-restored copy on disk, and restarting the application against it is
+        the one thing that must not happen.  The tree is still rolled back; the
+        service is left down.
 
         Order matters: database first (to avoid running old code against new
         schema), then git checkout, then service restart.
@@ -1121,7 +1131,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             # The tree went back a commit; the configuration that describes it
             # goes back with it (#383).
             self._restore_synced_config()
-            restarted = bool(self.systemd_service)
+            restarted = bool(self.systemd_service) and not keep_service_stopped
             if restarted:
                 self._restart_service()
         except Exception as rollback_exc:
@@ -1179,6 +1189,15 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 self.database_config
             ).on_empty
             kwargs["db_name"] = self.database_config.get("name", "")
+            project = getattr(self.config_object, "project_name", None)
+            if project:
+                from fraisier.naming import pgbackrest_helper_socket_path
+
+                kwargs["pgbackrest_socket"] = str(
+                    pgbackrest_helper_socket_path(
+                        project, self.fraise_name, self.environment
+                    )
+                )
             if self.systemd_service:
                 from fraisier.service_managers import get_service_manager
 
