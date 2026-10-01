@@ -1,0 +1,20 @@
+2026-10-01 14:26:43.890 P00   INFO: restore command begin 2.59.2: --archive-mode=off --delta --exec-id=478-e2031adc --log-level-console=detail --pg1-path=/var/lib/postgresql/18/staging --repo=1 --repo1-path=/var/lib/pgbackrest --set=20261001-141744F_20261001-141746I --stanza=main
+2026-10-01 14:26:43.894 P00   INFO: repo1: restore backup set 20261001-141744F_20261001-141746I, recovery will start at 2026-10-01 14:17:46
+2026-10-01 14:26:43.894 P00   INFO: remap data directory to '/var/lib/postgresql/18/staging'
+2026-10-01 14:26:43.925 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/16384/16566 (16KB, 83.98%) checksum e0ffebd326cab48da42a9684a0d180ad4be1c3e2
+2026-10-01 14:26:43.926 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/16384/16564 (16KB, 84.03%) checksum c9459934b6ac5b445ffad8d057f75ea99388c5ae
+2026-10-01 14:26:43.927 P01 DETAIL: restore file /var/lib/postgresql/18/staging/pg_xact/0000 (8KB, 86.48%) checksum dc075b9a417387ecc8b295b8d5fd13a88f7313a3
+2026-10-01 14:26:43.928 P01 DETAIL: restore file /var/lib/postgresql/18/staging/global/pg_control.pgbackrest.tmp (8KB, 86.56%) checksum 8b8b602d18eede86bcc4cf324335e3d142a7bcac
+2026-10-01 14:26:43.936 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/16384/16557 (8KB, 96.18%) checksum f0570eeebe6d7814d7c12324f5093288a411bfa8
+2026-10-01 14:26:43.936 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/16384/16546 (8KB, 96.23%) checksum b3d578824c484c12273de1ab64fbcea177255073
+2026-10-01 14:26:43.907 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/16384/1255 - exists and matches backup (824KB, 2.66%) checksum 6fda54ca3e82aeda6a79425ef884a9a4900353ef
+2026-10-01 14:26:43.908 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/5/1255 - exists and matches backup (816KB, 5.28%) checksum c6c8b0aea7abcce9bf2e8af824d061ce4d71c151
+2026-10-01 14:26:43.908 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/4/1255 - exists and matches backup (816KB, 7.91%) checksum c6c8b0aea7abcce9bf2e8af824d061ce4d71c151
+2026-10-01 14:26:43.908 P01 DETAIL: restore file /var/lib/postgresql/18/staging/base/1/1255 - exists and matches backup (816KB, 10.54%) checksum c6c8b0aea7abcce9bf2e8af824d061ce4d71c151
+2026-10-01 14:26:43.940 P01 DETAIL: restore file /var/lib/postgresql/18/staging/global/6244 - exists and is zero size (0B, 100.00%)
+2026-10-01 14:26:43.940 P01 DETAIL: restore file /var/lib/postgresql/18/staging/global/6243 - exists and is zero size (0B, 100.00%)
+2026-10-01 14:26:43.894 P00 DETAIL: remove 'global/pg_control' so cluster will not start if restore does not complete
+2026-10-01 14:26:43.928 P01 DETAIL: restore file /var/lib/postgresql/18/staging/global/pg_control.pgbackrest.tmp (8KB, 86.56%) checksum 8b8b602d18eede86bcc4cf324335e3d142a7bcac
+2026-10-01 14:26:44.046 P00   INFO: restore global/pg_control (performed last to ensure aborted restores cannot be started)
+2026-10-01 14:26:44.047 P00   INFO: restore size = 30.3MB, file total = 1295
+2026-10-01 14:26:44.047 P00   INFO: restore command end: completed successfully (158ms)

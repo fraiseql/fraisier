@@ -1,0 +1,2 @@
+18 prod    5432 online postgres /var/lib/postgresql/18/prod    /var/log/postgresql/postgresql-18-prod.log
+18 staging 5433 down   postgres /var/lib/postgresql/18/staging /var/log/postgresql/postgresql-18-staging.log

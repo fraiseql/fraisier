@@ -1,0 +1,13 @@
+[Unit]
+Description=Fraisier pgBackRest helper socket for {{ project_name }} ({{ helper.fraise }}-{{ helper.environment }})
+
+[Socket]
+{# naming.pgbackrest_helper_socket_path decides where the socket is; the
+   restore source reads the same authority to connect to it (#337, #424). #}
+ListenStream={{ helper_socket_path }}
+SocketUser={{ scaffold.deploy_user }}
+SocketGroup={{ scaffold.deploy_user }}
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target
