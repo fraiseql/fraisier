@@ -116,6 +116,17 @@ class Disposition(StrEnum):
       radius rather than a side effect of a release.
     """
 
+    PGBACKREST_HELPER = "pgbackrest_helper"
+    """#424's per-(fraise, environment) pgBackRest root helper.
+
+    Shares #279's re-bake *shape* — the stanza, repository, cluster and target
+    are baked into ``ExecStart`` as argv, so a running ``.service`` keeps the OLD
+    ones and ``enable --now`` is a no-op on it — but it is gated per fraise by
+    ``_scope_active``, where the unit-installer is env-owned.  Kept a separate
+    disposition so ``with_disposition('helper_rebake')`` cannot silently start
+    matching units that block does not install.
+    """
+
     NGINX_VHOST = "nginx_vhost"
     """Copy to sites-available plus a sites-enabled symlink."""
 
@@ -205,6 +216,25 @@ class AppManagedUnit:
 
 
 @dataclass(frozen=True)
+class PgBackRestHelperPair:
+    """One ``(fraise, environment)``'s pgBackRest helper, both units together."""
+
+    socket: RenderedArtifact
+    service: RenderedArtifact
+    fraise: str
+    environment: str
+
+    @property
+    def socket_unit(self) -> str:
+        """The name ``systemctl`` is given, as opposed to the path copied."""
+        return self.socket.source.removeprefix("systemd/")
+
+    @property
+    def service_unit(self) -> str:
+        return self.service.source.removeprefix("systemd/")
+
+
+@dataclass(frozen=True)
 class UnitInstallerPair:
     """One environment's unit-installer helper, both units together."""
 
@@ -258,6 +288,39 @@ class ArtifactManifest:
             if a.disposition is Disposition.PLAIN and a.source in _TIMER_UNIT_FAMILY
             if a.source.endswith(".timer")
         )
+
+    def pgbackrest_helper_pairs(self) -> tuple[PgBackRestHelperPair, ...]:
+        """The pgBackRest helpers, socket and service paired per (fraise, environment).
+
+        The re-bake acts on both units together — stop the .service, restart the
+        .socket — so it needs the pair.  An environment that rendered one unit
+        without the other is refused: the sequence cannot run on half a pair, and
+        a silently skipped root helper is exactly #323's shape.
+        """
+        by_scope: dict[tuple[str, str], dict[str, RenderedArtifact]] = {}
+        for artifact in self.with_disposition(Disposition.PGBACKREST_HELPER):
+            scope = (artifact.fraise or "", artifact.environment or "")
+            suffix = "socket" if artifact.source.endswith(".socket") else "service"
+            by_scope.setdefault(scope, {})[suffix] = artifact
+
+        pairs: list[PgBackRestHelperPair] = []
+        for scope in sorted(by_scope):
+            units = by_scope[scope]
+            if set(units) != {"socket", "service"}:
+                raise ValidationError(
+                    f"pgBackRest helper for {scope[0]}/{scope[1]} is incomplete: "
+                    f"rendered {sorted(units)}, needs both the .socket and the "
+                    ".service"
+                )
+            pairs.append(
+                PgBackRestHelperPair(
+                    socket=units["socket"],
+                    service=units["service"],
+                    fraise=scope[0],
+                    environment=scope[1],
+                )
+            )
+        return tuple(pairs)
 
     def unit_installer_pairs(self) -> tuple[UnitInstallerPair, ...]:
         """The unit-installer helpers, socket and service paired per environment.
@@ -447,7 +510,11 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
     # test proves the two move together by patching the authority. A
     # module-level `from … import` here would make that test pass while the
     # two sites disagreed, which is the drift it exists to catch.
-    from fraisier.naming import pre_migrate_prune_unit_names, retention_unit_names
+    from fraisier.naming import (
+        pgbackrest_helper_unit_names,
+        pre_migrate_prune_unit_names,
+        retention_unit_names,
+    )
     from fraisier.scaffold.renderer import _collect_unit_installer_envs
 
     project = renderer.context["project_name"]
@@ -561,6 +628,26 @@ def _classify(renderer: ScaffoldRenderer, source: str) -> RenderedArtifact | Non
                 Disposition.TIMER,
                 destination=f"{SYSTEMD_DIR}/{stem}",
                 environment=entry.environment,
+            )
+
+    # #424's pgBackRest helper, one per (fraise, environment) that restores from
+    # it. Matched against the entries the renderer actually wrote units for, and
+    # against names from the same helper it used.
+    #
+    # Fraise-owned like the prune pair: only a host that deploys this fraise in
+    # this environment may install, or run, a root daemon that restores its
+    # cluster. A dedicated disposition because the install is #279's re-bake
+    # sequence, gated per fraise.
+    for helper in renderer.pgbackrest_helper_entries():
+        if stem in pgbackrest_helper_unit_names(
+            project, helper.fraise, helper.environment
+        ):
+            return RenderedArtifact(
+                source,
+                Disposition.PGBACKREST_HELPER,
+                destination=f"{SYSTEMD_DIR}/{stem}",
+                fraise=helper.fraise,
+                environment=helper.environment,
             )
 
     # The pre-migrate dump gate's prune pair (#420), one per (fraise, environment)

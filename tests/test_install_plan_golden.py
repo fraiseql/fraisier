@@ -490,6 +490,60 @@ fraises:
             prune_schedule: "*-*-* 04:15:00 UTC"
 """
 
+# #424's shape: the root helper a pgBackRest restore source needs. Fraise-owned,
+# so `_scope_active` gates it: `abox` deploys `api` and installs, re-bakes and
+# enables exactly that fraise's helper; `bbox` deploys `worker` and plans exactly
+# `worker`'s. A host that does not deploy a fraise in an environment must never
+# carry a root daemon that can stop and rewrite that environment's cluster.
+_PGBACKREST_HELPER = """\
+name: proj
+servers:
+  a.example.io:
+    machine_hostnames: [abox]
+  b.example.io:
+    machine_hostnames: [bbox]
+scaffold:
+  deploy_user: deployer
+fraises:
+  api:
+    type: api
+    environments:
+      staging:
+        server: a.example.io
+        app_path: /var/www/api
+        systemd_service: api.service
+        git_repo: /var/git/api.git
+        database:
+          strategy: restore_migrate
+          name: api
+          admin_url: postgresql://postgres@localhost:5433/postgres
+          restore:
+            source: pgbackrest
+            pgbackrest:
+              stanza: main
+              repo: 1
+              cluster: 18/staging
+  worker:
+    type: api
+    environments:
+      staging:
+        server: b.example.io
+        app_path: /var/www/worker
+        systemd_service: worker.service
+        git_repo: /var/git/worker.git
+        database:
+          strategy: restore_migrate
+          name: worker
+          admin_url: postgresql://postgres@localhost:5433/postgres
+          restore:
+            source: pgbackrest
+            pgbackrest:
+              stanza: workers
+              repo: 2
+              cluster: 18/workers
+              target: "2026-10-01 14:18:37+00"
+"""
+
 # (case name, config, hostname). Two entries for the asymmetric config: the
 # whole point is that the two hosts must plan *different* installs.
 MATRIX = [
@@ -516,6 +570,8 @@ MATRIX = [
     ("timer_families_on", _TIMER_FAMILIES_ON, "solo"),
     ("pre_migrate_prune_owning_host", _PRE_MIGRATE_PRUNE, "abox"),
     ("pre_migrate_prune_other_host", _PRE_MIGRATE_PRUNE, "bbox"),
+    ("pgbackrest_helper_owning_host", _PGBACKREST_HELPER, "abox"),
+    ("pgbackrest_helper_other_host", _PGBACKREST_HELPER, "bbox"),
 ]
 
 

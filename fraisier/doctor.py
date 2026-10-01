@@ -1726,6 +1726,66 @@ def _check_backup_retention(config: FraisierConfig | None) -> CheckResult:
     )
 
 
+@register_check("pgbackrest_helper")
+def _check_pgbackrest_helper(config: FraisierConfig | None) -> CheckResult:
+    """Each pgBackRest-restoring environment here has a helper to talk to (#424).
+
+    A refresh stops the app service before it asks the helper for anything, so a
+    helper that is not there costs a stopped service for nothing — and the helper
+    exists on a host only after ``scaffold-install``, which an upgrade does not
+    run.  This says so before the nightly timer finds out.
+
+    *Installed* and *listening* are reported separately because the remedies
+    differ: install it, or find out why an installed one is not running.
+
+    Uses a dry-run render, which writes nothing.
+    """
+    name = "pgbackrest_helper"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+
+    from fraisier.scaffold.renderer import ScaffoldRenderer
+    from fraisier.scaffold.retention import pgbackrest_helper_report
+
+    try:
+        report = pgbackrest_helper_report(ScaffoldRenderer(config))
+    except ValidationError as exc:
+        return CheckResult(name, "skip", f"invalid restore config: {exc}")
+    except (OSError, ValueError) as exc:
+        return CheckResult(name, "skip", f"could not read the scaffold: {exc}")
+
+    if not report:
+        return CheckResult(name, "skip", "no environment restores from pgBackRest")
+
+    missing = [r.scope for r in report if not r.installed]
+    silent = [r.scope for r in report if r.installed and not r.listening]
+    if missing:
+        return CheckResult(
+            name,
+            "warn",
+            f"pgBackRest helper not installed for {', '.join(missing)}",
+            fix_hint=(
+                "run 'fraisier scaffold && sudo fraisier scaffold-install --yes' on "
+                "this host; until then a pgBackRest refresh cannot stop or restore "
+                "its cluster"
+            ),
+        )
+    if silent:
+        return CheckResult(
+            name,
+            "warn",
+            f"pgBackRest helper installed but not listening for {', '.join(silent)}",
+            fix_hint=(
+                "systemctl status the helper's .socket unit "
+                "(fraisier-<project>-<fraise>-<env>-pgbackrest-helper.socket) and "
+                "journalctl -u its .service"
+            ),
+        )
+    return CheckResult(
+        name, "pass", f"{len(report)} pgBackRest helper(s) installed and listening"
+    )
+
+
 @register_check("deferred_restarts")
 def _check_deferred_restarts(config: FraisierConfig | None) -> CheckResult:
     """Units installed by a deploy and still running their previous version.

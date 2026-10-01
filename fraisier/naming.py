@@ -94,6 +94,37 @@ def unit_installer_socket_path(project_name: str, env_name: str) -> Path:
     return Path(f"/run/fraisier/{env_name}/unit-installer-{project_name}.sock")
 
 
+def pgbackrest_helper_unit_names(
+    project_name: str, fraise_name: str, env_name: str
+) -> tuple[str, str]:
+    """Return ``(socket_unit, service_unit)`` for one pgBackRest helper (#424).
+
+    One helper per ``(fraise, environment)``: it is baked with that
+    environment's stanza, repository and cluster, so two environments cannot
+    share one.  The renderer names the files it writes and the artifact manifest
+    names the files it installs; both call here.
+
+    Returns:
+        The ``.socket`` and ``.service`` names, in the order they are installed.
+    """
+    base = f"fraisier-{project_name}-{fraise_name}-{env_name}-pgbackrest-helper"
+    return f"{base}.socket", f"{base}.service"
+
+
+def pgbackrest_helper_socket_path(
+    project_name: str, fraise_name: str, env_name: str
+) -> Path:
+    """Return the filesystem path one pgBackRest helper listens on (#424).
+
+    The socket unit's ``ListenStream=`` decides where the socket *is*; the
+    restore source decides where to look for it.  Both read this, so a rename
+    cannot leave a source connecting to a socket nothing listens on (#337).
+    """
+    return Path(
+        f"/run/fraisier/pgbackrest-{project_name}-{fraise_name}-{env_name}.sock"
+    )
+
+
 def retention_unit_names(
     project_name: str, env_name: str, entry_name: str
 ) -> tuple[str, str]:

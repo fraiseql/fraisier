@@ -940,6 +940,32 @@ if _scope_active "{{ ish.fraise_name }}" "{{ ish.env_name }}"; then
 fi
 {% endfor %}
 
+{% for pair in artifact_manifest.pgbackrest_helper_pairs() %}
+# pgBackRest helper for {{ pair.fraise }}-{{ pair.environment }} (#424, runs as root)
+#
+# #279's re-bake, for #279's reason: the .service bakes the stanza, repository,
+# cluster and target into ExecStart as argv, so a running instance keeps the OLD
+# ones and `enable --now` is a no-op on it. daemon-reload the new unit, STOP the
+# stale-argv .service, then enable + restart the .socket so the next connection
+# re-execs with the new argv. _run_strict throughout: a half-applied re-bake
+# leaves a root daemon able to restore a cluster with a target nobody now
+# intends, which must stop the install rather than surface in a later refresh.
+#
+# Gated on _scope_active: only a host that deploys this fraise in this
+# environment may carry a root daemon that restores its cluster.
+if _scope_active "{{ pair.fraise }}" "{{ pair.environment }}"; then
+    echo "  Installing pgBackRest helper for {{ pair.fraise }}-{{ pair.environment }}"
+    _run_strict sudo cp "${SCAFFOLD_DIR}/{{ pair.socket.source }}" \
+       {{ pair.socket.destination }}
+    _run_strict sudo cp "${SCAFFOLD_DIR}/{{ pair.service.source }}" \
+       {{ pair.service.destination }}
+    _run_strict sudo systemctl daemon-reload
+    _run_strict sudo systemctl stop {{ pair.service_unit }}
+    _run_strict sudo systemctl enable {{ pair.socket_unit }}
+    _run_strict sudo systemctl restart {{ pair.socket_unit }}
+fi
+{% endfor %}
+
 {% for pair in artifact_manifest.unit_installer_pairs() %}
 # Unit-installer helper for {{ pair.environment }} (#240, runs as root)
 #

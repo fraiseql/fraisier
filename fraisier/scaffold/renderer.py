@@ -26,6 +26,7 @@ from fraisier.config import (
     ServiceConfig,
     ValidationError,
 )
+from fraisier.config.restore_source import PgBackRestSpec, parse_pgbackrest
 from fraisier.dbops._validation import validate_service_name
 from fraisier.manifest import build_manifest
 from fraisier.naming import (
@@ -837,6 +838,15 @@ def local_webhook_source(config: FraisierConfig, server: str | None = None) -> s
 
 
 @dataclass(frozen=True)
+class PgBackRestHelper:
+    """One ``(fraise, environment)`` that restores from pgBackRest (#424)."""
+
+    fraise: str
+    environment: str
+    spec: PgBackRestSpec
+
+
+@dataclass(frozen=True)
 class PreMigratePrune:
     """One ``pre_migrate_dump`` gate that a timer prunes (#420)."""
 
@@ -1085,6 +1095,10 @@ class ScaffoldRenderer:
         # Retention for corpora this host receives (#339). Env-owned: a
         # received corpus has no producing fraise here.
         rendered_files.extend(self._render_retention_units(dry_run))
+
+        # The root helper a pgBackRest restore source needs (#424), one per
+        # (fraise, environment) — fraise-owned like the prune timer below.
+        rendered_files.extend(self._render_pgbackrest_helper_units(dry_run))
 
         # The pre-migrate dump gate's prune without a deploy (#420). Fraise-owned:
         # the deploys of that fraise are what fill the directory.
@@ -1652,6 +1666,63 @@ class ScaffoldRenderer:
             for entry in self.config.all_retain_entries()
             if entry.environment in local_envs
         ]
+
+    def pgbackrest_helper_entries(self) -> list[PgBackRestHelper]:
+        """The ``(fraise, environment)`` pairs here that restore from pgBackRest.
+
+        Local fraises only: a helper on a host that never refreshes that
+        environment would be a root daemon with nothing to do.  The spec is the
+        *validated* ``restore.pgbackrest`` block, so what reaches a root unit
+        file has already passed :func:`fraisier.config._validation`.
+        """
+        entries: list[PgBackRestHelper] = []
+        for fraise in self.context["local_fraises"]:
+            for env_name, env_config in fraise.get("environments", {}).items():
+                if not isinstance(env_config, dict):
+                    continue
+                restore = (env_config.get("database") or {}).get("restore")
+                if not isinstance(restore, dict):
+                    continue
+                spec = parse_pgbackrest(restore)
+                if spec is not None:
+                    entries.append(PgBackRestHelper(fraise["name"], env_name, spec))
+        return entries
+
+    def _render_pgbackrest_helper_units(self, dry_run: bool) -> list[str]:
+        """Render a ``.socket``/``.service`` pair per pgBackRest environment (#424)."""
+        from fraisier.naming import pgbackrest_helper_unit_names
+
+        project = self.context["project_name"]
+        rendered: list[str] = []
+        for entry in self.pgbackrest_helper_entries():
+            socket_unit, service_unit = pgbackrest_helper_unit_names(
+                project, entry.fraise, entry.environment
+            )
+            socket_rel = f"systemd/{socket_unit}"
+            service_rel = f"systemd/{service_unit}"
+            rendered.extend([socket_rel, service_rel])
+            if dry_run:
+                continue
+            ctx = {
+                **self.context,
+                "helper": entry,
+                "helper_socket_unit": socket_unit,
+                "helper_socket_path": str(
+                    naming.pgbackrest_helper_socket_path(
+                        project, entry.fraise, entry.environment
+                    )
+                ),
+            }
+            for template_path, out_name in (
+                ("core/pgbackrest-helper.socket.j2", socket_rel),
+                ("core/pgbackrest-helper.service.j2", service_rel),
+            ):
+                try:
+                    content = self.env.get_template(template_path).render(**ctx)
+                except jinja2.TemplateNotFound:
+                    content = f"# Placeholder: {template_path}\n"
+                self._write_output(out_name, content)
+        return rendered
 
     def pre_migrate_prune_entries(self) -> list[PreMigratePrune]:
         """``(fraise, environment)`` pairs on this host whose gate can be pruned (#420).

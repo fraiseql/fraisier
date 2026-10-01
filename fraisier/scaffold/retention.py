@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fraisier import naming
 from fraisier.naming import pre_migrate_prune_unit_names, retention_unit_names
 from fraisier.scaffold.artifacts import SYSTEMD_DIR
 
@@ -132,6 +133,62 @@ def pre_migrate_prune_report(
                 timer_unit=timer_unit,
                 service_installed=(root / service_unit).exists(),
                 timer_installed=(root / timer_unit).exists(),
+            )
+        )
+    return report
+
+
+@dataclass(frozen=True)
+class PgBackRestHelperStatus:
+    """One environment's pgBackRest helper, and whether it is reachable."""
+
+    fraise: str
+    environment: str
+    service_installed: bool
+    socket_installed: bool
+    listening: bool
+
+    @property
+    def installed(self) -> bool:
+        return self.service_installed and self.socket_installed
+
+    @property
+    def scope(self) -> str:
+        return f"{self.fraise}/{self.environment}"
+
+
+def pgbackrest_helper_report(
+    renderer: ScaffoldRenderer,
+    *,
+    systemd_dir: Path | str | None = None,
+) -> list[PgBackRestHelperStatus]:
+    """Status of every pgBackRest helper this host's config says it needs (#424).
+
+    *Installed* (both unit files on disk) and *listening* (the socket the client
+    connects to exists) are reported apart: the first is `scaffold-install`'s
+    remedy and the second is a unit that is installed and not running.  The socket
+    path comes from the naming authority the unit's ``ListenStream=`` and the
+    restore source read too, looked up at call time.
+    """
+    root = Path(SYSTEMD_DIR if systemd_dir is None else systemd_dir)
+    project = renderer.context["project_name"]
+
+    report: list[PgBackRestHelperStatus] = []
+    for entry in renderer.pgbackrest_helper_entries():
+        socket_unit, service_unit = naming.pgbackrest_helper_unit_names(
+            project, entry.fraise, entry.environment
+        )
+        report.append(
+            PgBackRestHelperStatus(
+                fraise=entry.fraise,
+                environment=entry.environment,
+                service_installed=(root / service_unit).exists(),
+                socket_installed=(root / socket_unit).exists(),
+                listening=Path(
+                    naming.pgbackrest_helper_socket_path(
+                        project, entry.fraise, entry.environment
+                    )
+                ).exists(),
             )
         )
     return report
