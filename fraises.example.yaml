@@ -148,6 +148,8 @@ fraises:
                                    # missing_index, default_mismatch,
                                    # type_mismatch, nullable_mismatch,
                                    # tview_option_mismatch
+            on_empty: fail         # fail | warn — a pg_tviews TVIEW that is empty
+                                   # while its backing view has rows (#422)
           # Optional post-migration SQL hooks (#204). Each entry has
           # exactly one of `sql_dir` or `sql_file`; on_error is `halt`
           # (default — abort before restart) or `warn` (log + continue).

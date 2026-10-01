@@ -103,6 +103,7 @@ from . import _rollback as _rollback_mod  # noqa: E402, F401
 from . import _validate as _validate_mod  # noqa: E402, F401
 from . import bootstrap as _bootstrap_mod  # noqa: E402, F401
 from . import db as _db_mod  # noqa: E402, F401
+from . import db_tviews as _db_tviews_mod  # noqa: E402, F401
 from . import doctor as _doctor_mod  # noqa: E402, F401
 from . import env_check as _env_check_mod  # noqa: E402, F401
 from . import health as _health_mod  # noqa: E402, F401

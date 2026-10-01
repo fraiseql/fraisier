@@ -63,6 +63,33 @@ def _reset_delivery_dedupe():
 
 
 @pytest.fixture(autouse=True)
+def _no_live_tview_probe(request):
+    """Stub the restore pipeline's pg_tviews calls; they need a live database.
+
+    Every test that drives ``restore_backup`` or ``RestoreMigrateStrategy.execute``
+    to completion stubs the restorer, the migration and the receipt, and none has
+    a database to ask about TVIEWs (#422).  The restore reads as "no pg_tviews",
+    and the strategy's emptiness probe passes.  Integration tests run them for
+    real, as does the module that tests the strategy's probe.
+    """
+    if request.node.get_closest_marker("integration") or (
+        request.node.module.__name__ == "tests.test_restore_tview_probe"
+    ):
+        yield
+        return
+    from unittest.mock import patch
+
+    with (
+        patch("fraisier.dbops.restore.tviews_installed", return_value=False),
+        patch(
+            "fraisier.strategies._restore.RestoreMigrateStrategy"
+            "._check_tviews_not_empty"
+        ),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _fast_strategy_time(monkeypatch, request):
     """Make asyncio.sleep advance time instantly for deployment strategy tests."""
     # Only apply to test files that test deployment strategies

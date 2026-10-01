@@ -1329,6 +1329,8 @@ def _check_pg_tviews_contract(config: FraisierConfig | None) -> CheckResult:
     """
     import psycopg
 
+    from fraisier.dbops.tviews import read_support
+
     name = "pg_tviews_contract"
     urls = _database_urls(config)
     if not urls:
@@ -1340,22 +1342,14 @@ def _check_pg_tviews_contract(config: FraisierConfig | None) -> CheckResult:
     for target, url in urls.items():
         try:
             with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
-                if (
-                    conn.execute(
-                        "SELECT 1 FROM pg_extension WHERE extname = 'pg_tviews'"
-                    ).fetchone()
-                    is None
-                ):
-                    continue
-                seen += 1
-                try:
-                    row = conn.execute("SELECT tviews.contract_version()").fetchone()
-                except psycopg.Error:
-                    row = None
+                support = read_support(conn)
         except psycopg.Error as exc:
             unreachable.append(f"{target}: {str(exc).splitlines()[0]}")
             continue
-        if row is None or row[0] != 1:
+        if support.state == "absent":
+            continue
+        seen += 1
+        if support.state == "outdated":
             old.append(target)
 
     if old:

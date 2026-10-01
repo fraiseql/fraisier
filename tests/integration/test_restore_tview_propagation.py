@@ -97,6 +97,8 @@ def test_a_restored_tview_follows_its_base_tables(pg_tviews_target, tmp_path, jo
             jobs=jobs,
         )
         assert result.success is True, result.error
+        # a dump carries UNLOGGED data, so the rebuild finds nothing to do
+        assert result.tviews_rebuilt == ()
 
         with psycopg.connect(target.dsn(_DST_DB), autocommit=True) as conn:
             restored = conn.execute(

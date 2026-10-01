@@ -707,6 +707,7 @@ def db_restore(
             )
 
             from fraisier.config.schema import PreflightConfig
+            from fraisier.post_migrate_check import load_post_migrate_check
 
             preflight_cfg = db_cfg.get("preflight") or {}
             preflight = PreflightConfig(
@@ -732,6 +733,7 @@ def db_restore(
                     ),
                     backup_path=from_backup,
                     preflight=preflight,
+                    on_empty_tview=load_post_migrate_check(db_cfg).on_empty,
                 ),
                 admin_url=admin_url,
                 service_manager=svc_mgr,

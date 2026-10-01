@@ -21,11 +21,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import psycopg
 from confiture.core.restorer import DatabaseRestorer, RestoreOptions
 from confiture.exceptions import RestoreError
 
+from fraisier.dbops._url import replace_db_name
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
 from fraisier.dbops.operations import _pg_cmd
+from fraisier.dbops.tviews import (
+    TviewError,
+    TviewRebuilt,
+    rebuild_empty_tviews,
+    tviews_installed,
+)
 
 
 @dataclass
@@ -51,6 +59,9 @@ class RestoreResult:
     matviews_deferred: int | None = None
     matviews_refreshed: int | None = None
     analyze_ran: bool = False
+    #: What ``pg_tviews_rebuild_all(only_empty)`` filled after the restore: ``()``
+    #: when nothing was empty, ``None`` when the database has no pg_tviews (#422).
+    tviews_rebuilt: tuple[TviewRebuilt, ...] | None = None
 
 
 def _connection_params(
@@ -267,12 +278,30 @@ def restore_backup(
                 duration_seconds=time.monotonic() - t0,
             )
 
+    # The restored database is not the one `connection_url` names, which is
+    # the maintenance database the drop/create ran from.
+    restored_url = replace_db_name(connection_url, db_name)
+    try:
+        tviews_rebuilt = (
+            tuple(rebuild_empty_tviews(restored_url))
+            if tviews_installed(restored_url)
+            else None
+        )
+    except (TviewError, psycopg.Error) as exc:
+        return RestoreResult(
+            success=False,
+            stage="tview_rebuild",
+            error=f"tview_rebuild failed: the restore ran, but {exc}",
+            duration_seconds=time.monotonic() - t0,
+        )
+
     return RestoreResult(
         success=True,
         duration_seconds=time.monotonic() - t0,
         matviews_deferred=result.matviews_deferred,
         matviews_refreshed=result.matviews_refreshed,
         analyze_ran=result.analyze_ran,
+        tviews_rebuilt=tviews_rebuilt,
     )
 
 

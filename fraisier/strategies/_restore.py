@@ -37,6 +37,9 @@ class RestoreConfig:
     preferred_compression: str | None = None
     backup_path: Path | None = None
     preflight: PreflightConfig = field(default_factory=PreflightConfig)
+    #: ``post_migrate_check.on_empty``: what a TVIEW that is empty over a
+    #: populated view costs once the pipeline has finished rewriting the database.
+    on_empty_tview: str = "fail"
 
 
 class RestoreMigrateStrategy(Strategy):
@@ -85,6 +88,47 @@ class RestoreMigrateStrategy(Strategy):
     @property
     def _resolved_template_name(self) -> str:
         return self._config.template_name or f"template_{self._config.db_name}"
+
+    def _check_tviews_not_empty(self) -> None:
+        """Refuse to go on while a pg_tviews TVIEW is empty under a full view (#422).
+
+        ``restore_backup`` already rebuilt what a restore empties, so on a dump
+        this normally finds nothing.  What it still catches is a LOGGED TVIEW
+        (``only_empty`` rebuilds UNLOGGED ones) and a migration that left one
+        empty.  It runs while the service is still stopped, so failing here
+        starts nothing on an empty read model.
+
+        Raises:
+            DatabaseError: a TVIEW is empty, or the probe could not run, and
+                ``on_empty_tview`` is ``fail``.
+        """
+        import psycopg
+
+        from fraisier.dbops import tviews
+        from fraisier.dbops._url import replace_db_name
+        from fraisier.errors import DatabaseError
+
+        url = replace_db_name(self._admin_url, self._config.db_name)
+        try:
+            empty = tviews.find_empty_tviews(url)
+        except (tviews.TviewError, psycopg.Error) as exc:
+            message = f"could not check TVIEWs for emptiness: {exc}"
+            if self._config.on_empty_tview == "warn":
+                log.warning("%s", message)
+                return
+            raise DatabaseError(message) from exc
+        if not empty:
+            return
+        pairs = ", ".join(f"{e.tview} (view {e.view})" for e in empty)
+        message = (
+            f"{len(empty)} pg_tviews TVIEW(s) are empty while their backing view "
+            f"has rows: {pairs}. Rebuild them with `fraisier db tviews rebuild "
+            f"--all` before starting the service"
+        )
+        if self._config.on_empty_tview == "warn":
+            log.warning("%s", message)
+            return
+        raise DatabaseError(message)
 
     def _preflight_enabled(self) -> bool:
         """Return True when the migration preflight check should run."""
@@ -398,6 +442,18 @@ class RestoreMigrateStrategy(Strategy):
                 restore_result.matviews_refreshed,
             )
 
+        # Said whether or not anything was empty: a restore that rebuilt nothing
+        # and one that never looked must not read alike (#422). None means the
+        # database has no pg_tviews.
+        if restore_result.tviews_rebuilt is not None:
+            log.info(
+                "pg_tviews: rebuilt %d empty TVIEW(s)%s",
+                len(restore_result.tviews_rebuilt),
+                "".join(
+                    f" {r.entity}={r.rows}rows" for r in restore_result.tviews_rebuilt
+                ),
+            )
+
         # Step 8: Create rollback template
         if cfg.create_template:
             template_name = self._resolved_template_name
@@ -474,6 +530,11 @@ class RestoreMigrateStrategy(Strategy):
                 "archive stated none; the restored database was not checked "
                 "for emptiness"
             )
+
+        # Step 10.4: No TVIEW may be empty under a populated view (#422). After
+        # every step that can change the database, before the receipt (which
+        # means "this run completed") and before the service starts.
+        self._check_tviews_not_empty()
 
         # Step 10.5: Leave this run's receipt in the database it just rewrote.
         #

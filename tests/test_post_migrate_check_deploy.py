@@ -93,6 +93,16 @@ def _deploy(deployer: APIDeployer, order: list[str] | None = None):
         return deployer.execute()
 
 
+@pytest.fixture(autouse=True)
+def _no_tview_probe():
+    """These tests are about the drift gate; the TVIEW probe has its own file.
+
+    The migration is stubbed here, so there is no migrated database to probe.
+    """
+    with patch.object(APIDeployer, "_run_empty_tview_check"):
+        yield
+
+
 @pytest.fixture
 def app(tmp_path: Path) -> Path:
     app_dir = tmp_path / "api"
