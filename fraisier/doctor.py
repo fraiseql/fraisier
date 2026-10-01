@@ -1286,6 +1286,99 @@ def _check_pre_migrate_dump_writable(config: FraisierConfig | None) -> CheckResu
     )
 
 
+def _database_urls(config: FraisierConfig | None) -> dict[str, str]:
+    """Each configured ``database.database_url``, keyed ``fraise/env``.
+
+    An ``!envvar`` that is not set here is left out rather than raised: the
+    doctor's job is to report, and ``fraises_yaml_resolves`` already says so.
+    """
+    from fraisier.dbops._url import resolve_db_url
+    from fraisier.errors import ConfigurationError
+
+    urls: dict[str, str] = {}
+    fraises = getattr(config, "fraises", None) if config is not None else None
+    for fraise_name, fraise in (fraises or {}).items():
+        if not isinstance(fraise, dict):
+            continue
+        for env_name, env_config in (fraise.get("environments") or {}).items():
+            if not isinstance(env_config, dict):
+                continue
+            raw = (env_config.get("database") or {}).get("database_url")
+            try:
+                url = resolve_db_url(raw)
+            except ConfigurationError:
+                continue
+            if url:
+                urls[f"{fraise_name}/{env_name}"] = url
+    return urls
+
+
+@register_check("pg_tviews_contract", network=True)
+def _check_pg_tviews_contract(config: FraisierConfig | None) -> CheckResult:
+    """pg_tviews must speak read contract 1 (0.1.0-beta.20 or later).
+
+    confiture 1.29 refuses an older pg_tviews with ``CONFIG_014`` wherever it
+    reads TVIEWs live, and the drift gate is on by default — so on an old host
+    every deploy of a TVIEW project fails its gate, after the migrations ran.
+
+    ``pg_extension.extversion`` cannot tell the versions apart: it reads
+    ``0.1.0`` on every beta.  ``tviews.contract_version()`` is the one thing
+    confiture itself checks, so the check calls it.  A database without the
+    extension is none of this check's business, and one it cannot reach is a
+    skip rather than a verdict.
+    """
+    import psycopg
+
+    name = "pg_tviews_contract"
+    urls = _database_urls(config)
+    if not urls:
+        return CheckResult(name, "skip", "no database.database_url configured")
+
+    old: list[str] = []
+    seen = 0
+    unreachable: list[str] = []
+    for target, url in urls.items():
+        try:
+            with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
+                if (
+                    conn.execute(
+                        "SELECT 1 FROM pg_extension WHERE extname = 'pg_tviews'"
+                    ).fetchone()
+                    is None
+                ):
+                    continue
+                seen += 1
+                try:
+                    row = conn.execute("SELECT tviews.contract_version()").fetchone()
+                except psycopg.Error:
+                    row = None
+        except psycopg.Error as exc:
+            unreachable.append(f"{target}: {str(exc).splitlines()[0]}")
+            continue
+        if row is None or row[0] != 1:
+            old.append(target)
+
+    if old:
+        return CheckResult(
+            name,
+            "fail",
+            f"pg_tviews on {', '.join(old)} predates read contract 1 "
+            f"(0.1.0-beta.20): confiture 1.29 refuses it with CONFIG_014, so "
+            f"every deploy of a TVIEW project fails its drift gate",
+            fix_hint=(
+                "upgrade pg_tviews to 0.1.0-beta.20 or later and run its "
+                "scripts/migrate-from-0.1.0.sql on each database"
+            ),
+        )
+    if not seen:
+        if unreachable:
+            return CheckResult(
+                name, "skip", f"could not reach {'; '.join(unreachable)}"
+            )
+        return CheckResult(name, "skip", "pg_tviews is not installed")
+    return CheckResult(name, "pass", f"pg_tviews read contract 1 on {seen} database(s)")
+
+
 # ---------------------------------------------------------------------------
 # Public runner
 # ---------------------------------------------------------------------------

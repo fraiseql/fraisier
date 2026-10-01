@@ -116,6 +116,34 @@ INDEX_LOST = {
     "drift_items": [LOST_INDEX_ITEM],
 }
 
+#: A pinned TVIEW option the live table does not hold, copied from a confiture
+#: **1.29.0** run against pg_tviews 0.1.0-beta.20 — the wire bytes are preserved at
+#: ``.phases/2026-10-01-confiture-1-29-probe/wire-C_logged.json``, captured by
+#: ``driver11.py`` rather than composed here.  Graded ``warning`` with
+#: ``has_critical_drift: false``, exactly like ``missing_index``.
+LOST_TVIEW_OPTION_ITEM = {
+    "type": "tview_option_mismatch",
+    "severity": "warning",
+    "object": "tv_post",
+    "expected": "logged = true",
+    "actual": "logged = false",
+    "message": "TVIEW 'tv_post' pins logged = true; the database holds false",
+    "subject": {
+        "schema": "public",
+        "relation": "tv_post",
+        "name": "logged",
+        "arguments": None,
+        "role": None,
+    },
+}
+
+TVIEW_OPTION_DRIFTED = {
+    **CLEAN_BARE,
+    "has_drift": True,
+    "warning_count": 1,
+    "drift_items": [LOST_TVIEW_OPTION_ITEM],
+}
+
 #: A clean ``confiture build --format json`` envelope, copied from a 1.6.0 run
 #: with the gate's own flags.  The schema goes to ``--output``, this to stdout,
 #: and the progress lines to stderr.
@@ -852,6 +880,43 @@ class TestEscalation:
 
         assert not result.passed
         assert not result.ran
+
+
+class TestTviewOptionEscalation:
+    """``tview_option_mismatch`` is a warning a deploy may refuse (confiture 1.29.0).
+
+    A TVIEW whose tree pins ``logged`` or ``fillfactor`` and whose live table
+    holds something else is graded ``warning`` and leaves ``has_critical_drift``
+    false, so it passes the gate unasked.  Measured in
+    ``.phases/2026-10-01-confiture-1-29-probe/``: unlogged-versus-logged is the
+    difference between a TVIEW a physical restore empties and one it keeps.
+    """
+
+    def test_it_can_be_named_and_fails_the_gate(self, project: Path) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(TVIEW_OPTION_DRIFTED)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+                escalate=("tview_option_mismatch",),
+            )
+
+        assert not result.passed
+        assert result.ran
+        assert [item.object_name for item in result.critical] == ["tv_post"]
+
+    def test_unnamed_it_still_passes(self, project: Path) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = _fake_confiture(TVIEW_OPTION_DRIFTED)
+            result = check_schema_drift(
+                project_dir=project,
+                confiture_config=project / "db/environments/production.yaml",
+                checks=["live-drift"],
+            )
+
+        assert result.passed
+        assert [item.kind for item in result.warnings] == ["tview_option_mismatch"]
 
 
 class TestEscalationVocabularyIsClosedHereToo:

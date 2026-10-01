@@ -146,7 +146,8 @@ fraises:
             on_critical: fail      # fail | warn
             escalate: []           # warning kinds this deploy will not accept:
                                    # missing_index, default_mismatch,
-                                   # type_mismatch, nullable_mismatch
+                                   # type_mismatch, nullable_mismatch,
+                                   # tview_option_mismatch
           # Optional post-migration SQL hooks (#204). Each entry has
           # exactly one of `sql_dir` or `sql_file`; on_error is `halt`
           # (default — abort before restart) or `warn` (log + continue).

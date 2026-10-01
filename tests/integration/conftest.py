@@ -370,6 +370,44 @@ def pg_target(_pg_server: PgTarget | None) -> PgTarget:
     return _pg_server
 
 
+def _skip_no_tviews(reason: str) -> NoReturn:
+    pytest.skip(f"{reason}; CI has none")  # ty: ignore[too-many-positional-arguments]
+
+
+@pytest.fixture
+def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
+    """A server with pg_tviews read contract 1 (0.1.0-beta.20 or later), or skip.
+
+    **Skips even under ``FRAISIER_INTEGRATION=1``, on purpose.**  No CI service
+    container carries pg_tviews, so a TVIEW test cannot be mandatory there; it
+    runs on a developer box whose server has the extension, and the PR records
+    that it did.  That is the one reason a skip is accepted here — the
+    ``unavailable`` rule above is for tests CI is *supposed* to run.
+    """
+    psycopg = pytest.importorskip("psycopg")
+    probe_db = "fraisier_it_tviews_probe"
+    with psycopg.connect(pg_target.dsn(_MAINTENANCE_DB), autocommit=True) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM pg_available_extensions WHERE name = 'pg_tviews'"
+        ).fetchone():
+            _skip_no_tviews("pg_tviews is not installed on this server")
+        conn.execute(f"DROP DATABASE IF EXISTS {probe_db} WITH (FORCE)")
+        conn.execute(f"CREATE DATABASE {probe_db}")
+    try:
+        with psycopg.connect(pg_target.dsn(probe_db), autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION pg_tviews")
+        with psycopg.connect(pg_target.dsn(probe_db), autocommit=True) as conn:
+            contract = conn.execute("SELECT tviews.contract_version()").fetchone()
+    except psycopg.Error:
+        contract = None
+    finally:
+        with psycopg.connect(pg_target.dsn(_MAINTENANCE_DB), autocommit=True) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {probe_db} WITH (FORCE)")
+    if contract is None or contract[0] != 1:
+        _skip_no_tviews("pg_tviews here predates read contract 1 (0.1.0-beta.20)")
+    return pg_target
+
+
 def _hold_flock(
     lock_dir: Path,
     name: str,
