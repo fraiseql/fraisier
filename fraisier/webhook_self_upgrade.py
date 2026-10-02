@@ -379,14 +379,68 @@ def _entrypoint_is_broken(service: str) -> str | None:
     would strand the host in the other direction, and the ``unit_entrypoints``
     doctor check reports the same condition without needing to be right here.
     """
-    binary = _unit_entrypoint(service)
+    try:
+        binary = _unit_entrypoint(service)
+    except Exception as exc:
+        # The resolver imports fraisier code from the venv the install has just
+        # replaced. Failing to import it *is* the breakage (#427: an undeclared
+        # dependency), not a reason to abstain — and crashing here would skip
+        # the refusal below and leave no record at all.
+        return f"{service} ExecStart (probe failed: {type(exc).__name__}: {exc})"
     if binary is None:
         return None
     target = Path(binary)
     # Existence first: os.access(X_OK) is permissive for root.
-    if target.exists() and os.access(binary, os.X_OK):
+    if not (target.exists() and os.access(binary, os.X_OK)):
+        return binary
+    failure = _entrypoint_import_failure(target)
+    if failure is not None:
+        return f"{binary} ({failure})"
+    return None
+
+
+# What the installed console scripts import at start-up. An entrypoint that
+# resolves but cannot import these fails the restart just as surely as a missing
+# one; #427 shipped exactly that (`packaging` undeclared, so `fraisier.cli` died).
+_STARTUP_MODULES = ("fraisier.cli", "fraisier.webhook")
+_IMPORT_PROBE_TIMEOUT_S = 60
+
+
+def _entrypoint_import_failure(target: Path) -> str | None:
+    """Why the entrypoint's interpreter cannot import fraisier, or None.
+
+    The entrypoint itself is never executed — for the webhook unit it *is* the
+    server. Its shebang names the tool venv's interpreter, and that interpreter
+    imports :data:`_STARTUP_MODULES` in a subprocess. Abstains (None) when the
+    shebang does not name a Python, as for a shell wrapper.
+    """
+    try:
+        with target.open("rb") as fh:
+            first = fh.readline(4096).decode("utf-8", "replace").strip()
+    except OSError:
         return None
-    return binary
+    if not first.startswith("#!"):
+        return None
+    interpreter = first[2:].strip().split()[0] if first[2:].strip() else ""
+    if "python" not in Path(interpreter).name:
+        return None
+    probe = "import importlib\n" + "".join(
+        f"importlib.import_module({m!r})\n" for m in _STARTUP_MODULES
+    )
+    try:
+        proc = subprocess.run(
+            [interpreter, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=_IMPORT_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"import probe could not run: {type(exc).__name__}: {exc}"
+    if proc.returncode == 0:
+        return None
+    lines = [line for line in proc.stderr.strip().splitlines() if line.strip()]
+    return f"cannot import fraisier: {lines[-1] if lines else proc.returncode}"
 
 
 def _refuse_restart_for_broken_entrypoint(
@@ -399,10 +453,11 @@ def _refuse_restart_for_broken_entrypoint(
 ) -> None:
     """Log loudly and record that the venv did not survive the install."""
     log.error(
-        "self-upgrade: NOT restarting %s — its ExecStart binary %s no longer "
-        "resolves. `uv tool install --force` removes before it verifies, so the "
-        "tool venv is half-removed and this unit would fail 203/EXEC. The "
-        "process running now is the only working fraisier on this host. "
+        "self-upgrade: NOT restarting %s — its ExecStart entrypoint is not "
+        "usable: %s. Either `uv tool install --force` (which removes before it "
+        "verifies) left the tool venv half-removed, or the new fraisier cannot "
+        "import (#427); a restart would fail. The process running now is the "
+        "only working fraisier on this host. "
         "Recover with: sudo find ~/.local/share/uv/tools -name __pycache__ "
         "! -user $(id -un) -type d -exec rm -rf {} + && "
         "uv tool install --force fraisier==%s",
@@ -413,8 +468,7 @@ def _refuse_restart_for_broken_entrypoint(
     if lock_dir is None:
         return
     consequence = (
-        f"{service} ExecStart={binary} does not resolve after the install; "
-        "restart refused to avoid 203/EXEC"
+        f"{service} ExecStart={binary} is not usable after the install; restart refused"
     )
     # A failed install already recorded uv's own stderr. That is the *cause* and
     # this is the *consequence*; an operator needs both, so the earlier detail is

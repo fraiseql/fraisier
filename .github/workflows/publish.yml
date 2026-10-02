@@ -176,6 +176,19 @@ jobs:
     - name: Validate with twine
       run: twine check dist/*
 
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    # Hosts run fraisier from an isolated `uv tool install`, where an import the
+    # wheel does not declare is fatal: 0.83.0/0.84.0 shipped a CLI that died on
+    # `import packaging` (#427). Install the exact artifact alone and start it.
+    - name: Smoke-test the wheel in an isolated install
+      run: |
+        uv venv /tmp/isolated
+        uv pip install --python /tmp/isolated/bin/python dist/*.whl
+        /tmp/isolated/bin/fraisier --version
+        /tmp/isolated/bin/python -c "import fraisier.cli, fraisier.doctor, fraisier.webhook, fraisier.webhook_self_upgrade"
+
     - name: List artifacts
       run: |
         echo "=== Built Artifacts ==="

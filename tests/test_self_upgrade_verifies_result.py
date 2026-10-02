@@ -205,3 +205,93 @@ class TestTheResolver:
         from fraisier.webhook_self_upgrade import _unit_entrypoint
 
         assert _unit_entrypoint("fraisier-nope.service") is None
+
+
+def _upgrade_with_restart_socket(lock_dir):
+    with (
+        patch("fraisier.webhook_self_upgrade._run_install", return_value=0),
+        patch(
+            "fraisier.webhook_self_upgrade._send_restart", return_value=0
+        ) as send_restart,
+        patch("fraisier.webhook_self_upgrade._wait_for_deploys_to_drain") as drain,
+    ):
+        drain.return_value = type("R", (), {"drained": True, "held": []})()
+        rc = _run_upgrade(
+            "0.84.1",
+            SERVICE,
+            "/run/fraisier/systemctl.sock",
+            lock_dir=lock_dir,
+            drain_settle_s=0,
+        )
+    return rc, send_restart
+
+
+def _python_entrypoint(bin_dir: Path, interpreter: str) -> Path:
+    """A console script as uv writes it: a shebang naming the venv's Python."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    p = bin_dir / "fraisier-webhook"
+    p.write_text(
+        f"#!{interpreter}\nimport sys\nfrom fraisier.webhook import run_server\n"
+        "sys.exit(run_server())\n"
+    )
+    p.chmod(p.stat().st_mode | stat.S_IXUSR)
+    return p
+
+
+class TestAnInstallThatResolvesButCannotImport:
+    """#427: the binary exists and is executable, but the new fraisier dies on
+    import (an undeclared dependency). Existence is not usability."""
+
+    def test_an_interpreter_that_cannot_import_fraisier_blocks_the_restart(
+        self, lock_dir, unit_dir, tmp_path
+    ):
+        python = tmp_path / "venv" / "bin" / "python3"
+        python.parent.mkdir(parents=True)
+        python.write_text(
+            "#!/bin/sh\n"
+            "echo \"ModuleNotFoundError: No module named 'packaging'\" >&2\n"
+            "exit 1\n"
+        )
+        python.chmod(python.stat().st_mode | stat.S_IXUSR)
+        _write_unit(
+            unit_dir, _python_entrypoint(tmp_path / "tools" / "bin", str(python))
+        )
+
+        rc, send_restart = _upgrade_with_restart_socket(lock_dir)
+
+        send_restart.assert_not_called()
+        assert rc == ENTRYPOINT_BROKEN_RC
+        record = read_self_upgrade_failure(lock_dir)
+        assert record is not None
+        assert "packaging" in record.detail
+
+    def test_an_interpreter_that_imports_fraisier_still_restarts(
+        self, lock_dir, unit_dir, tmp_path
+    ):
+        import sys
+
+        _write_unit(
+            unit_dir, _python_entrypoint(tmp_path / "tools" / "bin", sys.executable)
+        )
+
+        rc, send_restart = _upgrade_with_restart_socket(lock_dir)
+
+        send_restart.assert_called_once()
+        assert rc == 0
+
+
+class TestWhenTheProbeItselfFails:
+    def test_a_resolver_that_cannot_import_is_reported_broken_not_raised(
+        self, lock_dir, unit_dir
+    ):
+        with patch(
+            "fraisier.webhook_self_upgrade._unit_entrypoint",
+            side_effect=ModuleNotFoundError("No module named 'packaging'"),
+        ):
+            rc, send_restart = _upgrade_with_restart_socket(lock_dir)
+
+        send_restart.assert_not_called()
+        assert rc == ENTRYPOINT_BROKEN_RC
+        record = read_self_upgrade_failure(lock_dir)
+        assert record is not None
+        assert "packaging" in record.detail

@@ -547,7 +547,7 @@ wheels = [
 
 [[package]]
 name = "fraisier"
-version = "0.84.0"
+version = "0.84.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -555,6 +555,7 @@ dependencies = [
     { name = "fraiseql-confiture" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "packaging" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "uvicorn" },
@@ -611,6 +612,7 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0,<1.0" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0" },
     { name = "mcp", extras = ["cli"], marker = "extra == 'mcp'", specifier = ">=1.9.0" },
+    { name = "packaging", specifier = ">=23.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'all-databases'", specifier = ">=3.1.0,<4.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.1.0,<4.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1.0,<4.0" },

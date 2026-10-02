@@ -517,6 +517,13 @@ dependencies = [
   "rich>=13.0.0",
   "jinja2>=3.1.0,<4.0",
   "httpx>=0.27.0,<1.0",
+  # `doctor.py` parses versions with `packaging.version`, and `fraisier.cli`
+  # imports it, so the CLI cannot start without it. Undeclared until 0.84.1: a
+  # project venv almost always carries it transitively, so every test passed,
+  # while an isolated `uv tool install` — how hosts run fraisier — got a CLI that
+  # died on import and a webhook self-upgrade that crashed half-way (#427).
+  # tests/test_isolated_install.py installs the wheel alone to keep it that way.
+  "packaging>=23.0",
 ]
 description = "Fraisier - Deployment orchestrator for the FraiseQL ecosystem. Any language, any database, any deployment target."
 keywords = ["deployment", "orchestration", "devops", "graphql", "fraiseql"]
@@ -524,7 +531,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.84.0"
+version = "0.84.1"
 
 [project.optional-dependencies]
 all-databases = [
