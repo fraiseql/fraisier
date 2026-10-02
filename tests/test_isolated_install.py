@@ -45,6 +45,7 @@ STARTUP_MODULES = (
     "fraisier.install_helper",
     "fraisier.pgbackrest_helper",
     "fraisier.scaffold_install_helper",
+    "fraisier.unit_installer_helper",
 )
 
 
