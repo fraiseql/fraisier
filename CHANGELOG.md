@@ -24,6 +24,10 @@ webhook unit once no deploy is running.
 ### Fixed
 
 - `packaging` is declared in `dependencies`.
+- `fraisier-unit-installer` is declared in `[project.scripts]`. The development and
+  staging unit-installer units ran it, but no install ever created it, so they
+  failed 203/EXEC when triggered. A test now checks every binary a scaffold
+  template runs against the declared console scripts.
 - The self-upgrade's post-install check no longer trusts that an entrypoint which
   *exists* will *start*: it imports `fraisier.cli` and `fraisier.webhook` with the
   interpreter the entrypoint's shebang names, and refuses the restart (recording
