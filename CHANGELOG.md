@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.84.1] - 2026-10-02
+
+**A fix for an isolated install that could not start.** 0.83.0 and 0.84.0 import
+`packaging` without declaring it, so `uv tool install fraisier` — how every host
+runs it — produced a CLI that failed on every command, and a webhook self-upgrade
+that installed the new version, then crashed before deciding whether to restart
+([#427](https://github.com/fraiseql/fraisier/issues/427)).
+
+### ⚠️ Recovering a host already on 0.84.0
+
+The webhook process keeps running the previous version from memory; only new
+`fraisier` processes (timers, the CLI) fail. Bumping the pin to 0.84.1 lets the
+next deploy's self-upgrade repair it. To repair by hand:
+`uv tool install --force fraisier==0.84.1` as the deploy user, then restart the
+webhook unit once no deploy is running.
+
+### Fixed
+
+- `packaging` is declared in `dependencies`.
+- The self-upgrade's post-install check no longer trusts that an entrypoint which
+  *exists* will *start*: it imports `fraisier.cli` and `fraisier.webhook` with the
+  interpreter the entrypoint's shebang names, and refuses the restart (recording
+  why) if that fails. A failure inside the probe itself is reported as a broken
+  entrypoint instead of crashing the worker.
+
+### Added
+
+- `tests/test_isolated_install.py` (runs under `FRAISIER_INTEGRATION=1`) and a
+  publish-workflow step install the built wheel alone and import every console
+  script's start-up module.
+
 ## [0.84.0] - 2026-10-01
 
 **Three open issues and a confiture minor, in one release.** A restore can now
