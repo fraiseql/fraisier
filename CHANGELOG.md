@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.84.2] - 2026-10-04
+
+**A self-upgrade no longer changes the interpreter fraisier runs on.** The webhook
+self-upgrade ran `uv tool install --force fraisier==X` with no `--python`, so uv
+picked the newest Python on the host. A newer interpreter arriving therefore moved
+fraisier onto it at the next upgrade, and when a dependency (today
+`fraiseql-confiture`, which has no Linux wheel for 3.14) could not install there, the
+install failed after `--force` had already removed the tool
+([#431](https://github.com/fraiseql/fraisier/issues/431)).
+
+### Fixed
+
+- The self-upgrade install passes `--python MAJOR.MINOR` of the interpreter the
+  webhook is running on, so the tool venv stays on it. Moving to another Python is a
+  deliberate `uv tool install --force --python X.Y fraisier==...` by hand.
+
+### Upgrade note
+
+The pin takes effect from the version that ships it: a host on 0.84.1 or earlier
+runs the old argv for the upgrade that installs 0.84.2. On a host that has gained a
+newer Python than the one fraisier runs on, set `UV_PYTHON=X.Y` for that one upgrade,
+or install by hand with `--python`.
+
 ## [0.84.1] - 2026-10-02
 
 **A fix for an isolated install that could not start.** 0.83.0 and 0.84.0 import

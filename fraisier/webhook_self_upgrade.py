@@ -6,7 +6,8 @@ running, ``maybe_self_upgrade`` detaches a worker subprocess that:
 1. touches the ``.draining`` flag in ``lock_dir`` so any new deploy hitting
    the webhook during the upgrade window is refused with HTTP 503 +
    ``Retry-After`` rather than being silently killed by the restart RPC,
-2. runs ``uv tool install --force --refresh-package fraisier fraisier=={X}``
+2. runs ``uv tool install --force --refresh-package fraisier --python {X.Y}
+   fraisier=={X}`` (the running interpreter, #431)
    against the webhook user's own uv tool dir,
 3. sleeps a short *settle* delay so any deploy accepted in the small window
    between dispatch acceptance and lock acquisition reaches its
@@ -116,7 +117,14 @@ class _SpawnArgs:
 
 
 def _build_install_cmd(required: str) -> list[str]:
-    """Return the argv for ``uv tool install`` matching bootstrap's form."""
+    """Return the argv for ``uv tool install`` matching bootstrap's form.
+
+    ``--python`` names the running interpreter's ``major.minor``. Without it uv
+    resolves the newest Python on the host, so a newer interpreter arriving
+    changes fraisier's on its own, and when one dependency has no wheel for it
+    the install fails after ``--force`` has removed the tool (#431). Moving to a
+    new Python stays a deliberate ``uv tool install --python X.Y`` by hand.
+    """
     return [
         "uv",
         "tool",
@@ -124,6 +132,8 @@ def _build_install_cmd(required: str) -> list[str]:
         "--force",
         "--refresh-package",
         "fraisier",
+        "--python",
+        "{}.{}".format(*sys.version_info[:2]),
         f"fraisier=={required}",
     ]
 
