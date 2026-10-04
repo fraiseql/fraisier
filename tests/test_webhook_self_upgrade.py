@@ -28,7 +28,7 @@ def _write_pyproject(tmp_path: Path, fraisier_pin: str | None) -> None:
 
 class TestBuildInstallCmd:
     def test_matches_bootstrap_form(self):
-        """The install command must mirror fraisier/bootstrap.py:221-222 exactly."""
+        """The install command mirrors bootstrap's, plus the interpreter pin."""
         assert _build_install_cmd("0.16.6") == [
             "uv",
             "tool",
@@ -36,8 +36,24 @@ class TestBuildInstallCmd:
             "--force",
             "--refresh-package",
             "fraisier",
+            "--python",
+            "{}.{}".format(*sys.version_info[:2]),
             "fraisier==0.16.6",
         ]
+
+    def test_pins_the_running_interpreter_not_the_newest_on_the_host(self, monkeypatch):
+        """#431: without ``--python`` uv picks the newest interpreter it can find.
+
+        ``--force`` removes the tool before it verifies, so a newer Python whose
+        dependencies have no wheel leaves the host without fraisier.
+        """
+        monkeypatch.setattr(sys, "version_info", (3, 13, 11, "final", 0))
+        cmd = _build_install_cmd("0.16.6")
+        assert cmd[cmd.index("--python") + 1] == "3.13"
+
+    def test_the_pin_precedes_the_requirement(self):
+        cmd = _build_install_cmd("0.16.6")
+        assert cmd.index("--python") < cmd.index("fraisier==0.16.6")
 
 
 class TestMaybeSelfUpgrade:
