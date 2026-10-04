@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.84.3] - 2026-10-04
+
+**A self-upgrade the running Python cannot satisfy now stops before it installs
+anything.** Since 0.84.2 the upgrade is pinned to the interpreter fraisier already
+runs on. A release that needs a newer Python (confiture 1.30 and the fraisier release
+after it declare `requires-python >=3.14`) therefore cannot install on a host still on
+3.13, and a move between Pythons has to be a deliberate act
+([#435](https://github.com/fraiseql/fraisier/issues/435)).
+
+### Fixed
+
+- Before `uv tool install --force`, the worker runs `uv pip install --dry-run`
+  against the running interpreter. It changes nothing and reads the same index
+  configuration. When the target cannot be resolved there (a `requires-python` it
+  does not meet, a dependency with no wheel or no buildable source), the worker
+  records the refusal with the command to move the host by hand, returns non-zero,
+  and requests no restart. The installed fraisier is left exactly as it was.
+
+### Upgrade note
+
+This closes a narrower gap than it may sound. Measured against a target declaring
+`requires-python >=3.14` on a 3.13 host, uv's own resolver already fails before it
+removes anything, so 0.84.2 was not exposed to *that* case. The dry run adds the
+failures uv only meets after resolving (a dependency that has to be built), and a
+record that names the manual command instead of a bare resolver error.
+
+A host moves to a newer Python by hand:
+`uv tool install --force --python X.Y fraisier==VERSION`.
+
 ## [0.84.2] - 2026-10-04
 
 **A self-upgrade no longer changes the interpreter fraisier runs on.** The webhook
