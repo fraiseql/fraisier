@@ -75,6 +75,8 @@ class TestARealFailedInstall:
         # Exactly the #351 shape: bin/ is removed, then the install fails.
         uv.write_text(
             "#!/bin/sh\n"
+            # The dry-run resolve ahead of the install is not what removes bin/.
+            '[ "$1 $2" = "pip install" ] && exit 0\n'
             f"rm -rf '{bin_dir}'\n"
             "echo 'error: failed to remove directory ...: Permission denied' >&2\n"
             "exit 2\n"

@@ -647,11 +647,15 @@ class TestRunUpgradeDrainCoordination:
 
         events: list[str] = []
 
-        def fake_install(*_a, **_kw):
-            events.append(
-                "flag_set" if (tmp_path / DRAINING_FLAG_NAME).exists() else "flag_unset"
-            )
-            events.append("install")
+        def fake_install(argv, *_a, **_kw):
+            # The dry-run resolve ahead of the install is not the install.
+            if argv[1] == "tool":
+                events.append(
+                    "flag_set"
+                    if (tmp_path / DRAINING_FLAG_NAME).exists()
+                    else "flag_unset"
+                )
+                events.append("install")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         def fake_sleep(_s):

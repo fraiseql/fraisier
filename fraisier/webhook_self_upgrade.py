@@ -138,6 +138,28 @@ def _build_install_cmd(required: str) -> list[str]:
     ]
 
 
+def _build_preflight_cmd(required: str) -> list[str]:
+    """Return the argv that resolves ``fraisier==required`` and changes nothing.
+
+    ``uv pip install --dry-run`` against the running interpreter reads the same
+    index configuration the real install will, and fails the way the real
+    install would when the target needs a newer Python (or a dependency does).
+    ``uv tool install --force`` cannot be asked that question: it removes the
+    tool before it verifies.
+    """
+    return [
+        "uv",
+        "pip",
+        "install",
+        "--dry-run",
+        "--refresh-package",
+        "fraisier",
+        "--python",
+        sys.executable,
+        f"fraisier=={required}",
+    ]
+
+
 def _parse_semver(version: str) -> tuple[int, int, int]:
     parts = version.split(".")
     if len(parts) != 3:
@@ -324,7 +346,31 @@ def _run_install(required: str, *, lock_dir: Path | None = None) -> int:
     mean the tool venv is now half-removed and every entrypoint dangling. The
     record is what makes that visible: the log below reaches only this worker's
     own file, which nothing surfaces (#351).
+
+    A target the running interpreter cannot resolve never reaches that command:
+    the dry-run below stops it with the tool still in place (#435).
     """
+    preflight = _build_preflight_cmd(required)
+    log.info("self-upgrade: checking %s resolves: %s", required, " ".join(preflight))
+    probe = subprocess.run(preflight, check=False, capture_output=True, text=True)
+    if probe.returncode != 0:
+        detail = (
+            f"fraisier {required} cannot be installed on this host's Python "
+            f"{sys.version_info[0]}.{sys.version_info[1]}; the installed fraisier "
+            f"was left untouched. Move the host deliberately: "
+            f"uv tool install --force --python <version> fraisier=={required}\n"
+            f"{(probe.stderr or '').strip()}"
+        )
+        log.error("self-upgrade: refused, nothing was installed: %s", detail)
+        if lock_dir is not None:
+            record_self_upgrade_failure(
+                lock_dir,
+                required=required,
+                installed=_installed_version(),
+                rc=probe.returncode,
+                detail=detail,
+            )
+        return probe.returncode
     cmd = _build_install_cmd(required)
     log.info("self-upgrade: running %s", " ".join(cmd))
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
