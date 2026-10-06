@@ -73,7 +73,7 @@ class TestOnEmptyFail:
     def test_it_probes_the_database_the_migration_used(self, app: Path) -> None:
         find = _probe(_deployer(app, enabled=True), app)
 
-        find.assert_called_once_with(URL)
+        find.assert_called_once_with(URL, on_unreadable="fail")
 
     def test_a_probe_that_cannot_run_stops_a_declared_gate(self, app: Path) -> None:
         """A check that did not run has cleared nothing."""
@@ -91,6 +91,35 @@ class TestOnEmptyFail:
                 app,
                 raises=TviewError("pg_tviews here predates read contract 1; beta.20"),
             )
+
+
+class TestAnUnreadableTviewFollowsOnEmpty:
+    """What a TVIEW the deploy role cannot read costs is ``on_empty``'s answer."""
+
+    def test_a_declared_fail_gate_asks_the_probe_to_fail(self, app: Path) -> None:
+        find = _probe(_deployer(app, enabled=True, on_empty="fail"), app)
+
+        assert find.call_args.kwargs["on_unreadable"] == "fail"
+
+    def test_the_probe_refusing_stops_the_deploy_naming_the_grant(
+        self, app: Path
+    ) -> None:
+        refusal = TviewError(
+            'public.tv_post (view public.v_post): GRANT SELECT ON "public"."tv_post"'
+            ' TO "deploy"'
+        )
+        with pytest.raises(DeploymentError, match=r"GRANT SELECT ON"):
+            _probe(_deployer(app, enabled=True), app, raises=refusal)
+
+    def test_a_declared_warn_gate_asks_the_probe_to_warn(self, app: Path) -> None:
+        find = _probe(_deployer(app, enabled=True, on_empty="warn"), app)
+
+        assert find.call_args.kwargs["on_unreadable"] == "warn"
+
+    def test_a_gate_nobody_wrote_only_warns(self, app: Path) -> None:
+        find = _probe(_deployer(app), app)
+
+        assert find.call_args.kwargs["on_unreadable"] == "warn"
 
 
 class TestOnEmptyWarn:

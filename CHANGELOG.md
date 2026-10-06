@@ -13,7 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connecting role gets `permission denied` (SQLSTATE 42501) reading a TVIEW or its backing
   view, `find_empty_tviews` logs one warning naming the TVIEW, its view and the grant
   that fixes it, skips that TVIEW, and still checks the rest. Before, it raised and stopped
-  the deploy. Any other error still propagates.
+  the deploy. Any other error still propagates. The grant names the connecting
+  role (`current_user`), so it can be pasted as it stands.
+- **Under `on_empty: fail`, a TVIEW the probe cannot read stops the gate**, like an empty
+  one, naming it and the `GRANT` that fixes it. That holds for a gate the project declared
+  and for the restore probe; a gate nobody wrote, and `on_empty: warn`, keep the warning.
+  With pg_tviews 0.1.0-beta.25 a role that can read `tv_<entity>` can read its backing
+  view, so this fires only for a role with no `SELECT` on the TVIEW itself.
 
 ### Upgrade note
 

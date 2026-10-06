@@ -779,7 +779,14 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             )
         else:
             try:
-                empty = tviews.find_empty_tviews(url)
+                # An unreadable TVIEW has cleared nothing, so a gate that chose
+                # `fail` stops on it; one nobody wrote only reports it.
+                empty = tviews.find_empty_tviews(
+                    url,
+                    on_unreadable=(
+                        "fail" if gate.declared and gate.on_empty == "fail" else "warn"
+                    ),
+                )
             except (tviews.TviewError, psycopg.Error) as exc:
                 failure = f"could not check TVIEWs for emptiness: {exc}"
 
