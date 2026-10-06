@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The empty-TVIEW probe skips a TVIEW it is not allowed to read, and says so.** When the
+  connecting role gets `permission denied` (SQLSTATE 42501) reading a TVIEW or its backing
+  view, `find_empty_tviews` logs one warning naming the TVIEW, its view and the grant
+  that fixes it, skips that TVIEW, and still checks the rest. Before, it raised and stopped
+  the deploy. Any other error still propagates.
+
+### Upgrade note
+
+**pg_tviews 0.1.0-beta.25 and roles with custom ACLs.** The backing view moves from
+`<schema>.v_<entity>` to `tviews.<schema>__tv_<entity>` and takes the `SELECT` grants of its
+TVIEW's table. A role that read the old view only through a grant on the *view*, and has no
+`SELECT` on `tv_<entity>`, loses that access. Grant it on the table:
+
+    GRANT SELECT ON <schema>.tv_<entity> TO <role>;
+
+To check which TVIEWs a role can no longer verify:
+
+    SELECT r.schema, r.name, has_table_privilege('<role>', r.view, 'SELECT')
+    FROM tviews.registry r;
+
+Run `ALTER EXTENSION pg_tviews UPDATE` as a superuser first so the views are moved.
+
 ## [0.84.2] - 2026-10-04
 
 **A self-upgrade no longer changes the interpreter fraisier runs on.** The webhook

@@ -15,6 +15,7 @@ The extension's schema is read from the catalog rather than assumed to be
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -23,6 +24,8 @@ from psycopg import sql
 
 if TYPE_CHECKING:
     from psycopg import Connection
+
+log = logging.getLogger(__name__)
 
 #: The read contract fraisier speaks.  confiture 1.29 requires the same one.
 CONTRACT = 1
@@ -140,6 +143,14 @@ def find_empty_tviews(url: str) -> list[EmptyTview]:
     as a ``regclass`` — nothing is inferred from a name.  A TVIEW that is empty
     because its view is empty is correct and is not reported.
 
+    A TVIEW the connecting role cannot read, or whose backing view it cannot
+    read, is neither empty nor fine: the probe cannot tell.  It is logged by name
+    with the grant that fixes it and skipped, never failed, so the TVIEWs the role
+    can read are still checked.  pg_tviews 0.1.0-beta.25 moves the backing view
+    into its own schema and gives it its table's ``SELECT`` grants, so this is
+    what a role that read the old ``v_<entity>`` only through a grant on the view
+    meets.  Any other error still propagates.
+
     Returns ``[]`` when the database has no pg_tviews.
     """
     with _connect(url) as conn:
@@ -157,14 +168,28 @@ def find_empty_tviews(url: str) -> list[EmptyTview]:
         ).fetchall()
         empty: list[EmptyTview] = []
         for schema, name, view_schema, view_name in registry:
-            row = conn.execute(
-                sql.SQL(
-                    "SELECT EXISTS (SELECT 1 FROM {tv}), EXISTS (SELECT 1 FROM {v})"
-                ).format(
-                    tv=sql.Identifier(schema, name),
-                    v=sql.Identifier(view_schema, view_name),
+            try:
+                row = conn.execute(
+                    sql.SQL(
+                        "SELECT EXISTS (SELECT 1 FROM {tv}), EXISTS (SELECT 1 FROM {v})"
+                    ).format(
+                        tv=sql.Identifier(schema, name),
+                        v=sql.Identifier(view_schema, view_name),
+                    )
+                ).fetchone()
+            except psycopg.errors.InsufficientPrivilege:
+                log.warning(
+                    "pg_tviews: cannot verify %s.%s (backing view %s.%s): "
+                    "permission denied; skipped. Fix: GRANT SELECT ON %s.%s TO "
+                    "<role>; the backing view follows its table's grants",
+                    schema,
+                    name,
+                    view_schema,
+                    view_name,
+                    schema,
+                    name,
                 )
-            ).fetchone()
+                continue
             has_rows, view_has_rows = row if row is not None else (True, False)
             if not has_rows and view_has_rows:
                 empty.append(EmptyTview(schema, name, view_schema, view_name))

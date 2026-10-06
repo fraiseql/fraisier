@@ -1098,6 +1098,13 @@ What fraisier does about it:
 | after the migration, in every deploy | reads each TVIEW and its backing view from `tviews.registry` and refuses one that is empty while its view has rows | the deploy stops, naming each `tv_*`/`v_*` pair |
 | before the service starts in `restore_migrate` | the same probe | the restore stops with the service still down |
 
+A TVIEW the deploy role may not read, or whose backing view it may not read, cannot be
+verified. The probe logs `pg_tviews: cannot verify …` naming it and the
+`GRANT SELECT ON <schema>.tv_<entity>` that fixes it, skips it, and does not fail the
+deploy; the TVIEWs the role can read are still checked. From pg_tviews 0.1.0-beta.25 the
+backing view takes its TVIEW table's `SELECT` grants, so a role that reads `tv_<entity>`
+reads the view.
+
 `on_empty: warn` turns the refusals into a log line, the way `on_critical: warn`
 does; `fail` is the default for the same reason it is there. The probe follows
 `enabled`: declining the gate declines it. A database without pg_tviews is never
