@@ -11,7 +11,10 @@ template rebuilds can be skipped when the schema hasn't changed.
 import hashlib
 import warnings
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _compute_schema_hash(schema_dir: Path) -> str:

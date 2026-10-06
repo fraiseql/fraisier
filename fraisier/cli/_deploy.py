@@ -617,7 +617,7 @@ def _display_deployment_status(data: dict, environment: str) -> None:
             else:
                 age_str = f"{minutes // 1440}d ago"
             console.print(f"[bold]Last deploy:[/bold]  {deployed_at} ({age_str})")
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             pass
 
     error = data.get("error")

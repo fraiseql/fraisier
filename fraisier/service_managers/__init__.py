@@ -3,16 +3,17 @@
 import platform
 from typing import TYPE_CHECKING, Any
 
-from .base import ServiceManager
 from .rc import RcServiceManager
 from .systemd import SystemdServiceManager
 
 if TYPE_CHECKING:  # pragma: no cover
     from fraisier.runners import CommandRunner
 
+    from .base import ServiceManager
+
 
 def get_service_manager(
-    runner: "CommandRunner", config: dict[str, Any] | None = None
+    runner: CommandRunner, config: dict[str, Any] | None = None
 ) -> ServiceManager:
     """Get the appropriate ServiceManager for the current platform.
 

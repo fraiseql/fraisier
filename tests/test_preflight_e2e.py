@@ -66,7 +66,7 @@ def _pg_available(admin_url: str) -> bool:
             timeout=5,
         )
         return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError, subprocess.TimeoutExpired:
         return False
 
 

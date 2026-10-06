@@ -1022,6 +1022,7 @@ class TestEscalationVocabularyIsClosedHereToo:
                 confiture_config=project / "db/environments/production.yaml",
                 checks=["live-drift"],
                 escalate=ESCALATABLE_KINDS,
+                extra_objects="all",  # `extra_object` is refused without it
             )
 
         assert result.ran

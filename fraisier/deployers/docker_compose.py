@@ -67,7 +67,7 @@ class DockerComposeDeployer(BaseDeployer):
                 if svc.get("Service") == self.service_name:
                     image = svc.get("Image", "")
                     return image.split(":")[-1] if ":" in image else None
-        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+        except subprocess.CalledProcessError, json.JSONDecodeError, OSError:
             pass
         return None
 
@@ -184,5 +184,5 @@ class DockerComposeDeployer(BaseDeployer):
                 if state != "running":
                     return False
             return True
-        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+        except subprocess.CalledProcessError, json.JSONDecodeError, OSError:
             return False

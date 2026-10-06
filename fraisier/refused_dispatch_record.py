@@ -83,7 +83,7 @@ def _entry_from(raw: Any) -> RefusedDispatch | None:
             webhook_id=int(raw.get("webhook_id", 0)),
             refused_at=str(raw.get("refused_at", "")),
         )
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

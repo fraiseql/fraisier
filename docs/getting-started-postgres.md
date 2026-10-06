@@ -25,7 +25,7 @@ PostgreSQL is ideal for:
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.14+
 - PostgreSQL 14+ (server or Docker)
 - psycopg (Python adapter - installed automatically)
 

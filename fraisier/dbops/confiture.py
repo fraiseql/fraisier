@@ -721,7 +721,7 @@ def _count_from_payload(stdout: str) -> int:
     """
     try:
         payload = json.loads(stdout)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return 0
     if not isinstance(payload, dict):
         return 0
@@ -885,7 +885,7 @@ def confiture_status(  # pragma: no cover
             m["version"] for m in migrations if m.get("status") == "pending"
         ]
         status.has_pending = result.returncode == 1
-    except (json.JSONDecodeError, KeyError):
+    except json.JSONDecodeError, KeyError:
         status.error = f"Failed to parse status JSON: {result.stdout[:200]}"
 
     return status

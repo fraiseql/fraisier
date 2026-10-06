@@ -148,7 +148,7 @@ class DjangoMigrateStrategy(MigrationStrategy):
                                 or app_latest > latest_migration
                             ):
                                 latest_migration = app_latest
-                    except (ImportError, AttributeError, OSError):
+                    except ImportError, AttributeError, OSError:
                         # Expected failure modes for an app whose migrations
                         # module is missing, broken, or on an unreadable path.
                         # Anything else (e.g. a real bug) propagates to the

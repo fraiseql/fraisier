@@ -334,7 +334,7 @@ class DockerComposeProvider(DeploymentProvider):
         config_path: str = "confiture.yaml",
         direction: str = "up",
         timeout: int | None = None,
-    ) -> "ConfitureResult":
+    ) -> ConfitureResult:
         """Run database migrations inside a container via confiture.
 
         Args:

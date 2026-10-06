@@ -145,7 +145,7 @@ def client_major_version() -> int | None:
             timeout=10,
             check=False,
         ).stdout
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
     match = re.search(r"(\d+)", out)
     return int(match.group(1)) if match else None

@@ -16,9 +16,9 @@ import contextlib
 import dataclasses
 import os
 import time
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 import psycopg
@@ -34,6 +34,9 @@ from fraisier.dbops.tviews import (
     rebuild_empty_tviews,
     tviews_installed,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass

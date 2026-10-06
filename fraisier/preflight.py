@@ -120,7 +120,7 @@ class PreflightChecker:
         try:
             out = self.runner.run(["df", "-BG", "/opt"], timeout=10)
             return self._parse_disk_space(out.stdout, min_gb)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        except subprocess.CalledProcessError, subprocess.TimeoutExpired:
             return CheckResult(
                 name="Disk space",
                 passed=False,
@@ -131,7 +131,7 @@ class PreflightChecker:
         """Check whether the given ports are already in use."""
         try:
             out = self.runner.run(["ss", "-tlnp"], timeout=10)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        except subprocess.CalledProcessError, subprocess.TimeoutExpired:
             return CheckResult(
                 name="Port availability",
                 passed=False,

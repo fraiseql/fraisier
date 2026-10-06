@@ -4,8 +4,10 @@ Supports precedence: flags > user config > system config > defaults
 """
 
 import os
-from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 try:
     import tomllib
@@ -35,7 +37,7 @@ class FrameworkConfig:
         system_config_path: Path | None = None,
         user_config_path: Path | None = None,
         overrides: dict[str, Any] | None = None,
-    ) -> "FrameworkConfig":
+    ) -> FrameworkConfig:
         """Load configuration with precedence.
 
         Precedence (highest to lowest):
@@ -133,7 +135,7 @@ class FrameworkConfig:
             for k in keys:
                 value = value[k]
             return value
-        except (KeyError, TypeError):
+        except KeyError, TypeError:
             return default
 
     def to_dict(self) -> dict[str, Any]:

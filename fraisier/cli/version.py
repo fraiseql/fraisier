@@ -36,7 +36,7 @@ def _get_systemd_version() -> str:
         if result.returncode == 0:
             # First line is like "systemd 249 (249.7-1-arch)"
             return result.stdout.split("\n")[0]
-    except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+    except subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired:
         pass
     return "Not detected"
 

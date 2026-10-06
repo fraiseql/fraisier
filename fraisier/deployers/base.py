@@ -73,7 +73,7 @@ def _iter_candidates() -> Iterator[tuple[str, Path | None]]:
     #    leftovers when both happen to exist.
     try:
         home: Path | None = Path.home()
-    except (RuntimeError, KeyError):
+    except RuntimeError, KeyError:
         home = None
     if home is not None:
         yield "~/.local/bin/fraisier", home / ".local" / "bin" / "fraisier"

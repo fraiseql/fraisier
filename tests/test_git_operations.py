@@ -3,6 +3,7 @@
 import json
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -16,7 +17,9 @@ from fraisier.git.operations import (
     get_worktree_sha,
     verify_worktree_at_sha,
 )
-from tests.fixtures.git_env import DeployEnv
+
+if TYPE_CHECKING:
+    from tests.fixtures.git_env import DeployEnv
 
 REPOS_BASE = Path("/var/lib/fraisier/repos")
 

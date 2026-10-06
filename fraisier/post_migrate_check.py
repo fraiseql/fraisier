@@ -50,7 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from fraisier.dbops.drift import CHECK_FLAGS, ESCALATABLE_KINDS
+from fraisier.dbops.drift import CHECK_FLAGS, ESCALATABLE_KINDS, EXTRA_OBJECTS_MODES
 
 #: What ``on_critical`` may say.
 ON_CRITICAL: tuple[str, ...] = ("fail", "warn")
@@ -67,6 +67,11 @@ VALID_ESCALATIONS: tuple[str, ...] = ESCALATABLE_KINDS
 #: offered: it replays every function body and belongs on a timer.
 VALID_CHECKS: tuple[str, ...] = tuple(CHECK_FLAGS)
 
+#: What ``extra_objects`` may say.  ``declared`` is confiture's default and
+#: leaves every verdict as it was; ``all`` is the opt-in that makes a stray
+#: schema, extension, policy, … a warning ``escalate`` can act on.
+VALID_EXTRA_OBJECTS: tuple[str, ...] = EXTRA_OBJECTS_MODES
+
 _DEFAULT_CHECKS: tuple[str, ...] = ("live-drift",)
 
 
@@ -79,6 +84,7 @@ class PostMigrateCheck:
     on_critical: Literal["fail", "warn"] = "fail"
     escalate: tuple[str, ...] = ()
     on_empty: Literal["fail", "warn"] = "fail"
+    extra_objects: Literal["declared", "all"] = "declared"
     #: Did a human write this gate, or is it the default arriving on its own?
     #:
     #: Only one thing turns on it, and it is not what the gate *checks* — a
@@ -110,5 +116,6 @@ def load_post_migrate_check(database_config: dict[str, Any]) -> PostMigrateCheck
         on_critical=raw.get("on_critical", "fail"),
         escalate=tuple(raw.get("escalate") or ()),
         on_empty=raw.get("on_empty", "fail"),
+        extra_objects=raw.get("extra_objects", "declared"),
         declared=declared,
     )

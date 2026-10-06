@@ -162,6 +162,22 @@ class TestEnabled:
         assert order == ["migrate", "gate", "hooks", "restart"]
 
 
+class TestExtraObjectsReachTheGate:
+    def test_the_configured_mode_is_what_the_gate_is_told(self, app: Path) -> None:
+        with patch(
+            "fraisier.dbops.drift.check_schema_drift", return_value=CLEAN
+        ) as check:
+            _deploy(_deployer(app, enabled=True, extra_objects="all"))
+        assert check.call_args.kwargs["extra_objects"] == "all"
+
+    def test_the_default_is_declared(self, app: Path) -> None:
+        with patch(
+            "fraisier.dbops.drift.check_schema_drift", return_value=CLEAN
+        ) as check:
+            _deploy(_deployer(app))
+        assert check.call_args.kwargs["extra_objects"] == "declared"
+
+
 class TestOnCriticalFail:
     def test_drift_aborts_before_the_hooks_and_the_restart(self, app: Path) -> None:
         order: list[str] = []

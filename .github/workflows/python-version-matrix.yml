@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13']
+        python-version: ['3.14']
 
     services:
       postgres:
@@ -96,7 +96,7 @@ jobs:
       - name: Check matrix results
         run: |
           if [[ "${{ needs.test-matrix.result }}" == "success" ]]; then
-            echo "Python 3.11+ tests passed"
+            echo "Python 3.14 tests passed"
             exit 0
           else
             echo "Python version testing failed"

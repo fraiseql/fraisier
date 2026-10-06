@@ -143,7 +143,7 @@ class ContextualLogger:
                 redacted[key] = value
         return redacted
 
-    def context(self, **kwargs) -> "LogContext":
+    def context(self, **kwargs) -> LogContext:
         """Enter context with additional logging context.
 
         Args:
@@ -334,7 +334,7 @@ def get_contextual_logger(name: str) -> ContextualLogger:
     return ContextualLogger(name, logger)
 
 
-def setup_logging_from_config(config: "FrameworkConfig") -> logging.Logger:
+def setup_logging_from_config(config: FrameworkConfig) -> logging.Logger:
     """Setup logging using framework configuration.
 
     Args:
@@ -386,7 +386,7 @@ def setup_logging(
         file_handler.setLevel(getattr(logging, level.upper()))
         file_handler.setFormatter(JSONFormatter())
         logger.addHandler(file_handler)
-    except (OSError, PermissionError):
+    except OSError, PermissionError:
         logger.warning("Log file unavailable, stderr only")
 
     return logger

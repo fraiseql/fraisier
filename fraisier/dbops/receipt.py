@@ -324,7 +324,7 @@ def _parse_receipt(payload: str) -> RestoreReceipt | None:
             age_seconds=float(row["age_seconds"]),
             floor_schema=str(floor_schema) if floor_schema else None,
         )
-    except (ValueError, TypeError, KeyError):
+    except ValueError, TypeError, KeyError:
         return None
 
 
@@ -440,7 +440,7 @@ def relation_freshness(
         row = json.loads(stdout.strip())
         total = int(row["total"])
         fresh = int(row["fresh"])
-    except (ValueError, TypeError, KeyError):
+    except ValueError, TypeError, KeyError:
         return ActuationCheck(
             ActuationVerdict.UNVERIFIABLE,
             f"could not parse the relation mtimes read from {db_name}",

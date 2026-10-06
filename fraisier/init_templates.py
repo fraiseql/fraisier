@@ -4,7 +4,10 @@ Each template returns a YAML string for a fraises.yaml scaffold
 tailored to a specific framework.
 """
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def generic_template() -> str:

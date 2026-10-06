@@ -112,7 +112,7 @@ def read_self_upgrade_failure(lock_dir: Path | str) -> SelfUpgradeFailure | None
             detail=str(data.get("detail", "")),
             recorded_at=str(data.get("recorded_at", "")),
         )
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

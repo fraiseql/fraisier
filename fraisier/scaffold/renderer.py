@@ -88,7 +88,7 @@ def _extract_port(health_check_url: str) -> int | None:
     try:
         parsed = urlparse(health_check_url)
         return parsed.port
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
 
 

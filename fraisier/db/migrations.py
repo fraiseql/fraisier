@@ -10,9 +10,10 @@ Each migration file is named: NNN_description.sql (e.g., 001_create_tables.sql)
 """
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .adapter import DatabaseType, FraiserDatabaseAdapter
+if TYPE_CHECKING:
+    from .adapter import DatabaseType, FraiserDatabaseAdapter
 
 
 class MigrationError(Exception):

@@ -40,14 +40,14 @@ class TestFreebsdBootstrapper:
         assert bs.os_name == "FreeBSD"
 
     def test_installs_python(self, mock_config, mock_runner, tmp_path):
-        """Installs Python 3.11+ on FreeBSD."""
+        """Installs Python 3.14 on FreeBSD."""
         bs = bootstrapper(mock_config, mock_runner, tmp_path)
 
         step = bs._install_python()
 
         assert step.name == "Install Python"
         mock_runner.run.assert_called_with(
-            ["sudo", "pkg", "install", "-y", "python311"]
+            ["sudo", "pkg", "install", "-y", "python314"]
         )
 
     def test_installs_postgresql_client(self, mock_config, mock_runner, tmp_path):

@@ -107,6 +107,14 @@ CHECK_FLAGS: dict[str, str] = {
 #: one it keeps.  ``missing_tview`` is critical and ``extra_tview`` is not
 #: reported as a warning, so neither is a row.
 #:
+#: ``extra_object`` is the sixth (confiture 1.30.0; wire bytes in
+#: ``.phases/2026-10-06-python-3-14-floor/wire-extra-object.json``): a stray
+#: policy, domain, schema, … the live database holds and the DDL does not.  It
+#: is a ``warning`` **only** under ``--extra-objects all``; at the default it is
+#: ``info`` (and absent for a kind the DDL never declares), which escalation
+#: never reads.  So the kind is escalatable only with ``extra_objects="all"``,
+#: and :func:`check_schema_drift` refuses the pairing without it.
+#:
 #: ⚠️ ``missing_constraint`` and ``constraint_mismatch`` are **not** rows here,
 #: and their absence is the point.  confiture 1.26.0 grades both ``critical``
 #: (confiture#506/#518), so each fails the gate on its own and ``escalate``
@@ -137,7 +145,15 @@ ESCALATABLE_KINDS: tuple[str, ...] = (
     "type_mismatch",
     "nullable_mismatch",
     "tview_option_mismatch",
+    "extra_object",
 )
+
+#: What ``--extra-objects`` may say (confiture 1.30.0, confiture#596).  At
+#: ``declared`` -- confiture's default, and what fraisier sends by not sending
+#: the flag -- a stray schema, extension, domain, policy, … is reported only for
+#: a kind the DDL declares, and graded ``info``.  At ``all`` every stray object
+#: is reported, graded ``warning``.
+EXTRA_OBJECTS_MODES: tuple[str, ...] = ("declared", "all")
 
 #: ``confiture build --env NAME`` resolves this path under ``--project-dir``.
 _ENV_DIR = ("db", "environments")
@@ -732,6 +748,7 @@ def check_schema_drift(
     checks: Sequence[str],
     database_url: str | None = None,
     escalate: Collection[str] = (),
+    extra_objects: str = "declared",
 ) -> DriftResult:
     """Compare the live database against the schema *project_dir* builds.
 
@@ -747,6 +764,10 @@ def check_schema_drift(
             exactly as confiture graded it.  A name outside that list refuses
             the run: it would promote nothing, and a gate that silently
             declines to fire is what this one exists to prevent.
+        extra_objects: ``declared`` (the default) leaves confiture's own
+            reading of stray objects alone; ``all`` passes ``--extra-objects
+            all`` to the live-drift check so every stray object is a warning.
+            ``escalate`` may name ``extra_object`` only with ``all``.
 
     Returns:
         A :class:`DriftResult`.  It never raises for an operational failure —
@@ -780,6 +801,29 @@ def check_schema_drift(
                 f"cannot escalate {stray}: not a drift kind confiture grades "
                 f"warning ({', '.join(ESCALATABLE_KINDS)}). Refusing rather "
                 f"than running a gate that would never fire on it"
+            ),
+        )
+
+    # At the default an `extra_object` is graded `info`, which escalation never
+    # reads, so naming it there is the same silent no-op as a misspelt kind.
+    if extra_objects not in EXTRA_OBJECTS_MODES:
+        return DriftResult(
+            passed=False,
+            checks=selected,
+            error=(
+                f"extra_objects {extra_objects!r} is not one of "
+                f"{', '.join(EXTRA_OBJECTS_MODES)}"
+            ),
+        )
+    if "extra_object" in escalate and extra_objects != "all":
+        return DriftResult(
+            passed=False,
+            checks=selected,
+            error=(
+                "cannot escalate 'extra_object' without extra_objects: all. "
+                "confiture grades a stray object `info` unless asked to report "
+                "every one, and escalation promotes only warnings, so the gate "
+                "would never fire on it"
             ),
         )
 
@@ -851,12 +895,20 @@ def check_schema_drift(
                     ),
                 )
 
+        # `--extra-objects` belongs to `--check-live-drift`; sending it with only
+        # the signatures check would claim a scope that check does not have.
+        extra = (
+            ["--extra-objects", "all"]
+            if extra_objects == "all" and "live-drift" in selected
+            else []
+        )
         validate = _run(
             [
                 "confiture",
                 "migrate",
                 "validate",
                 *(CHECK_FLAGS[name] for name in selected),
+                *extra,
                 *scoped,
                 "-c",
                 str(config),

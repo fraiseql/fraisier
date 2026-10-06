@@ -106,7 +106,7 @@ def tviews_status(ctx: click.Context, fraise: str, env: str, as_json: bool) -> N
     empty: list[tviews.EmptyTview] | None
     try:
         empty = tviews.find_empty_tviews(url)
-    except (tviews.TviewError, psycopg.Error):
+    except tviews.TviewError, psycopg.Error:
         empty = None
 
     if as_json:

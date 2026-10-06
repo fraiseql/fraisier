@@ -6,9 +6,12 @@ git operations module.
 """
 
 import subprocess
+from typing import TYPE_CHECKING
 
 from fraisier.git.operations import get_worktree_sha
-from tests.fixtures.git_env import DeployEnv
+
+if TYPE_CHECKING:
+    from tests.fixtures.git_env import DeployEnv
 
 
 class TestGitDeployEnv:

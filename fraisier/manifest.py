@@ -1,11 +1,15 @@
 """PathManifest: single source of truth for filesystem paths managed by fraisier."""
 
-from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from fraisier.config import FraisierConfig
 from fraisier.naming import deploy_socket_name
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from fraisier.config import FraisierConfig
 
 # Tool cache/state dirs the install-helper unit relocates under app_path so they
 # fall inside the single ReadWritePaths root that ProtectSystem=strict allows.

@@ -138,7 +138,7 @@ class VersionInfo:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "VersionInfo":
+    def from_dict(cls, data: dict[str, Any]) -> VersionInfo:
         """Deserialize from dict, ignoring unknown keys."""
         filtered = {k: v for k, v in data.items() if k in _VERSION_FIELDS}
         return cls(**filtered)
@@ -163,7 +163,7 @@ class VersionSyncConfig:
     targets: list[VersionSyncTarget]
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "VersionSyncConfig":
+    def from_dict(cls, data: dict[str, Any]) -> VersionSyncConfig:
         """Create from dict configuration."""
         targets = [
             VersionSyncTarget(
@@ -174,7 +174,7 @@ class VersionSyncConfig:
         return cls(targets=targets)
 
     @classmethod
-    def auto_discover(cls, root_path: Path) -> "VersionSyncConfig":
+    def auto_discover(cls, root_path: Path) -> VersionSyncConfig:
         """Auto-discover common version files to sync."""
         targets = []
 
@@ -428,7 +428,7 @@ def detect_required_fraisier_version(app_path: Path) -> str | None:
         return None
     try:
         data = tomllib.loads(pyproject.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+    except OSError, tomllib.TOMLDecodeError:
         return None
     project = data.get("project", {})
     candidates: list[str] = list(project.get("dependencies") or [])
@@ -448,7 +448,7 @@ def detect_required_fraisier_version(app_path: Path) -> str | None:
 def generate_version_json(
     app_path: Path,
     schema_dir: Path | None = None,
-) -> "VersionInfo":
+) -> VersionInfo:
     """Build a VersionInfo from pyproject.toml + git metadata.
 
     Reads the version string from ``app_path/pyproject.toml``, queries git

@@ -165,7 +165,7 @@ def envelope_error_message(output: str) -> str | None:
     """
     try:
         data = json.loads(output)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -189,7 +189,7 @@ def envelope_error_actionable(output: str) -> str | None:
     """
     try:
         data = json.loads(output)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -209,7 +209,7 @@ def envelope_error_code(output: str) -> str | None:
     """
     try:
         data = json.loads(output)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return None
     if not isinstance(data, dict):
         return None

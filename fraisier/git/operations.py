@@ -8,9 +8,12 @@ deployment path.
 import json
 import logging
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fraisier.errors import DeploymentError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger("fraisier")
 
@@ -60,7 +63,7 @@ def get_worktree_sha(worktree: Path, bare_repo: Path | None = None) -> str | Non
     for cmd in attempts:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        except (subprocess.CalledProcessError, OSError):
+        except subprocess.CalledProcessError, OSError:
             continue
         sha = result.stdout.strip()
         if sha:
@@ -271,7 +274,7 @@ def _read_selfheal_state(bare_repo: Path) -> dict:
     """Read the per-worktree self-heal state, or ``{}`` if absent/unreadable."""
     try:
         data = json.loads(_selfheal_state_path(bare_repo).read_text())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
     return data if isinstance(data, dict) else {}
 

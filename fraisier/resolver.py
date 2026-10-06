@@ -5,10 +5,13 @@ injected for testing (hermetic tests without monkeypatching os.environ).
 """
 
 import os
-from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fraisier.config import ConfigurationError
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # Default database path if /var/lib/fraisier exists
 DEFAULT_DB_PATH = Path("/var/lib/fraisier/fraisier.db")

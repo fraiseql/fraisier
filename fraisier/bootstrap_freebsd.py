@@ -37,10 +37,10 @@ class FreebsdBootstrapper(ServerBootstrapper):
         self.os_name = "FreeBSD"
 
     def _install_python(self) -> StepResult:
-        """Install Python 3.11+ using pkg."""
+        """Install Python 3.14 using pkg."""
         return self._run_remote(
             "Install Python",
-            ["sudo", "pkg", "install", "-y", "python311"],
+            ["sudo", "pkg", "install", "-y", "python314"],
         )
 
     def _install_postgres_client(self) -> StepResult:

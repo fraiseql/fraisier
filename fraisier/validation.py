@@ -14,12 +14,14 @@ import pwd
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fraisier import ssh
-from fraisier.config import FraisierConfig
 from fraisier.config._lazy_env import LazyEnv
 from fraisier.errors import ConfigurationError, ValidationError
+
+if TYPE_CHECKING:
+    from fraisier.config import FraisierConfig
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +185,7 @@ class ValidationRunner:
         """
         try:
             return self.config.get_fraise_environment(fraise_name, env_name)
-        except (ValidationError, ConfigurationError):
+        except ValidationError, ConfigurationError:
             return None
 
     def _check_config_valid(self) -> ValidationCheckResult:
@@ -408,7 +410,7 @@ class ValidationRunner:
                             message=f"Git repo reachable: {url}",
                         )
                     )
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                except subprocess.CalledProcessError, subprocess.TimeoutExpired:
                     results.append(
                         ValidationCheckResult(
                             name="git_reachability",
@@ -459,7 +461,7 @@ class ValidationRunner:
                             message=f"SSH to {label} OK",
                         )
                     )
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                except subprocess.CalledProcessError, subprocess.TimeoutExpired:
                     results.append(
                         ValidationCheckResult(
                             name="ssh_connectivity",
@@ -649,7 +651,7 @@ class DeploymentReadinessValidator:
                     passed=True,
                     message=f"Reachable: {clone_url}",
                 )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            except subprocess.CalledProcessError, subprocess.TimeoutExpired:
                 return ValidationCheckResult(
                     name="git_repo_accessible",
                     passed=False,
@@ -798,7 +800,7 @@ class DeploymentReadinessValidator:
                 message=f"Service '{service_name}' is active",
             )
 
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except subprocess.TimeoutExpired, FileNotFoundError:
             return ValidationCheckResult(
                 name="systemd_service_exists",
                 passed=False,

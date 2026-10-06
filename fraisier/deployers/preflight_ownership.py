@@ -3,9 +3,12 @@
 import logging
 import pwd
 import shutil
+from typing import TYPE_CHECKING
 
 from fraisier.errors import DeploymentError
-from fraisier.manifest import PathManifest
+
+if TYPE_CHECKING:
+    from fraisier.manifest import PathManifest
 
 logger = logging.getLogger("fraisier")
 

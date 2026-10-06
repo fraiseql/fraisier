@@ -3,9 +3,10 @@
 Manages available Git providers and allows custom providers to be registered.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .base import GitProvider
+if TYPE_CHECKING:
+    from .base import GitProvider
 
 # Registry of available providers
 _providers: dict[str, type[GitProvider]] = {}
