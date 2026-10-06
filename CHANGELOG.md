@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   18's `NULLS NOT DISTINCT`, `NOT ENFORCED`, temporal keys and `NOT NULL … NOT VALID`, so
   the drift gate sees them; an unvalidated `NOT NULL` no longer reports a spurious
   `nullable_mismatch` warning.
+- **The empty-TVIEW probe skips a TVIEW it is not allowed to read, and says so.** When the
+  connecting role gets `permission denied` (SQLSTATE 42501) reading a TVIEW or its backing
+  view, `find_empty_tviews` logs one warning naming the TVIEW, its view and the grant
+  that fixes it, skips that TVIEW, and still checks the rest. Before, it raised and stopped
+  the deploy. Any other error still propagates. The grant names the connecting
+  role (`current_user`), so it can be pasted as it stands.
+- **Under `on_empty: fail`, a TVIEW the probe cannot read stops the gate**, like an empty
+  one, naming it and the `GRANT` that fixes it. That holds for a gate the project declared
+  and for the restore probe; a gate nobody wrote, and `on_empty: warn`, keep the warning.
+  With pg_tviews 0.1.0-beta.25 a role that can read `tv_<entity>` can read its backing
+  view, so this fires only for a role with no `SELECT` on the TVIEW itself.
 
 ### Upgrade note
 
@@ -33,6 +44,20 @@ while the database holds another value is now reported as `tview_option_mismatch
 (`warning`); the deploy passes. A project that lists `tview_option_mismatch` under
 `post_migrate_check.escalate` fails on it. A TVIEW that declares no policy reports
 nothing. Measured against pg_tviews beta.25 on confiture 1.30.0 through 1.33.0.
+
+**pg_tviews 0.1.0-beta.25 and roles with custom ACLs.** The backing view moves from
+`<schema>.v_<entity>` to `tviews.<schema>__tv_<entity>` and takes the `SELECT` grants of its
+TVIEW's table. A role that read the old view only through a grant on the *view*, and has no
+`SELECT` on `tv_<entity>`, loses that access. Grant it on the table:
+
+    GRANT SELECT ON <schema>.tv_<entity> TO <role>;
+
+To check which TVIEWs a role can no longer verify:
+
+    SELECT r.schema, r.name, has_table_privilege('<role>', r.view, 'SELECT')
+    FROM tviews.registry r;
+
+Run `ALTER EXTENSION pg_tviews UPDATE` as a superuser first so the views are moved.
 
 ## [0.85.0] - 2026-10-06
 

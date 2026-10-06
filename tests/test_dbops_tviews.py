@@ -110,6 +110,81 @@ def probe(tview: str, *, tv: bool, view: bool) -> tuple[str, list[tuple[bool, bo
     return (f'EXISTS (SELECT 1 FROM "{tview}"', [(tv, view)])
 
 
+class TestAnUnreadableTviewCannotBeVerified:
+    """A role that cannot read a TVIEW or its backing view is told nothing about it.
+
+    From pg_tviews 0.1.0-beta.25 the backing view lives in ``tviews`` and takes
+    its TVIEW table's ``SELECT`` grants, so a role that reads ``tv_<entity>``
+    reads the view.  A role that read the *old* ``v_<entity>`` only through a
+    grant on the view loses it.  That is a configuration the probe cannot judge,
+    not an empty TVIEW and not a reason to stop the deploy: it is reported, by
+    name, and the TVIEWs it can read are still checked.  Any other failure is
+    still an error.
+    """
+
+    @staticmethod
+    def _denied() -> psycopg.errors.InsufficientPrivilege:
+        return psycopg.errors.InsufficientPrivilege("permission denied for view")
+
+    def _conn(self, first: Any) -> FakeConn:
+        return FakeConn(
+            EXTENSION,
+            CONTRACT_ONE,
+            REGISTRY,
+            (
+                'EXISTS (SELECT 1 FROM "public"."tv_post"',
+                first,
+            ),
+            probe('app"."tv_user', tv=False, view=True),
+        )
+
+    def test_a_denied_probe_does_not_fail_and_the_rest_are_still_checked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(monkeypatch, self._conn(self._denied()))
+
+        found = tviews.find_empty_tviews("postgresql:///app")
+
+        assert [e.tview for e in found] == ["app.tv_user"]
+
+    def test_the_warning_names_the_tview_and_its_view(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        patch_connect(monkeypatch, self._conn(self._denied()))
+
+        with caplog.at_level("WARNING", logger="fraisier.dbops.tviews"):
+            tviews.find_empty_tviews("postgresql:///app")
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "public.tv_post" in warnings[0]
+        assert "public.v_post" in warnings[0]
+        assert "GRANT SELECT ON public.tv_post" in warnings[0]
+
+    def test_any_other_failure_is_still_an_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        missing = psycopg.errors.UndefinedTable("relation does not exist")
+        patch_connect(monkeypatch, self._conn(missing))
+
+        with pytest.raises(psycopg.errors.UndefinedTable):
+            tviews.find_empty_tviews("postgresql:///app")
+
+    def test_a_readable_database_warns_about_nothing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        patch_connect(monkeypatch, self._conn([(True, True)]))
+
+        with caplog.at_level("WARNING", logger="fraisier.dbops.tviews"):
+            tviews.find_empty_tviews("postgresql:///app")
+
+        assert not caplog.records
+
+
 class TestFindEmpty:
     def test_a_tview_with_no_rows_over_a_view_with_rows_is_reported(
         self, monkeypatch: pytest.MonkeyPatch
