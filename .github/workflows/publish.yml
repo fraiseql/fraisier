@@ -34,7 +34,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.12'
+        python-version: '3.14'
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
@@ -71,7 +71,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.12'
+        python-version: '3.14'
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -101,7 +101,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.12'
+        python-version: '3.14'
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -120,7 +120,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.12'
+        python-version: '3.14'
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -182,10 +182,14 @@ jobs:
     # Hosts run fraisier from an isolated `uv tool install`, where an import the
     # wheel does not declare is fatal: 0.83.0/0.84.0 shipped a CLI that died on
     # `import packaging` (#427). Install the exact artifact alone and start it.
+    #
+    # On the Python floor and `--only-binary :all:`, in a fresh venv: a
+    # dependency with no cp314 wheel must fail the release here, not fall back
+    # to a source build that uv's cache would hide after any earlier one (#435).
     - name: Smoke-test the wheel in an isolated install
       run: |
-        uv venv /tmp/isolated
-        uv pip install --python /tmp/isolated/bin/python dist/*.whl
+        uv venv --python 3.14 /tmp/isolated
+        uv pip install --only-binary :all: --python /tmp/isolated/bin/python dist/*.whl
         /tmp/isolated/bin/fraisier --version
         /tmp/isolated/bin/python -c "import fraisier.cli, fraisier.doctor, fraisier.webhook, fraisier.webhook_self_upgrade"
 

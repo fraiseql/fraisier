@@ -6,7 +6,7 @@ Getting started with Fraisier development.
 
 ## Prerequisites
 
-- **Python**: 3.11+ (check with `python --version`)
+- **Python**: 3.14+ (check with `python --version`)
 - **Git**: Any recent version
 - **pip/uv**: Package manager (uv recommended)
 - **SQLite3**: Usually included with Python

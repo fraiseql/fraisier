@@ -173,7 +173,7 @@ class ServiceConfig:
         return merged
 
     @classmethod
-    def from_env_dict(cls, env: dict[str, Any]) -> "ServiceConfig":
+    def from_env_dict(cls, env: dict[str, Any]) -> ServiceConfig:
         """Parse ServiceConfig from an environment dict.
 
         Supports both nested ``service:`` key and legacy flat fields.
@@ -280,7 +280,7 @@ class NginxEnvConfig:
         return [_process_cors_origin(o) for o in self.cors_origins]
 
     @classmethod
-    def from_env_dict(cls, env: dict[str, Any]) -> "NginxEnvConfig | None":
+    def from_env_dict(cls, env: dict[str, Any]) -> NginxEnvConfig | None:
         """Parse NginxEnvConfig from an environment dict.
 
         Returns None if no ``nginx:`` key is present.

@@ -5,13 +5,16 @@ Mocks only systemctl (can't restart real services) and health checks
 (no real service to check).
 """
 
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from fraisier.deployers.api import APIDeployer
 from fraisier.deployers.base import DeploymentStatus
 from fraisier.runners import LocalRunner
 from fraisier.strategies import StrategyResult
-from tests.fixtures.git_env import DeployEnv
+
+if TYPE_CHECKING:
+    from tests.fixtures.git_env import DeployEnv
 
 
 def _make_deployer(

@@ -8,9 +8,12 @@ Creates a temporary git environment that mirrors a real fraisier deployment:
 
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass

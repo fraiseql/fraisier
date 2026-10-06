@@ -8,7 +8,7 @@ from first install through day-to-day operations.
 ## Prerequisites
 
 - Linux server (Ubuntu 22.04+, Debian 12+, or similar)
-- Python 3.11+
+- Python 3.14+
 - Git
 - systemd
 - sudo access for the initial setup
@@ -850,6 +850,7 @@ database:
     on_critical: fail         # fail | warn
     escalate: []              # warning kinds that must fail the gate
     on_empty: fail            # fail | warn — an empty TVIEW over a populated view
+    extra_objects: declared   # declared | all — see "Strays the DDL never declared"
 ```
 
 The gate builds the schema this checkout would produce (`confiture build
@@ -1067,7 +1068,7 @@ post_migrate_check:
 
 The kinds `escalate` accepts are exactly the warning-graded ones —
 `missing_index`, `default_mismatch`, `type_mismatch`,
-`nullable_mismatch` and `tview_option_mismatch`. A name outside that list is a config error rather
+`nullable_mismatch`, `tview_option_mismatch` and `extra_object` (only with `extra_objects: all`). A name outside that list is a config error rather
 than a gate that quietly declines to fire: an operator who writes
 `missing_indexes` has asked for a promise, and getting silence instead is
 the failure this whole gate exists to avoid. `extra_constraint` is
@@ -1081,6 +1082,30 @@ not offered here until the constraint kinds became critical and freed the
 list to carry it; before 1.15.0 a dropped foreign key was exit 0 with an
 *empty* `drift_items`, so nothing distinguished it from a clean database
 (fraiseql/confiture#308, #309).
+
+##### Strays the DDL never declared (`extra_objects`)
+
+A policy, domain, extension, schema or other object the live database holds
+and the DDL does not is an `extra_object`. confiture reports one only for a
+kind the DDL declares somewhere, and grades it `info`, so by default a stray
+policy on a tree that declares no policy is not reported at all and nothing
+here can stop on it.
+
+```yaml
+post_migrate_check:
+  enabled: true
+  extra_objects: all            # every stray object, graded `warning`
+  escalate: [extra_object]      # ...and a deploy that finds one stops
+```
+
+`extra_objects: all` passes `--extra-objects all` to the live-drift check
+(confiture 1.30.0). It is **off by default** (`declared`): turning it on can
+fail a deploy on an object nobody ever put in the tree, a role-owned policy or
+an extension a DBA installed. `extra_object` is a valid `escalate` kind only
+together with it, because at the default the item is `info` and escalation
+promotes warnings; a config that names it without the opt-in is a validation
+error rather than a gate that cannot fire. Without `escalate` the items are
+reported as warnings and the deploy passes.
 
 ### TVIEWs after a restore or a failover (#422)
 

@@ -262,7 +262,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             parts = result.stdout.strip().split("=")
             state = parts[1] if len(parts) > 1 else "unknown"
             return f"timer:{state}"
-        except (subprocess.CalledProcessError, IndexError):  # pragma: no cover
+        except subprocess.CalledProcessError, IndexError:  # pragma: no cover
             return None
 
     def health_check(self) -> bool:

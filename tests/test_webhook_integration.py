@@ -7,7 +7,7 @@ Tests valid/invalid signatures, branch routing, and database recording.
 import hashlib
 import hmac
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -15,6 +15,9 @@ from fastapi.testclient import TestClient
 from fraisier.config import FraisierConfig
 from fraisier.git import WebhookEvent
 from fraisier.webhook import app
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 WEBHOOK_SECRET = "test-webhook-secret-for-integration-tests"
 

@@ -10,6 +10,13 @@ half-way on a production host.
 This builds the wheel, installs it into an empty venv with nothing but its own
 declared dependencies, and imports what the console scripts import.
 
+The venv is on Python 3.14, the floor, and the install is ``--only-binary
+:all:``: a dependency with no wheel for 3.14 must fail here rather than fall
+back to a source build, which is what confiture 1.20-1.29 did on Linux (they
+shipped a cp314 wheel for Windows only; the sdist then failed on pyo3). uv's
+cache hides that after any earlier source build, so the venv is fresh and the
+flag is what makes the missing wheel an error (#435).
+
 It needs ``uv`` and an index to resolve from, so it runs where
 ``FRAISIER_INTEGRATION=1`` (the quality gate) and is skipped elsewhere. The
 publish workflow repeats the same check on the artifact it is about to upload.
@@ -33,6 +40,9 @@ pytestmark = [
 ]
 
 REPO = Path(__file__).resolve().parent.parent
+
+#: The interpreter floor, which is also the only Python the wheel is tested on.
+FLOOR = "3.14"
 
 # Every module a console script in [project.scripts] starts from, plus the
 # self-upgrade worker, which imports fraisier.doctor after an install.
@@ -64,19 +74,30 @@ def isolated_venv(tmp_path_factory) -> Path:
     assert built.returncode == 0, built.stderr
     wheel = next(dist.glob("fraisier-*.whl"))
     venv = root / "venv"
-    created = _run("uv", "venv", "--quiet", str(venv))
+    created = _run("uv", "venv", "--quiet", "--python", FLOOR, str(venv))
     assert created.returncode == 0, created.stderr
     installed = _run(
         "uv",
         "pip",
         "install",
         "--quiet",
+        "--only-binary",
+        ":all:",
         "--python",
         str(venv / "bin" / "python"),
         str(wheel),
     )
     assert installed.returncode == 0, installed.stderr
     return venv
+
+
+def test_the_venv_is_on_the_floor(isolated_venv):
+    proc = _run(
+        str(isolated_venv / "bin" / "python"),
+        "-c",
+        "import sys; print('%d.%d' % sys.version_info[:2])",
+    )
+    assert proc.stdout.strip() == FLOOR, proc.stderr
 
 
 def test_the_cli_starts(isolated_venv):

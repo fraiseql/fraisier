@@ -597,7 +597,7 @@ def _extract_preflight_issues(stdout: str) -> str | None:
     """
     try:
         data = json.loads(stdout)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return None
     if not isinstance(data, dict):
         return None

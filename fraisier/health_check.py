@@ -18,12 +18,13 @@ import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from fraisier.config import HealthConfig, HealthResponseConfig
 
 from .logging import ContextualLogger
@@ -724,7 +725,7 @@ class AggregateHealthResult:
 
     def to_dict(
         self,
-        response_config: "HealthResponseConfig | None" = None,
+        response_config: HealthResponseConfig | None = None,
     ) -> dict[str, Any]:
         """Serialize to JSON-compatible dict, applying security omissions."""
         result: dict[str, Any] = {"status": self.status}
@@ -761,8 +762,8 @@ class AggregateHealthChecker:
 
     def __init__(
         self,
-        services: dict[str, "ServiceHealthConfig"],
-        health_config: "HealthConfig",
+        services: dict[str, ServiceHealthConfig],
+        health_config: HealthConfig,
     ):
         """Initialize aggregate health checker.
 
@@ -775,7 +776,7 @@ class AggregateHealthChecker:
         self.logger = logging.getLogger(__name__)
 
     def _check_service(
-        self, name: str, service_config: "ServiceHealthConfig"
+        self, name: str, service_config: ServiceHealthConfig
     ) -> ServiceHealthResult:
         """Check a single service using its full URL."""
         url = service_config.url
@@ -807,7 +808,7 @@ class AggregateHealthChecker:
                     )
                     version = _get_nested(data, version_field)
                     migration = _get_nested(data, migration_field)
-                except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
+                except json.JSONDecodeError, UnicodeDecodeError, KeyError:
                     pass  # Ignore parsing errors, keep None
 
                 return ServiceHealthResult(
@@ -818,7 +819,7 @@ class AggregateHealthChecker:
                     version=version,
                     migration=migration,
                 )
-        except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        except urllib.error.URLError, OSError, TimeoutError, ValueError:
             pass
 
         duration_ms = (time.time() - start) * 1000

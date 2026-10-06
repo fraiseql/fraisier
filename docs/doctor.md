@@ -27,7 +27,7 @@ passed.
 
 | Check | What it verifies | Network? | Canonical fix |
 |---|---|---|---|
-| `python_version` | Python >= 3.11 | no | upgrade Python |
+| `python_version` | the running Python is 3.14 or newer | no | `uv tool install --force --python 3.14 fraisier==<version>` |
 | `fraisier_version` | `importlib.metadata.version("fraisier")` resolves | no | `pip install --force-reinstall fraisier` |
 | `confiture_version` | `confiture --version` resolvable | no | `pip install confiture` |
 | `fraises_yaml_loadable` | `fraises.yaml` parses without error | no | `fraisier validate` for details; `fraisier init` for fresh setup |
@@ -44,6 +44,7 @@ passed.
 | `pgbackrest_helper` | every environment that restores from pgBackRest (`restore.source: pgbackrest`) has its root helper installed and listening | no | `fraisier scaffold && sudo fraisier scaffold-install --yes`; if installed, `systemctl status` its `.socket` |
 | `self_upgrade_failure` | the last webhook self-upgrade landed, rather than leaving the tool venv half-removed | no | clear foreign-owned `__pycache__`, then `uv tool install --force fraisier==<version>` — see [a self-upgrade that did not land](#a-self-upgrade-that-did-not-land) |
 | `unit_entrypoints` | every installed unit's `ExecStart=` fraisier binary exists and is executable | no | reinstall the tool venv — a unit whose entrypoint dangles fails 203/EXEC at its next restart |
+| `unit_interpreter` | the venv behind every installed unit's `ExecStart=` fraisier binary was built on Python 3.14 or newer (`warn` below it; `skip` when `pyvenv.cfg` cannot be read) | no | `uv tool install --force --python 3.14 fraisier==<version>` — self-upgrade is pinned to the running interpreter and refuses releases that need 3.14, so a 3.13 host must be moved by hand |
 | `pg_tviews_contract` | every configured database that has pg_tviews has read contract 1 (`tviews.contract_version()`), which confiture 1.29 requires; `extversion` reads `0.1.0` on every beta, so it cannot be used | yes | upgrade pg_tviews to 0.1.0-beta.20 or later and run its `scripts/migrate-from-0.1.0.sql` |
 | `backup_corpus_free_space` | each `retain[].dir` exists and its volume meets the entry's `min_free_gb` | no | free space on the volume, or declare a threshold — see [`min_free_gb`](deployment-guide.md#min_free_gb--a-policy-is-not-a-disk-alarm) |
 | `scaffold_artifact_coverage` | every artifact the manifest declares for this host is installed | no | `fraisier scaffold && sudo fraisier scaffold-install --yes` |

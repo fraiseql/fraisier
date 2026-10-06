@@ -58,5 +58,5 @@ class Snapshot:
             else:
                 # Assume bytes if no suffix
                 return float(size_str) / (1024 * 1024)
-        except (ValueError, IndexError):
+        except ValueError, IndexError:
             return None

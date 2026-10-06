@@ -141,6 +141,16 @@ class TestLoader:
         loaded = load_post_migrate_check({"post_migrate_check": {"enabled": True}})
         assert loaded.escalate == ()
 
+    def test_extra_objects_defaults_to_declared(self) -> None:
+        loaded = load_post_migrate_check({"post_migrate_check": {"enabled": True}})
+        assert loaded.extra_objects == "declared"
+
+    def test_extra_objects_is_read_from_config(self) -> None:
+        loaded = load_post_migrate_check(
+            {"post_migrate_check": {"enabled": True, "extra_objects": "all"}}
+        )
+        assert loaded.extra_objects == "all"
+
     def test_escalate_is_read_from_config(self) -> None:
         loaded = load_post_migrate_check(
             {
@@ -234,6 +244,36 @@ class TestValidation:
                 "production",
                 _config(enabled=True, escalate="missing_index"),
             )
+
+    @pytest.mark.parametrize("bad", ["every", "", None, True, ["all"]])
+    def test_extra_objects_outside_the_vocabulary_is_rejected(
+        self, bad: object
+    ) -> None:
+        with pytest.raises(ValidationError, match="extra_objects"):
+            validate_one_fraise_environment(
+                "api", "production", _config(enabled=True, extra_objects=bad)
+            )
+
+    def test_extra_objects_all_passes(self) -> None:
+        validate_one_fraise_environment(
+            "api", "production", _config(enabled=True, extra_objects="all")
+        )
+
+    def test_escalating_extra_object_needs_the_opt_in(self) -> None:
+        """At the default an extra object is ``info``; escalation reads warnings."""
+        with pytest.raises(ValidationError, match="extra_objects: all"):
+            validate_one_fraise_environment(
+                "api",
+                "production",
+                _config(enabled=True, escalate=["extra_object"]),
+            )
+
+    def test_escalating_extra_object_with_the_opt_in_passes(self) -> None:
+        validate_one_fraise_environment(
+            "api",
+            "production",
+            _config(enabled=True, escalate=["extra_object"], extra_objects="all"),
+        )
 
     def test_an_empty_escalate_is_fine(self) -> None:
         """It is the default; spelling it out is not an error."""

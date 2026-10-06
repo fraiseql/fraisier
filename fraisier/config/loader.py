@@ -28,9 +28,8 @@ import os
 import re
 import subprocess
 import threading
-from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -66,6 +65,9 @@ from fraisier.config.schema import (
     _config_search_locations,
 )
 from fraisier.errors import ConfigurationError, ValidationError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -465,7 +467,7 @@ class FraisierConfig:
                 check=True,
             )
             return Path(result.stdout.strip()).name
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except subprocess.CalledProcessError, FileNotFoundError:
             logging.getLogger(__name__).debug(
                 "Could not determine git repo name, using cwd"
             )

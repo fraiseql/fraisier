@@ -8,7 +8,6 @@ import hmac
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +21,8 @@ from .config import get_config, reset_config
 from .config._lazy_env import LazyEnv, to_str
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from .config.loader import FraisierConfig
     from .database import FraisierDB
 from .deferred_restart import maybe_apply_deferred_restarts
@@ -148,7 +149,7 @@ def _reconcile_orphaned_deploys() -> None:
 
 #: Held so the replay task is not garbage-collected mid-flight. asyncio keeps
 #: only a weak reference to a bare `create_task` result.
-_replay_task: "asyncio.Task[None] | None" = None
+_replay_task: asyncio.Task[None] | None = None
 
 
 async def _run_replays(targets: list[Any]) -> None:
@@ -210,7 +211,7 @@ def _replay_refused_dispatches() -> None:
 
     try:
         config = get_config()
-    except (FileNotFoundError, FrameworkError):
+    except FileNotFoundError, FrameworkError:
         return
     lock_dir = _get_lock_dir(config)
     if lock_dir is None:
@@ -266,7 +267,7 @@ def _install_sighup_reload() -> asyncio.AbstractEventLoop | None:
             reset_config()
 
         loop.add_signal_handler(signal.SIGHUP, _reload)
-    except (NotImplementedError, RuntimeError, ValueError):
+    except NotImplementedError, RuntimeError, ValueError:
         logger.debug(
             "SIGHUP config reload unavailable in this runtime; skipping",
             exc_info=True,
@@ -284,7 +285,7 @@ def _remove_sighup_reload(loop: asyncio.AbstractEventLoop | None) -> None:
         return
     try:
         loop.remove_signal_handler(signal.SIGHUP)
-    except (NotImplementedError, RuntimeError, ValueError):
+    except NotImplementedError, RuntimeError, ValueError:
         logger.debug("Could not remove SIGHUP handler", exc_info=True)
 
 
@@ -365,7 +366,7 @@ def _self_upgrade_flag_max_age_s() -> float:
                 "self_upgrade_flag_max_age_s", _FLAG_MAX_AGE_DEFAULT_S
             )
         )
-    except (FileNotFoundError, AttributeError, ValueError, TypeError):
+    except FileNotFoundError, AttributeError, ValueError, TypeError:
         return _FLAG_MAX_AGE_DEFAULT_S
 
 
@@ -382,7 +383,7 @@ def _retry_after_seconds() -> int:
                 "self_upgrade_retry_after_s", _RETRY_AFTER_DEFAULT_S
             )
         )
-    except (FileNotFoundError, AttributeError, ValueError, TypeError):
+    except FileNotFoundError, AttributeError, ValueError, TypeError:
         return _RETRY_AFTER_DEFAULT_S
 
 
@@ -463,7 +464,7 @@ def _record_refusals(
 
 
 def _discharge_refusal(
-    config: "FraisierConfig", fraise_name: str, environment: str
+    config: FraisierConfig, fraise_name: str, environment: str
 ) -> None:
     """Clear this target's refused-dispatch entry after a deploy that landed.
 
@@ -596,7 +597,7 @@ async def _run_deployment(
     webhook_id: int | None,
     git_branch: str | None,
     git_commit: str | None,
-    db: "FraisierDB",
+    db: FraisierDB,
 ) -> None:
     """Run the actual deployment within a lock."""
     upgrading = False
@@ -721,7 +722,7 @@ async def _run_deployment(
         )
 
 
-def _get_lock_dir(config: "FraisierConfig") -> Path | None:
+def _get_lock_dir(config: FraisierConfig) -> Path | None:
     """Extract lock directory from config, or None when it is unusable.
 
     A relative ``deployment.lock_dir`` is a misconfiguration: the lock file
@@ -733,7 +734,7 @@ def _get_lock_dir(config: "FraisierConfig") -> Path | None:
     """
     try:
         lock_dir = Path(config.deployment.lock_dir)
-    except (AttributeError, FileNotFoundError):
+    except AttributeError, FileNotFoundError:
         return None
     if not lock_dir.is_absolute():
         logger.error(
@@ -820,7 +821,7 @@ def _dispatch_deployment(
     event: WebhookEvent,
     background_tasks: BackgroundTasks,
     webhook_id: int,
-    config: "FraisierConfig",
+    config: FraisierConfig,
 ) -> dict[str, Any]:
     """Find matching fraises for a push event and trigger deployments.
 

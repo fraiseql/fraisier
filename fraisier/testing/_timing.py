@@ -20,9 +20,7 @@ class Elapsed:
 
 
 @contextmanager
-def timed_phase(
-    phase_name: str, logger: logging.Logger
-) -> Generator[Elapsed, None, None]:
+def timed_phase(phase_name: str, logger: logging.Logger) -> Generator[Elapsed]:
     """Context manager that logs and records elapsed time for a phase."""
     elapsed = Elapsed()
     start = time.monotonic()

@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.85.0] - 2026-10-06
+
+**⚠️ Python 3.14 is the floor.** fraisier now requires Python 3.14 and
+`fraiseql-confiture` 1.30 (`>=1.30.0,<1.31`), which declares the same floor and ships
+the first cp314 wheels for Linux and macOS (manylinux_2_28 x86_64, macOS arm64) beside
+Windows. A host on 3.11-3.13 stays on fraisier 0.84.x and confiture 1.29.x
+([#435](https://github.com/fraiseql/fraisier/issues/435), fraiseql/confiture#598).
+
+### Added
+
+- **`post_migrate_check.extra_objects: declared | all`** (off by default, `declared`).
+  `all` passes `--extra-objects all` to the live-drift check, so every stray schema,
+  extension, domain, policy and the like is reported as a `warning` instead of only the
+  kinds the DDL declares, as `info`.
+- **`extra_object` is an `escalate` kind**, valid only with `extra_objects: all`: at the
+  default confiture grades it `info`, which escalation never reads, so a config naming
+  it without the opt-in is refused at load (and by the gate) rather than accepted and inert.
+  The test payloads are wire bytes captured from confiture 1.30.0.
+- **`fraisier doctor` `unit_interpreter`** warns when the venv behind an installed unit's
+  `ExecStart=` binary was built on Python below 3.14: the host keeps serving, but
+  self-upgrade is pinned to the running interpreter and cannot receive this release.
+  `python_version` now fails below 3.14 and names the move.
+
+### Changed
+
+- `requires-python >=3.14`; classifiers, ruff `target-version` and every CI job
+  (`quality-gate`, `python-version-matrix`, `publish`) are 3.14 only, pinned together by
+  `tests/test_python_floor.py`. ruff's 3.14 target rewrites `except (A, B):` to
+  `except A, B:` (PEP 758) and moves annotation-only imports under `TYPE_CHECKING`.
+- The isolated-install guard (`tests/test_isolated_install.py` and the publish smoke
+  test) builds a fresh 3.14 venv and installs with `--only-binary :all:`, so a dependency
+  with no cp314 wheel fails the release instead of falling back to a source build that
+  uv's cache hides afterwards.
+- The FreeBSD bootstrap installs `python314` (it installed `python311`).
+
+### Upgrade note
+
+**Hosts move by hand.** Self-upgrade is pinned to the running interpreter and will
+refuse this release on a 3.13 host, by design:
+
+    uv tool install --force --python 3.14 fraisier==0.85.0
+
+`fraisier doctor` (`unit_interpreter`) names every unit still on an older Python.
+
+**confiture 1.30 changes, audited against what fraisier reads:**
+
+- The import surface is unchanged (`tests/test_confiture_dependency_floor.py`), and 6399
+  tests pass with the same 10 environment skips as on 0.84.3.
+- Drift reports `missing_object` (**critical**) for a schema, extension, domain, policy,
+  rule and the like that the model holds and the live database lost, so a deploy that
+  passed with one missing now fails the gate.
+- ⚠️ A confiture `backup_before_migrate` hook configured without `compression` now writes
+  `<migration>.sql.zst` via `pg_dump` (zstd needs a `pg_dump` client 16 or newer) where it
+  wrote `.sql.gz`. Set `compression: gzip` to keep the old suffix. `compress: true/false`
+  still works and warns.
+- PostgreSQL 16 is confiture's minimum; nothing refuses an older server.
+- `DIFFER_404` is a new diff warning (exit 0) in confiture's exit-code table.
+
 ## [0.84.3] - 2026-10-04
 
 **A self-upgrade the running Python cannot satisfy now stops before it installs

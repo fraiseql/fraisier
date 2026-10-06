@@ -158,7 +158,7 @@ def _check_systemd_version() -> tuple[bool, str, str]:
                 )
         else:
             return False, "unknown", "systemctl command failed"
-    except (subprocess.SubprocessError, FileNotFoundError):
+    except subprocess.SubprocessError, FileNotFoundError:
         return False, "unknown", "systemd not available"
 
 
@@ -248,7 +248,7 @@ def _check_systemd_units(unit_name: str) -> dict:
         else:
             return {"ok": False, "message": f"Systemd unit {unit_name} not enabled"}
 
-    except (subprocess.SubprocessError, FileNotFoundError):
+    except subprocess.SubprocessError, FileNotFoundError:
         return {"ok": False, "message": "systemctl command not available"}
 
 

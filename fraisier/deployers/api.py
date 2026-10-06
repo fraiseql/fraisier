@@ -679,6 +679,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             checks=gate.checks,
             database_url=self._migrated_database_url,
             escalate=gate.escalate,
+            extra_objects=gate.extra_objects,
         )
         if result.passed:
             logger.info("%s", result.summary())

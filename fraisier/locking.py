@@ -15,13 +15,15 @@ import os
 import socket
 import sqlite3
 import time
-from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from fraisier.errors import DeploymentLockError
 from fraisier.worker_logging import SELF_UPGRADE_LOG_DIR
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
 

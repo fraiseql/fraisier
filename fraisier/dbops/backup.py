@@ -8,15 +8,17 @@ import logging
 import re
 import shutil
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
 from fraisier.dbops.archive import ArchiveVerdict, verify_archive
 from fraisier.dbops.operations import _pg_cmd
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 log = logging.getLogger(__name__)
 

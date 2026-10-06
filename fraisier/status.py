@@ -234,7 +234,7 @@ def elapsed_seconds(status: DeploymentStatusFile) -> float | None:
             started_dt = datetime.datetime.fromisoformat(status.started_at)
         started_ts = started_dt.timestamp()
         return time.time() - started_ts
-    except (ValueError, TypeError, AttributeError):
+    except ValueError, TypeError, AttributeError:
         return None
 
 
@@ -260,7 +260,7 @@ def reconcile_orphaned_deploys(
     for path in sorted(status_dir.glob("*.status.json")):
         try:
             status = _from_dict(json.loads(path.read_text()))
-        except (OSError, ValueError, TypeError):
+        except OSError, ValueError, TypeError:
             logger.warning("Skipping unreadable status file %s", path)
             continue
         if status.state not in NON_TERMINAL_STATES or not owner_is_gone(status):
@@ -282,7 +282,7 @@ def reconcile_orphaned_deploys(
         )
         try:
             write_status(status, status_dir=status_dir)
-        except (OSError, ValidationError):
+        except OSError, ValidationError:
             logger.warning("Could not reconcile status file %s", path, exc_info=True)
             continue
         logger.warning(

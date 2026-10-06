@@ -9,15 +9,17 @@ Follows CQRS pattern with clear separation of write (tb_*) and read (v_*) models
 import os
 import sqlite3
 import threading
-from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fraisier.db.history import DeploymentHistoryManager
 from fraisier.db.lock_store import DeploymentLockStore
 from fraisier.db.state import FraiseStateManager
 from fraisier.db.webhook_store import WebhookEventStore
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 # Default database location
 DEFAULT_DB_PATH = Path("/opt/fraisier/fraisier.db")
@@ -34,7 +36,7 @@ def get_db_path() -> Path:
 
 
 @contextmanager
-def get_connection() -> Generator[sqlite3.Connection, None, None]:
+def get_connection() -> Generator[sqlite3.Connection]:
     """Get database connection with row factory and concurrency pragmas."""
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)

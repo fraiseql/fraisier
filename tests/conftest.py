@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +11,9 @@ from fraisier.config import FraisierConfig, reset_config
 from fraisier.database import FraisierDB
 from fraisier.dbops._url import replace_db_name
 from tests.fixtures.git_env import git_deploy_env as git_deploy_env  # noqa: PLC0414
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture(autouse=True)

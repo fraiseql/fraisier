@@ -413,7 +413,7 @@ def _unit_entrypoint(service: str) -> str | None:
 
     try:
         text = (_UNIT_DIR / service).read_text()
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
     for line in text.splitlines():
         binary = _exec_start_binary(line)

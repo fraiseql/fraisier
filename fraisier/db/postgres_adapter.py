@@ -303,7 +303,7 @@ class PostgresAdapter(FraiserDatabaseAdapter):
                 idle_connections=pool_available,
                 waiting_requests=stats.get("requests_waiting", 0),
             )
-        except (psycopg.Error, AttributeError):  # pragma: no cover
+        except psycopg.Error, AttributeError:  # pragma: no cover
             return PoolMetrics(
                 total_connections=self.pool_max_size,
                 active_connections=0,

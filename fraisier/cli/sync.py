@@ -316,7 +316,7 @@ def _read_branch_version(branch: str) -> str:
             v = data.get("version")
             if v:
                 return str(v)
-        except (json.JSONDecodeError, AttributeError):
+        except json.JSONDecodeError, AttributeError:
             pass
 
     r2 = subprocess.run(

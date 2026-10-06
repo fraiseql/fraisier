@@ -8,10 +8,12 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ class DeploymentProvider(ABC):
 
     name: str
 
-    def __init__(self, config: "dict[str, Any] | ProviderConfig"):
+    def __init__(self, config: dict[str, Any] | ProviderConfig):
         """Initialize provider with configuration.
 
         Args:
@@ -413,7 +415,7 @@ class ProviderRegistry:
 
     @classmethod
     def get_provider(
-        cls, provider_type: str, config: "ProviderConfig"
+        cls, provider_type: str, config: ProviderConfig
     ) -> DeploymentProvider:
         """Create a provider instance from config.
 

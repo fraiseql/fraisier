@@ -89,9 +89,13 @@ def register_check(
 # ---------------------------------------------------------------------------
 
 
+#: The interpreter floor (#435): ``requires-python`` and confiture's own.
+PYTHON_FLOOR = (3, 14)
+
+
 @register_check("python_version")
 def _check_python_version(_config: FraisierConfig | None) -> CheckResult:
-    minimum = (3, 11)
+    minimum = PYTHON_FLOOR
     actual = sys.version_info[:3]
     detail = ".".join(str(p) for p in actual)
     if actual < minimum:
@@ -99,7 +103,10 @@ def _check_python_version(_config: FraisierConfig | None) -> CheckResult:
             "python_version",
             "fail",
             f"Python {detail} < {'.'.join(str(p) for p in minimum)}",
-            fix_hint="upgrade Python to 3.11 or newer",
+            fix_hint=(
+                f"move fraisier to Python {'.'.join(str(p) for p in minimum)}: "
+                "`uv tool install --force --python 3.14 fraisier==<version>`"
+            ),
         )
     return CheckResult("python_version", "pass", detail)
 
@@ -725,7 +732,7 @@ def _ddl_dirs(gate: _DriftGate) -> list[Path]:
 
     try:
         raw = yaml.safe_load(gate.config_path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
+    except OSError, yaml.YAMLError:
         return []
     if not isinstance(raw, dict):
         return []
@@ -778,7 +785,7 @@ def _confiture_cli_version() -> Version | None:
             timeout=5,
             check=False,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired, OSError:
         return None
     if proc.returncode != 0:
         return None
@@ -1117,7 +1124,7 @@ def _built_schema(gate: _DriftGate) -> str | None:
 
     try:
         env_name = drift._env_for_build(gate.project_dir, gate.config_path)
-    except (ValueError, OSError):
+    except ValueError, OSError:
         return None
     with tempfile.TemporaryDirectory(prefix="fraisier-doctor-names-") as tmp:
         output = Path(tmp) / "expected_schema.sql"
@@ -1863,7 +1870,7 @@ def _check_unit_entrypoints(_config: FraisierConfig | None) -> CheckResult:
     for unit in unit_files:
         try:
             text = unit.read_text()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             # A unit we cannot read is not evidence of anything; the artifact
             # coverage check is what reports units that should not be here.
             continue
@@ -1902,6 +1909,88 @@ def _check_unit_entrypoints(_config: FraisierConfig | None) -> CheckResult:
             "! -user $(id -un) -type d -exec rm -rf {} +\n"
             "  uv tool install --force fraisier==<version>\n"
             "then verify with `ls -l ~/.local/bin/fraisier*`."
+        ),
+    )
+
+
+def _venv_python(binary: str) -> tuple[int, ...] | None:
+    """The Python the venv holding *binary* was built on, or ``None``.
+
+    Read from ``pyvenv.cfg`` (``version_info`` under uv, ``version`` under
+    ``venv``), not by running the interpreter: the doctor may be unprivileged,
+    and a ProtectHome'd or half-removed venv must read as "unknown", never as a
+    pass.
+    """
+    resolved = Path(binary).resolve()
+    if resolved.parent.name != "bin":
+        return None
+    try:
+        text = (resolved.parent.parent / "pyvenv.cfg").read_text()
+    except OSError, UnicodeDecodeError:
+        return None
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() in ("version_info", "version"):
+            parts = value.strip().split(".")[:3]
+            if len(parts) >= 2 and all(p.isdigit() for p in parts[:2]):
+                return tuple(int(p) for p in parts if p.isdigit())
+    return None
+
+
+@register_check("unit_interpreter")
+def _check_unit_interpreter(_config: FraisierConfig | None) -> CheckResult:
+    """Every installed unit runs on the Python floor (#435).
+
+    fraisier requires Python 3.14. A tool venv installed on 3.13 keeps serving
+    the release it has, but a self-upgrade is pinned to the interpreter it runs
+    on and refuses every release from the floor change on, by design. The host
+    looks healthy and is stuck, so this reads the venv each unit's
+    ``ExecStart=`` binary lives in rather than the interpreter the doctor was
+    started with.
+
+    ``warn``, not ``fail``, matching ``self_upgrade_failure``: the host is up
+    and serving. What it has lost is the ability to receive a release. A venv
+    whose version cannot be read is a ``skip``, never a pass.
+    """
+    name = "unit_interpreter"
+    try:
+        unit_files = sorted(SYSTEMD_UNIT_DIR.glob("*.service"))
+    except OSError as exc:
+        return CheckResult(name, "skip", f"could not read {SYSTEMD_UNIT_DIR}: {exc}")
+
+    stale: list[str] = []
+    read = 0
+    for unit in unit_files:
+        try:
+            text = unit.read_text()
+        except OSError, UnicodeDecodeError:
+            continue
+        for line in text.splitlines():
+            binary = _exec_start_binary(line)
+            if binary is None or not Path(binary).name.startswith("fraisier"):
+                continue
+            found = _venv_python(binary)
+            if found is None:
+                continue
+            read += 1
+            if found[:2] < PYTHON_FLOOR:
+                stale.append(f"{unit.name} -> Python {'.'.join(map(str, found))}")
+
+    if not read:
+        return CheckResult(
+            name, "skip", "no unit names a fraisier venv whose Python can be read"
+        )
+    if not stale:
+        return CheckResult(name, "pass", f"{read} unit venv(s) on Python >= 3.14")
+    return CheckResult(
+        name,
+        "warn",
+        f"below the Python 3.14 floor: {'; '.join(stale)}",
+        fix_hint=(
+            "this host keeps serving, but self-upgrade is pinned to the running "
+            "interpreter and refuses releases that need 3.14, so it cannot "
+            "receive them. Move it by hand:\n"
+            "  uv tool install --force --python 3.14 fraisier==<version>"
         ),
     )
 
@@ -2049,7 +2138,7 @@ def _binary_semver(binary: str) -> tuple[int, int, int] | None:
             timeout=15,
             check=False,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired, OSError:
         return None
     if proc.returncode != 0:
         return None
@@ -2075,7 +2164,7 @@ def _installed_deploy_entrypoints() -> dict[str, str] | None:
     for unit in unit_files:
         try:
             text = unit.read_text()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
         for line in text.splitlines():
             binary = _exec_start_binary(line)

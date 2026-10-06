@@ -739,6 +739,7 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
         ON_EMPTY,
         VALID_CHECKS,
         VALID_ESCALATIONS,
+        VALID_EXTRA_OBJECTS,
     )
 
     errors: list[str] = []
@@ -803,6 +804,26 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
                 f"{fraise_name}: {location}.escalate has unknown drift kind(s) "
                 f"{unknown}; valid: {', '.join(VALID_ESCALATIONS)}"
             )
+
+    # `extra_object` is a warning only when confiture is asked to report every
+    # stray object; at the default it is `info`, which escalation never reads.
+    # Naming it without the opt-in is a gate that cannot fire.
+    extra_objects = block.get("extra_objects", "declared")
+    if extra_objects not in VALID_EXTRA_OBJECTS:
+        errors.append(
+            f"{fraise_name}: {location}.extra_objects must be one of "
+            f"{', '.join(VALID_EXTRA_OBJECTS)}, got {extra_objects!r}"
+        )
+    elif (
+        isinstance(escalate, list)
+        and "extra_object" in escalate
+        and extra_objects != "all"
+    ):
+        errors.append(
+            f"{fraise_name}: {location}.escalate names extra_object, which needs "
+            f"{location}.extra_objects: all (at the default confiture grades a "
+            f"stray object info, and escalation only promotes warnings)"
+        )
 
     return errors
 
