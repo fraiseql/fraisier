@@ -52,6 +52,17 @@ def test_an_empty_tview_refuses_the_restore_and_names_the_pair() -> None:
         _check(_strategy(), found=EMPTY)
 
 
+@pytest.mark.parametrize("mode", ["fail", "warn"])
+def test_the_restore_passes_its_on_empty_choice_for_an_unreadable_tview(
+    mode: str,
+) -> None:
+    strategy = _strategy(on_empty_tview=mode)
+    with patch("fraisier.dbops.tviews.find_empty_tviews", return_value=[]) as find:
+        strategy._check_tviews_not_empty()
+
+    assert find.call_args.kwargs["on_unreadable"] == mode
+
+
 def test_it_probes_the_restored_database_not_the_maintenance_one() -> None:
     url = _check(_strategy())
 
@@ -76,7 +87,7 @@ def test_it_runs_after_the_migration_and_before_the_receipt() -> None:
     order: list[str] = []
     with patch(
         "fraisier.dbops.tviews.find_empty_tviews",
-        side_effect=lambda *_a: order.append("tviews") or [],
+        side_effect=lambda *_a, **_k: order.append("tviews") or [],
     ):
         _execute(order=order)
 
