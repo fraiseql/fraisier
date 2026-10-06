@@ -90,7 +90,17 @@ def test_a_truncated_tview_is_found_by_name_and_view(url: str) -> None:
 
     (found,) = tviews.find_empty_tviews(url)
 
-    assert (found.tview, found.view) == ("public.tv_post", "public.v_post")
+    # The view is wherever the registry says: `public.v_post` before pg_tviews
+    # 0.1.0-beta.25, `tviews.public__tv_post` from it. The probe must agree with
+    # the registry, never with a name this test infers.
+    with psycopg.connect(url, autocommit=True) as conn:
+        (expected,) = conn.execute(
+            "SELECT format('%s.%s', n.nspname, c.relname) "
+            "FROM tviews.registry r JOIN pg_class c ON c.oid = r.view "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE r.schema = 'public' AND r.name = 'tv_post'"
+        ).fetchone()
+    assert (found.tview, found.view) == ("public.tv_post", expected)
 
 
 def test_rebuild_brings_the_rows_back_and_names_the_entity(url: str) -> None:

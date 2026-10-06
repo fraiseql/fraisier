@@ -126,7 +126,12 @@ class RestoreMigrateStrategy(Strategy):
 
         url = replace_db_name(self._admin_url, self._config.db_name)
         try:
-            empty = tviews.find_empty_tviews(url)
+            empty = tviews.find_empty_tviews(
+                url,
+                on_unreadable="warn"
+                if self._config.on_empty_tview == "warn"
+                else "fail",
+            )
         except (tviews.TviewError, psycopg.Error) as exc:
             message = f"could not check TVIEWs for emptiness: {exc}"
             if self._config.on_empty_tview == "warn":

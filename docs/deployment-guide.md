@@ -1130,6 +1130,11 @@ deploy; the TVIEWs the role can read are still checked. From pg_tviews 0.1.0-bet
 backing view takes its TVIEW table's `SELECT` grants, so a role that reads `tv_<entity>`
 reads the view.
 
+Under `on_empty: fail` that is not a warning: a TVIEW nobody can look at has cleared
+nothing, so a gate the project declared (and the restore probe) stops, naming each one and
+the `GRANT SELECT ON <schema>.tv_<entity> TO <current role>` that fixes it. `on_empty: warn`,
+and a gate that is only the default, keep the log line.
+
 `on_empty: warn` turns the refusals into a log line, the way `on_critical: warn`
 does; `fail` is the default for the same reason it is there. The probe follows
 `enabled`: declining the gate declines it. A database without pg_tviews is never

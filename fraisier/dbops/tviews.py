@@ -135,7 +135,9 @@ def _usable(conn: _Executes) -> TviewsSupport | None:
     return support if support.state == "ok" else None
 
 
-def find_empty_tviews(url: str) -> list[EmptyTview]:
+def find_empty_tviews(
+    url: str, *, on_unreadable: Literal["warn", "fail"] = "warn"
+) -> list[EmptyTview]:
     """Every TVIEW with no rows whose backing view has some.
 
     confiture's drift is schema-only, so this is the data probe it cannot be.
@@ -150,6 +152,11 @@ def find_empty_tviews(url: str) -> list[EmptyTview]:
     into its own schema and gives it its table's ``SELECT`` grants, so this is
     what a role that read the old ``v_<entity>`` only through a grant on the view
     meets.  Any other error still propagates.
+
+    *on_unreadable* is what such a TVIEW costs.  ``warn`` (the default) is the
+    above.  ``fail`` is for a gate whose owner chose ``on_empty: fail``: a TVIEW
+    nobody can look at has cleared nothing, so the probe raises
+    :class:`TviewError` naming each one and the grant that fixes it.
 
     Returns ``[]`` when the database has no pg_tviews.
     """
@@ -167,6 +174,7 @@ def find_empty_tviews(url: str) -> list[EmptyTview]:
             ).format(sql.Identifier(str(support.schema)))
         ).fetchall()
         empty: list[EmptyTview] = []
+        unreadable: list[str] = []
         for schema, name, view_schema, view_name in registry:
             try:
                 row = conn.execute(
@@ -178,22 +186,41 @@ def find_empty_tviews(url: str) -> list[EmptyTview]:
                     )
                 ).fetchone()
             except psycopg.errors.InsufficientPrivilege:
+                grant = _grant_hint(conn, schema, name)
                 log.warning(
                     "pg_tviews: cannot verify %s.%s (backing view %s.%s): "
-                    "permission denied; skipped. Fix: GRANT SELECT ON %s.%s TO "
-                    "<role>; the backing view follows its table's grants",
+                    "permission denied; skipped. Fix: %s; the backing view "
+                    "follows its table's grants",
                     schema,
                     name,
                     view_schema,
                     view_name,
-                    schema,
-                    name,
+                    grant,
+                )
+                unreadable.append(
+                    f"{schema}.{name} (view {view_schema}.{view_name}): {grant}"
                 )
                 continue
             has_rows, view_has_rows = row if row is not None else (True, False)
             if not has_rows and view_has_rows:
                 empty.append(EmptyTview(schema, name, view_schema, view_name))
+        if unreadable and on_unreadable == "fail":
+            raise TviewError(
+                f"{len(unreadable)} pg_tviews TVIEW(s) cannot be read by this role, "
+                f"so they were not checked for emptiness: {'; '.join(unreadable)}"
+            )
         return empty
+
+
+def _grant_hint(conn: _Executes, schema: str, name: str) -> str:
+    """The ``GRANT`` that lets the connecting role read a TVIEW, ready to paste."""
+    row = conn.execute("SELECT current_user").fetchone()
+    role = row[0] if row else "<role>"
+    return (
+        sql.SQL("GRANT SELECT ON {t} TO {r}")
+        .format(t=sql.Identifier(schema, name), r=sql.Identifier(role))
+        .as_string()
+    )
 
 
 def _rebuild(url: str, *, only_empty: bool) -> list[TviewRebuilt]:

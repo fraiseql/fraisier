@@ -136,6 +136,7 @@ class TestAnUnreadableTviewCannotBeVerified:
                 first,
             ),
             probe('app"."tv_user', tv=False, view=True),
+            ("current_user", [("deploy",)]),
         )
 
     def test_a_denied_probe_does_not_fail_and_the_rest_are_still_checked(
@@ -161,7 +162,37 @@ class TestAnUnreadableTviewCannotBeVerified:
         assert len(warnings) == 1
         assert "public.tv_post" in warnings[0]
         assert "public.v_post" in warnings[0]
-        assert "GRANT SELECT ON public.tv_post" in warnings[0]
+        # the connecting role, quoted, so the line can be pasted as it stands
+        assert 'GRANT SELECT ON "public"."tv_post" TO "deploy"' in warnings[0]
+        assert "<role>" not in warnings[0]
+
+    def test_under_fail_an_unreadable_tview_is_an_error_naming_it_and_the_grant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(monkeypatch, self._conn(self._denied()))
+
+        with pytest.raises(tviews.TviewError) as raised:
+            tviews.find_empty_tviews("postgresql:///app", on_unreadable="fail")
+
+        text = str(raised.value)
+        assert "public.tv_post" in text
+        assert "public.v_post" in text
+        assert 'GRANT SELECT ON "public"."tv_post" TO "deploy"' in text
+        assert "app.tv_user" not in text  # the readable one is not blamed
+
+    def test_under_fail_a_readable_database_is_unaffected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(monkeypatch, self._conn([(True, True)]))
+
+        found = tviews.find_empty_tviews("postgresql:///app", on_unreadable="fail")
+
+        assert [e.tview for e in found] == ["app.tv_user"]
+
+    def test_the_default_is_warn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        patch_connect(monkeypatch, self._conn(self._denied()))
+
+        assert tviews.find_empty_tviews("postgresql:///app")  # no raise
 
     def test_any_other_failure_is_still_an_error(
         self, monkeypatch: pytest.MonkeyPatch
