@@ -1336,54 +1336,56 @@ def _database_urls(config: FraisierConfig | None) -> dict[str, str]:
 
 @register_check("pg_tviews_contract", network=True)
 def _check_pg_tviews_contract(config: FraisierConfig | None) -> CheckResult:
-    """pg_tviews must speak read contract 1 (0.1.0-beta.20 or later).
+    """confiture must be able to read pg_tviews (``MINIMUM_PG_TVIEWS`` or later).
 
-    confiture 1.29 refuses an older pg_tviews with ``CONFIG_014`` wherever it
+    confiture refuses a pg_tviews it cannot read with ``CONFIG_014`` wherever it
     reads TVIEWs live, and the drift gate is on by default — so on an old host
     every deploy of a TVIEW project fails its gate, after the migrations ran.
 
     ``pg_extension.extversion`` cannot tell the versions apart: it reads
-    ``0.1.0`` on every beta.  ``tviews.contract_version()`` is the one thing
-    confiture itself checks, so the check calls it.  A database without the
-    extension is none of this check's business, and one it cannot reach is a
-    skip rather than a verdict.
+    ``0.1.0`` on every beta.  The check asks confiture's own
+    ``require_supported_pg_tviews_on``, on a connection doctor opened: given a
+    URL, confiture reports one it cannot reach as ``CONFIG_006``, where doctor
+    reports a skip.  A database without the extension is none of this check's
+    business.
     """
+    import confiture.platform
     import psycopg
+    from confiture.exceptions import ConfigurationError
 
     from fraisier.dbops.tviews import read_support
 
     name = "pg_tviews_contract"
+    minimum = confiture.platform.MINIMUM_PG_TVIEWS
     urls = _database_urls(config)
     if not urls:
         return CheckResult(name, "skip", "no database.database_url configured")
 
-    old: list[str] = []
+    refused: list[str] = []
+    hints: list[str] = []
     seen = 0
     unreachable: list[str] = []
     for target, url in urls.items():
         try:
             with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
-                support = read_support(conn)
+                if read_support(conn).state == "absent":
+                    continue
+                seen += 1
+                confiture.platform.require_supported_pg_tviews_on(conn)
         except psycopg.Error as exc:
             unreachable.append(f"{target}: {str(exc).splitlines()[0]}")
-            continue
-        if support.state == "absent":
-            continue
-        seen += 1
-        if support.state == "outdated":
-            old.append(target)
+        except ConfigurationError as exc:
+            refused.append(f"{target}: {str(exc).splitlines()[0]}")
+            if exc.resolution_hint and exc.resolution_hint not in hints:
+                hints.append(exc.resolution_hint)
 
-    if old:
+    if refused:
         return CheckResult(
             name,
             "fail",
-            f"pg_tviews on {', '.join(old)} predates read contract 1 "
-            f"(0.1.0-beta.20): confiture 1.29 refuses it with CONFIG_014, so "
-            f"every deploy of a TVIEW project fails its drift gate",
-            fix_hint=(
-                "upgrade pg_tviews to 0.1.0-beta.20 or later and run its "
-                "scripts/migrate-from-0.1.0.sql on each database"
-            ),
+            f"confiture refuses pg_tviews with CONFIG_014 on {'; '.join(refused)} "
+            f"Every deploy of a TVIEW project there fails its drift gate.",
+            fix_hint="; ".join(hints) or f"upgrade pg_tviews to {minimum} or later",
         )
     if not seen:
         if unreachable:
@@ -1391,7 +1393,9 @@ def _check_pg_tviews_contract(config: FraisierConfig | None) -> CheckResult:
                 name, "skip", f"could not reach {'; '.join(unreachable)}"
             )
         return CheckResult(name, "skip", "pg_tviews is not installed")
-    return CheckResult(name, "pass", f"pg_tviews read contract 1 on {seen} database(s)")
+    return CheckResult(
+        name, "pass", f"pg_tviews {minimum} or later on {seen} database(s)"
+    )
 
 
 # ---------------------------------------------------------------------------

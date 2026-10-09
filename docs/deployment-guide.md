@@ -1165,10 +1165,13 @@ populated view, `3` it could not check (no pg_tviews, an older one, no
 connection). A host that could not look never reports what a host that looked and
 passed reports.
 
-**pg_tviews must be 0.1.0-beta.20 or later** — confiture 1.29 requires read
-contract 1, and so does everything above. `fraisier doctor` checks it
-(`pg_tviews_contract`) by calling `tviews.contract_version()`, because
-`pg_extension.extversion` reads `0.1.0` on every beta.
+**pg_tviews must be 0.1.0-beta.26 or later.** confiture 1.34 refuses an older one
+with `CONFIG_014`, so on such a host the drift gate fails every deploy of a TVIEW
+project, after its migrations ran. `fraisier doctor` checks this beforehand
+(`pg_tviews_contract`) by asking confiture's own
+`require_supported_pg_tviews_on`, since `pg_extension.extversion` reads `0.1.0`
+on every beta. Upgrade the package, then run `ALTER EXTENSION pg_tviews UPDATE`
+on each database as a superuser.
 
 ### `database.post_migrate`: SQL hooks after migrate
 
