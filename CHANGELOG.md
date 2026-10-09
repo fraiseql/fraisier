@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`fraiseql-confiture` 1.34 (`>=1.34.0,<1.35`).** confiture now reads a TVIEW's
+  `time_refresh` and `function_reads`. A mismatch on either is the existing
+  `tview_option_mismatch` warning, so no drift kind or severity changes.
+- **`fraisier doctor`'s `pg_tviews_contract` asks confiture.** It calls
+  `confiture.platform.require_supported_pg_tviews_on` on its own connection, so it
+  fails exactly where the drift gate would refuse. An unreachable database is
+  still a skip. The detail and fix hint are confiture's own.
+
 ### Fixed
 
 - **A restore no longer finds out after the fact that it cannot rebuild TVIEWs**
@@ -21,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed: …`. A pg_dump restore needs no grant: `CREATE EXTENSION pg_tviews` already
   requires its role to be a superuser. See "The role that rebuilds" in
   `docs/deployment-guide.md`.
+
+### Upgrade note
+
+**⚠️ Upgrade pg_tviews to 0.1.0-beta.26 before this release.** confiture 1.34
+refuses an older pg_tviews with `CONFIG_014`. On such a host the post-migrate drift
+gate fails every deploy of a TVIEW project, even one whose database matches its
+DDL, after the migrations ran. Run `fraisier doctor` first: `pg_tviews_contract`
+names each database to upgrade. Then install the package and run
+`ALTER EXTENSION pg_tviews UPDATE` on each database as a superuser. A database
+without pg_tviews is unaffected.
 
 ## [0.86.0] - 2026-10-11
 

@@ -57,8 +57,10 @@ CONFITURE_IMPORT_SURFACE: dict[str, tuple[str, ...]] = {
     "confiture.core.migrator": ("Migrator",),
     "confiture.core.restorer": ("DatabaseRestorer", "RestoreOptions"),
     "confiture.core.view_manager": ("ViewManager",),
-    "confiture.exceptions": ("MigrationError", "RestoreError"),
+    "confiture.exceptions": ("ConfigurationError", "MigrationError", "RestoreError"),
     "confiture.models.migration": ("Migration",),
+    # ``doctor``'s ``pg_tviews_contract`` asks confiture's own check (1.34.0).
+    "confiture.platform": ("MINIMUM_PG_TVIEWS", "require_supported_pg_tviews_on"),
 }
 
 
