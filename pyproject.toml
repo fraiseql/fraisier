@@ -572,9 +572,24 @@ dependencies = [
   #   * The other nine scenarios and `--exit-codes-json` are unchanged.
   #     The model wire's five new booleans are `schema dump-model` output,
   #     which fraisier never reads, nor `parser.pglast` (now 8.5).
-  # The floor moves with the cap: 1.31.0 was the first confiture to read a
-  # beta.25 registry's backing view, and the Python floor is 1.30.0's.
-  "fraiseql-confiture>=1.33.0,<1.34",
+  #
+  # **1.34.0 needs pg_tviews 0.1.0-beta.26** (confiture#677): it reads the
+  # registry's `function_reads` and `time_refresh` columns and refuses an
+  # older pg_tviews with `CONFIG_014`. Same probe, 1.33.0 vs 1.34.0:
+  #   * Against beta.26 all fourteen verdicts are identical. A mismatch on
+  #     either new option is the existing `tview_option_mismatch` (warning).
+  #   * ⚠️ Against beta.25 every scenario fails the gate with exit 5,
+  #     `CONFIG_014`, naming the missing columns and the upgrade. That covers
+  #     a tree built from itself, so a deploy on such a host fails after its
+  #     migrations ran. `fraisier doctor`'s `pg_tviews_contract` says so
+  #     beforehand: it asks `confiture.platform.require_supported_pg_tviews_on`
+  #     on its own connection, so an unreachable database stays a skip.
+  #   * `--exit-codes-json` is unchanged. `tview_004`/`tview_005` are
+  #     `confiture lint` rules, which fraisier never runs. pglast's 8.5 floor
+  #     is confiture's own.
+  # The floor moves with the cap. 1.34.0 is the first confiture to publish the
+  # pg_tviews check that doctor calls. The Python floor is still 1.30.0's.
+  "fraiseql-confiture>=1.34.0,<1.35",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
