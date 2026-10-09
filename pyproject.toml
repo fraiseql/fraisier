@@ -527,7 +527,54 @@ dependencies = [
   #     makes a stray one `warning`, so `escalate` can fail on it (the opt-in
   #     `extra_objects` setting in `post_migrate_check`, off by default).
   #   * PostgreSQL 16 is confiture's minimum; nothing refuses an older server.
-  "fraiseql-confiture>=1.30.0,<1.31",
+  #
+  # **1.31.0 reads pg_tviews 0.1.0-beta.25** (pg_tviews#185): the backing view
+  # is the one `tviews.registry.view` names (`tviews.<schema>__tv_<entity>`),
+  # and an application `v_<entity>` is an ordinary view of the tree. Measured
+  # on the published artifact against a beta.25 build, 1.30.0 vs 1.31.0, in
+  # `.phases/2026-10-09-confiture-1-31-probe/` (`driver12.py`, nine scenarios):
+  #   * One verdict moves, and only to a warning: a TVIEW whose tree pins
+  #     `uncascaded_policy` (`pg_tviews_create_or_replace(…, options => …)`)
+  #     and whose database holds another is now `tview_option_mismatch`
+  #     (`warning`, exit 0). A project escalating that kind fails on it.
+  #     The beta.25 default (`error`) is no pin on either side, so a tree that
+  #     declares no policy reports nothing.
+  #   * The other eight agree on both: a matched tree, fillfactor and LOGGED
+  #     pins, an extra and a missing TVIEW, and a declared `v_<entity>`
+  #     present and absent (`missing_view`, critical, on both).
+  #   * `confiture --exit-codes-json` is byte-identical, so fraisier-core's
+  #     vendored table does not move. `TView.backing_view` is removed;
+  #     fraisier never read it. `build_005`/`build_006` and `softdel_003` are
+  #     `confiture lint`, which fraisier never invokes.
+  #
+  # **1.32.0 changes nothing fraisier reads.** Same probe, 1.31.0 vs 1.32.0:
+  # all nine verdicts, and every `migrate validate` payload but its temp path
+  # and timing, are identical; so is `confiture --exit-codes-json`. Its
+  # additions are `confiture lint` rules (`tview_003`-`005`, `session_*`,
+  # `i18n_001`), `confiture check translations` and seed level 5
+  # (`STAGED_ROW_NOT_PROMOTED`), none of which fraisier invokes. Its modules
+  # no longer defer annotations (PEP 649), which only an `inspect.signature`
+  # caller sees; fraisier has none. #648 (one holder per relation name) can
+  # only remove a drift item a name-clashing tree used to report twice.
+  #
+  # **1.33.0 models what PostgreSQL 18 says of a constraint** (confiture#673):
+  # `NULLS NOT DISTINCT`, `NOT ENFORCED`, temporal keys (`WITHOUT OVERLAPS`)
+  # and a `NOT NULL … NOT VALID`. No drift kind or severity changes, but the
+  # gate now sees differences it was blind to. Same probe, five more
+  # scenarios on PostgreSQL 18.6, 1.32.0 vs 1.33.0:
+  #   * ⚠️ A unique key the DDL declares `NULLS NOT DISTINCT` and the database
+  #     holds plain was a pass and is now `constraint_mismatch` (critical): the
+  #     deploy fails. So would an enforced/`NOT ENFORCED` or temporal mismatch
+  #     (confiture's own positive controls).
+  #   * A tree built from itself reports nothing for any of the four facts;
+  #     an unvalidated `NOT NULL`, which 1.32 reported as a spurious
+  #     `nullable_mismatch` warning, now reads clean.
+  #   * The other nine scenarios and `--exit-codes-json` are unchanged.
+  #     The model wire's five new booleans are `schema dump-model` output,
+  #     which fraisier never reads, nor `parser.pglast` (now 8.5).
+  # The floor moves with the cap: 1.31.0 was the first confiture to read a
+  # beta.25 registry's backing view, and the Python floor is 1.30.0's.
+  "fraiseql-confiture>=1.33.0,<1.34",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
