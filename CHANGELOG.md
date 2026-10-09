@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`fraiseql-confiture` 1.33 (`>=1.33.0,<1.34`).** 1.31 is the first confiture that
+  reads pg_tviews 0.1.0-beta.25, where a TVIEW's backing view is the one `tviews.registry`
+  names (`tviews.<schema>__tv_<entity>`) and an application `v_<entity>` view is an
+  ordinary view of the tree. 1.32 changes nothing fraisier reads. 1.33 models PostgreSQL
+  18's `NULLS NOT DISTINCT`, `NOT ENFORCED`, temporal keys and `NOT NULL … NOT VALID`, so
+  the drift gate sees them; an unvalidated `NOT NULL` no longer reports a spurious
+  `nullable_mismatch` warning.
+
+### Upgrade note
+
+**⚠️ A deploy that passed can fail on a constraint the database holds differently.**
+On PostgreSQL 18, a key the DDL declares `NULLS NOT DISTINCT`, `NOT ENFORCED` or temporal
+(`WITHOUT OVERLAPS`/`PERIOD`) that the database holds otherwise, or the reverse, is now
+`constraint_mismatch` (critical), and the post-migrate gate fails the deploy. The
+database really does differ from the DDL; before 1.33 the gate could not see it.
+Bring the database in line with a migration, or the DDL in line with the database.
+A database built from its own DDL reports nothing.
+
+**One drift-gate finding is new, as a warning.** A TVIEW whose DDL pins
+`uncascaded_policy` (`pg_tviews_create_or_replace(…, options => '{"uncascaded_policy": …}')`)
+while the database holds another value is now reported as `tview_option_mismatch`
+(`warning`); the deploy passes. A project that lists `tview_option_mismatch` under
+`post_migrate_check.escalate` fails on it. A TVIEW that declares no policy reports
+nothing. Measured against pg_tviews beta.25 on confiture 1.30.0 through 1.33.0.
+
 ## [0.85.0] - 2026-10-06
 
 **⚠️ Python 3.14 is the floor.** fraisier now requires Python 3.14 and
