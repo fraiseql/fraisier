@@ -125,7 +125,10 @@ def _check_fraisier_version(_config: FraisierConfig | None) -> CheckResult:
             "fraisier_version",
             "fail",
             f"importlib.metadata could not resolve fraisier: {exc}",
-            fix_hint="reinstall fraisier (`pip install --force-reinstall fraisier`)",
+            fix_hint=(
+                "reinstall the fraisier tool: `uv tool install --force"
+                " --python 3.14 fraisier==<version>`"
+            ),
         )
     return CheckResult("fraisier_version", "pass", v)
 
