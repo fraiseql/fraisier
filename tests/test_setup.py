@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from fraisier.config import FraisierConfig
@@ -428,9 +429,9 @@ class TestPlanAppServices:
         prod_dst = actions[1].command[-1]
         assert prod_dst == "/etc/systemd/system/my-api.service"
 
-        # The source should still use the generated name
+        # The source is the file the scaffold writes under that name (#446)
         dev_src = actions[0].command[-2]
-        assert "tp_my_api_development.service" in dev_src
+        assert dev_src == "scripts/generated/systemd/my-api-dev.service"
 
     def test_falls_back_to_generated_name(self, tmp_path):
         """Without systemd_service, the generated name is used."""
@@ -1327,3 +1328,56 @@ fraises:
             "tp_my_api_production.service",
             "tp_worker_production.service",
         ]
+
+
+# Each way of naming the app unit, and the unit file that name gives (#446).
+_APP_UNIT_NAMINGS = {
+    "default": ({}, "tp_my_api_production.service"),
+    "systemd_service": (
+        {"systemd_service": "api.tp.io.service"},
+        "api.tp.io.service",
+    ),
+    "service_name": (
+        {"service": {"exec": "bin/serve", "service_name": "tp-api"}},
+        "tp-api.service",
+    ),
+}
+
+
+class TestAppServiceNamesMatchTheRender:
+    """setup copies, installs and enables the file the scaffold writes (#446)."""
+
+    def _setup(self, tmp_path, extra: dict) -> ServerSetup:
+        env = {"app_path": "/var/www/api", **extra}
+        raw = {
+            "name": "tp",
+            "scaffold": {"output_dir": str(tmp_path / "generated")},
+            "fraises": {"my_api": {"type": "api", "environments": {"production": env}}},
+        }
+        return ServerSetup(_make_config(tmp_path, yaml.safe_dump(raw)), FakeRunner())
+
+    @pytest.mark.parametrize("branch", sorted(_APP_UNIT_NAMINGS))
+    def test_copy_source_is_a_file_the_scaffold_wrote(self, tmp_path, branch):
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        extra, _ = _APP_UNIT_NAMINGS[branch]
+        setup = self._setup(tmp_path, extra)
+        ScaffoldRenderer(setup.config).render()
+
+        [action] = setup._plan_app_services()
+        assert Path(action.command[-2]).is_file(), action.command[-2]
+
+    @pytest.mark.parametrize("branch", sorted(_APP_UNIT_NAMINGS))
+    def test_destination_and_enable_use_the_rendered_name(self, tmp_path, branch):
+        extra, unit = _APP_UNIT_NAMINGS[branch]
+        setup = self._setup(tmp_path, extra)
+
+        [copy] = setup._plan_app_services()
+        enabled = [
+            a.command[-1]
+            for a in setup._plan_systemd_reload()
+            if a.command[:3] == ["sudo", "systemctl", "enable"]
+            and not a.command[-1].startswith("fraisier-")
+        ]
+        assert copy.command[-1] == f"/etc/systemd/system/{unit}"
+        assert enabled == [unit]
