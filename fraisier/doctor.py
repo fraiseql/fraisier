@@ -137,7 +137,11 @@ def _check_confiture_version(_config: FraisierConfig | None) -> CheckResult:
             "confiture_version",
             "fail",
             "confiture binary not found on PATH",
-            fix_hint="install confiture (`pip install confiture` or vendor-specific)",
+            fix_hint=(
+                "expose the confiture fraisier pins: `uv tool install --force"
+                " --python 3.14 fraisier==<version>"
+                " --with-executables-from fraiseql-confiture`"
+            ),
         )
     try:
         proc = subprocess.run(
