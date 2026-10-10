@@ -351,6 +351,20 @@ def _resolve_service_base(
     ).removesuffix(".service")
 
 
+_SCHEDULED_DEPLOYER_TYPES = ("scheduled", "backup")
+
+
+def _scheduled_units(level: dict[str, Any]) -> list[str]:
+    """The validated ``systemd_service``/``systemd_timer`` one config level names."""
+    units: list[str] = []
+    for field in ("systemd_service", "systemd_timer"):
+        unit = level.get(field)
+        if unit:
+            validate_service_name(unit)
+            units.append(unit)
+    return units
+
+
 def _collect_allowed_services(
     project_name: str, fraises_list: list[dict[str, Any]]
 ) -> list[str]:
@@ -360,11 +374,12 @@ def _collect_allowed_services(
     The webhook's own service unit is included so the #162 self-upgrade path
     can restart the webhook via the systemctl-helper socket.
 
-    For ``type: scheduled`` fraises, also walks ``jobs.*`` and includes each
-    job's ``systemd_service`` and ``systemd_timer`` so the webhook-driven
-    ``ScheduledDeployer`` can enable/restart these units via the helper
-    socket on each deploy (#239). This is symmetric in shape to the webhook
-    fix in v0.22.2 but covers a separately-discovered gap.
+    For the two types the registry builds a ``ScheduledDeployer`` for
+    (``scheduled`` and ``backup``), also includes ``systemd_service`` and
+    ``systemd_timer`` at env level and in each of ``jobs.*``: the deployer
+    enables and starts its timer through the helper socket, and it reads the
+    env-level fields without a job, the job's merged over them with one
+    (#239, #447).
 
     The app unit is named only for a fraise that serves: any other has none
     rendered, so naming it would allowlist a unit fraisier never wrote (#432).
@@ -376,14 +391,9 @@ def _collect_allowed_services(
             continue
         for env_name, raw_env_config in fraise.get("environments", {}).items():
             env_config = raw_env_config or {}
-            if fraise.get("type") == "scheduled":
-                for job in (env_config.get("jobs") or {}).values():
-                    for field in ("systemd_service", "systemd_timer"):
-                        unit = job.get(field)
-                        if not unit:
-                            continue
-                        validate_service_name(unit)
-                        services.append(unit)
+            if fraise.get("type") in _SCHEDULED_DEPLOYER_TYPES:
+                for level in (env_config, *(env_config.get("jobs") or {}).values()):
+                    services.extend(_scheduled_units(level or {}))
             if fraise_serves(fraise, env_config):
                 base = _resolve_service_base(
                     project_name, fraise_name, env_name, env_config

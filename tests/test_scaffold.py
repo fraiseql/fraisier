@@ -2807,10 +2807,11 @@ fraises:
         # Still strictly sandboxed.
         assert "ProtectSystem=strict" in content
 
-    def test_collect_allowed_services_skips_jobs_on_non_scheduled_types(self):
-        """Only type:scheduled fraises contribute jobs.* unit names to the
-        allowlist. type:backup fraises (which also use jobs.*) must NOT —
-        their units are managed by a different path."""
+    def test_collect_allowed_services_includes_backup_jobs(self):
+        """type:backup builds the same ScheduledDeployer as type:scheduled, and
+        with a job it enables and starts that job's timer through the helper.
+        No other path manages these units, so the helper must allow them (#447).
+        """
         from fraisier.scaffold.renderer import _collect_allowed_services
 
         fraises = [
@@ -2832,8 +2833,8 @@ fraises:
             }
         ]
         services = _collect_allowed_services("myproj", fraises)
-        assert "myproj-nightly-backup.service" not in services
-        assert "myproj-nightly-backup.timer" not in services
+        assert "myproj-nightly-backup.service" in services
+        assert "myproj-nightly-backup.timer" in services
 
     def test_unit_installer_helper_units_rendered_when_scheduled_fraise_present(
         self, tmp_path
