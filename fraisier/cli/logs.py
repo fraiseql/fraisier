@@ -44,6 +44,37 @@ def _resolve_unit_pattern(
     return app_service_name(config.project_name, fraise, environment, env_config)
 
 
+def _refuse_app_logs_without_an_app_unit(
+    config, fraise: str, environment: str, env_config: dict
+) -> None:
+    """Exit 1, naming what to tail instead, when *fraise* serves nothing.
+
+    The scaffold renders the app unit only for a fraise that serves (#432),
+    so ``journalctl -u`` on its name matches nothing and printed nothing,
+    exit 0: it read as a quiet service, not a missing one (#449).
+    """
+    from fraisier.fraise_roles import fraise_serves
+
+    raw_fraise = config.get_fraise(fraise) or {}
+    raw_env = (raw_fraise.get("environments") or {}).get(environment) or {}
+    if fraise_serves(raw_fraise, raw_env):
+        return
+
+    units = [
+        unit
+        for level in (env_config, *(env_config.get("jobs") or {}).values())
+        if (unit := (level or {}).get("systemd_service"))
+    ]
+    console.print(
+        f"[red]Error:[/red] fraise '{fraise}' serves nothing in '{environment}', "
+        "so it has no app unit to tail."
+    )
+    for unit in units:
+        console.print(f"  journalctl -u {unit}")
+    console.print(f"Deploy logs: fraisier logs {fraise} {environment} --service deploy")
+    raise SystemExit(1)
+
+
 @main.command()
 @click.argument("fraise")
 @click.argument("environment")
@@ -91,6 +122,9 @@ def logs(
             f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"
         )
         raise SystemExit(1)
+
+    if service == "app":
+        _refuse_app_logs_without_an_app_unit(config, fraise, environment, fraise_config)
 
     # Build unit pattern using the same naming logic as the scaffold
     unit_pattern = _resolve_unit_pattern(
