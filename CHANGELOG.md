@@ -166,6 +166,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already did (#190), and fall back to PATH with a warning only when the venv has none. On
   a host where PATH held a different confiture, the gate now runs the pinned version, and
   its verdict can change accordingly.
+- **Doctor's `fraisier_version` hint reinstalls fraisier the way hosts install it**
+  ([#457](https://github.com/fraiseql/fraisier/issues/457)). It said `pip install
+  --force-reinstall fraisier`, but hosts run fraisier from a `uv tool` venv, which has no
+  `pip`, and a `pip` on PATH repairs some other environment. The hint and
+  [the check table](docs/doctor.md) now give bootstrap's form: `uv tool install --force
+  --python 3.14 fraisier==<version>`.
 
 ### Added
 
