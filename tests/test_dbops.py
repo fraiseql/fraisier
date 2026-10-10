@@ -123,6 +123,7 @@ class TestConfitureBuild:
     def test_confiture_build_runs_command(self):
         """confiture_build() without rebuild delegates to confiture migrate up."""
         from fraisier.dbops.confiture import confiture_build
+        from fraisier.dbops.confiture_executable import confiture_executable
 
         with patch("subprocess.run") as mock_run:
             # fraisier asks for `--format json`, so this is what confiture
@@ -137,9 +138,7 @@ class TestConfitureBuild:
         assert result.success is True
         assert result.migration_count == 3
         cmd = mock_run.call_args[0][0]
-        assert "confiture" in cmd
-        assert "migrate" in cmd
-        assert "up" in cmd
+        assert cmd[:3] == [confiture_executable(), "migrate", "up"]
 
     def test_confiture_build_rebuild_mode(self):
         """confiture_build(rebuild=True) delegates to confiture migrate rebuild."""

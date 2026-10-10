@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Literal
 
 from packaging.version import InvalidVersion, Version
 
+from fraisier.dbops.confiture_executable import confiture_executable
 from fraisier.errors import ValidationError
 from fraisier.root_install import ROOT_DIR, ROOT_LINK, ROOT_TOOL_DIR
 
@@ -131,12 +132,12 @@ def _check_fraisier_version(_config: FraisierConfig | None) -> CheckResult:
 
 @register_check("confiture_version")
 def _check_confiture_version(_config: FraisierConfig | None) -> CheckResult:
-    binary = shutil.which("confiture")
+    binary = shutil.which(confiture_executable())
     if binary is None:
         return CheckResult(
             "confiture_version",
             "fail",
-            "confiture binary not found on PATH",
+            "confiture binary not found beside fraisier's interpreter or on PATH",
             fix_hint=(
                 "expose the confiture fraisier pins: `uv tool install --force"
                 " --python 3.14 fraisier==<version>"
@@ -789,12 +790,12 @@ _ALTER_DROP_FOLDED_IN = Version("1.11.0")
 def _confiture_cli_version() -> Version | None:
     """The version of the ``confiture`` the gate will run, or ``None``.
 
-    Read from the binary on PATH rather than from installed package metadata:
-    ``dbops/drift.py`` spells the executable ``confiture`` and lets PATH
-    resolve it, the two can differ, and it is the binary's answer that decides
-    what the gate does.
+    Read from the binary the gate runs (:func:`confiture_executable`) rather
+    than from installed package metadata: when the venv has no ``confiture``
+    the gate falls back to PATH's, the two can differ, and it is the binary's
+    answer that decides what the gate does.
     """
-    binary = shutil.which("confiture")
+    binary = shutil.which(confiture_executable())
     if binary is None:
         return None
     try:
