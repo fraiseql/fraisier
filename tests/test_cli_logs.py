@@ -91,6 +91,11 @@ class TestLogsCommand:
         if ssh_config:
             fraise_env["ssh"] = ssh_config
         config.get_fraise_environment.return_value = fraise_env
+        # A real fraise dict: a bare MagicMock reads as serving only by accident.
+        config.get_fraise.return_value = {
+            "type": "api",
+            "environments": {"production": dict(fraise_env)},
+        }
         return config
 
     def _mock_popen(self):
@@ -332,3 +337,98 @@ fraises:
             tmp_path,
             "          host: prod.example.com\n          address_family: any\n",
         )  # no exception
+
+
+_ROLES_CONFIG = """\
+name: proj
+fraises:
+  api:
+    type: api
+    environments:
+      production:
+        app_path: /srv/api
+  stats:
+    type: scheduled
+    environments:
+      production:
+        app_path: /srv/api
+        jobs:
+          daily:
+            systemd_service: proj-daily-stats.service
+            systemd_timer: proj-daily-stats.timer
+          weekly:
+            systemd_service: proj-weekly-report.service
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        app_path: /srv/api
+        systemd_service: nightly.service
+        systemd_timer: nightly.timer
+  dumps:
+    type: backup
+    environments:
+      production:
+        app_path: /srv/api
+"""
+
+
+class TestAppLogsForAFraiseThatServesNothing:
+    """--service app on a fraise with no app unit says so (#449)."""
+
+    def _invoke(self, tmp_path, args):
+        from fraisier.config import FraisierConfig
+
+        path = tmp_path / "fraises.yaml"
+        path.write_text(_ROLES_CONFIG)
+        config = FraisierConfig(str(path))
+        popen = MagicMock()
+        popen.return_value.wait.return_value = 0
+        popen.return_value.returncode = 0
+        with (
+            patch("fraisier.cli.main.get_config", return_value=config),
+            patch("fraisier.cli.logs.subprocess.Popen", popen),
+        ):
+            result = CliRunner().invoke(
+                main, args, obj={"config": config, "skip_health": False}
+            )
+        return result, popen
+
+    def test_a_jobs_shaped_fraise_names_its_job_units(self, tmp_path):
+        result, popen = self._invoke(
+            tmp_path, ["logs", "stats", "production", "--service", "app"]
+        )
+        assert result.exit_code != 0
+        popen.assert_not_called()
+        assert "serves nothing" in result.output
+        assert "proj-daily-stats.service" in result.output
+        assert "proj-weekly-report.service" in result.output
+        assert "--service deploy" in result.output
+
+    def test_a_flat_scheduled_fraise_names_its_unit(self, tmp_path):
+        result, popen = self._invoke(
+            tmp_path, ["logs", "nightly", "production", "--service", "app"]
+        )
+        assert result.exit_code != 0
+        popen.assert_not_called()
+        assert "nightly.service" in result.output
+
+    def test_a_fraise_with_no_units_points_at_the_deploy_logs(self, tmp_path):
+        result, popen = self._invoke(
+            tmp_path, ["logs", "dumps", "production", "--service", "app"]
+        )
+        assert result.exit_code != 0
+        popen.assert_not_called()
+        assert "--service deploy" in result.output
+
+    def test_a_serving_fraise_still_tails_its_app_unit(self, tmp_path):
+        result, popen = self._invoke(
+            tmp_path, ["logs", "api", "production", "--service", "app"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "proj_api_production.service" in popen.call_args[0][0]
+
+    def test_deploy_logs_of_a_non_serving_fraise_are_unchanged(self, tmp_path):
+        result, popen = self._invoke(tmp_path, ["logs", "stats", "production"])
+        assert result.exit_code == 0, result.output
+        assert "fraisier-stats-production@*.service" in popen.call_args[0][0]
