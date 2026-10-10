@@ -34,6 +34,7 @@ from fraisier.dbops.confiture_contract import (
     envelope_error_code,
     envelope_error_message,
 )
+from fraisier.dbops.confiture_executable import confiture_executable
 from fraisier.errors import MigrationError as FraisierMigrationError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -791,7 +792,15 @@ def confiture_migrate(
     auto_detect_baseline: bool = False,
 ) -> ConfitureResult:
     """Run ``confiture migrate up`` or ``confiture migrate down``."""
-    cmd = ["confiture", "migrate", direction, "-c", config_path, "--format", "json"]
+    cmd = [
+        confiture_executable(),
+        "migrate",
+        direction,
+        "-c",
+        config_path,
+        "--format",
+        "json",
+    ]
     if auto_detect_baseline and direction == "up":
         cmd.append("--auto-detect-baseline")
 
@@ -816,7 +825,7 @@ def confiture_rebuild(
 ) -> ConfitureResult:
     """Run ``confiture migrate rebuild``."""
     cmd = [
-        "confiture",
+        confiture_executable(),
         "migrate",
         "rebuild",
         "-c",
@@ -847,7 +856,15 @@ def confiture_status(  # pragma: no cover
     cwd: str = ".",
 ) -> StatusResult:
     """Run ``confiture migrate status --format json``."""
-    cmd = ["confiture", "migrate", "status", "-c", config_path, "--format", "json"]
+    cmd = [
+        confiture_executable(),
+        "migrate",
+        "status",
+        "-c",
+        config_path,
+        "--format",
+        "json",
+    ]
 
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
 

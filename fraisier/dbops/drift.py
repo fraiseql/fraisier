@@ -67,6 +67,7 @@ from fraisier.dbops.confiture_contract import (
     envelope_error_code,
     envelope_error_message,
 )
+from fraisier.dbops.confiture_executable import confiture_executable
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, Sequence
@@ -719,7 +720,7 @@ def build_expected_schema(
     """
     return _run(
         [
-            "confiture",
+            confiture_executable(),
             "build",
             "--project-dir",
             str(project_dir),
@@ -904,7 +905,7 @@ def check_schema_drift(
         )
         validate = _run(
             [
-                "confiture",
+                confiture_executable(),
                 "migrate",
                 "validate",
                 *(CHECK_FLAGS[name] for name in selected),

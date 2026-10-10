@@ -157,6 +157,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scaffold no longer renders for scheduled, backup and etl fraises, printed nothing and
   exited 0. It now exits 1, prints a `journalctl -u` line for each `systemd_service` the
   fraise declares, and points at `--service deploy`.
+- **fraisier runs the confiture it pins, not whichever one PATH finds**
+  ([#456](https://github.com/fraiseql/fraisier/issues/456)). The post-migrate drift gate,
+  `fraisier db migrate` and doctor's `confiture_version` ran a bare `confiture`. A host
+  bootstrapped with `uv tool install fraisier` puts no `confiture` on PATH: the one fraisier
+  depends on sits in the tool venv. So these either found nothing or ran a version fraisier
+  never audited. They now run the `confiture` next to fraisier's interpreter, as preflight
+  already did (#190), and fall back to PATH with a warning only when the venv has none. On
+  a host where PATH held a different confiture, the gate now runs the pinned version, and
+  its verdict can change accordingly.
 
 ### Added
 

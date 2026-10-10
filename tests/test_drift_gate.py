@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fraisier.dbops.confiture_executable import confiture_executable
 from fraisier.dbops.drift import (
     CHECK_FLAGS,
     ESCALATABLE_KINDS,
@@ -385,7 +386,7 @@ class TestBuildInvocation:
             )
 
         build = _runs(mock_run)[0]
-        assert build[:2] == ["confiture", "build"]
+        assert build[:2] == [confiture_executable(), "build"]
         assert "--schema-only" in build
         assert build[build.index("--project-dir") + 1] == str(project)
         assert build[build.index("--env") + 1] == "production"
@@ -421,7 +422,7 @@ class TestValidateInvocation:
             )
 
         build, validate = _runs(mock_run)
-        assert validate[:3] == ["confiture", "migrate", "validate"]
+        assert validate[:3] == [confiture_executable(), "migrate", "validate"]
         config = Path(validate[validate.index("-c") + 1])
         assert config.is_absolute()
         assert config == project / "db/environments/production.yaml"

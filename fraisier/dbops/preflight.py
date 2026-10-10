@@ -17,7 +17,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import uuid
 from dataclasses import dataclass, field
@@ -28,6 +27,7 @@ from fraisier.dbops.confiture_contract import (
     classify_confiture_failure,
     envelope_error_code,
 )
+from fraisier.dbops.confiture_executable import confiture_executable
 
 log = logging.getLogger(__name__)
 
@@ -767,9 +767,8 @@ def _run_confiture_preflight(
     """
     from fraisier.errors import DatabaseError
 
-    confiture_exe = str(Path(sys.executable).parent / "confiture")
     cmd = [
-        confiture_exe,
+        confiture_executable(),
         "migrate",
         "preflight",
         "--against",
