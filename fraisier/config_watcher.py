@@ -116,6 +116,10 @@ class ConfigWatcher:
         except FileNotFoundError:
             return True  # Config doesn't exist, treat as change
 
+    def forget_hash(self) -> None:
+        """Drop the saved hash, so the next deploy treats the config as changed."""
+        self.hash_file.unlink(missing_ok=True)
+
     def save_hash(self) -> None:
         """Save current hash to disk for next comparison.
 

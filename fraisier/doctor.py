@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Literal
 from packaging.version import InvalidVersion, Version
 
 from fraisier.errors import ValidationError
+from fraisier.root_install import ROOT_DIR, ROOT_LINK, ROOT_TOOL_DIR
 
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
@@ -1981,7 +1982,10 @@ def _check_unit_entrypoints(_config: FraisierConfig | None) -> CheckResult:
             continue
         for line in text.splitlines():
             binary = _exec_start_binary(line)
-            if binary is None or not Path(binary).name.startswith("fraisier"):
+            if binary is None or not (
+                Path(binary).name.startswith("fraisier")
+                or binary.startswith(f"{ROOT_DIR}/")
+            ):
                 continue
             checked += 1
             # Existence first: os.access(X_OK) is permissive for root, so a
@@ -2254,10 +2258,10 @@ def _check_remote_debug_disabled(config: FraisierConfig | None) -> CheckResult:
     )
 
 
-#: What ``root_unit_exec_trust`` reports while #433 has no fix shipped: the root
-#: helpers still run from the deploy user's uv tool dir on every host. The
-#: release that moves them to root-owned code flips this to ``"fail"``.
-ROOT_EXEC_TRUST_STATUS: Status = "warn"
+#: What ``root_unit_exec_trust`` reports. ``"fail"`` since #433's fix shipped:
+#: the root helpers run root-owned code, so a root command someone else can
+#: change is a defect on the host, not a known gap in fraisier.
+ROOT_EXEC_TRUST_STATUS: Status = "fail"
 
 #: Where the file reader looks for drop-ins, lowest priority first: a drop-in in
 #: a later root masks a same-named one in an earlier root. Only the fallback
@@ -2630,6 +2634,9 @@ def _command_flaw(command: _ExecCommand) -> str | None:
         executable = found
     resolved = Path(executable).resolve()
     interpreter = _shebang_interpreter(resolved)
+    # ``<venv>/bin/python -I -m …`` (the root helpers, #433): the link resolves
+    # out of the venv, and the venv is where the imported code lives.
+    named_venv = _venv_root(Path(executable))
     chains = [executable]
     if interpreter is not None:
         chains.append(interpreter)
@@ -2640,7 +2647,8 @@ def _command_flaw(command: _ExecCommand) -> str | None:
         if flaw is not None:
             return flaw
     candidates = [resolved, *([Path(interpreter)] if interpreter else [])]
-    for venv in dict.fromkeys(v for v in map(_venv_root, candidates) if v):
+    venvs = [named_venv, *map(_venv_root, candidates)]
+    for venv in dict.fromkeys(v for v in venvs if v):
         flaw = _tree_flaw(venv)
         home = _pyvenv_home(venv)
         if flaw is None and home is not None:
@@ -2667,9 +2675,9 @@ def _check_root_unit_exec_trust(_config: FraisierConfig | None) -> CheckResult:
     cannot answer, it reads the files: the unit and its drop-ins under
     ``SYSTEMD_DROPIN_ROOTS``.
 
-    Every host running fraisier's root helpers today fails it, because they
-    run from the deploy user's uv tool dir. It reports
-    ``ROOT_EXEC_TRUST_STATUS``: ``warn`` until #433's fix ships.
+    Before #433's fix, every host running fraisier's root helpers failed it,
+    because they ran from the deploy user's uv tool dir. A host still does
+    until an operator has installed the root copy and re-run scaffold-install.
     """
     name = "root_unit_exec_trust"
     if not SYSTEMD_UNIT_DIR.is_dir():
@@ -2711,14 +2719,161 @@ def _check_root_unit_exec_trust(_config: FraisierConfig | None) -> CheckResult:
         f"{len(flawed)} unit(s) run code as root that another user can change: "
         + "; ".join(flawed),
         fix_hint=(
-            "fraisier's root helpers run from the deploy user's uv tool dir, so "
-            "the deploy user can become root; the fix is tracked in #433, and "
-            "until it ships treat the deploy user as root-equivalent. For any "
+            "for a fraisier root helper still running from the deploy user's uv "
+            "tool dir (#433): install the root copy with `sudo "
+            "fraisier-root-upgrade <version>` (or bootstrap's root install), then "
+            "run `sudo fraisier scaffold-install` so the helper units point at "
+            "it; until then treat the deploy user as root-equivalent. For any "
             "other unit listed: make the path and every directory above it "
             "root-owned and not group- or world-writable, or give the unit a "
             "non-root `User=`"
         ),
     )
+
+
+#: The root copy's tool venv. Patched in tests.
+ROOT_TOOL_VENV = Path(ROOT_TOOL_DIR) / "fraisier"
+
+
+def _deploy_tool_venv(config: FraisierConfig | None) -> Path | None:
+    """The deploy user's fraisier tool venv (uv's default tool dir)."""
+    user = getattr(getattr(config, "scaffold", None), "deploy_user", None)
+    if not user:
+        return None
+    return Path(f"/home/{user}/.local/share/uv/tools/fraisier")
+
+
+def _tool_version(venv: Path | None) -> str | None:
+    """The fraisier version installed in *venv*, from its dist-info."""
+    if venv is None:
+        return None
+    pattern = "lib/python*/site-packages/fraisier-*.dist-info/METADATA"
+    for metadata in sorted(venv.glob(pattern)):
+        try:
+            text = metadata.read_text()
+        except OSError, UnicodeDecodeError:
+            continue
+        for line in text.splitlines():
+            if line.startswith("Version:"):
+                return line.partition(":")[2].strip()
+    return None
+
+
+@register_check("root_helper_version_skew")
+def _check_root_helper_version_skew(config: FraisierConfig | None) -> CheckResult:
+    """The root helpers' copy of fraisier and the deploy user's agree (#433).
+
+    The webhook's self-upgrade upgrades the deploy user's copy only; the root
+    copy is upgraded by an operator. So the two drifting apart is a normal
+    state after a self-upgrade, and this says so rather than letting the root
+    helpers quietly run an older fraisier than everything else.
+    """
+    name = "root_helper_version_skew"
+    root = _tool_version(ROOT_TOOL_VENV)
+    if root is None:
+        return CheckResult(
+            name, "skip", f"no root fraisier install under {ROOT_TOOL_VENV}"
+        )
+    deploy = _tool_version(_deploy_tool_venv(config))
+    if deploy is None:
+        return CheckResult(name, "skip", "no deploy-user fraisier install found")
+    if root == deploy:
+        return CheckResult(name, "pass", f"root and deploy copies are both {root}")
+    return CheckResult(
+        name,
+        "warn",
+        f"root copy {root}, deploy copy {deploy}: the root helpers run {root}",
+        fix_hint=(
+            f"`sudo fraisier-root-upgrade {deploy}`; the running helpers notice "
+            "the new version and exit after their current request"
+        ),
+    )
+
+
+def _sudoers_files() -> list[Path]:
+    """Where sudo's ``secure_path`` may be set. Seam for tests."""
+    try:
+        extra = sorted(Path("/etc/sudoers.d").iterdir())
+    except OSError:
+        extra = []
+    return [Path("/etc/sudoers"), *extra]
+
+
+_SECURE_PATH_RE = re.compile(r'^\s*Defaults\s+secure_path\s*=\s*"?([^"\n]*)"?\s*$')
+
+
+def _secure_path() -> list[str] | None:
+    """sudo's ``secure_path``, last setting wins; None if none could be read."""
+    found: list[str] | None = None
+    for path in _sudoers_files():
+        try:
+            text = path.read_text()
+        except OSError, UnicodeDecodeError:
+            continue
+        for line in text.splitlines():
+            match = _SECURE_PATH_RE.match(line)
+            if match:
+                found = [d for d in match.group(1).split(":") if d]
+    return found
+
+
+@register_check("root_fraisier_command")
+def _check_root_fraisier_command(_config: FraisierConfig | None) -> CheckResult:
+    """``sudo fraisier`` runs the root copy (#433, path 8).
+
+    An operator's ``sudo fraisier scaffold-install`` is how root-owned files
+    get written. If ``sudo fraisier`` found the deploy user's copy, the
+    operator would run deploy-owned code as root. The root install puts a
+    root-owned ``/usr/local/bin/fraisier`` link to the root copy; this checks
+    the link, and that no directory sudo searches first can be changed by
+    anyone but root.
+    """
+    name = "root_fraisier_command"
+    if not Path(ROOT_DIR).is_dir():
+        return CheckResult(name, "skip", f"no root fraisier install under {ROOT_DIR}")
+    link = Path(ROOT_LINK)
+    hint = "`sudo fraisier-root-upgrade <version>` writes the link"
+    if not link.is_symlink():
+        return CheckResult(
+            name, "warn", f"{link} is not a link to the root copy", fix_hint=hint
+        )
+    target = link.resolve()
+    if not target.is_relative_to(ROOT_DIR):
+        return CheckResult(
+            name,
+            "warn",
+            f"{link} points at {target}, not into {ROOT_DIR}",
+            fix_hint=hint,
+        )
+    flaw = _chain_flaw(str(link))
+    if flaw is not None:
+        return CheckResult(name, "warn", f"{link}: {flaw}", fix_hint=hint)
+
+    secure_path = _secure_path()
+    if secure_path is None:
+        return CheckResult(
+            name,
+            "pass",
+            f"{link} runs the root copy; sudo's secure_path could not be read",
+        )
+    link_dir = str(link.parent)
+    if link_dir not in secure_path:
+        return CheckResult(
+            name,
+            "warn",
+            f"sudo's secure_path does not include {link_dir}",
+            fix_hint=f"add {link_dir} to `Defaults secure_path` in /etc/sudoers",
+        )
+    for earlier in secure_path[: secure_path.index(link_dir)]:
+        flaw = _chain_flaw(earlier)
+        if flaw is not None:
+            return CheckResult(
+                name,
+                "warn",
+                f"in sudo's secure_path, {earlier} comes before {link_dir}: {flaw}",
+                fix_hint="put only root-owned directories ahead of it in secure_path",
+            )
+    return CheckResult(name, "pass", f"`sudo fraisier` runs the root copy ({target})")
 
 
 @register_check("self_upgrade_failure")

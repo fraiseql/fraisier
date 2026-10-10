@@ -9,6 +9,7 @@ to the configured output_dir.
 
 import logging
 import re
+import shlex
 import shutil
 import socket
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ from fraisier.naming import (
     deploy_socket_name,
     unit_installer_unit_names,
 )
+from fraisier.root_install import ROOT_PYTHON
 from fraisier.scaffold.artifacts import (
     ARTIFACT_MANIFEST_NAME,
     INSTALL_SCRIPT_NAME,
@@ -655,6 +657,33 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
         "install_helper_sockets": install_helper_sockets,
         "gateway_fraise": gateway_fraise,
         "has_per_env_nginx": has_per_env_nginx,
+        # The root helpers' interpreter: the root-owned install, never the
+        # deploy user's uv tool dir (#433).
+        "root_python": ROOT_PYTHON,
+        "root_install": _root_install_context(),
+    }
+
+
+def _root_install_context() -> dict[str, Any]:
+    """What install.sh needs to install the root copy (#433), from one source."""
+    from importlib.metadata import version
+
+    from fraisier import root_install
+
+    return {
+        "dir": root_install.ROOT_DIR,
+        "uv": root_install.ROOT_UV,
+        "python": root_install.ROOT_PYTHON,
+        "bin": root_install.ROOT_BIN_DIR,
+        "link_dir": root_install.ROOT_LINK_DIR,
+        "commands": root_install.ROOT_COMMANDS,
+        "env": shlex.join(
+            f"{key}={value}" for key, value in root_install.root_install_env().items()
+        ),
+        "uv_url": root_install.ROOT_UV_URL,
+        "safe_path": root_install.SAFE_PATH,
+        "python_version": root_install.ROOT_PYTHON_VERSION,
+        "version": version("fraisier"),
     }
 
 
@@ -1253,19 +1282,9 @@ class ScaffoldRenderer:
         socket_out = f"systemd/fraisier-{project}-scaffold-install-helper.socket"
 
         if not dry_run:
-            # _render_template() does template.render(**self.context) with no
-            # extra_context support.  Inject scaffold_install_script temporarily.
-            # The helper's allowed_script is the install.sh in the single
-            # server-side scaffold state tree (#283), NOT app_path / /opt/{project}.
-            self.context["scaffold_install_script"] = (
-                f"{self.config.scaffold_state_dir}/install.sh"
+            self._render_template(
+                "core/scaffold-install-helper.service.j2", service_out
             )
-            try:
-                self._render_template(
-                    "core/scaffold-install-helper.service.j2", service_out
-                )
-            finally:
-                del self.context["scaffold_install_script"]
             self._render_template("core/scaffold-install-helper.socket.j2", socket_out)
 
         return [service_out, socket_out]

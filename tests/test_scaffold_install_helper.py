@@ -8,13 +8,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fraisier.root_policy import RootPolicy, UnitGrant, dump_policy
+from fraisier.scaffold_apply import ApplyOutcome
 from fraisier.scaffold_install_helper import (
     _build_server_socket,
     _handle_connection,
     _send_error,
     _send_response,
     _serve_connection,
+    apply_for_project,
+    build_apply,
 )
+from fraisier.unit_validator import Refusal
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,12 +39,26 @@ def _recv_json(sock) -> dict:
     return json.loads(raw.decode())
 
 
-def _call(request: dict, allowed_script: str) -> dict:
+class _Recorder:
+    def __init__(self, outcome: ApplyOutcome | None = None, error=None):
+        self.outcome = outcome or ApplyOutcome(installed=["a.service"])
+        self.error = error
+        self.calls: list[bool] = []
+
+    def __call__(self, deploy_in_flight: bool) -> ApplyOutcome:
+        self.calls.append(deploy_in_flight)
+        if self.error is not None:
+            raise self.error
+        return self.outcome
+
+
+def _call(request, apply) -> dict:
     """Send *request* via socket pair, call handler, return parsed response."""
     server, client = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
-    client.sendall(json.dumps(request).encode() + b"\n")
+    payload = request if isinstance(request, bytes) else json.dumps(request).encode()
+    client.sendall(payload + b"\n")
     client.shutdown(_socket.SHUT_WR)
-    _handle_connection(server, allowed_script=allowed_script)
+    _handle_connection(server, apply)
     with client.makefile("rb") as f:
         raw = f.readline()
     client.close()
@@ -69,194 +88,205 @@ class TestSendResponse:
         assert data == {"ok": False, "error": "boom"}
 
     def test_send_response_swallows_oserror(self):
-        server, client = _make_socket_pair()
-        client.close()
-        # Should not raise, just log warning
-        _send_response(server, {"ok": True})
-        server.close()
+        conn = MagicMock()
+        conn.sendall.side_effect = OSError("broken pipe")
+        _send_response(conn, {"ok": True})
 
 
 # ---------------------------------------------------------------------------
-# _handle_connection
+# _handle_connection: the render is applied, never executed
 # ---------------------------------------------------------------------------
 
 
 class TestHandleConnection:
-    def test_valid_install_request_runs_script(self, tmp_path):
-        """Valid {"action": "install"} runs the allowed script."""
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho ok")
-        script.chmod(0o755)
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "ok\n"
-        mock_result.stderr = ""
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            result = _call({"action": "install"}, allowed_script=str(script))
-
+    def test_an_install_request_applies_and_reports(self):
+        apply = _Recorder(
+            ApplyOutcome(installed=["a.service"], unchanged=["b.service"])
+        )
+        result = _call({"action": "install"}, apply)
         assert result["ok"] is True
         assert result["returncode"] == 0
-        args = mock_run.call_args[0][0]
-        assert args == ["/usr/bin/bash", str(script)]
+        assert result["installed"] == ["a.service"]
+        assert result["stdout"] == "installed 1 unit(s), 1 unchanged: a.service"
 
-    def test_install_runs_with_via_helper_env_marker(self, tmp_path):
-        """install.sh is executed with FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER=1 so it
-        skips restarting this helper's own socket (the self-restart race)."""
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho ok")
-        script.chmod(0o755)
+    def test_nothing_is_executed_from_the_render(self):
+        with patch("subprocess.run") as run:
+            _call({"action": "install"}, _Recorder())
+        run.assert_not_called()
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        mock_result.stderr = ""
+    def test_a_declared_deploy_defers_restarts(self):
+        apply = _Recorder()
+        _call({"action": "install", "deploy_in_flight": True}, apply)
+        assert apply.calls == [True]
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            _call({"action": "install"}, allowed_script=str(script))
+    def test_an_undeclared_request_does_not(self):
+        apply = _Recorder()
+        _call({"action": "install"}, apply)
+        assert apply.calls == [False]
 
-        env = mock_run.call_args.kwargs["env"]
-        assert env["FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER"] == "1"
-        # Inherits the ambient environment rather than replacing it wholesale.
-        assert "PATH" in env
+    def test_non_boolean_declaration_is_not_trusted(self):
+        apply = _Recorder()
+        _call({"action": "install", "deploy_in_flight": "yes; rm -rf /"}, apply)
+        assert apply.calls == [False]
 
-    def test_declared_deploy_reaches_install_sh(self, tmp_path):
-        """A request declaring a live deploy sets the marker install.sh reads to
-        decide whether restarting the webhook would kill its own caller (#349)."""
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho ok")
-        script.chmod(0o755)
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        mock_result.stderr = ""
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            _call(
-                {"action": "install", "deploy_in_flight": True},
-                allowed_script=str(script),
-            )
-
-        env = mock_run.call_args.kwargs["env"]
-        assert env["FRAISIER_DEPLOY_IN_FLIGHT"] == "1"
-
-    def test_undeclared_request_leaves_the_marker_unset(self, tmp_path):
-        """An operator-invoked install must keep restarting units normally."""
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho ok")
-        script.chmod(0o755)
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        mock_result.stderr = ""
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            _call({"action": "install"}, allowed_script=str(script))
-
-        env = mock_run.call_args.kwargs["env"]
-        assert "FRAISIER_DEPLOY_IN_FLIGHT" not in env
-
-    def test_non_boolean_declaration_is_not_trusted(self, tmp_path):
-        """The payload reaches a root daemon; only a real `true` counts."""
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho ok")
-        script.chmod(0o755)
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        mock_result.stderr = ""
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            _call(
-                {"action": "install", "deploy_in_flight": "yes; rm -rf /"},
-                allowed_script=str(script),
-            )
-
-        env = mock_run.call_args.kwargs["env"]
-        assert "FRAISIER_DEPLOY_IN_FLIGHT" not in env
-
-    def test_unknown_action_is_rejected(self, tmp_path):
-        """Unknown actions are rejected without running the script."""
-        script = tmp_path / "install.sh"
-        script.touch()
-        result = _call({"action": "rm_rf"}, allowed_script=str(script))
-        assert result["ok"] is False
-        assert "action not allowed" in result["error"]
-
-    def test_install_script_not_found_returns_error(self, tmp_path):
-        """Missing script path returns ok=False with 'not found' message."""
-        result = _call(
-            {"action": "install"}, allowed_script=str(tmp_path / "nonexistent.sh")
+    def test_a_refused_or_pending_apply_is_ok_false_with_every_reason(self):
+        outcome = ApplyOutcome(
+            refused={"app.service": [Refusal("user", "User='root' is not allowed")]},
+            pending=["/etc/sudoers.d/demo: differs from the render"],
+            deferred_restarts=["w.service"],
         )
-        assert result["ok"] is False
-        assert "not found" in result["error"]
-
-    def test_script_failure_returns_ok_false(self, tmp_path):
-        """Non-zero exit from the script propagates as ok=False."""
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\nexit 1")
-        script.chmod(0o755)
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stdout = ""
-        mock_result.stderr = "error\n"
-
-        with patch("subprocess.run", return_value=mock_result):
-            result = _call({"action": "install"}, allowed_script=str(script))
-
+        result = _call({"action": "install"}, _Recorder(outcome))
         assert result["ok"] is False
         assert result["returncode"] == 1
+        assert result["pending"] == ["/etc/sudoers.d/demo: differs from the render"]
+        assert result["refused"] == {
+            "app.service": ["[user] User='root' is not allowed"]
+        }
+        assert "pending operator install: /etc/sudoers.d/demo" in result["stderr"]
+        assert "sudo fraisier scaffold-install" in result["stderr"]
+        assert result["deferred_restarts"] == ["w.service"]
 
-    def test_malformed_json_is_handled_gracefully(self, tmp_path):
-        script = tmp_path / "install.sh"
-        script.touch()
+    def test_unknown_action_is_rejected_without_applying(self):
+        apply = _Recorder()
+        result = _call({"action": "rm_rf"}, apply)
+        assert result["ok"] is False
+        assert "action not allowed" in result["error"]
+        assert apply.calls == []
+
+    def test_a_non_object_request_is_rejected(self):
+        apply = _Recorder()
+        result = _call([1, 2], apply)
+        assert result["ok"] is False
+        assert apply.calls == []
+
+    def test_malformed_json_is_rejected(self):
+        result = _call(b"not valid json", _Recorder())
+        assert result["ok"] is False
+        assert "malformed JSON" in result["error"]
+
+    def test_empty_connection_is_handled_gracefully(self):
         server, client = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        client.sendall(b"not valid json\n")
         client.shutdown(_socket.SHUT_WR)
-        _handle_connection(server, allowed_script=str(script))
+        _handle_connection(server, _Recorder())
         client.close()
 
-    def test_empty_connection_is_handled_gracefully(self, tmp_path):
+    def test_an_apply_that_raises_is_an_error_response(self):
+        result = _call({"action": "install"}, _Recorder(error=RuntimeError("disk")))
+        assert result["ok"] is False
+        assert "disk" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# argv: --project, and a unit that still names an install.sh
+# ---------------------------------------------------------------------------
+
+
+class TestBuildApply:
+    def test_a_legacy_unit_never_runs_its_install_script(self, tmp_path):
         script = tmp_path / "install.sh"
-        script.touch()
-        server, client = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        client.shutdown(_socket.SHUT_WR)
-        _handle_connection(server, allowed_script=str(script))
-        client.close()
+        script.write_text("#!/bin/bash\ntouch " + str(tmp_path / "ran") + "\n")
+        apply = build_apply([str(script)])
+        outcome = apply(True)
+        assert not outcome.ok
+        assert "sudo fraisier scaffold-install" in outcome.pending[0]
+        assert str(script) in outcome.pending[0]
+        assert not (tmp_path / "ran").exists()
 
-    def test_timeout_expired_sends_error(self, tmp_path):
-        """TimeoutExpired is caught and returns an error response."""
-        import subprocess
-
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho ok")
-        script.chmod(0o755)
-
+    def test_project_selects_the_policy(self):
         with patch(
-            "subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=[], timeout=300),
+            "fraisier.scaffold_install_helper.apply_for_project",
+            return_value=ApplyOutcome(),
+        ) as afp:
+            build_apply(["--project", "demo"])(True)
+        afp.assert_called_once_with("demo", True)
+
+
+class TestApplyForProject:
+    def _policy(self, scaffold_dir: str, project: str = "demo") -> RootPolicy:
+        return RootPolicy(
+            project=project,
+            scaffold_dir=scaffold_dir,
+            users=frozenset({"deploy"}),
+            groups=frozenset(),
+            exec_prefixes=("/opt/x/",),
+            read_paths=frozenset(),
+            directories=frozenset(),
+            units={"a.service": UnitGrant("systemd/a.service", "plain")},
+        )
+
+    def test_an_untrusted_policy_applies_nothing_and_says_why(self, tmp_path):
+        from fraisier.root_policy import RootPolicyError
+
+        error = RootPolicyError(
+            "no root policy at X: run `sudo fraisier scaffold-install`"
+        )
+        with patch("fraisier.scaffold_install_helper.load_policy", side_effect=error):
+            outcome = apply_for_project("demo", True, policy_root=tmp_path)
+        assert not outcome.ok
+        assert outcome.pending == [str(error)]
+
+    def test_a_policy_a_non_root_user_wrote_is_refused(self, tmp_path):
+        """The suite does not run as root, so tmp_path is exactly that case."""
+        policy_dir = tmp_path / "demo"
+        policy_dir.mkdir()
+        (policy_dir / "root-policy.json").write_text(
+            dump_policy(self._policy(str(tmp_path)))
+        )
+        writes = []
+        outcome = apply_for_project(
+            "demo",
+            True,
+            policy_root=tmp_path,
+            systemd_dir=tmp_path,
+            systemctl=lambda *a: writes.append(a) or True,
+        )
+        assert not outcome.ok
+        assert "other than root" in outcome.pending[0]
+        assert writes == []
+
+    def test_a_policy_for_another_project_is_refused(self, tmp_path):
+        policy = self._policy(str(tmp_path), project="other")
+        with patch("fraisier.scaffold_install_helper.load_policy", return_value=policy):
+            outcome = apply_for_project("demo", True, policy_root=tmp_path)
+        assert outcome.pending == ["the root policy is for 'other', not 'demo'"]
+
+    def test_applies_the_tree_the_policy_names(self, tmp_path):
+        tree = tmp_path / "scaffold"
+        (tree / "systemd").mkdir(parents=True)
+        unit = "[Service]\nUser=deploy\nExecStart=/opt/x/run\n"
+        (tree / "systemd" / "a.service").write_text(unit)
+        (tree / "artifact-manifest.json").write_text(
+            json.dumps(
+                {
+                    "artifacts": [
+                        {
+                            "source": "systemd/a.service",
+                            "destination": "/etc/systemd/system/a.service",
+                            "disposition": "plain",
+                        }
+                    ],
+                    "hosts": {"solo": {"scopes": [], "environments": []}},
+                }
+            )
+        )
+        systemd = tmp_path / "systemd-dir"
+        systemd.mkdir()
+        calls = []
+        with patch(
+            "fraisier.scaffold_install_helper.load_policy",
+            return_value=self._policy(str(tree)),
         ):
-            result = _call({"action": "install"}, allowed_script=str(script))
-
-        assert result["ok"] is False
-        assert "timed out" in result["error"]
-
-    def test_oserror_from_subprocess_sends_error(self, tmp_path):
-        """OSError from subprocess.run is caught and returns error response."""
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho ok")
-        script.chmod(0o755)
-
-        with patch("subprocess.run", side_effect=OSError("exec failed")):
-            result = _call({"action": "install"}, allowed_script=str(script))
-
-        assert result["ok"] is False
-        assert "failed to run" in result["error"]
+            outcome = apply_for_project(
+                "demo",
+                False,
+                policy_root=tmp_path,
+                systemd_dir=systemd,
+                systemctl=lambda *a: calls.append(a) or True,
+                hostname=lambda: "solo",
+            )
+        assert outcome.ok, outcome.report()
+        assert (systemd / "a.service").read_text() == unit
+        assert calls == [("daemon-reload",)]
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +301,7 @@ class TestBuildServerSocket:
             patch("sys.exit", side_effect=SystemExit(1)),
             pytest.raises(SystemExit),
         ):
-            _build_server_socket("/opt/test/scripts/generated/install.sh")
+            _build_server_socket()
 
     def test_exits_on_missing_listen_fds(self):
         with (
@@ -279,7 +309,7 @@ class TestBuildServerSocket:
             patch("sys.exit", side_effect=SystemExit(1)),
             pytest.raises(SystemExit),
         ):
-            _build_server_socket("/opt/test/scripts/generated/install.sh")
+            _build_server_socket()
 
 
 # ---------------------------------------------------------------------------
@@ -345,32 +375,8 @@ fraises:
             f"scaffold-install-helper.socket not in rendered files: {files}"
         )
 
-    def test_service_file_content_references_install_script(self, tmp_path):
-        """Service unit must reference the baked-in install.sh path."""
-        from fraisier.scaffold.renderer import ScaffoldRenderer
-
-        config = self._make_config(tmp_path)
-        renderer = ScaffoldRenderer(config)
-        renderer.render(dry_run=False)
-
-        output_dir = renderer.output_dir
-        service_file = (
-            output_dir
-            / "systemd"
-            / "fraisier-myproject-scaffold-install-helper.service"
-        )
-        assert service_file.exists(), f"Expected {service_file} to exist"
-        content = service_file.read_text()
-        assert "install.sh" in content
-        assert "fraisier-scaffold-install-helper" in content
-
-    def test_service_bakes_state_dir_install_script(self, tmp_path):
-        """The baked install.sh path is the project state_dir, not /opt/{project} (#283).
-
-        The scaffold-install-helper's allowed_script must point at the single
-        server-side scaffold tree the deploy actually materializes, so it stays
-        in lockstep with regeneration regardless of app_path.
-        """
+    def test_service_names_the_project_and_no_script(self, tmp_path):
+        """The helper reads the root policy by project; it runs no script (#433)."""
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         config = self._make_config(tmp_path)
@@ -383,8 +389,25 @@ fraises:
             / "fraisier-myproject-scaffold-install-helper.service"
         )
         content = service_file.read_text()
-        assert "/var/lib/fraisier/myproject/scaffold/install.sh" in content
-        assert "/opt/myproject" not in content
+        assert "-m fraisier.scaffold_install_helper" in content
+        assert "--project myproject" in content
+        assert "install.sh" not in content
+
+    def test_service_may_write_only_systemd_units(self, tmp_path):
+        """nginx and sudoers are an operator's now, so the helper cannot write them."""
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        config = self._make_config(tmp_path)
+        renderer = ScaffoldRenderer(config)
+        renderer.render(dry_run=False)
+
+        content = (
+            renderer.output_dir
+            / "systemd"
+            / "fraisier-myproject-scaffold-install-helper.service"
+        ).read_text()
+        assert "ReadWritePaths=/etc/systemd/system\n" in content
+        assert "ProtectSystem=strict" in content
 
     def test_socket_file_content_has_correct_socket_path(self, tmp_path):
         """Socket unit must have the correct ListenStream path."""
@@ -537,19 +560,24 @@ class TestInstallScaffoldSocketClient:
 class TestServeConnectionEnforcesPeerCreds:
     """``_serve_connection`` runs ``check_peer_creds`` before dispatching."""
 
-    def test_rejects_non_matching_uid(self, tmp_path):
+    def test_rejects_non_matching_uid(self):
         import os
 
-        script = tmp_path / "install.sh"
-        script.write_text("#!/bin/bash\necho hi\n")
         server, client = _make_socket_pair()
-        wrong_uid = os.getuid() + 1
-        _serve_connection(
-            server,
-            expected_uid=wrong_uid,
-            allowed_script=str(script),
-        )
+        apply = _Recorder()
+        _serve_connection(server, expected_uid=os.getuid() + 1, apply=apply)
         data = _recv_json(client)
         client.close()
         assert data["ok"] is False
         assert "peer" in data["error"].lower()
+        assert apply.calls == []
+
+    def test_without_a_deploy_uid_it_serves_nobody(self):
+        server, client = _make_socket_pair()
+        apply = _Recorder()
+        _serve_connection(server, expected_uid=None, apply=apply)
+        data = _recv_json(client)
+        client.close()
+        assert data["ok"] is False
+        assert "peer credentials cannot be checked" in data["error"]
+        assert apply.calls == []

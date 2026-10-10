@@ -4431,6 +4431,27 @@ scaffold:
 class TestScaffoldCLI:
     """fraisier scaffold generates all files."""
 
+    @pytest.fixture(autouse=True)
+    def _as_root_on_the_prepared_tree(self, tmp_path, monkeypatch):
+        """scaffold-install runs as root on a tree it rendered itself (#433).
+
+        These tests pin its messages and its sudoers check, not the render, so
+        the "render" is the directory each test prepares. The root flow itself
+        is pinned in ``test_scaffold_install_root``.
+        """
+        from fraisier.cli import scaffold as scaffold_mod
+
+        def prepared(_config):
+            tree = tmp_path / "output"
+            tree.mkdir(exist_ok=True)
+            return tree
+
+        monkeypatch.setattr(scaffold_mod, "_euid", lambda: 0)
+        monkeypatch.setattr(scaffold_mod, "_render_root_tree", prepared)
+        monkeypatch.setattr(scaffold_mod, "_host_payload", lambda _tree: {})
+        monkeypatch.setattr(scaffold_mod, "_hostname", lambda: "solo")
+        monkeypatch.setattr(scaffold_mod, "_write_root_policy", lambda _p: None)
+
     def test_scaffold_command_generates_files(self, tmp_path):
         """fraisier scaffold generates files to output_dir."""
         from click.testing import CliRunner
@@ -4478,34 +4499,6 @@ class TestScaffoldCLI:
         assert (override / "install.sh").exists()
         assert not (tmp_path / "output").exists()
 
-    def test_scaffold_install_output_dir_override_looked_up(self, tmp_path):
-        """scaffold-install --output-dir reads install.sh from that dir (#283)."""
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = tmp_path / "fraises.yaml"
-        cfg.write_text(_SCAFFOLD_YAML.format(output=str(tmp_path / "output")))
-        override = tmp_path / "state"
-        override.mkdir()
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "-c",
-                str(cfg),
-                "scaffold-install",
-                "--output-dir",
-                str(override),
-                "--yes",
-            ],
-        )
-        # No install.sh in the override dir → the error must name that path,
-        # proving --output-dir (not scaffold.output_dir) was consulted.
-        assert result.exit_code != 0
-        assert str(override / "install.sh") in result.output
-
     def test_scaffold_gateway_generated_for_multi_fraise(self, tmp_path):
         """Gateway templates generated when >1 fraise."""
         cfg = tmp_path / "fraises.yaml"
@@ -4538,148 +4531,6 @@ scaffold:
         # Nginx gateway should be generated for multi-fraise
         gateway = tmp_path / "output" / "nginx" / "gateway.conf"
         assert gateway.exists()
-
-    def test_scaffold_install_command_missing_install_script(self, tmp_path):
-        """scaffold-install fails if install.sh doesn't exist."""
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = tmp_path / "fraises.yaml"
-        cfg.write_text(
-            f"""
-name: tp
-scaffold:
-  output_dir: {tmp_path / "output"}
-fraises: {{}}
-"""
-        )
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install"])
-        assert result.exit_code != 0
-        assert "not found" in result.output.lower()
-
-    def test_scaffold_install_command_unreadable_install_script(
-        self, tmp_path, monkeypatch
-    ):
-        """scaffold-install reports a friendly error when install.sh is unreadable.
-
-        Regression for #222: `Path.exists()` propagates `PermissionError` when a
-        parent directory of the install script is not traversable. The CLI must
-        treat that the same as "not found" and exit cleanly instead of crashing
-        with an unhandled traceback.
-        """
-        from pathlib import Path
-
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = tmp_path / "fraises.yaml"
-        cfg.write_text(
-            f"""
-name: tp
-scaffold:
-  output_dir: {tmp_path / "output"}
-fraises: {{}}
-"""
-        )
-
-        real_exists = Path.exists
-        unreadable = tmp_path / "output" / "install.sh"
-
-        def fake_exists(self, *args, **kwargs):
-            if self == unreadable:
-                raise PermissionError(13, "Permission denied", str(self))
-            return real_exists(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "exists", fake_exists)
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install"])
-        assert result.exit_code != 0
-        assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "Traceback" not in result.output
-        assert "not found" in result.output.lower()
-
-    def test_scaffold_install_command_is_file_permission_error(
-        self, tmp_path, monkeypatch
-    ):
-        """scaffold-install handles PermissionError from is_file() cleanly (#222)."""
-        from pathlib import Path
-
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = tmp_path / "fraises.yaml"
-        cfg.write_text(
-            f"""
-name: tp
-scaffold:
-  output_dir: {tmp_path / "output"}
-fraises: {{}}
-"""
-        )
-        install_script = tmp_path / "output" / "install.sh"
-        install_script.parent.mkdir(parents=True)
-        install_script.write_text("#!/bin/sh\n")
-
-        real_is_file = Path.is_file
-
-        def fake_is_file(self, *args, **kwargs):
-            if self == install_script:
-                raise PermissionError(13, "Permission denied", str(self))
-            return real_is_file(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "is_file", fake_is_file)
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install"])
-        assert result.exit_code != 0
-        assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "Traceback" not in result.output
-
-    def test_scaffold_install_command_chmod_permission_error(
-        self, tmp_path, monkeypatch
-    ):
-        """scaffold-install handles PermissionError from chmod() cleanly (#222)."""
-        from pathlib import Path
-
-        from click.testing import CliRunner
-
-        from fraisier.cli import main
-
-        cfg = tmp_path / "fraises.yaml"
-        cfg.write_text(
-            f"""
-name: tp
-scaffold:
-  output_dir: {tmp_path / "output"}
-fraises: {{}}
-"""
-        )
-        install_script = tmp_path / "output" / "install.sh"
-        install_script.parent.mkdir(parents=True)
-        install_script.write_text("#!/bin/sh\n")
-        install_script.chmod(0o644)  # not executable
-
-        real_chmod = Path.chmod
-
-        def fake_chmod(self, *args, **kwargs):
-            if self == install_script:
-                raise PermissionError(1, "Operation not permitted", str(self))
-            return real_chmod(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "chmod", fake_chmod)
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["-c", str(cfg), "scaffold-install", "--yes"])
-        assert result.exit_code != 0
-        assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "Traceback" not in result.output
-        assert "executable" in result.output.lower()
 
     def test_scaffold_install_failure_message_includes_exit_code(
         self, tmp_path, monkeypatch

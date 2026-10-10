@@ -207,34 +207,101 @@ Processes the unit starts (a `confiture` or `uv` subprocess) keep the opt-out,
 because fraisier sets it again for them. Until the drop-in is reverted,
 `fraisier doctor` names it.
 
-## Root helpers: the deploy user is root-equivalent today
+## Root helpers
 
-**This is a known gap, tracked in
-[#433](https://github.com/fraiseql/fraisier/issues/433).** The root helpers
-(`systemctl-helper`, `scaffold-install-helper`, `unit-installer` and
-`pgbackrest-helper`) run as root from `/home/<deploy_user>/.local/bin`, which is
-the deploy user's uv tool dir. Whoever can write a module those helpers import,
-or the `install.sh` that the scaffold-install-helper runs from
-`/var/lib/fraisier/<project>/scaffold`, runs code as root the next time the
-socket starts the helper. That includes the deploy user and anything running as
-it, the public webhook included. It also includes anyone who can land a commit
-on an auto-deployed branch, because each deploy installs that commit's
-`fraises.yaml` and re-renders the units root installs.
+fraisier runs four helpers as root: `systemctl-helper`, `scaffold-install-helper`,
+`unit-installer` and `pgbackrest-helper`. Until
+[#433](https://github.com/fraiseql/fraisier/issues/433) they ran from the deploy
+user's uv tool dir, and the scaffold-install-helper ran a deploy-rendered
+`install.sh`, so the deploy user was root-equivalent. Two people can act as the
+deploy user here, and the model has to hold against both:
 
-The `SO_PEERCRED` check and the allowlists limit which **requests** a helper
-serves. They cannot protect a helper whose own code the caller can change.
+- anyone who can land a commit on an auto-deployed branch, with no host access,
+  because each deploy installs that commit's `fraises.yaml` and re-renders the
+  units;
+- a compromised deploy-user account, the public webhook included.
 
-Until #433's fix ships, treat the deploy user as root-equivalent on every host
-fraisier manages.
+### What root runs
+
+The root helpers run a **second, root-owned copy of fraisier** under
+`/usr/local/lib/fraisier-root`. They do not use `/opt/fraisier`, which the
+deploy user owns. Each unit runs
+`/usr/local/lib/fraisier-root/tools/fraisier/bin/python -I -m fraisier.<helper>`,
+and `-I` keeps `PYTHONPATH`, the working directory and any user site out of what
+it imports. uv installs the copy with every path pinned under that directory: the
+tool venv, the managed Python, the cache, and uv itself, chowned to root after
+its installer runs. It runs under `env -i`, so a `HOME` or `UV_*` that survived
+`sudo` cannot decide where it writes.
+
+Only an operator changes the root copy, with `sudo fraisier-root-upgrade VERSION`.
+The webhook's self-upgrade changes only the deploy user's copy, so the two differ
+after every self-upgrade. `fraisier doctor` reports that as
+`root_helper_version_skew`. A root-owned `/usr/local/bin/fraisier` link makes
+`sudo fraisier` run the root copy, and `root_fraisier_command` checks the link
+and sudo's `secure_path`.
+
+### What a deploy may install as root
+
+A deploy still re-renders the scaffold as the deploy user. The
+scaffold-install-helper now reads that render as **untrusted input** and runs
+nothing from it. It applies only what the **root policy**
+(`/etc/fraisier/<project>/root-policy.json`) allows. Only an operator's
+`sudo fraisier scaffold-install` writes that file, and the helper refuses it
+unless the file and every directory above it are root-owned and writable by
+root alone. Nothing in `fraises.yaml`, `/opt/fraisier` or `/var/lib/fraisier`
+can widen it.
+
+- A deploy may rewrite only the units the policy lists, from the source the
+  policy names for each. Each one must pass a **positive allowlist** of
+  sections and directives, and any directive not on it refuses the unit:
+  - `User=` and `Group=` must be non-root identities the policy lists. A
+    service with no `User=` is refused.
+  - Every `Exec*=` line names an executable under the policy's prefixes, with
+    no `+`, `!`, `!!` or `|` prefix.
+  - `EnvironmentFile=` and `LoadCredential=` may name only files the policy
+    lists. `LogsDirectory=` and the other directories systemd creates and
+    chowns may name only the policy's names. `StandardOutput=file:` and its
+    relatives are refused.
+  - `DynamicUser=`, `SupplementaryGroups=`, capabilities, `BindPaths=`,
+    `RootDirectory=`, `PermissionsStartOnly=`, `LoadCredentialEncrypted=` and
+    every directive the allowlist does not name are refused.
+- Everything else root owns is the operator's: sudoers, every nginx file,
+  sockets, users, directories and the root helpers themselves. If a deploy's
+  render wants one of them changed, or names an artifact the policy has never
+  seen, the helper writes nothing and reports it as pending. The deploy then
+  stops.
+- Nothing is written unless everything passes.
+- The unit-installer, which copies an app's own `scripts/systemd` units, applies
+  the same allowlist. It accepts only `.service` and `.timer` files, and writes
+  the bytes it judged rather than reading the file a second time.
+
+The policy is read off the render the operator approved: the identities,
+executables, files and directories its units, and the app's own units, name.
+It never grants an identity that resolves to uid or gid 0, or a read of
+`/etc/shadow`, sudoers, `/etc/ssh` or `/root`. Config validation also refuses
+`service.user`/`service.group` of `root`/`0` and `retain.user: root`. That
+check is defence in depth: it runs from deploy-owned code, and the allowlist
+is what holds.
+
+### The operator's install
+
+`sudo fraisier scaffold-install` renders `fraises.yaml` as root, into a private
+directory. Before anything runs, it shows a diff of every root-owned file it
+would write and of the root policy it would grant. `--yes` skips the question,
+not the diff. Run as anyone but root, it refuses, because all it could do is
+hand a script someone else wrote to `sudo`. The config it reads is still one a
+commit author chose, so read the diff.
+
+### What doctor checks
 
 `fraisier doctor` (`root_unit_exec_trust`) reports every command that runs as
-root from a path someone other than root can change. It reads the effective
-unit (`systemctl show`, so drop-ins count), follows symlinks, a script's `#!`
-interpreter, the venv and the base Python its `pyvenv.cfg` names, and every
-directory above them. It also counts a `+` or `!` command in a unit that sets
-`User=`, and a `retain.user: root` or `service.user: root` unit. Today it
-**warns**, and on every host it names the root helpers. It becomes a failure
-once the fix ships.
+root from a path someone other than root can change. It reads the effective unit
+through `systemctl show`, so drop-ins count. It follows symlinks, a script's `#!`
+interpreter, the venv (a `bin/python -m` command included) and the base Python
+named in its `pyvenv.cfg`, and every directory above them. It also counts a `+`
+or `!` command in a unit that sets `User=`. Since #433's fix it **fails**. A host
+fails until an operator has installed the root copy and re-run
+`sudo fraisier scaffold-install`.
 
 ## What Fraisier Does NOT Protect Against
 

@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The deploy user is no longer root-equivalent**
+  ([#433](https://github.com/fraiseql/fraisier/issues/433)). ⚠️ One-time operator
+  steps; see the upgrade note. Anyone who could land a commit on an auto-deployed
+  branch could become root, and so could the deploy-user account. The root helpers
+  ran from the deploy user's uv tool dir, the scaffold-install-helper ran a
+  deploy-rendered `install.sh` as root, the unit-installer copied app units without
+  reading them, and `service.user: root` produced a root app unit. Now:
+  - The root helpers run a **root-owned copy of fraisier** under
+    `/usr/local/lib/fraisier-root`, as `python -I -m fraisier.<helper>`. uv installs
+    it with every path pinned under that directory and nothing inherited from the
+    caller. Only `sudo fraisier-root-upgrade VERSION` changes it. A root-owned
+    `/usr/local/bin/fraisier` link makes `sudo fraisier` run it. install.sh and
+    `fraisier bootstrap` install it when it is missing.
+  - The scaffold-install-helper **runs nothing a deploy rendered**. It reads the
+    render as untrusted input and writes only the units the new **root policy**
+    (`/etc/fraisier/<project>/root-policy.json`, written by an operator's
+    `sudo fraisier scaffold-install`, and refused unless only root could have
+    written it) lets a deploy rewrite. Each unit must pass a positive allowlist of
+    directives: non-root `User=`/`Group=` from the policy, executables under the
+    policy's prefixes, no `+`/`!` command, read paths and directories from the
+    policy. Everything else root owns is the operator's: sudoers, nginx, sockets,
+    users, directories and the helpers themselves. A deploy that would change one
+    of them **stops**, and the deploy names what is pending. Nothing is written
+    unless everything passes. Restarts the helper defers go on the deploy's own
+    ledger, and a stopped install forgets the config hash, so the next deploy
+    asks again.
+  - The **unit-installer** applies the same allowlist, accepts only `.service` and
+    `.timer`, and writes exactly the bytes it judged.
+  - `sudo fraisier scaffold-install` renders as root, into a private directory.
+    Before anything runs it shows a diff of every root-owned file and of the root
+    policy, `--yes` included, and it writes the policy only after the install
+    succeeds. Run as anyone but root it refuses, and `--output-dir` is refused.
+  - Config validation refuses `service.user`/`service.group` of `root` or `0`, and
+    `retain.user: root`, as defence in depth.
+  - `fraisier doctor`: `root_unit_exec_trust` now **fails** instead of warning, and
+    judges a venv run as `bin/python -m`. The new `root_helper_version_skew` and
+    `root_fraisier_command` checks report a root copy behind the deploy copy, and
+    a `sudo fraisier` that would not run the root copy. `unit_entrypoints` also
+    judges the root interpreter.
+
+  See [root helpers](docs/security.md#root-helpers).
 - **No PEP 768 remote attach into a fraisier process**
   ([#436](https://github.com/fraiseql/fraisier/issues/436)). Python 3.14 lets anything
   allowed to ptrace a process inject code into it while it runs. Every unit fraisier
@@ -32,9 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `!` lines in a unit with `User=`, and `retain.user: root` or
   `service.user: root`. ⚠️ **It warns on every host with the root helpers
   installed**, because they run from the deploy user's uv tool dir, so
-  `fraisier doctor` can exit 2 where it exited 0. Until #433's fix ships, treat the deploy user as
-  root-equivalent; see
-  [root helpers](docs/security.md#root-helpers-the-deploy-user-is-root-equivalent-today).
+  `fraisier doctor` can exit 2 where it exited 0. #433's fix, above, makes it a
+  failure; see [root helpers](docs/security.md#root-helpers).
 
 ### Fixed
 
@@ -5923,3 +5963,60 @@ Initial release of Fraisier deployment management system.
 - Database migration support via confiture
 - Comprehensive testing framework
 - Rich CLI with progress indicators and error handling
+
+**⚠️ Root helpers (#433): one-time operator steps on every host.** Until they are
+done, the root helpers keep running the deploy user's copy, `fraisier doctor` fails
+`root_unit_exec_trust`, and the scaffold-install-helper answers every config-changing
+deploy with "pending": the deploy stops and names the operator step.
+
+1. Install the root copy. `sudo fraisier` cannot find it yet, so do it by hand, with
+   the version the deploy copy runs (`fraisier --version`):
+
+       sudo mkdir -p /usr/local/lib/fraisier-root
+       curl -LsSf https://astral.sh/uv/0.9.18/install.sh | sudo env -i HOME=/root \
+         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+         UV_INSTALL_DIR=/usr/local/lib/fraisier-root/uv UV_NO_MODIFY_PATH=1 sh
+       sudo chown -R root:root /usr/local/lib/fraisier-root/uv
+       sudo chmod -R go-w /usr/local/lib/fraisier-root/uv
+       sudo env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+         UV_TOOL_DIR=/usr/local/lib/fraisier-root/tools \
+         UV_TOOL_BIN_DIR=/usr/local/lib/fraisier-root/bin \
+         UV_PYTHON_INSTALL_DIR=/usr/local/lib/fraisier-root/python \
+         UV_CACHE_DIR=/usr/local/lib/fraisier-root/cache \
+         UV_PYTHON_PREFERENCE=only-managed UV_NO_CONFIG=1 \
+         /usr/local/lib/fraisier-root/uv/uv tool install --python 3.14 fraisier==VERSION
+       sudo ln -sfn /usr/local/lib/fraisier-root/bin/fraisier /usr/local/bin/fraisier
+       sudo ln -sfn /usr/local/lib/fraisier-root/bin/fraisier-root-upgrade \
+         /usr/local/bin/fraisier-root-upgrade
+
+   A new host bootstrapped with this release gets it from `fraisier bootstrap`.
+2. Run `sudo fraisier scaffold-install` and read the diff it shows: the root helper
+   units now name the root copy, and it writes the root policy. From now on run it
+   only as root. The non-root form, and `--output-dir`, are refused.
+3. Run `fraisier doctor`: `root_unit_exec_trust`, `root_helper_version_skew` and
+   `root_fraisier_command` should pass.
+
+**What a deploy now stops on.** A deploy may still change the content of the units
+the policy lists, such as the app unit, the deploy services, the webhook and the
+retention and prune timers. It stops, and leaves the host as it was, when its render
+changes anything only an operator may install:
+- any **nginx** file;
+- **sudoers**. A changed `install.command` re-bakes the sudoers fallback (#279), so it
+  now stops the deploy until the operator runs `sudo fraisier scaffold-install`.
+- a socket, a root helper's unit (a new app service in the systemctl-helper
+  allowlist, a new unit-installer `--allow` pair, a pgBackRest spec);
+- a unit, user or directory the policy has never seen: a new fraise, environment or
+  timer;
+- a unit that fails the allowlist.
+
+The operator runs `sudo fraisier scaffold-install` against the deployed commit's
+`fraises.yaml`. For example, `git -C <app_path> show <sha>:fraises.yaml >
+/tmp/fraises.yaml`, then `sudo fraisier -c /tmp/fraises.yaml scaffold-install`. Then
+redeploy. After a self-upgrade, also run `sudo fraisier-root-upgrade <version>`
+(`root_helper_version_skew` says when): the two copies render the same units only
+when they are the same version.
+
+**`retain.user: root` is refused**, and so is a `service.user`/`service.group` of
+`root` or `0`. A retention prune runs the deploy user's copy of fraisier, so as root it
+ran deploy-owned code as root. Set `retain.user` to the corpus owner, for example
+`postgres`.

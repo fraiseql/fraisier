@@ -837,7 +837,7 @@ class TestManifestFileOnDisk:
     def test_render_writes_it(self, tmp_path):
         payload = self._written(tmp_path)
 
-        assert payload["schema_version"] == 1
+        assert payload["schema_version"] == 2
         assert payload["batch_hash"]
         assert payload["artifacts"]
 

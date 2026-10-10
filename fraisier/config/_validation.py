@@ -140,9 +140,32 @@ def validate_servers(servers: dict) -> None:
             machines_to_servers[machine] = logical_server
 
 
+def _is_root_identity(value: object) -> bool:
+    text = str(value).strip()
+    return text == "root" or (text.isdigit() and int(text) == 0)
+
+
+def _refuse_root_service_identity(fraise_name: str, env: dict) -> list[str]:
+    """``service.user``/``service.group`` become the app unit's ``User=``/``Group=``.
+
+    Root there is a root app unit, running whatever ``service.exec`` names
+    (#433, path 9). Defence in depth: the root scaffold-install helper refuses
+    such a unit whatever this says, because this runs from deploy-owned code.
+    """
+    service = env.get("service")
+    if not isinstance(service, dict):
+        return []
+    return [
+        f"{fraise_name}: service.{key} may not be root or 0: the app unit would "
+        f"run as root (#433)"
+        for key in ("user", "group")
+        if key in service and _is_root_identity(service[key])
+    ]
+
+
 def _validate_environment(fraise_name: str, env: dict) -> None:
     """Validate a single fraise environment config."""
-    errors: list[str] = []
+    errors: list[str] = _refuse_root_service_identity(fraise_name, env)
 
     # app_path is required when health_check is configured (needs a deploy target)
     if env.get("health_check") and not env.get("app_path"):
@@ -1245,6 +1268,13 @@ def _validate_retain_user(
             f"{source}: {value!r} is not a valid username — it becomes a "
             f"User= directive, and a leading '-' would reach a command line "
             f"as an option"
+        )
+        return None
+    if _is_root_identity(value):
+        errors.append(
+            f"{source}: {value!r} would run the prune as root, from the deploy "
+            f"user's copy of fraisier (#433); use the owner of the corpus, "
+            f"e.g. postgres"
         )
         return None
     return value

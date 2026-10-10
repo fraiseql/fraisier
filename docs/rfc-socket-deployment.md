@@ -181,7 +181,9 @@ webhook:
 ## Security Considerations
 
 - **Socket Permissions**: Restricted to web user group only
-- **Service Isolation**: Runs as deploy user, no privilege escalation
+- **Service Isolation**: Runs as deploy user. The root helpers run root-owned
+  code, and a deploy installs as root only what the root policy allows
+  (see [security](security.md#root-helpers), #433)
 - **Input Validation**: Strict JSON schema prevents injection
 - **Audit Logging**: All requests logged to systemd journal
 - **Timeout Protection**: Long-running deployments automatically killed

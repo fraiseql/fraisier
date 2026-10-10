@@ -41,3 +41,33 @@ def test_templates_reference_at_least_the_main_cli() -> None:
 def test_every_binary_a_template_runs_is_a_declared_console_script() -> None:
     missing = _referenced_binaries() - _declared_scripts()
     assert not missing, f"scaffold runs undeclared console scripts: {sorted(missing)}"
+
+
+def _referenced_modules() -> set[str]:
+    """Modules a template runs with ``python -I -m`` (the root helpers, #433)."""
+    pattern = re.compile(r"-I -m (fraisier(?:\.[a-z_]+)+)")
+    return {
+        name
+        for template in TEMPLATES.rglob("*")
+        if template.is_file()
+        for name in pattern.findall(
+            template.read_text(encoding="utf-8", errors="ignore")
+        )
+    }
+
+
+def test_the_module_scan_finds_the_root_helpers() -> None:
+    assert "fraisier.scaffold_install_helper" in _referenced_modules()
+
+
+def test_every_module_a_template_runs_has_a_main_guard() -> None:
+    missing = []
+    for module in _referenced_modules():
+        source = ROOT / Path(*module.split(".")).with_suffix(".py")
+        if 'if __name__ == "__main__":' not in source.read_text(encoding="utf-8"):
+            missing.append(module)
+    assert not missing, f"`-m` would import and do nothing: {sorted(missing)}"
+
+
+def test_the_operator_upgrade_command_is_declared() -> None:
+    assert "fraisier-root-upgrade" in _declared_scripts()

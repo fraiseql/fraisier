@@ -101,7 +101,7 @@ class TestService:
     def test_the_whole_spec_is_baked_into_execstart(self, rendered):
         line = self.exec_start(rendered)
 
-        assert "fraisier-pgbackrest-helper" in line
+        assert "-I -m fraisier.pgbackrest_helper" in line
         assert "--deploy-user fraisier" in line
         assert "--stanza main" in line
         assert "--repo 1" in line

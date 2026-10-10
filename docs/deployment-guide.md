@@ -625,10 +625,9 @@ is too old, an unreachable helper) is an ordinary error and the service restarts
   does it. Its request names an operation and nothing else — no path, argv, cluster
   or stanza — and the helper's stanza, repository, cluster and target are baked into
   its unit by `scaffold`, so its authority is fixed when it is installed and visible
-  in `systemctl cat`. **Know the limit of that:** a deploy regenerates and installs
-  the scaffold, as root, from the repository's `fraises.yaml`, so whoever can land a
-  commit on the deploy branch chooses what is baked (the deploy user already reaches
-  root through that pipeline). What protects a cluster from a wrong or hostile
+  in `systemctl cat`. Since #433 only an operator installs or changes this unit: a
+  deploy whose render changes it stops as pending until the operator runs
+  `sudo fraisier scaffold-install` ([security](security.md#root-helpers)). What also protects a cluster from a wrong or hostile
   `cluster:` is the helper's **own** refusal, from root-owned configuration, of any
   cluster whose configuration archives into its stanza — the stanza's source, in
   practice production — as well as of a root-owned cluster, a running one, or a

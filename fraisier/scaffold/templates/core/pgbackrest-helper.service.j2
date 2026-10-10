@@ -11,20 +11,21 @@ Type=simple
 
    The stanza, repository, cluster and target are baked into ExecStart: the
    helper's authority is fixed when this unit is installed and is not decided per
-   request. That is a limit, not a wall — a deploy regenerates and installs the
-   scaffold, as root, from the repository's fraises.yaml, so whoever can land a
-   commit on the deploy branch chooses what is baked. What protects a cluster from
-   a wrong or hostile `cluster:` is the helper's own refusal, from root-owned
-   configuration, of any cluster that archives into its stanza.
+   request. Only an operator installs it (#433): a deploy that renders a different
+   one is stopped as pending until the operator runs scaffold-install. What also
+   protects a cluster from a wrong or hostile `cluster:` is the helper's own
+   refusal, from root-owned configuration, of any cluster that archives into its
+   stanza.
 
    Comment markers here carry no minus sign. trim_blocks and lstrip_blocks
    already drop a standalone comment line; adding whitespace-control markers
    additionally eats the newline of the directive ABOVE, silently gluing two
    directives into one that systemd reads as neither. #}
-ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-pgbackrest-helper --deploy-user {{ scaffold.deploy_user }} --stanza {{ helper.spec.stanza }} --repo {{ helper.spec.repo }} --cluster {{ helper.spec.cluster }} --target {% if ' ' in helper.spec.target %}"{{ helper.spec.target }}"{% else %}{{ helper.spec.target }}{% endif %} --timeout {{ helper.spec.timeout_seconds }}
+ExecStart={{ root_python }} -I -m fraisier.pgbackrest_helper --deploy-user {{ scaffold.deploy_user }} --stanza {{ helper.spec.stanza }} --repo {{ helper.spec.repo }} --cluster {{ helper.spec.cluster }} --target {% if ' ' in helper.spec.target %}"{{ helper.spec.target }}"{% else %}{{ helper.spec.target }}{% endif %} --timeout {{ helper.spec.timeout_seconds }}
 
-# Prevent Python from creating root-owned __pycache__ dirs in the deploy user's
-# tool installation when the helper runs as root.
+# Root-owned code only (#433): the root tool install's interpreter, isolated
+# (-I) from PYTHONPATH, the working directory and any user site. No bytecode is
+# written, so the root install never carries files nobody installed.
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 
@@ -32,8 +33,8 @@ Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 # ProtectSystem=full rather than strict: the data directory is whatever
 # pg_lsclusters says for the cluster, which this unit cannot know at render time,
 # and a read-only mount over it would turn every restore into EROFS. /usr, /boot
-# and /etc stay read-only. ProtectHome is omitted because the binary lives in
-# ~/.local, which it would hide.
+# and /etc stay read-only. ProtectHome is omitted: a cluster's data directory
+# may live under /home.
 NoNewPrivileges=true
 ProtectSystem=full
 PrivateTmp=true

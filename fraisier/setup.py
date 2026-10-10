@@ -242,8 +242,8 @@ class ServerSetup:
             ("/var/lib/fraisier", deploy_user),
             ("/var/lib/fraisier/repos", deploy_user),
             ("/var/lib/fraisier/status", deploy_user),
-            # The persistent scaffold state tree (#283) that the socket helper
-            # reads its baked install.sh from. Owned by deploy_user so
+            # The persistent scaffold state tree (#283) that the root helper
+            # reads a deploy's render from (#433). Owned by deploy_user so
             # deploy-time regeneration (which runs as that user) can refresh
             # it — the same reason bootstrap chowns it (#284).
             (self.config.scaffold_state_dir, deploy_user),
@@ -280,10 +280,9 @@ class ServerSetup:
         ``scaffold.output_dir`` — the tree the operator reviews before
         installing.  The deploy path never looks there: it regenerates into,
         installs from and staleness-checks ``scaffold_state_dir`` (#283), and
-        the scaffold-install-helper's baked ``allowed_script`` is
-        ``{state_dir}/install.sh``.  Left unpopulated, that helper exits at
-        startup and every deploy silently falls back to the subprocess install
-        path until the first config-changing deploy regenerates the tree (#284).
+        the root scaffold-install helper reads a deploy's render from it
+        (#433).  Persisting the reviewed tree there gives both a starting
+        point before the first config-changing deploy regenerates it (#284).
 
         Copying rather than moving keeps ``output_dir`` as the review surface.
         The webhook env file is excluded: it carries

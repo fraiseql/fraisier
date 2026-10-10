@@ -247,6 +247,18 @@ class TestDoctor:
 class TestScaffoldInstallDefault:
     """The load-bearing one: a default install must not stop a service."""
 
+    @pytest.fixture(autouse=True)
+    def _as_root_on_the_prepared_tree(self, tmp_path, monkeypatch):
+        """scaffold-install runs as root on its own render (#433); here, ``out``."""
+        from fraisier.cli import scaffold as scaffold_mod
+
+        monkeypatch.setattr(scaffold_mod, "_euid", lambda: 0)
+        monkeypatch.setattr(
+            scaffold_mod, "_render_root_tree", lambda _config: tmp_path / "out"
+        )
+        monkeypatch.setattr(scaffold_mod, "_host_payload", lambda _tree: {})
+        monkeypatch.setattr(scaffold_mod, "_write_root_policy", lambda _p: None)
+
     def test_scaffold_install_does_not_touch_foreign_units_by_default(
         self, tmp_path, monkeypatch
     ):
@@ -284,8 +296,6 @@ class TestScaffoldInstallDefault:
                 "scaffold-install",
                 "--yes",
                 "--dry-run",
-                "--output-dir",
-                str(script.parent),
             ],
         )
 
@@ -331,8 +341,6 @@ class TestScaffoldInstallDefault:
                 "scaffold-install",
                 "--yes",
                 "--prune-foreign",
-                "--output-dir",
-                str(script.parent),
             ],
         )
 
