@@ -290,7 +290,12 @@ class ValidationRunner:
                     )
                 )
             for env_name in self.config.list_environments(name):
-                env = self._safe_get_environment(name, env_name) or {}
+                env = self._safe_get_environment(name, env_name)
+                # An env that fails its own validation is already reported by
+                # _check_section_traversal; reading it as empty here would add
+                # a "missing app_path" that points at the wrong field (#448).
+                if env is None:
+                    continue
                 if not env.get("app_path"):
                     results.append(
                         ValidationCheckResult(
@@ -523,8 +528,8 @@ class ValidationRunner:
             if fraise.get("type") != "api":
                 continue
             for env_name in self.config.list_environments(name):
-                env = self._safe_get_environment(name, env_name) or {}
-                if not env.get("health_check"):
+                env = self._safe_get_environment(name, env_name)
+                if env is not None and not env.get("health_check"):
                     results.append(
                         ValidationCheckResult(
                             name="missing_health_check",

@@ -70,7 +70,7 @@ fraises:
         database:
           name: myapp_development
           strategy: rebuild  # drop and recreate (dev only!)
-          # admin_url: postgresql://postgres@/postgres?host=/var/run/postgresql  # for DROP/CREATE DB
+          admin_url: postgresql://postgres@/postgres?host=/var/run/postgresql  # for DROP/CREATE DB
           # create_template: true   # snapshot the rebuilt DB as template_<name> for fast reseeds
           # app_version: "1.2.3"    # optional override; auto-discovered from version.json / pyproject.toml otherwise
         health_check:
@@ -86,6 +86,7 @@ fraises:
         database:
           name: myapp_staging
           strategy: restore_migrate
+          admin_url: postgresql://postgres@/postgres?host=/var/run/postgresql  # for DROP/CREATE DB
           confiture_config: db/environments/staging.yaml
           restore:
             backup_dir: /backup/production
@@ -319,9 +320,10 @@ fraises:
         script_path: scripts/etl/run_etl
         database:
           name: myapp_production
-        notifications:
-          on_success: scripts/etl/success_notification
-          on_failure: scripts/etl/failure_notification
+        notifications:            # a list of notifiers per event, see docs/notifications.md
+          on_failure:
+            - type: slack
+              webhook_url: ${SLACK_DEPLOY_URL}
 
   # ============================================================
   # SCHEDULED JOBS EXAMPLE
@@ -331,6 +333,7 @@ fraises:
     description: Statistics and report generation
     environments:
       production:
+        app_path: /var/www/api.myapp.io  # shares code with API
         jobs:
           daily_stats:
             name: myapp-daily-stats
@@ -354,6 +357,7 @@ fraises:
     description: Database backup and remote sync
     environments:
       production:
+        app_path: /var/www/api.myapp.io  # shares code with API
         jobs:
           local_backup:
             name: myapp-backup-db
