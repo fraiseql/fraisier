@@ -251,3 +251,7 @@ def main() -> None:
         )
     finally:
         server_sock.close()
+
+
+if __name__ == "__main__":
+    main()

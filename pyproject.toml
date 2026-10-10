@@ -633,6 +633,7 @@ fraisier-install-helper = "fraisier.install_helper:main"
 fraisier-pgbackrest-helper = "fraisier.pgbackrest_helper:main"
 fraisier-scaffold-install-helper = "fraisier.scaffold_install_helper:main"
 fraisier-unit-installer = "fraisier.unit_installer_helper:main"
+fraisier-root-upgrade = "fraisier.root_install:main"
 
 [project.urls]
 Documentation = "https://fraisier.fraiseql.com"

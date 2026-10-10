@@ -22,13 +22,37 @@ module docstring. Recap:
 4. The worker survives the webhook restart because it is in its own
    session.
 
+## Two copies of fraisier
+
+A host runs two copies of fraisier ([#433](https://github.com/fraiseql/fraisier/issues/433)):
+
+- **the deploy user's**, in its uv tool dir. The webhook, the deploy daemon and
+  the install-helper run it, and this self-upgrade upgrades it;
+- **the root copy**, under `/usr/local/lib/fraisier-root`. The root helpers
+  (systemctl, scaffold-install, unit-installer, pgBackRest) run it, and
+  `sudo fraisier` resolves to it. **A self-upgrade never touches it**: root
+  must not run code the deploy user installed.
+
+So after a self-upgrade the root helpers keep running the previous version, and
+`fraisier doctor` reports `root_helper_version_skew`. That is normal, but act
+on it when the new version changes what the root helpers do, or the units
+scaffold renders for them:
+
+```bash
+sudo fraisier-root-upgrade 0.90.0          # the version the deploy copy runs
+sudo fraisier scaffold-install             # if the release notes say units changed
+```
+
+A release that changes a root helper's unit, sudoers or nginx makes the next
+config-changing deploy stop as pending until the operator runs both.
+
 ## What else is running the old code
 
-The worker restarts one unit: the webhook. Every **root helper** —
-systemctl, install, scaffold-install, unit-installer — runs from the same
-deploy-user venv as a `Type=simple` daemon behind an `Accept=no` socket, so a
-single process serves every connection and an upgrade on disk does not reach
-it. Before v0.72.0 those processes kept serving the old code until someone ran
+The worker restarts one unit: the webhook. Every **helper** runs as a
+`Type=simple` daemon behind an `Accept=no` socket, so a single process serves
+every connection and an upgrade on disk does not reach it. The install-helper
+runs from the deploy user's venv; the root helpers run from the root copy, which
+only `fraisier-root-upgrade` upgrades. Before v0.72.0 those processes kept serving the old code until someone ran
 `scaffold-install`, which is how a host could end up with a webhook that sends
 a request its own helper does not recognise
 ([#391](https://github.com/fraiseql/fraisier/issues/391)).

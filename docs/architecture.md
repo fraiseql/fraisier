@@ -613,7 +613,9 @@ class ConfigurationError(FraisierError): ...
 
 ### Deployment Execution
 
-- ✅ Deployer runs as regular user (not root)
+- ✅ Deployer runs as regular user (not root); what it may install as root is
+  bounded by a root-owned policy, and root runs only root-owned code
+  ([security](security.md#root-helpers), #433)
 - ⚠️ Need: Sandbox environments, blast radius limits
 - ⚠️ Need: Audit logging of all operations
 

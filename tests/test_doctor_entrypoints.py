@@ -198,3 +198,25 @@ class TestOsAccessIsNotTheOnlyGate:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(os, "access", lambda *_a, **_k: True)
             assert _run(_config()).status == "fail"
+
+
+class TestRootInstall:
+    """The root helpers run the root install's interpreter, not a fraisier* script."""
+
+    def test_a_missing_root_interpreter_fails(self, unit_dir, tmp_path, monkeypatch):
+        root = tmp_path / "fraisier-root"
+        monkeypatch.setattr("fraisier.doctor.ROOT_DIR", str(root))
+        python = root / "tools" / "fraisier" / "bin" / "python"
+        _unit(unit_dir, "h.service", f"{python} -I -m fraisier.systemctl_helper")
+        result = _run()
+        assert result.status == "fail"
+        assert f"h.service -> {python}" in result.detail
+
+    def test_a_present_root_interpreter_passes(self, unit_dir, tmp_path, monkeypatch):
+        root = tmp_path / "fraisier-root"
+        monkeypatch.setattr("fraisier.doctor.ROOT_DIR", str(root))
+        bindir = root / "tools" / "fraisier" / "bin"
+        bindir.mkdir(parents=True)
+        python = _executable(bindir, "python")
+        _unit(unit_dir, "h.service", f"{python} -I -m fraisier.systemctl_helper")
+        assert _run().status == "pass"

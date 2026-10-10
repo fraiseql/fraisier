@@ -30,10 +30,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
 from fraisier.helper_version import VersionWatch, serve_until_stale
+from fraisier.root_policy import RootPolicy, RootPolicyError, load_policy, policy_path
 from fraisier.unit_installer_protocol import (
     Allowlist,
     AllowlistEntry,
@@ -51,6 +52,7 @@ from fraisier.unit_installer_protocol import (
     render_response,
     validate_manifest,
 )
+from fraisier.unit_validator import check_app_unit_name, validate_unit
 
 _SYSTEMCTL = "/usr/bin/systemctl"
 _DAEMON_RELOAD_TIMEOUT = 30
@@ -143,12 +145,66 @@ def _read_manifest_bytes(conn: socket.socket) -> bytes:
     return bytes(buf)
 
 
+def _no_policy() -> RootPolicy:
+    raise RootPolicyError(
+        "the unit-installer has no root policy to judge units against; "
+        "run `sudo fraisier scaffold-install` as an operator"
+    )
+
+
+#: How the running helper reads its root policy. ``main`` points it at
+#: ``/etc/fraisier/<project>/root-policy.json``; until then it refuses.
+_policy_loader: Callable[[], RootPolicy] = _no_policy
+
+
+def _judge_sources(
+    manifest: Manifest,
+    *,
+    resolved: ResolvedAllowlist,
+    policy: RootPolicy,
+) -> dict[int, bytes]:
+    """Read every unit the manifest installs, once, and judge it (#433).
+
+    Every op is judged before any is written, and the bytes returned here are
+    the bytes written: a second read would let the deploy user swap the file
+    between the judgement and the copy.
+    """
+    contents: dict[int, bytes] = {}
+    reasons: list[str] = []
+    for index, op in enumerate(manifest.operations):
+        if not isinstance(op, InstallFileOp):
+            continue
+        name = Path(op.dest_path).name
+        data = _read_source(op.source_path, resolved)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            reasons.append(f"op {index} {name}: [syntax] the file is not UTF-8")
+            continue
+        refusals = [
+            r
+            for r in (
+                check_app_unit_name(name, policy),
+                *validate_unit(name, text, policy),
+            )
+            if r is not None
+        ]
+        reasons += [f"op {index} {name}: {r}" for r in refusals]
+        contents[index] = data
+    if reasons:
+        raise ManifestRejected(
+            "refused by the root policy's unit allowlist:\n" + "\n".join(reasons)
+        )
+    return contents
+
+
 def _handle_manifest(
     conn: socket.socket,
     *,
     allowlist: Allowlist,
     resolved: ResolvedAllowlist,
     lock_path: Path | None = None,
+    policy_loader: Callable[[], RootPolicy] | None = None,
 ) -> None:
     """Read one manifest, validate, execute, write structured response.
 
@@ -163,13 +219,17 @@ def _handle_manifest(
         return
     try:
         validate_manifest(manifest, allowlist)
-    except ManifestRejected as exc:
+        policy = (policy_loader or _policy_loader)()
+        contents = _judge_sources(manifest, resolved=resolved, policy=policy)
+    except (ManifestRejected, RootPolicyError) as exc:
         conn.sendall(render_response("rejected", reason=str(exc)))
         return
     try:
         with _flock_or_busy(lock_path):
             try:
-                response = _execute_manifest(manifest, resolved=resolved)
+                response = _execute_manifest(
+                    manifest, resolved=resolved, contents=contents
+                )
             except ManifestRejected as exc:
                 # Mid-flight TOCTOU rejection (cycle 4.5). Any already-written
                 # ops in this manifest do NOT roll back — consistent with
@@ -212,7 +272,12 @@ def _flock_or_busy(lock_path: Path | None) -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def _execute_manifest(manifest: Manifest, *, resolved: ResolvedAllowlist) -> bytes:
+def _execute_manifest(
+    manifest: Manifest,
+    *,
+    resolved: ResolvedAllowlist,
+    contents: dict[int, bytes] | None = None,
+) -> bytes:
     """Apply each op then each post-action in order. Returns a structured response.
 
     Wall-clock checked between each op + post-action. Exceeding
@@ -226,7 +291,8 @@ def _execute_manifest(manifest: Manifest, *, resolved: ResolvedAllowlist) -> byt
         _check_manifest_deadline(start, stage="op", op_index=op_index)
         match op:
             case InstallFileOp():
-                _execute_install_file_op(op, resolved=resolved)
+                data = (contents or {}).get(op_index)
+                _execute_install_file_op(op, resolved=resolved, data=data)
                 written.append(Path(op.dest_path).name)
             case WriteMarkerOp():
                 _execute_write_marker_op(op, resolved=resolved)
@@ -333,6 +399,7 @@ def _execute_install_file_op(
     op: InstallFileOp,
     *,
     resolved: ResolvedAllowlist,
+    data: bytes | None = None,
 ) -> None:
     """Copy source bytes to dest, chmod 0644, write marker if present.
 
@@ -363,7 +430,9 @@ def _execute_install_file_op(
     parent_fd = _open_and_verify_dest_parent(parent_realpath, resolved)
     try:
         basename = dest.name
-        _copy_source_into_dir_fd(parent_fd, basename, op.source_path, resolved)
+        if data is None:
+            data = _read_source(op.source_path, resolved)
+        _write_into_dir_fd(parent_fd, basename, data)
         if op.marker is not None:
             _write_marker_into_dir_fd(parent_fd, basename, op.marker)
     finally:
@@ -418,18 +487,17 @@ def _open_and_verify_dest_parent(
     return parent_fd
 
 
-def _copy_source_into_dir_fd(
-    parent_fd: int,
-    basename: str,
-    source_path: str,
-    resolved: ResolvedAllowlist,
-) -> None:
-    """Read source bytes (O_NOFOLLOW) and write to ``parent_fd/basename``.
+#: A unit file is a few KiB; anything bigger is not one, and is not read whole.
+_MAX_UNIT_BYTES = 1024 * 1024
 
-    Source path is re-validated against the snapshot's source_prefixes at
-    execute time — defends against deploy_user swapping a source file
-    between validate and execute. Both source and dest opens use
-    O_NOFOLLOW so a symlink inserted anywhere after the resolve is caught.
+
+def _read_source(source_path: str, resolved: ResolvedAllowlist) -> bytes:
+    """Read source bytes once (O_NOFOLLOW), re-checked against the snapshot.
+
+    Source path is re-validated against the snapshot's source_prefixes —
+    defends against deploy_user swapping a source file between validate and
+    read. The open uses O_NOFOLLOW so a symlink inserted after the resolve is
+    caught.
     """
     source_realpath = Path(source_path).resolve(strict=True)
     if not any(source_realpath.is_relative_to(p) for p in resolved.source_prefixes):
@@ -449,32 +517,38 @@ def _copy_source_into_dir_fd(
             )
             raise ManifestRejected(msg) from exc
         raise
-
     try:
-        dst_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
-        try:
-            dst_fd = os.open(
-                basename, dst_flags, mode=_INSTALL_FILE_MODE, dir_fd=parent_fd
-            )
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                msg = (
-                    f"dest basename {basename!r} is a symlink — refusing "
-                    "to follow (O_NOFOLLOW)"
-                )
-                raise ManifestRejected(msg) from exc
-            raise
-        try:
-            while True:
-                chunk = os.read(src_fd, 65536)
-                if not chunk:
-                    break
-                _write_all(dst_fd, chunk)
-            os.fchmod(dst_fd, _INSTALL_FILE_MODE)
-        finally:
-            os.close(dst_fd)
+        chunks: list[bytes] = []
+        remaining = _MAX_UNIT_BYTES + 1
+        while remaining > 0 and (chunk := os.read(src_fd, min(65536, remaining))):
+            chunks.append(chunk)
+            remaining -= len(chunk)
     finally:
         os.close(src_fd)
+    if remaining <= 0:
+        msg = f"source {source_realpath} is larger than a unit file can be"
+        raise ManifestRejected(msg)
+    return b"".join(chunks)
+
+
+def _write_into_dir_fd(parent_fd: int, basename: str, data: bytes) -> None:
+    """Write *data* to ``parent_fd/basename``, mode 0644, never through a link."""
+    dst_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    try:
+        dst_fd = os.open(basename, dst_flags, mode=_INSTALL_FILE_MODE, dir_fd=parent_fd)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            msg = (
+                f"dest basename {basename!r} is a symlink — refusing "
+                "to follow (O_NOFOLLOW)"
+            )
+            raise ManifestRejected(msg) from exc
+        raise
+    try:
+        _write_all(dst_fd, data)
+        os.fchmod(dst_fd, _INSTALL_FILE_MODE)
+    finally:
+        os.close(dst_fd)
 
 
 def _write_marker_into_dir_fd(
@@ -574,6 +648,8 @@ def main() -> None:  # pragma: no cover — exercised end-to-end by the smoke te
     allowlist = _parse_allowlist(remaining)
     resolved = _resolve_allowlist(allowlist)
     lock_path = _DEFAULT_LOCK_DIR / f"unit-installer-{project}-{env}.lock"
+    global _policy_loader
+    _policy_loader = lambda: load_policy(policy_path(project))  # noqa: E731
     server_sock = _build_server_socket()
     watch = VersionWatch()
 
@@ -641,3 +717,7 @@ def _build_server_socket() -> socket.socket:  # pragma: no cover
     server_sock.setblocking(True)
     logger.info("fraisier-unit-installer ready")
     return server_sock
+
+
+if __name__ == "__main__":
+    main()

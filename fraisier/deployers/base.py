@@ -721,8 +721,13 @@ class BaseDeployer(StatusRecordMixin, ABC):
             response = json.loads(raw.decode())
             return types.SimpleNamespace(
                 returncode=0 if response.get("ok") else 1,
+                # An error response carries `error` alone (#433's helper
+                # refuses a request it cannot serve that way).
                 stdout=response.get("stdout", ""),
-                stderr=response.get("stderr", ""),
+                stderr=response.get("stderr", "") or response.get("error", ""),
+                pending=response.get("pending") or [],
+                refused=response.get("refused") or {},
+                deferred_restarts=response.get("deferred_restarts") or [],
             )
         except TimeoutError as exc:
             # A hang is not an absence. The helper accepted the connection, so
@@ -748,11 +753,10 @@ class BaseDeployer(StatusRecordMixin, ABC):
             if socket_present:
                 logger.warning(
                     "Scaffold-install-helper socket %s is present but "
-                    "unreachable (%s). The helper likely failed to start — e.g. "
-                    "its baked install.sh is missing at the scaffold state_dir. "
-                    "Falling back to the subprocess install, which is neutered "
-                    "under NoNewPrivileges; re-run scaffold-install / redeploy "
-                    "to repair the socket.",
+                    "unreachable (%s). The helper likely failed to start. "
+                    "Falling back to the subprocess install, which only an "
+                    "operator running as root can complete; run `sudo fraisier "
+                    "scaffold-install` to repair the socket.",
                     socket_path,
                     exc,
                 )
@@ -763,6 +767,16 @@ class BaseDeployer(StatusRecordMixin, ABC):
                     socket_path,
                 )
             return None
+
+    def _record_deferred_restarts(self, config_path: Path, units: list[str]) -> None:
+        """Put what the root helper deferred on this deploy's ledger (#349, #433)."""
+        if not units:
+            return
+        from fraisier.config import get_config
+        from fraisier.deferred_restart import record_deferred_restarts
+
+        lock_dir = get_config(config_path).deployment.lock_dir
+        record_deferred_restarts(Path(lock_dir), list(units))
 
     def _install_scaffold(self, config_path: Path | None = None) -> None:
         """Install updated scaffold files to system locations.
@@ -797,13 +811,26 @@ class BaseDeployer(StatusRecordMixin, ABC):
             # Try socket helper first (compatible with NoNewPrivileges=true)
             socket_result = self._try_scaffold_install_via_socket(config_path)
             if socket_result is not None:
+                self._record_deferred_restarts(
+                    config_path, getattr(socket_result, "deferred_restarts", [])
+                )
                 if socket_result.returncode != 0:
+                    # The next deploy must ask again: the hash was saved before
+                    # this install, and "config unchanged" would otherwise skip
+                    # the very step that has to stop it (#433).
+                    from fraisier.config_watcher import ConfigWatcher
+
+                    ConfigWatcher(config_path.parent).forget_hash()
                     # The helper's stderr was captured on the socket and then
                     # dropped from the message — "command not allowed" is the
                     # line an operator needs, and it is never on stdout (#381).
                     raise DeploymentError(
                         f"Failed to install scaffold files via socket helper: "
-                        f"{self._combine_output(socket_result)}"
+                        f"{self._combine_output(socket_result)}",
+                        context={
+                            "pending": getattr(socket_result, "pending", []),
+                            "refused": getattr(socket_result, "refused", {}),
+                        },
                     )
                 logger.info("✓ Scaffold files installed via helper socket")
                 return

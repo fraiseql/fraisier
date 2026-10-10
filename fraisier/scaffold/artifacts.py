@@ -32,9 +32,10 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fraisier.errors import ValidationError
 from fraisier.naming import unit_installer_unit_names
@@ -55,11 +56,17 @@ rather than reading a file that may be older than the code reading it.
 
 So this is the record for a human, for review, and for a diff between two
 renders — the one place to look to answer "what does this tree contain and who
-installs each piece". ``schema_version`` is carried for whoever writes the
-first reader; there deliberately is not one yet.
+installs each piece".
+
+It has one reader, and that reader does not trust it: the root
+scaffold-install-helper (#433) reads ``hosts`` and ``artifacts`` through
+:func:`host_artifacts` only to notice an artifact for this host that the root
+policy does not cover, and to report it as waiting for an operator. What it
+installs, and from where, comes from the root policy alone.
 """
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
+"""2 added ``hosts``: install.sh's host gate as data, read by the root helper."""
 
 
 class Disposition(StrEnum):
@@ -253,12 +260,25 @@ class UnitInstallerPair:
 
 
 @dataclass(frozen=True)
+class HostScope:
+    """install.sh's host gate for one machine, as data."""
+
+    scopes: tuple[str, ...]
+    """``fraise:env`` keys, ``*:env`` for a global declaration."""
+
+    environments: tuple[str, ...]
+    webhook: str | None
+    """The webhook unit source this machine installs."""
+
+
+@dataclass(frozen=True)
 class ArtifactManifest:
     """Every artifact of one render, plus what binds it to that render."""
 
     artifacts: tuple[RenderedArtifact, ...]
     app_managed: tuple[AppManagedUnit, ...]
     batch_hash: str
+    hosts: Mapping[str, HostScope] = field(default_factory=dict)
 
     def installed(self) -> tuple[RenderedArtifact, ...]:
         return tuple(a for a in self.artifacts if a.is_installed)
@@ -795,7 +815,59 @@ def build_artifact_manifest(
         artifacts=tuple(artifacts),
         app_managed=tuple(_collect_app_managed(renderer)),
         batch_hash=_batch_hash(artifacts),
+        hosts=_host_scopes(renderer.context),
     )
+
+
+def _host_scopes(context: Mapping[str, Any]) -> dict[str, HostScope]:
+    """The maps install.sh bakes its host gate from, as data."""
+    envs = context.get("machine_env_map") or {}
+    webhooks = context.get("machine_webhook_map") or {}
+    return {
+        machine: HostScope(
+            scopes=tuple(scopes),
+            environments=tuple(envs.get(machine, ())),
+            webhook=webhooks.get(machine),
+        )
+        for machine, scopes in sorted((context.get("machine_scope_map") or {}).items())
+    }
+
+
+def host_gate_open(artifact: Mapping[str, Any], host: Mapping[str, Any]) -> bool:
+    """install.sh's ``host_gate`` macro: ``_scope_active``, ``_env_active`` or true."""
+    fraise, environment = artifact.get("fraise"), artifact.get("environment")
+    if fraise:
+        scopes = host.get("scopes") or []
+        return f"{fraise}:{environment}" in scopes or f"*:{environment}" in scopes
+    if environment:
+        return environment in (host.get("environments") or [])
+    return True
+
+
+def host_artifacts(
+    payload: Mapping[str, Any], hostname: str
+) -> list[dict[str, Any]] | None:
+    """The installed artifacts install.sh would copy on *hostname*, from a dump.
+
+    ``None`` when *hostname* is not a registered machine — install.sh refuses
+    to run there. Mirrors install.sh's gate exactly; ``test_host_artifacts``
+    holds the two together by running the real script.
+    """
+    hosts = payload.get("hosts")
+    if not isinstance(hosts, Mapping) or hostname not in hosts:
+        return None
+    host = hosts[hostname]
+    chosen: list[dict[str, Any]] = []
+    for artifact in payload.get("artifacts") or []:
+        if not artifact.get("destination"):
+            continue
+        if artifact.get("disposition") == Disposition.WEBHOOK:
+            if artifact.get("source") == host.get("webhook"):
+                chosen.append(artifact)
+            continue
+        if host_gate_open(artifact, host):
+            chosen.append(artifact)
+    return chosen
 
 
 def _batch_hash(artifacts: list[RenderedArtifact]) -> str:
@@ -890,5 +962,13 @@ def dump_manifest(manifest: ArtifactManifest) -> str:
             }
             for u in manifest.app_managed
         ],
+        "hosts": {
+            machine: {
+                "scopes": list(h.scopes),
+                "environments": list(h.environments),
+                "webhook": h.webhook,
+            }
+            for machine, h in manifest.hosts.items()
+        },
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"

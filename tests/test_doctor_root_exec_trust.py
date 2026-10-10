@@ -112,8 +112,42 @@ def test_registered() -> None:
     assert CHECK in doctor.DOCTOR_CHECKS
 
 
-def test_today_it_warns_and_release_d_flips_one_constant() -> None:
-    assert doctor.ROOT_EXEC_TRUST_STATUS == "warn"
+def test_since_release_d_it_fails() -> None:
+    """#433's fix has shipped: root running changeable code is a failure now."""
+    assert doctor.ROOT_EXEC_TRUST_STATUS == "fail"
+
+
+def test_a_venv_interpreter_run_with_dash_m_has_its_venv_judged(
+    tmp_path: Path, unit_dir: Path, owners: FakeOwners
+) -> None:
+    """The root helpers run ``<venv>/bin/python -I -m fraisier.x`` (#433).
+
+    ``bin/python`` is a link to the base interpreter, so resolving it lands
+    outside the venv. The venv holding the imported code must still be walked.
+    """
+    venv = tmp_path / "root-venv"
+    _venv(venv)
+    base = tmp_path / "base-python" / "bin" / "python3.14"
+    base.write_text("")
+    (venv / "bin" / "python").unlink()
+    (venv / "bin" / "python").symlink_to(base)
+    pth = venv / "lib" / "python3.14" / "site-packages" / "fraisier.pth"
+    owners.deploy_owns(pth)
+    _unit(unit_dir, "h.service", f"ExecStart={venv}/bin/python -I -m fraisier.helper")
+    result = _run()
+    assert result.status == "fail"
+    assert str(pth) in result.detail
+
+
+def test_the_fix_hint_names_the_operator_steps(
+    tmp_path: Path, unit_dir: Path, owners: FakeOwners
+) -> None:
+    venv = tmp_path / "deploy-venv"
+    _unit(unit_dir, "h.service", f"ExecStart={_venv(venv)} helper")
+    owners.deploy_owns(venv)
+    hint = _run().fix_hint or ""
+    assert "fraisier-root-upgrade" in hint
+    assert "sudo fraisier scaffold-install" in hint
 
 
 # --- what is judged ---------------------------------------------------------
@@ -150,7 +184,7 @@ def test_a_deploy_owned_module_inside_a_root_owned_venv_is_flagged(
     pth = venv / "lib" / "python3.14" / "site-packages" / "fraisier.pth"
     owners.deploy_owns(pth)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == doctor.ROOT_EXEC_TRUST_STATUS
     assert str(pth) in result.detail
 
 
@@ -162,7 +196,7 @@ def test_a_root_owned_venv_on_a_deploy_owned_base_python_is_flagged(
     _unit(unit_dir, "h.service", f"ExecStart={_venv(tmp_path / 'v', home=home)} x")
     owners.deploy_owns(tmp_path / "uv-python")
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert str(tmp_path / "uv-python") in result.detail
 
 
@@ -179,7 +213,7 @@ def test_a_root_owned_script_on_a_deploy_owned_interpreter_is_flagged(
     _unit(unit_dir, "h.service", f"ExecStart={script}")
     owners.deploy_owns(interp_dir)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert str(interp_dir) in result.detail
 
 
@@ -190,7 +224,7 @@ def test_a_group_writable_parent_is_flagged(
     _unit(unit_dir, "h.service", f"ExecStart={_venv(venv)} helper")
     owners.modes[tmp_path] = stat.S_IFDIR | 0o775
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert f"{tmp_path} (group-writable" in result.detail
 
 
@@ -201,7 +235,7 @@ def test_a_world_writable_parent_is_flagged(
     _unit(unit_dir, "h.service", f"ExecStart={_venv(venv)} helper")
     owners.modes[venv / "bin"] = stat.S_IFDIR | 0o757
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert f"{venv / 'bin'} (world-writable" in result.detail
 
 
@@ -237,7 +271,7 @@ def test_a_root_owned_link_to_a_deploy_owned_target_is_flagged(
     _unit(unit_dir, "h.service", f"ExecStart={links / 'fraisier'} helper")
     owners.deploy_owns(venv)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert str(venv) in result.detail
 
 
@@ -252,7 +286,7 @@ def test_a_link_in_a_deploy_owned_dir_is_flagged_even_to_a_root_target(
     _unit(unit_dir, "h.service", f"ExecStart={local_bin / 'fraisier'} helper")
     owners.deploy_owns(tmp_path / "home" / "deploy")
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert str(tmp_path / "home" / "deploy") in result.detail
 
 
@@ -285,7 +319,7 @@ def test_the_scaffold_install_helper_script_argument_is_judged(
     )
     owners.deploy_owns(state)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert str(state) in result.detail
 
 
@@ -308,7 +342,7 @@ def test_user_root_is_root(
         unit_dir, "r.service", f"User={user}", f"ExecStart={_venv(venv)} backup prune"
     )
     owners.deploy_owns(venv)
-    assert _run().status == "warn"
+    assert _run().status == "fail"
 
 
 def test_dynamic_user_is_not_root(
@@ -336,7 +370,7 @@ def test_a_privileged_line_in_a_deploy_unit_is_judged(
     )
     owners.deploy_owns(venv)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert "w.service" in result.detail
     assert "ExecStartPre" in result.detail
 
@@ -372,7 +406,7 @@ def test_permissions_start_only_makes_the_other_lines_privileged(
     )
     owners.deploy_owns(venv)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert "ExecStartPre" in result.detail
 
 
@@ -386,7 +420,7 @@ def test_a_privileged_line_from_a_dropin_is_judged(
     _unit(unit_dir, "w.service", "User=deploy", "ExecStart=/bin/true")
     _dropin(unit_dir, "w.service.d", "x.conf", f"ExecStartPre=+{_venv(venv)}")
     owners.deploy_owns(venv)
-    assert _run().status == "warn"
+    assert _run().status == "fail"
 
 
 @pytest.mark.parametrize("dirname", ["w.service.d", "service.d", "w-.service.d"])
@@ -409,7 +443,7 @@ def test_a_dropin_under_run_that_clears_user_makes_the_unit_root(
     )
     _dropin(run, dirname, "50-root.conf", "User=")
     owners.deploy_owns(venv)
-    assert _run().status == "warn"
+    assert _run().status == "fail"
 
 
 def test_a_dropin_that_sets_user_makes_the_unit_unprivileged(
@@ -545,7 +579,7 @@ def test_the_live_reader_wins_over_the_files(
 
     monkeypatch.setattr(doctor, "_systemctl_show", fake_show)
     owners.deploy_owns(venv)
-    assert _run().status == "warn"
+    assert _run().status == "fail"
     assert asked == [["w.service"]]
 
 
@@ -621,7 +655,7 @@ def test_an_env_shebang_is_followed_to_the_interpreter(
     _unit(unit_dir, "h.service", f"ExecStart={script}")
     owners.deploy_owns(deploy_bin)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert str(deploy_bin) in result.detail
 
 
@@ -636,7 +670,7 @@ def test_a_bare_executable_is_found_on_systemds_path(
     monkeypatch.setattr(doctor, "_SYSTEMD_EXEC_PATH", str(script.parent))
     _unit(unit_dir, "h.service", "ExecStart=fraisier helper")
     owners.deploy_owns(venv)
-    assert _run().status == "warn"
+    assert _run().status == "fail"
 
 
 def test_dropin_dirs_cover_type_prefix_template_and_unit() -> None:
@@ -693,7 +727,7 @@ def test_a_link_to_a_deploy_owned_binary_is_flagged(
     _unit(unit_dir, "h.service", f"ExecStart={links / 'helper'}")
     owners.deploy_owns(deploy_bin)
     result = _run()
-    assert result.status == "warn"
+    assert result.status == "fail"
     assert str(deploy_bin) in result.detail
 
 

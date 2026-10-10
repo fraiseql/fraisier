@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from fraisier import unit_installer_helper
+from fraisier.root_policy import RootPolicy
 from fraisier.unit_installer_helper import (
     _execute_install_file_op,
     _handle_manifest,
@@ -36,6 +38,25 @@ from fraisier.unit_installer_protocol import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _root_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise the copy, not the content rules (#433).
+
+    Their units are bare ``[Unit]`` timers, which any policy allows; the rules
+    themselves are pinned in ``test_unit_installer_validates``.
+    """
+    policy = RootPolicy(
+        project="demo",
+        scaffold_dir="/var/lib/fraisier/demo/scaffold",
+        users=frozenset(),
+        groups=frozenset(),
+        exec_prefixes=(),
+        read_paths=frozenset(),
+        directories=frozenset(),
+    )
+    monkeypatch.setattr(unit_installer_helper, "_policy_loader", lambda: policy)
 
 
 def _socket_pair() -> tuple[socket.socket, socket.socket]:
@@ -121,7 +142,7 @@ def test_serve_connection_with_matching_uid_dispatches(tmp_path: Path) -> None:
     """When peer UID matches, the manifest is processed end-to-end."""
     src_dir, dest_dir = _seed_layout(tmp_path)
     source = src_dir / "foo.timer"
-    source.write_text("x")
+    source.write_text("[Unit]\n")
     op = InstallFileOp(
         source_path=str(source),
         dest_path=str(dest_dir / "foo.timer"),

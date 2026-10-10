@@ -6,10 +6,11 @@ Documentation=https://fraisier.readthedocs.io/
 
 [Service]
 Type=simple
-ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-systemctl-helper --deploy-user {{ scaffold.deploy_user }}{% for svc in allowed_services %} {{ svc }}{% endfor %}
+ExecStart={{ root_python }} -I -m fraisier.systemctl_helper --deploy-user {{ scaffold.deploy_user }}{% for svc in allowed_services %} {{ svc }}{% endfor %}
 
-# Prevent Python from creating root-owned __pycache__ dirs in the deploy user's
-# tool installation when the helper runs as root.
+# Root-owned code only (#433): the root tool install's interpreter, isolated
+# (-I) from PYTHONPATH, the working directory and any user site. No bytecode is
+# written, so the root install never carries files nobody installed.
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 

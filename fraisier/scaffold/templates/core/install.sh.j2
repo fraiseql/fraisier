@@ -298,6 +298,48 @@ _report_deferred_restarts() {
     _run sudo chown "${DEPLOY_USER}:${DEPLOY_USER}" "${_FRAISIER_DEFERRED_LEDGER}" || true
 }
 
+# ---------------------------------------------------------------------------
+# The root-owned fraisier the root helpers run (#433).
+#
+# The root helper units name {{ root_install.python }}, never the deploy
+# user's uv tool dir: whoever owns a venv owns what root imports from it. So
+# that install must exist before the helper units are installed, and it is
+# installed here only when it is missing. Upgrading it is an operator's
+# `sudo fraisier-root-upgrade VERSION`; a deploy never changes it.
+#
+# uv's installer keeps its tarball's owner (a uid that may be a real account
+# here), so the uv dir is chowned to root right after it.
+#
+# uv runs under `env -i` with every path pinned under {{ root_install.dir }}:
+# sudo can keep the caller's HOME, and uv would then fetch the interpreter,
+# read its config and keep its cache wherever that HOME points.
+_FRAISIER_ROOT_DIR="{{ root_install.dir }}"
+_FRAISIER_ROOT_UV="{{ root_install.uv }}"
+_FRAISIER_ROOT_PYTHON="{{ root_install.python }}"
+_FRAISIER_ROOT_BIN="{{ root_install.bin }}"
+_FRAISIER_ROOT_LINK_DIR="{{ root_install.link_dir }}"
+
+_install_root_fraisier() {
+    if [ -x "$_FRAISIER_ROOT_PYTHON" ]; then
+        echo "  Root-owned fraisier already installed under ${_FRAISIER_ROOT_DIR}"
+        echo "    (an operator upgrades it with: sudo fraisier-root-upgrade VERSION)"
+        return 0
+    fi
+    echo "  Installing root-owned fraisier {{ root_install.version }} under ${_FRAISIER_ROOT_DIR}"
+    _run_strict sudo mkdir -p "$_FRAISIER_ROOT_DIR"
+    _run_strict sudo chown root:root "$_FRAISIER_ROOT_DIR"
+    _run_strict sudo chmod 0755 "$_FRAISIER_ROOT_DIR"
+    if [ ! -x "$_FRAISIER_ROOT_UV" ]; then
+        _run_strict sudo sh -c "curl -LsSf {{ root_install.uv_url }} | env -i HOME=/root PATH={{ root_install.safe_path }} UV_INSTALL_DIR=$(dirname "$_FRAISIER_ROOT_UV") UV_NO_MODIFY_PATH=1 sh && chown -R root:root $(dirname "$_FRAISIER_ROOT_UV") && chmod -R go-w $(dirname "$_FRAISIER_ROOT_UV")"
+    fi
+    _run_strict sudo env -i {{ root_install.env }} \
+        "$_FRAISIER_ROOT_UV" tool install --force --python {{ root_install.python_version }} "fraisier=={{ root_install.version }}"
+    local cmd
+    for cmd in {{ root_install.commands | join(' ') }}; do
+        _run_strict sudo ln -sfn "${_FRAISIER_ROOT_BIN}/${cmd}" "${_FRAISIER_ROOT_LINK_DIR}/${cmd}"
+    done
+}
+
 # Sourcing this script defines the guard above and stops here; everything below
 # installs. fraisier's own tests source it to drive `_deploy_in_flight` and
 # `_restart_deploy_host_unit` for real, because the defect the guard exists for
@@ -614,6 +656,9 @@ if ! command -v uv &>/dev/null; then
 else
     echo "  uv already installed: $(uv --version)"
 fi
+
+# Before any root helper unit is installed: they all run this copy.
+_install_root_fraisier
 
 # Install system dependencies
 echo "  Installing system packages"

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import difflib
+import json
 import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
 
@@ -13,6 +17,9 @@ from fraisier.scaffold.sudoers_diff import SudoersDiff, diff_sudoers
 
 from ._helpers import console, require_config
 from .main import main
+
+if TYPE_CHECKING:
+    from fraisier.root_policy import RootPolicy
 
 # Distinct exit code for --strict-sudoers aborts (#224). 1 stays generic;
 # this lets CI/automation distinguish "sudoers would change" from any other
@@ -295,29 +302,35 @@ def _build_preview_cmd(cmd: list[str]) -> list[str]:
 
 def _print_install_failure(
     *,
-    install_script: Path,
     returncode: int,
-    cmd: list[str],
+    rerun_flags: list[str],
     phase: str | None,
 ) -> None:
     """Print the failure message for a non-zero install.sh exit.
 
     ``phase`` is ``"Validation"`` or ``"Preview"`` for the dry-run / validate
-    paths, or ``None`` for a real install. The rerun hint adds ``--verbose``
-    if it wasn't already present so the operator's copy-paste produces a
-    diagnostic log even when the original invocation didn't.
+    paths, or ``None`` for a real install. The rerun hint is this command, not
+    the install.sh it ran: that script was rendered into a private directory
+    that is gone by now. ``--verbose`` is added if it wasn't already present so
+    the operator's copy-paste produces a diagnostic log even when the original
+    invocation didn't.
     """
-    rerun_flags = " ".join(cmd[2:])  # skip ["sudo", install_script]
-    if "--verbose" not in rerun_flags:
-        rerun_flags = f"{rerun_flags} --verbose".strip()
+    flags = [*rerun_flags, *([] if "--verbose" in rerun_flags else ["--verbose"])]
     if phase is not None:
-        headline = f"[yellow]⚠ {phase} exited with code {returncode}.[/yellow]"
+        headline = (
+            f"[yellow]⚠ {phase} failed: install.sh exited with code "
+            f"{returncode}.[/yellow]"
+        )
     else:
-        headline = f"[red]✗ Installation failed (exit code {returncode}).[/red]"
+        headline = (
+            f"[red]✗ Installation failed (install.sh exited with code "
+            f"{returncode}).[/red]"
+        )
     console.print(
         f"\n{headline}\n"
         "To capture the full output for debugging:\n"
-        f"  sudo {install_script} {rerun_flags} 2>&1 | tee /tmp/install.log",
+        f"  sudo fraisier scaffold-install {' '.join(flags)} 2>&1 "
+        "| tee /tmp/install.log",
         soft_wrap=True,
     )
 
@@ -409,6 +422,176 @@ def _print_sudoers_diff(
     return diff
 
 
+# ---------------------------------------------------------------------------
+# The operator's root install (#433, path 8)
+# ---------------------------------------------------------------------------
+
+
+def _euid() -> int:
+    return os.geteuid()
+
+
+def _hostname() -> str:
+    from fraisier.scaffold_install_helper import short_hostname
+
+    return short_hostname()
+
+
+def _read_installed(path: str) -> bytes | None:
+    from fraisier.scaffold_apply import read_installed
+
+    return read_installed(path)
+
+
+def _read_current_policy(path: Path) -> str | None:
+    try:
+        return path.read_text()
+    except OSError, UnicodeDecodeError:
+        return None
+
+
+def _write_root_policy(policy: RootPolicy) -> None:
+    """Write *policy* where only root can, atomically, mode 0644."""
+    from fraisier.root_policy import dump_policy, policy_path
+
+    path = policy_path(policy.project)
+    for directory in (path.parent.parent, path.parent):
+        directory.mkdir(mode=0o755, exist_ok=True)
+        os.chown(directory, 0, 0)
+        directory.chmod(0o755)
+    tmp = path.with_name(f".{path.name}.new")
+    tmp.write_text(dump_policy(policy))
+    os.chown(tmp, 0, 0)
+    tmp.chmod(0o644)
+    tmp.replace(path)
+
+
+def _render_root_tree(config) -> Path:
+    """Render *config* as root into a fresh directory only root can write.
+
+    Never the tree a deploy rendered: the deploy user writes that one, and
+    installing it as root is the escalation #433 closes.
+    """
+    from fraisier.scaffold.renderer import ScaffoldRenderer
+
+    tree = Path(tempfile.mkdtemp(prefix=f"fraisier-{config.project_name}-scaffold-"))
+    renderer = ScaffoldRenderer(config)
+    renderer.output_dir = tree
+    renderer.render()
+    # `sudo` runs it directly, and the renderer writes it 0644.
+    (tree / "install.sh").chmod(0o700)
+    return tree
+
+
+def _host_payload(tree: Path) -> dict:
+    from fraisier.scaffold.artifacts import ARTIFACT_MANIFEST_NAME
+
+    return json.loads((tree / ARTIFACT_MANIFEST_NAME).read_text())
+
+
+def _print_root_file_diffs(tree: Path, chosen: list[dict]) -> None:
+    """Every root-owned file this install would write, as a diff of what is there."""
+    changed = 0
+    console.print("\n[cyan]Root-owned files this install writes:[/cyan]")
+    for artifact in sorted(chosen, key=lambda a: a["destination"]):
+        dest = artifact["destination"]
+        rendered = (tree / artifact["source"]).read_bytes()
+        installed = _read_installed(dest)
+        if installed == rendered:
+            continue
+        changed += 1
+        if installed is None:
+            console.print(f"  new: {dest}", markup=False)
+            continue
+        diff = difflib.unified_diff(
+            installed.decode(errors="replace").splitlines(),
+            rendered.decode(errors="replace").splitlines(),
+            fromfile=f"{dest} (installed)",
+            tofile=f"{dest} (rendered)",
+            lineterm="",
+        )
+        console.print("\n".join(diff), markup=False, highlight=False)
+    if not changed:
+        console.print("  (none differ from what is installed)")
+
+
+def _app_unit_texts(payload: dict, hostname: str) -> dict[str, str]:
+    """The app's own units this host's unit-installer copies, as they are now."""
+    from fraisier.scaffold.artifacts import host_gate_open
+    from fraisier.scaffold_apply import SafeTree, UnsafeTreeError
+
+    host = (payload.get("hosts") or {}).get(hostname) or {}
+    texts: dict[str, str] = {}
+    for unit in payload.get("app_managed") or []:
+        if not host_gate_open(unit, host):
+            continue
+        try:
+            data = SafeTree(unit["source_dir"]).read(unit["unit_name"])
+        except UnsafeTreeError as exc:
+            console.print(f"  [yellow]skipped {unit['unit_name']}: {exc}[/yellow]")
+            continue
+        if data is not None:
+            texts[unit["unit_name"]] = data.decode(errors="replace")
+    return texts
+
+
+def _exec_trees(config) -> list[str]:
+    """Directories a non-root unit may run anything under (#433)."""
+    trees = {
+        f"/home/{config.scaffold.deploy_user}/.local/bin/",
+        f"{config.scaffold_state_dir}/",
+    }
+    for fraise in config.fraises.values():
+        for env in (fraise.get("environments") or {}).values():
+            if isinstance(env, dict) and env.get("app_path"):
+                trees.add(f"{str(env['app_path']).rstrip('/')}/")
+    return sorted(trees)
+
+
+def _draft_root_policy(config, tree: Path, payload: dict, hostname: str):
+    from fraisier.root_policy_build import PolicyBuildError, build_policy
+
+    try:
+        return build_policy(
+            project=config.project_name,
+            scaffold_dir=str(config.scaffold_state_dir),
+            payload=payload,
+            hostname=hostname,
+            read_source=lambda rel: (
+                (tree / rel).read_text() if (tree / rel).is_file() else None
+            ),
+            app_units=_app_unit_texts(payload, hostname),
+            trees=_exec_trees(config),
+        )
+    except PolicyBuildError as exc:
+        console.print(
+            f"\n[yellow]No root policy for this host: {exc}.[/yellow]", markup=False
+        )
+        return None
+
+
+def _print_policy_diff(draft) -> None:
+    from fraisier.root_policy import dump_policy, policy_path
+
+    path = policy_path(draft.policy.project)
+    current = _read_current_policy(path) or ""
+    new = dump_policy(draft.policy)
+    console.print(f"\n[cyan]Root policy ({path}):[/cyan]")
+    if current == new:
+        console.print("  (unchanged)")
+    else:
+        diff = difflib.unified_diff(
+            current.splitlines(),
+            new.splitlines(),
+            fromfile=f"{path} (installed)",
+            tofile=f"{path} (new)",
+            lineterm="",
+        )
+        console.print("\n".join(diff), markup=False, highlight=False)
+    for note in draft.notes:
+        console.print(f"  note: {note}", markup=False)
+
+
 @main.command(name="scaffold-install")
 @click.option("--dry-run", is_flag=True, help="Preview what would be installed")
 @click.option(
@@ -429,9 +612,8 @@ def _print_sudoers_diff(
     "output_dir_opt",
     default=None,
     help=(
-        "Read the generated scaffold tree from this directory instead of "
-        "scaffold.output_dir. Used by the deploy path to install from the "
-        "server-side scaffold state tree."
+        "Refused: scaffold-install renders its own tree as root, and never "
+        "installs one someone else rendered (#433)."
     ),
 )
 @click.option(
@@ -455,78 +637,70 @@ def scaffold_install(
     output_dir_opt: str | None,
     prune_foreign: bool,
 ) -> None:
-    """Install generated scaffold files to system locations.
+    """Render the scaffold as root and install it, after showing what changes.
 
-    Runs the generated install.sh script with sudo to install systemd units,
-    nginx configs, sudoers rules, wrapper scripts, and system dependencies.
-
-    Must run 'fraisier scaffold' first to generate the files.
-
-    Prerequisites:
-    - Must run 'fraisier scaffold' first
-    - Must have sudo access (or be running as root)
-    - Generated files must be in PROJECT_DIR (usually /opt/<project_name>)
+    Run it as root: `sudo fraisier scaffold-install`. It renders fraises.yaml
+    into a private directory, shows a diff of every root-owned file it would
+    write and of the root policy it would grant deploys, asks, runs that
+    render's install.sh, and then writes the root policy
+    (/etc/fraisier/<project>/root-policy.json) that bounds what a deploy may
+    install as root (#433). `--yes` skips the question, not the diff.
 
     \b
-    Examples:
-        fraisier scaffold-install --dry-run     # Preview changes
+    Examples (each under sudo):
+        fraisier scaffold-install --dry-run       # Preview changes
         fraisier scaffold-install --validate-only # Check prerequisites
-        fraisier scaffold-install --yes          # Install without prompt
+        fraisier scaffold-install --yes           # Install without prompt
     """
     config = require_config(ctx)
+
+    if _euid() != 0:
+        console.print(
+            "[red]Error:[/red] scaffold-install writes root-owned files and must "
+            "render them as root. Run: sudo fraisier scaffold-install",
+            style="bold",
+        )
+        raise SystemExit(1)
+    if output_dir_opt:
+        console.print(
+            "[red]Error:[/red] --output-dir is refused: scaffold-install renders "
+            "its own tree as root and never installs one someone else rendered "
+            "(#433).",
+            style="bold",
+        )
+        raise SystemExit(1)
 
     if prune_foreign and not (dry_run or validate_only):
         _prune_foreign_units(config, yes=yes)
 
-    # Locate the install.sh script
-    output_dir = Path(output_dir_opt or config.scaffold.output_dir)
-    install_script = output_dir / "install.sh"
-
-    # Path.exists() only swallows ENOENT/ENOTDIR/ELOOP/EBADF; EACCES on a
-    # parent directory propagates as PermissionError. Treat any stat failure
-    # as "can't see the file" so the friendly message wins over a traceback.
+    tree = _render_root_tree(config)
     try:
-        exists = install_script.exists()
-    except OSError:
-        exists = False
-
-    if not exists:
-        console.print(
-            f"[red]Error:[/red] {install_script} not found or not readable.\n"
-            "Run 'fraisier scaffold' first to generate it.",
-            style="bold",
+        _install_root_tree(
+            config,
+            tree,
+            dry_run=dry_run,
+            validate_only=validate_only,
+            yes=yes,
+            verbose=verbose,
+            strict_sudoers=strict_sudoers,
         )
-        raise SystemExit(1)
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
 
-    try:
-        is_file = install_script.is_file()
-    except OSError:
-        is_file = False
 
-    if not is_file:
-        console.print(
-            f"[red]Error:[/red] {install_script} is not a regular file "
-            "or is not readable.",
-            style="bold",
-        )
-        raise SystemExit(1)
+def _install_root_tree(
+    config,
+    tree: Path,
+    *,
+    dry_run: bool,
+    validate_only: bool,
+    yes: bool,
+    verbose: bool,
+    strict_sudoers: bool,
+) -> None:
+    from fraisier.scaffold.artifacts import host_artifacts
 
-    # Make sure install.sh is executable. If we can't chmod (e.g. file owned
-    # by another user), only fail when the file isn't already executable —
-    # otherwise the chmod is a no-op anyway.
-    try:
-        install_script.chmod(0o755)
-    except OSError as exc:
-        if not os.access(install_script, os.X_OK):
-            console.print(
-                f"[red]Error:[/red] cannot make {install_script} executable: "
-                f"{exc.strerror or exc}.\n"
-                f"Fix permissions and retry, e.g.: "
-                f"sudo chmod +x {install_script}",
-                style="bold",
-            )
-            raise SystemExit(1) from exc
-
+    install_script = tree / "install.sh"
     cmd = _build_install_cmd(
         str(install_script),
         dry_run=dry_run,
@@ -542,15 +716,22 @@ def scaffold_install(
     else:
         console.print("[cyan]Installation plan:[/cyan]\n")
 
-    sudoers_src = output_dir / "sudoers"
+    sudoers_src = tree / "sudoers"
+    hostname = _hostname()
+    payload = _host_payload(tree)
+    chosen = host_artifacts(payload, hostname)
+    draft = _draft_root_policy(config, tree, payload, hostname)
 
-    def _check_sudoers_diff() -> None:
-        """Print the sudoers diff and honor --strict-sudoers.
+    def _show_changes() -> None:
+        """Every root-owned file and the policy, then the sudoers check.
 
-        Closure over `config.project_name`, `sudoers_src`, and `strict_sudoers`
-        so the call sites below stay short. Raises SystemExit(3) when
-        --strict-sudoers detects a removal or an unreadable target.
+        Printed before anything runs, `--yes` included: the operator opted
+        out of the question, not out of seeing the answer (#433, path 8).
         """
+        if chosen is not None:
+            _print_root_file_diffs(tree, chosen)
+        if draft is not None:
+            _print_policy_diff(draft)
         diff = _print_sudoers_diff(
             sudoers_src=sudoers_src,
             project_name=config.project_name,
@@ -566,21 +747,17 @@ def scaffold_install(
 
     # If not --yes and not validating/dry-running, show preview first
     if not yes and not validate_only and not dry_run:
-        preview_cmd = _build_preview_cmd(cmd)
-        _run_script(preview_cmd)
+        _run_script(_build_preview_cmd(cmd))
         console.print()
-        # Single prompt covers BOTH the install plan AND the sudoers diff:
-        # chaining a second `click.confirm` here would train operators to mash
-        # `y` past safety questions.
-        _check_sudoers_diff()
+        # Single prompt covers the install plan, the root-owned diffs, the
+        # policy and the sudoers diff: chaining a second `click.confirm` here
+        # would train operators to mash `y` past safety questions.
+        _show_changes()
         if not click.confirm("Proceed with installation?"):
             console.print("[yellow]Aborted.[/yellow]")
             return
     else:
-        # --yes / --dry-run / --validate-only: still surface the diff (loudly
-        # in --yes, as part of the preview output otherwise). The operator
-        # opted out of the prompt, not out of seeing what would change.
-        _check_sudoers_diff()
+        _show_changes()
 
     # Run the actual command
     returncode = _run_script(cmd)
@@ -591,6 +768,9 @@ def scaffold_install(
         elif dry_run:
             console.print("\n[green]✓ Preview complete[/green]")
         else:
+            if draft is not None:
+                _write_root_policy(draft.policy)
+                console.print("\n[green]✓ Root policy written.[/green]")
             console.print(
                 "\n[green]✓ Installation complete![/green]\n"
                 "[cyan]Next steps:[/cyan]\n"
@@ -609,10 +789,15 @@ def scaffold_install(
             phase = "Preview"
         else:
             phase = None
-        _print_install_failure(
-            install_script=install_script,
-            returncode=returncode,
-            cmd=cmd,
-            phase=phase,
-        )
+        rerun = [
+            flag
+            for flag, on in (
+                ("--yes", yes),
+                ("--dry-run", dry_run),
+                ("--validate-only", validate_only),
+                ("--verbose", verbose),
+            )
+            if on
+        ]
+        _print_install_failure(returncode=returncode, rerun_flags=rerun, phase=phase)
         raise SystemExit(returncode)

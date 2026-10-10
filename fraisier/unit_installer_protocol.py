@@ -350,7 +350,15 @@ def _check_marker(marker: MarkerMeta, *, op_index: int) -> None:
         raise ManifestRejected(msg)
 
 
+#: What the unit-installer may install (#433, D7). ``validate_service_name``
+#: accepts any suffix, so ``.mount``, ``.socket`` and ``.path`` units passed.
+UNIT_SUFFIXES = (".service", ".timer")
+
+
 def _check_unit_basename(basename: str, *, op_index: int) -> None:
+    if not basename.endswith(UNIT_SUFFIXES):
+        msg = f"op {op_index}: basename {basename!r} is not a .service or .timer unit"
+        raise ManifestRejected(msg)
     if ".." in basename:
         msg = f"op {op_index}: basename {basename!r} contains '..'"
         raise ManifestRejected(msg)

@@ -8,19 +8,17 @@ unavailable to them and the work happens here, behind a socket, as root.
 One helper serves **one** ``(fraise, environment)``, and what it may touch is
 baked into its root-owned unit file at scaffold time::
 
-    fraisier-pgbackrest-helper --deploy-user deployer --stanza main --repo 1 \\
-        --cluster 18/staging --target latest --timeout 21600
+    python -I -m fraisier.pgbackrest_helper --deploy-user deployer --stanza main \\
+        --repo 1 --cluster 18/staging --target latest --timeout 21600
 
 Its authority is fixed when its unit is installed — visible in ``systemctl cat``,
-and not decided per request or read from ``fraises.yaml`` at run time.  Be clear
-about the limit of that: a deploy regenerates and installs the scaffold, as root,
-from the repository's ``fraises.yaml``, so whoever can land a commit on the deploy
-branch chooses what is baked in (and the deploy user already reaches root through
-that pipeline).  What the helper adds *on its own authority*, reading only
-root-owned state, is what protects against a wrong or hostile ``cluster:``: it
-refuses any cluster whose configuration archives into its stanza — the stanza's
-source, in practice production — and any cluster that is root-owned, that is
-running, or whose data directory is not a directory.
+and not decided per request or read from ``fraises.yaml`` at run time.  Only an
+operator installs that unit (#433): a deploy whose render changes it stops as
+pending until ``sudo fraisier scaffold-install`` runs.  What the helper adds *on
+its own authority*, reading only root-owned state, is what protects against a
+wrong or hostile ``cluster:``: it refuses any cluster whose configuration archives
+into its stanza — the stanza's source, in practice production — and any cluster
+that is root-owned, that is running, or whose data directory is not a directory.
 
 The wire protocol (``fraisier.pgbackrest_protocol``) names an operation and nothing
 else.  The data directory is read from ``pg_lsclusters`` for the configured
@@ -531,3 +529,7 @@ def main() -> None:
         )
     finally:
         server_sock.close()
+
+
+if __name__ == "__main__":
+    main()

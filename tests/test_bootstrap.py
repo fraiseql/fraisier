@@ -556,10 +556,10 @@ class TestBootstrapFlow:
         mock_runner.upload.assert_not_called()
         mock_runner.upload_tree.assert_not_called()
 
-    def test_dry_run_produces_eleven_steps(self, dry_bootstrapper):
+    def test_dry_run_produces_fourteen_steps(self, dry_bootstrapper):
         with patch("fraisier.bootstrap.importlib_version", return_value="0.4.14"):
             result = dry_bootstrapper.bootstrap()
-        assert len(result.steps) == 11
+        assert len(result.steps) == 14
 
     def test_aborts_after_first_failure(self, bootstrapper, mock_runner):
         # Make _add_to_www_data fail (step 2); steps after it must not run.
@@ -647,3 +647,51 @@ class TestResolveBecomePassword:
     def test_empty_output_returns_empty_string(self):
         password = resolve_become_password("printf ''")
         assert password == ""
+
+
+class TestInstallRootFraisier:
+    """The root-owned copy the root helpers run (#433), installed by bootstrap."""
+
+    def test_runs_after_the_deploy_copy_and_before_install_sh(self, dry_bootstrapper):
+        names = [step.name for step in dry_bootstrapper.bootstrap().steps]
+        root = names.index("Install root-owned fraisier")
+        assert names.index("Install fraisier for deploy user") < root
+        assert names.index("Install root-owned uv") < root
+        assert (
+            root
+            < names.index("Link root fraisier commands")
+            < names.index("Run install.sh --standalone")
+        )
+
+    def test_installs_the_client_version_with_only_the_pinned_environment(
+        self, bootstrapper, mock_runner
+    ):
+        from fraisier.root_install import root_install_argv, root_install_env
+
+        with patch("fraisier.bootstrap.importlib_version", return_value="1.2.3"):
+            step = bootstrapper._install_root_fraisier()
+        assert step.success is True
+        cmd = mock_runner.run.call_args[0][0]
+        pins = [f"{k}={v}" for k, v in root_install_env().items()]
+        assert cmd == ["env", "-i", *pins, *root_install_argv("1.2.3")]
+
+    def test_uv_is_installed_pinned_into_the_root_dir_when_missing(
+        self, bootstrapper, mock_runner
+    ):
+        from fraisier.root_install import ROOT_UV, root_uv_install_argv
+
+        mock_runner.run.side_effect = [_err("missing"), MagicMock(stdout="")]
+        step = bootstrapper._install_root_uv()
+        assert step.success is True
+        assert mock_runner.run.call_args_list[0][0][0] == ["test", "-x", ROOT_UV]
+        assert mock_runner.run.call_args_list[1][0][0] == root_uv_install_argv()
+
+    def test_links_the_root_commands_onto_sudos_path(self, bootstrapper, mock_runner):
+        from fraisier.root_install import ROOT_BIN_DIR
+
+        step = bootstrapper._link_root_commands()
+        assert step.success is True
+        cmd = mock_runner.run.call_args[0][0]
+        assert cmd[:2] == ["bash", "-c"]
+        for name in ("fraisier", "fraisier-root-upgrade"):
+            assert f"ln -sfn {ROOT_BIN_DIR}/{name} /usr/local/bin/{name}" in cmd[2]

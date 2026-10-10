@@ -78,6 +78,30 @@ def read_deferred_restarts(lock_dir: Path) -> list[str]:
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
+def record_deferred_restarts(lock_dir: Path, units: list[str]) -> None:
+    """Add *units* to the ledger, merged with any debt an earlier install left.
+
+    The deploy records what the root scaffold-install helper deferred (#433):
+    the helper runs as root and does not write a file at a path the deploy's
+    config chooses. Two config-changing deploys in a row must not lose the
+    first one's entry, so this merges.
+    """
+    if not units:
+        return
+    path = Path(lock_dir) / DEFERRED_RESTART_FILE
+    merged = sorted({*read_deferred_restarts(lock_dir), *units})
+    try:
+        path.write_text("".join(f"{u}\n" for u in merged))
+    except OSError as exc:
+        log.warning(
+            "could not record deferred restarts at %s: %s; restart %s by hand "
+            "once the deploy finishes",
+            path,
+            exc,
+            ", ".join(units),
+        )
+
+
 def settle_deferred_restarts(lock_dir: Path, *, paid: list[str]) -> None:
     """Drop the units whose restart succeeded; keep everything else on the books."""
     path = Path(lock_dir) / DEFERRED_RESTART_FILE

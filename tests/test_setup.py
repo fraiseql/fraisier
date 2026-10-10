@@ -352,7 +352,10 @@ class TestPlanScaffoldState:
             / "systemd"
             / "fraisier-tp-scaffold-install-helper.service"
         ).read_text()
-        assert "/var/lib/fraisier/tp/scaffold/install.sh" in unit
+        # Since #433 the helper runs no script: it names its project, and
+        # reads the root policy for it.
+        assert "--project tp" in unit
+        assert "install.sh" not in unit
 
 
 class TestPlanSymlinks:

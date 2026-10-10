@@ -1,18 +1,26 @@
 """Root-privileged scaffold-install helper via Unix socket (socket-activated).
 
-Receives {"action": "install"} from the webhook service over a Unix socket and
-executes the project's install.sh as root. This removes the need for sudo in the
-webhook service and is compatible with NoNewPrivileges=true.
+A deploy that changed ``fraises.yaml`` re-renders the scaffold tree as the
+deploy user, then asks this helper to bring the host's units in line with it.
+The helper used to run that render's ``install.sh`` as root, which made anyone
+who can write the render root (#433). It now reads the render as untrusted
+input and applies only what the root policy allows
+(:mod:`fraisier.scaffold_apply`): the units an operator approved, rewritten
+with content that passes the validator. Sudoers, nginx, sockets, users,
+directories and the root helpers are an operator's, and a render that wants
+them changed is reported as pending, which stops the deploy.
 
 Protocol
 --------
 Request (one JSON line + newline)::
 
-    {"action": "install"}
+    {"action": "install", "deploy_in_flight": true}
 
 Response (one JSON line + newline)::
 
-    {"ok": true, "stdout": "...", "stderr": "...", "returncode": 0}
+    {"ok": true, "stdout": "...", "stderr": "...", "returncode": 0,
+     "installed": [...], "pending": [...], "refused": {"unit": ["..."]},
+     "deferred_restarts": [...], "failed": [...]}
 
 Error response::
 
@@ -27,17 +35,43 @@ import os
 import socket
 import subprocess
 import sys
-from pathlib import Path
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from fraisier._peer_creds import check_peer_creds, extract_deploy_uid
 from fraisier.helper_version import VersionWatch, serve_until_stale
+from fraisier.root_policy import (
+    POLICY_ROOT,
+    RootPolicyError,
+    load_policy,
+    policy_path,
+)
+from fraisier.scaffold.artifacts import SYSTEMD_DIR
+from fraisier.scaffold_apply import (
+    ApplyOutcome,
+    SafeTree,
+    UnitWriter,
+    apply_scaffold,
+    read_installed,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_ACTIONS: frozenset[str] = frozenset({"install"})
-_BASH = "/usr/bin/bash"
+_SYSTEMCTL = "/usr/bin/systemctl"
 
-_peer_creds_skip_warned = False
+#: The fix for a unit that still names an install.sh, or a policy that is
+#: missing: both are an operator's one-time step.
+OPERATOR_STEP = (
+    "run `sudo fraisier scaffold-install` once as an operator: it installs the "
+    "root-owned helper code and writes the root policy (#433)"
+)
+
+Apply = Callable[[bool], ApplyOutcome]
 
 
 def _send_error(conn: socket.socket, message: str) -> None:
@@ -53,26 +87,46 @@ def _send_response(conn: socket.socket, response: dict) -> None:
         logger.warning("Failed to send response: %s", exc)
 
 
-def _handle_connection(conn: socket.socket, allowed_script: str) -> None:
-    """Read one JSON request from *conn*, validate, execute install.sh, send response.
+def _read_request(conn: socket.socket) -> bytes:
+    buf = bytearray()
+    while True:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return bytes(buf)
+        buf.extend(chunk)
+        if b"\n" in buf:
+            return bytes(buf.split(b"\n", 1)[0]) + b"\n"
 
-    Args:
-        conn: Connected socket for this request.
-        allowed_script: Absolute path to the install.sh this helper may run.
-            Baked in at service-unit render time — acts as a security allowlist.
-    """
+
+def outcome_response(outcome: ApplyOutcome) -> dict:
+    """The wire form of an apply."""
+    summary = (
+        f"installed {len(outcome.installed)} unit(s), "
+        f"{len(outcome.unchanged)} unchanged"
+    )
+    if outcome.installed:
+        summary += ": " + ", ".join(outcome.installed)
+    return {
+        "ok": outcome.ok,
+        "stdout": summary,
+        "stderr": outcome.report(),
+        "returncode": 0 if outcome.ok else 1,
+        "installed": outcome.installed,
+        "pending": outcome.pending,
+        "refused": {
+            unit: [str(r) for r in refusals]
+            for unit, refusals in outcome.refused.items()
+        },
+        "deferred_restarts": outcome.deferred_restarts,
+        "failed": outcome.failed,
+    }
+
+
+def _handle_connection(conn: socket.socket, apply: Apply) -> None:
+    """Read one JSON request from *conn*, apply the render, send the outcome."""
     with conn:
-        raw = b""
         try:
-            buf = bytearray()
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                buf.extend(chunk)
-                if b"\n" in buf:
-                    raw = bytes(buf.split(b"\n", 1)[0]) + b"\n"
-                    break
+            raw = _read_request(conn)
         except OSError as exc:
             logger.warning("Read error: %s", exc)
             return
@@ -87,90 +141,114 @@ def _handle_connection(conn: socket.socket, allowed_script: str) -> None:
             _send_error(conn, f"malformed JSON: {exc}")
             return
 
-        action = request.get("action", "")
-
+        action = request.get("action", "") if isinstance(request, dict) else ""
         if action not in _ALLOWED_ACTIONS:
             _send_error(conn, f"action not allowed: {action!r}")
             return
 
-        if not Path(allowed_script).exists():
-            _send_error(conn, f"install script not found: {allowed_script}")
-            return
-
-        # Tell install.sh it is being executed BY this helper so it skips
-        # restarting THIS helper's own socket. `systemctl restart
-        # …scaffold-install-helper.socket` would SIGTERM this very process
-        # mid-request; the client would then read an empty reply and — under the
-        # webhook's NoNewPrivileges (which cannot fall back) — the deploy aborts
-        # before the DB step. See install.sh.j2's scaffold-install-helper block.
-        helper_env = {**os.environ, "FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER": "1"}
-
-        # Forward the client's declaration that a deploy is in flight, so
-        # install.sh does not restart the unit that deploy is running inside
-        # (#349). This travels in the request because the helper is a separate
-        # root service and does not inherit the deploy's environment.
-        #
-        # Only a literal JSON `true` is honoured, and it is mapped to a fixed
-        # value rather than interpolated: the payload reaches a daemon running
-        # as root, so a client must not be able to name an environment variable
-        # or choose its contents.
-        if request.get("deploy_in_flight") is True:
-            helper_env["FRAISIER_DEPLOY_IN_FLIGHT"] = "1"
+        # Only a literal JSON `true` counts: the payload reaches a root daemon,
+        # and all it may do is defer a restart (#349).
+        deploy_in_flight = request.get("deploy_in_flight") is True
         try:
-            result = subprocess.run(
-                [_BASH, allowed_script],
-                capture_output=True,
-                text=True,
-                timeout=300,
-                check=False,
-                env=helper_env,
-            )
-        except subprocess.TimeoutExpired:
-            logger.error("install.sh timed out: %s", allowed_script)
-            _send_error(conn, "install.sh timed out")
-            return
-        except OSError as exc:
-            logger.error("Failed to run install.sh: %s", exc)
-            _send_error(conn, f"failed to run install.sh: {exc}")
+            outcome = apply(deploy_in_flight)
+        except Exception as exc:
+            logger.exception("Scaffold apply failed")
+            _send_error(conn, f"scaffold apply failed: {exc}")
             return
 
-        response = {
-            "ok": result.returncode == 0,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "returncode": result.returncode,
-        }
-        if result.returncode != 0:
-            logger.error(
-                "install.sh exited %d: %s",
-                result.returncode,
-                result.stderr.strip(),
-            )
+        if not outcome.ok:
+            logger.error("Scaffold apply did not complete:\n%s", outcome.report())
+        _send_response(conn, outcome_response(outcome))
 
-        _send_response(conn, response)
+
+def _systemctl(*args: str) -> bool:
+    try:
+        result = subprocess.run(
+            [_SYSTEMCTL, *args],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.error("systemctl %s failed: %s", " ".join(args), exc)
+        return False
+    if result.returncode != 0:
+        logger.error(
+            "systemctl %s exited %d: %s",
+            " ".join(args),
+            result.returncode,
+            result.stderr.strip(),
+        )
+    return result.returncode == 0
+
+
+def short_hostname() -> str:
+    """What install.sh's ``hostname -s`` prints."""
+    return socket.gethostname().split(".", 1)[0]
+
+
+def apply_for_project(
+    project: str,
+    deploy_in_flight: bool,
+    *,
+    policy_root: Path = POLICY_ROOT,
+    systemd_dir: str | Path = SYSTEMD_DIR,
+    systemctl: Callable[..., bool] = _systemctl,
+    hostname: Callable[[], str] = short_hostname,
+) -> ApplyOutcome:
+    """Load this project's root policy and apply the render it points at.
+
+    The policy is read on every request, so an operator's scaffold-install
+    takes effect without restarting this helper. A policy that is missing, or
+    that someone other than root could have written, is not an error to work
+    around: nothing is applied, and the deploy is told what the operator must
+    do.
+    """
+    try:
+        policy = load_policy(policy_path(project, policy_root))
+    except RootPolicyError as exc:
+        return ApplyOutcome(pending=[f"{exc}"])
+    if policy.project != project:
+        return ApplyOutcome(
+            pending=[f"the root policy is for {policy.project!r}, not {project!r}"]
+        )
+    tree = SafeTree(policy.scaffold_dir)
+    return apply_scaffold(
+        policy,
+        read_tree=tree.read,
+        read_installed=read_installed,
+        write_unit=UnitWriter(systemd_dir).write,
+        systemctl=systemctl,
+        hostname=hostname(),
+        deploy_in_flight=deploy_in_flight,
+    )
+
+
+def _refuse(reason: str) -> Apply:
+    def apply(_deploy_in_flight: bool) -> ApplyOutcome:
+        return ApplyOutcome(pending=[reason])
+
+    return apply
 
 
 def _serve_connection(
     conn: socket.socket,
     *,
     expected_uid: int | None,
-    allowed_script: str,
+    apply: Apply,
 ) -> None:
-    """Enforce SO_PEERCRED then dispatch one request to ``_handle_connection``.
+    """Enforce SO_PEERCRED, then dispatch one request to ``_handle_connection``.
 
-    ``expected_uid=None`` is the v0.29 transitional fallback — log a one-time
-    warning and process the request anyway (becomes mandatory in v0.30).
+    A root helper with no deploy uid to check against serves nobody.
     """
-    global _peer_creds_skip_warned
     if expected_uid is None:
-        if not _peer_creds_skip_warned:
-            logger.warning(
-                "SO_PEERCRED check disabled: --deploy-uid not provided. "
-                "Re-render this helper's unit with v0.29 scaffold-install "
-                "to close the trust gap (will become mandatory in v0.30)."
+        with conn:
+            _send_error(
+                conn,
+                "peer credentials cannot be checked: the helper unit names no "
+                "--deploy-user that exists on this host",
             )
-            _peer_creds_skip_warned = True
-        _handle_connection(conn, allowed_script=allowed_script)
         return
     try:
         check_peer_creds(conn, expected_uid=expected_uid)
@@ -179,18 +257,11 @@ def _serve_connection(
         with conn:
             _send_error(conn, f"peer credentials rejected: {exc}")
         return
-    _handle_connection(conn, allowed_script=allowed_script)
+    _handle_connection(conn, apply)
 
 
-def _build_server_socket(allowed_script: str) -> socket.socket:
+def _build_server_socket() -> socket.socket:
     """Acquire socket from systemd socket activation (LISTEN_FDS protocol).
-
-    Args:
-        allowed_script: Absolute path to the install.sh this helper may run
-            (used for logging only at this stage).
-
-    Returns:
-        Server socket ready to accept connections.
 
     Raises:
         SystemExit: If LISTEN_FDS is not set or zero.
@@ -205,22 +276,46 @@ def _build_server_socket(allowed_script: str) -> socket.socket:
     # First activated socket is fd 3 (SD_LISTEN_FDS_START = 3)
     server_sock = socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
     server_sock.setblocking(True)
-
-    logger.info(
-        "fraisier-scaffold-install-helper ready, allowed script: %s",
-        allowed_script,
-    )
-
+    logger.info("fraisier-scaffold-install-helper ready")
     return server_sock
+
+
+def _pop_project(argv: list[str]) -> tuple[str | None, list[str]]:
+    remaining = list(argv)
+    if "--project" not in remaining:
+        return None, remaining
+    i = remaining.index("--project")
+    if i + 1 >= len(remaining):
+        return None, remaining
+    project = remaining[i + 1]
+    del remaining[i : i + 2]
+    return project, remaining
+
+
+def build_apply(argv: list[str]) -> Apply:
+    """The apply this helper's argv asks for, or a refusal that says why not.
+
+    A unit rendered before #433 passes the path of an ``install.sh`` instead
+    of ``--project``. That script is the escalation, so it is never run: every
+    request is answered with the operator step instead.
+    """
+    project, remaining = _pop_project(argv)
+    if project is None:
+        legacy = f" ({remaining[0]})" if remaining else ""
+        return _refuse(
+            f"this scaffold-install-helper unit predates the root policy and "
+            f"names an install script{legacy} that it will not run as root; "
+            + OPERATOR_STEP
+        )
+    return lambda deploy_in_flight: apply_for_project(project, deploy_in_flight)
 
 
 def main() -> None:
     """Entry point for fraisier-scaffold-install-helper.
 
-    The absolute path to the project's install.sh is passed as the first
-    positional argument (baked in at template render time)::
+    Argv, baked in at render time::
 
-        fraisier-scaffold-install-helper /opt/myproject/scripts/generated/install.sh
+        fraisier-scaffold-install-helper --deploy-user <name> --project <name>
 
     The socket file descriptor is provided by systemd via ``LISTEN_FDS``
     (fd 3 = first socket, ``Accept=no``).
@@ -231,29 +326,19 @@ def main() -> None:
     )
 
     deploy_uid, remaining = extract_deploy_uid(sys.argv[1:])
-
-    if not remaining:
-        logger.error("Usage: fraisier-scaffold-install-helper <path-to-install.sh>")
-        sys.exit(1)
-
-    allowed_script = remaining[0]
-
-    if not Path(allowed_script).exists():
-        logger.critical("install.sh not found at startup: %s", allowed_script)
-        sys.exit(1)
-
-    server_sock = _build_server_socket(allowed_script)
+    apply = build_apply(remaining)
+    server_sock = _build_server_socket()
 
     watch = VersionWatch()
     try:
         serve_until_stale(
             server_sock,
-            lambda conn: _serve_connection(
-                conn,
-                expected_uid=deploy_uid,
-                allowed_script=allowed_script,
-            ),
+            lambda conn: _serve_connection(conn, expected_uid=deploy_uid, apply=apply),
             is_stale=watch.is_stale,
         )
     finally:
         server_sock.close()
+
+
+if __name__ == "__main__":
+    main()

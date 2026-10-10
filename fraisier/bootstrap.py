@@ -12,6 +12,8 @@ from importlib.metadata import version as importlib_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fraisier import root_install
+
 if TYPE_CHECKING:
     from fraisier.config import FraisierConfig
     from fraisier.runners import SSHRunner
@@ -135,6 +137,9 @@ class ServerBootstrapper:
             self._add_to_www_data,
             self._install_uv,
             self._install_fraisier,
+            self._install_root_uv,
+            self._install_root_fraisier,
+            self._link_root_commands,
             self._restart_webhook_if_running,
             self._create_directories,
         ):
@@ -228,6 +233,42 @@ class ServerBootstrapper:
             ],
         )
 
+    def _install_root_uv(self) -> StepResult:
+        """A pinned, root-owned uv for the root copy (#433). Never the deploy's."""
+        return self._run_remote(
+            "Install root-owned uv",
+            root_install.root_uv_install_argv(),
+            already_done_cmd=["test", "-x", root_install.ROOT_UV],
+        )
+
+    def _install_root_fraisier(self) -> StepResult:
+        """The root-owned copy of fraisier the root helpers run (#433).
+
+        Bootstrap is an operator's action, so it sets the root copy to the
+        client's version, as it does the deploy copy; after this only
+        ``sudo fraisier-root-upgrade`` changes it. ``env -i`` keeps a HOME or
+        ``UV_*`` the SSH session carries from deciding where uv writes.
+        """
+        pins = [f"{k}={v}" for k, v in root_install.root_install_env().items()]
+        return self._run_remote(
+            "Install root-owned fraisier",
+            [
+                "env",
+                "-i",
+                *pins,
+                *root_install.root_install_argv(importlib_version("fraisier")),
+            ],
+        )
+
+    def _link_root_commands(self) -> StepResult:
+        """``sudo fraisier`` resolves to the root copy through ``secure_path``."""
+        links = " && ".join(
+            f"ln -sfn {root_install.ROOT_BIN_DIR}/{name}"
+            f" {root_install.ROOT_LINK_DIR}/{name}"
+            for name in root_install.ROOT_COMMANDS
+        )
+        return self._run_remote("Link root fraisier commands", ["bash", "-c", links])
+
     def _restart_webhook_if_running(self) -> StepResult:
         """Restart the webhook service after a fraisier upgrade.
 
@@ -261,7 +302,7 @@ class ServerBootstrapper:
     def _create_directories(self) -> StepResult:
         project_dir = f"/opt/{self.project_name}"
         # The persistent scaffold state tree (#283): the deploy renders here and
-        # the socket helper reads its baked install.sh from here. Owned by
+        # the root helper reads that render from here (#433). Owned by
         # deploy_user so deploy-time regeneration (which runs as that user) can
         # refresh it.
         state_dir = self.config.scaffold_state_dir
@@ -526,9 +567,9 @@ class ServerBootstrapper:
     def _cleanup(self, remote_scaffold_dir: str) -> None:
         """Remove the temporary scaffold directory from the remote server.
 
-        Never removes the persistent scaffold ``state_dir`` (#283): the socket
-        helper reads its baked install.sh from there, so it must survive
-        bootstrap (including a late-step failure).
+        Never removes the persistent scaffold ``state_dir`` (#283): the deploy
+        renders there and the root helper reads that render, so it must
+        survive bootstrap (including a late-step failure).
         """
         if self.dry_run:
             return

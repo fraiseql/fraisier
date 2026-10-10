@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ from fraisier.config import FraisierConfig
 from fraisier.scaffold.renderer import ScaffoldRenderer
 
 _GOLDEN = Path(__file__).parent / "golden" / "install_plan.json"
+_VERSION = version("fraisier")
 
 # One machine, every environment on it. The baseline: no host asymmetry to get
 # wrong, so anything that differs here is unconditional drift.
@@ -634,7 +636,10 @@ def _install_plan(tmp_path: Path, yaml_text: str, hostname: str) -> list[str]:
         if marker is not None:
             # Absolute tmp paths differ per run; the scaffold dir is the only
             # one that appears, so collapse it to a stable token.
-            plan.append(stripped[len(marker) :].replace(str(out), "$SCAFFOLD"))
+            # The root install bakes the rendering fraisier's version (#433),
+            # which moves every release; the golden pins the command, not it.
+            command = stripped[len(marker) :].replace(str(out), "$SCAFFOLD")
+            plan.append(command.replace(f"fraisier=={_VERSION}", "fraisier==$VERSION"))
     return plan
 
 
