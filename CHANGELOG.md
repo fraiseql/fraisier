@@ -66,6 +66,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     <source> version of <path>`). Re-apply such a hotfix on source. Before, the merge
     silently produced a blend: it kept what the hotfix added and dropped what it
     restored, which matched neither the hotfix nor source.
+- **`fraisier setup` installs the app unit the scaffold wrote**
+  ([#446](https://github.com/fraiseql/fraisier/issues/446)). Setup copied the app unit from
+  `{project}_{fraise}_{env}.service` whatever the config said, but the scaffold writes it
+  under `systemd_service` or `service.service_name` when either is set, so the copy named a
+  file that did not exist. With `service.service_name`, the installed name and the
+  `systemctl enable` ignored it too. The copy, the destination and the enable now use the
+  name the scaffold, the systemctl-helper allowlist and the deployer already use.
+- **A scheduled or backup fraise's timer reaches the systemctl-helper allowlist**
+  ([#447](https://github.com/fraiseql/fraisier/issues/447)). The allowlist took timers only
+  from `jobs.*` of a `type: scheduled` fraise. A deploy of a fraise with an env-level
+  `systemd_timer:` (no `jobs:`) therefore failed at `enable <timer>`, with advice to
+  upgrade the helper that changed nothing. The allowlist now takes `systemd_service` and
+  `systemd_timer` at env level and in each job, for both `scheduled` and `backup`, which
+  are the two types that deploy through the timer.
+- **The shipped example configs validate, and a broken environment is reported once**
+  ([#448](https://github.com/fraiseql/fraisier/issues/448)). `fraises.example.yaml` and
+  `examples/django-celery-postgres` failed `fraisier validate`: rebuild and restore envs
+  without `database.admin_url`, jobs-shaped fraises without `app_path`, and an ETL
+  `notifications:` block naming script paths, which crashed its deployer when it was
+  built. A test now validates every example and builds each of its deployers. Separately,
+  `required_fields` and `missing_health_check` read an environment that failed its own
+  validation as empty, so one missing `admin_url` also reported a "missing `app_path`"
+  that was set. They now skip it, and the validation error stands alone.
+- **`fraisier logs --service app` on a fraise that serves nothing says so**
+  ([#449](https://github.com/fraiseql/fraisier/issues/449)). It tailed an app unit the
+  scaffold no longer renders for scheduled, backup and etl fraises, printed nothing and
+  exited 0. It now exits 1, prints a `journalctl -u` line for each `systemd_service` the
+  fraise declares, and points at `--service deploy`.
 
 ### Added
 
@@ -91,6 +119,9 @@ helpers included, so on each host run:
 
 Until then, `fraisier doctor` warns `remote_debug_disabled` for every fraisier unit
 on that host. That is accurate: they still accept a remote attach.
+
+The same run picks up #447 on a host with an env-level `systemd_timer:` or a backup
+job's timer. Until then, a deploy of that fraise still fails at `enable <timer>`.
 
 **Orphaned app units.** Hosts scaffolded before this release carry an app unit for
 every scheduled, backup and etl fraise, and `fraisier setup` enabled each one. Nothing
