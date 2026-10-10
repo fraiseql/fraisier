@@ -29,7 +29,7 @@ passed.
 |---|---|---|---|
 | `python_version` | the running Python is 3.14 or newer | no | `uv tool install --force --python 3.14 fraisier==<version>` |
 | `fraisier_version` | `importlib.metadata.version("fraisier")` resolves | no | `pip install --force-reinstall fraisier` |
-| `confiture_version` | `confiture --version` resolvable | no | `pip install confiture` |
+| `confiture_version` | `confiture --version` resolvable | no | `uv tool install --force --python 3.14 fraisier==<version> --with-executables-from fraiseql-confiture` — the package is `fraiseql-confiture`; `confiture` on PyPI is an unrelated project |
 | `fraises_yaml_loadable` | `fraises.yaml` parses without error | no | `fraisier validate` for details; `fraisier init` for fresh setup |
 | `fraises_yaml_resolves` | every reachable `!envvar` resolves to a set var | no | export the missing variables or move them to `~/.config/fraisier/secrets.env` |
 | `secrets_env_readable` | `~/.config/fraisier/secrets.env` exists and is mode 0600 | no | `chmod 600 ~/.config/fraisier/secrets.env` |

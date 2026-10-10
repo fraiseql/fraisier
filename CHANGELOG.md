@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Doctor's `confiture_version` hint names the package fraisier depends on**
+  ([#454](https://github.com/fraiseql/fraisier/issues/454)). It said `pip install
+  confiture`, and on PyPI `confiture` is an unrelated configuration parser whose own
+  top-level `confiture` module collides with the one fraisier imports. The hint and
+  [the check table](docs/doctor.md) now expose the binary from fraisier's own tool venv,
+  at the version fraisier pins: `uv tool install --force --python 3.14
+  fraisier==<version> --with-executables-from fraiseql-confiture`.
 - **Doctor judges a drift gate only for a fraise that migrates**
   ([#429](https://github.com/fraiseql/fraisier/issues/429)). `post_migrate_check` defaults
   to on, so `post_migrate_check_buildable`, `_alter_safe` and `_names_conform` evaluated
