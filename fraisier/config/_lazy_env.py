@@ -279,5 +279,15 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        (#424); the bytes never
 #                                                        come from fraises.yaml.
 #
+#   root_policy.py:parse_policy (4 sites)    non-config  Validates the JSON of
+#                                                        the root-owned policy
+#                                                        file that root reads
+#                                                        before installing a
+#                                                        unit (#433); the policy
+#                                                        is observed from the
+#                                                        operator-approved
+#                                                        render, never parsed
+#                                                        as fraises.yaml.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.
