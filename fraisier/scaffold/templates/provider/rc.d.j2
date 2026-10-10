@@ -23,6 +23,7 @@ command_args="{{ command_args }}"
 pidfile="{{ pidfile }}"
 {% endif %}
 
+export PYTHON_DISABLE_REMOTE_DEBUG="1"
 {% for key, value in env.items() %}
 export {{ key }}="{{ value }}"
 {% endfor %}

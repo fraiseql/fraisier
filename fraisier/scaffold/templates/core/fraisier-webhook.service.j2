@@ -19,6 +19,7 @@ RestartSec=5
 
 # Environment
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 Environment=PATH=/home/{{ scaffold.deploy_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/etc/fraisier/{{ project_name }}.webhook.env
 {% if allowed_services %}

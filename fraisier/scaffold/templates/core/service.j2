@@ -79,6 +79,9 @@ ReadWritePaths=/var/lib/postgresql
 # whose next `uv sync --frozen` could not then unlink these __pycache__ dirs.
 # Declared before service.environment so an explicit override there wins.
 Environment=PYTHONDONTWRITEBYTECODE=1
+# No PEP 768 remote attach into a process holding credentials (#436). Any
+# value disables it, empty included; only UnsetEnvironment= lifts it.
+Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 Environment=ENVIRONMENT={{ env_name }}
 {% if fraise.get('type') == 'api' %}
 Environment=WORKERS={{ worker_count }}

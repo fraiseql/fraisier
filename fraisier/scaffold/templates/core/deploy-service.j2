@@ -13,6 +13,7 @@ StandardInput=socket
 StandardOutput=journal
 StandardError=journal
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 Environment=FRAISIER_CONFIG={{ scaffold.config_path }}
 # Allow git fetch to succeed on first run without known_hosts pre-seeded.
 Environment="GIT_SSH_COMMAND=ssh -oStrictHostKeyChecking=accept-new"

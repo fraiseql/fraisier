@@ -13,6 +13,7 @@ ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-unit-installer --
 # Prevent Python from creating root-owned __pycache__ dirs in the deploy user's
 # tool installation when the helper runs as root.
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 
 # Security hardening — runs as root but restricted.
 NoNewPrivileges=true
