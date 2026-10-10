@@ -42,6 +42,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the service its timer starts. A scheduled fraise with a fraise-level `exec_command`
   now has its rendered app unit in the systemctl-helper allowlist, which it had been
   missing.
+- **`fraisier sync` no longer duplicates a block that source moved after promoting it**
+  ([#430](https://github.com/fraiseql/fraisier/issues/430)). Sync PRs are squash-merged,
+  so the pre-merge's base is the original fork point. Against it, target's promoted copy
+  and source's move are two unrelated edits, and git kept both, cleanly and with exit
+  0: the block appeared twice. The pass that already restores a source-side revert
+  (v0.50.0) acted only when the merge took target's copy whole. It now acts whenever the
+  merged file is not source's, provided target's copy is one source once had, and takes
+  source's file (`Auto-resolved (took dev; the merge blended staging's stale copy into
+  it)`). A file whose target copy target authored keeps the three-way result and is
+  named in a warning, which before was printed only when the merge took target's copy
+  whole. After the pre-merge commit, sync now lists every file that still differs from
+  source, under `only on <target>`, `<target>'s own changes` and `deleted on <target>`.
+  Fraisier-owned files are left out of that list. It only warns; the exit code and the
+  PR are unchanged.
+
+  Known limitations:
+  - A file that target ever edited itself is still merged three-way, so a block moved
+    in it can still be duplicated. Sync names that file twice, in the warning and in the
+    residual list, but does not fix it.
+  - A target hotfix that put back an *earlier* source version of a file is now replaced
+    by source's current file, with a warning naming it (`<target> restored an earlier
+    <source> version of <path>`). Re-apply such a hotfix on source. Before, the merge
+    silently produced a blend: it kept what the hotfix added and dropped what it
+    restored, which matched neither the hotfix nor source.
 
 ### Added
 

@@ -62,6 +62,12 @@ _STALE_TARGET = _Resolution(
     "stale target copy",
     "stale target copies",
 )
+_STALE_TARGET_MERGED = _Resolution(
+    "  Auto-resolved (took {source}; the merge blended {target}'s stale copy"
+    " into it): {path}",
+    "stale target blend",
+    "stale target blends",
+)
 _PREFER_SOURCE = _Resolution(
     "  Auto-resolved (prefer-source): {path}",
     "by --prefer-source",
@@ -72,6 +78,7 @@ _PREFER_SOURCE = _Resolution(
 #: read the same way.
 _RESOLUTION_ORDER = (
     _STALE_TARGET,
+    _STALE_TARGET_MERGED,
     _FRAISIER_OWNED,
     _SOURCE_DELETION,
     _SOURCE_REVERT,
@@ -167,6 +174,53 @@ def _diff_paths(tgt: str, source: str, diff_filter: str) -> list[str]:
             check=False,
         )
     )
+
+
+def _report_residuals(source: str, tgt: str) -> None:
+    """Name every file the sync branch still holds in a non-source version.
+
+    Warn only. A clean three-way merge is trusted for files target authored, and
+    under squash promotion its base is stale, so a divergence target never meant
+    (#430) and target's genuine work look the same from here. Listing them is
+    what stops either from passing unnoticed. Fraisier-owned files are always
+    taken from source and are left out.
+    """
+    fields = _z_lines(
+        subprocess.run(
+            [
+                "git",
+                "diff",
+                "--name-status",
+                "-z",
+                "--no-renames",
+                f"origin/{source}",
+                "HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    )
+    groups: dict[str, list[str]] = {}
+    for status, path in zip(fields[::2], fields[1::2], strict=False):
+        if _is_auto_resolved(path):
+            continue
+        heading = {
+            "A": f"only on {tgt}",
+            "D": f"deleted on {tgt}",
+        }.get(status[:1], f"{tgt}'s own changes")
+        groups.setdefault(heading, []).append(path)
+    total = sum(len(paths) for paths in groups.values())
+    if not total:
+        return
+    err_console.print(
+        f"[yellow]Warning:[/yellow] {total} file(s) still differ from {source} "
+        "after the pre-merge; review them in the PR:"
+    )
+    for heading, paths in groups.items():
+        err_console.print(f"  {heading}:", markup=False)
+        for path in paths:
+            err_console.print(f"    {path}", markup=False)
 
 
 def _target_blob_is_source_derived(source: str, tgt: str, path: str) -> bool:
@@ -744,72 +798,72 @@ def _propagate_source_deletions(source: str, tgt: str) -> list[str]:
     return propagated
 
 
-def _propagate_source_reverts(source: str, tgt: str) -> list[str]:
-    """Restore source's content where the merge silently took target's stale copy.
+def _propagate_source_reverts(source: str, tgt: str) -> dict[str, _Resolution]:
+    """Restore source's content where the merge silently kept target's stale copy.
 
-    The other half of #290. ``_propagate_source_deletions`` handles source
-    removing a file; this handles source *reverting* one.
+    The other half of #290, widened by #430. ``_propagate_source_deletions``
+    handles source removing a file; this handles every other way a clean merge
+    lets a stale promoted copy on target override what source now says.
 
-    When source reverts a path to exactly its merge-base content, git's 3-way
-    merge sees ``ours == base`` and resolves it as *take theirs* — with a zero
-    exit code and no conflict, so the tier loop never sees it. Given a correct
-    base that is right. Under squash promotion the base is the ancient fork
-    point that never advances, so ``ours == base`` stops meaning "source never
-    touched this" and starts meaning "source added it and then reverted it",
-    while target still carries the promoted copy. The revert is lost on every
-    sync.
+    Under squash promotion the merge-base is the ancient fork point that never
+    advances, so git weighs target's promoted copy as if it were target's own
+    edit. Two shapes merge cleanly, exit 0, and never reach the tier loop:
 
-    A revert to any *other* content leaves ``ours != base != theirs`` and does
-    conflict, where tier 3 already resolves it. Only the exact return to base
-    content is silent, which is why this half survived the deletion fix.
+    * source reverts a path to exactly its base content. Git sees
+      ``ours == base`` and takes target's copy whole (#290).
+    * source moves or rewrites what it promoted. Against the ancient base the
+      promoted copy and source's edit are two non-overlapping hunks, so git
+      keeps both: a moved block appears twice, and the merged blob equals
+      neither side (#430).
 
     Detection deliberately computes no merge-base — anchoring on one is what
     broke the deletion half. It asks what the merge actually did:
 
     1. ``origin/<tgt>`` and ``origin/<source>`` differ on the path;
-    2. the merged **index** blob equals *target's* blob — git took theirs whole;
+    2. the merged **index** blob differs from *source's* blob — the merge let
+       target's side into the result, whole or blended;
     3. target's blob is source-derived, the same gate the deletion pass uses.
 
-    Gate 2 replaces a merge-base computation and excludes two classes for free:
-    a conflicted path has no stage-0 entry, so ``git rev-parse :<path>`` fails
-    and it falls through to the tier loop untouched; and a clean auto-merge of
-    non-overlapping hunks produces a blob equal to neither side, so both changes
-    survive.
+    Gate 2 needs a stage-0 entry, so a conflicted path fails ``git rev-parse
+    :<path>`` and falls through to the tier loop untouched. Gate 3 is what keeps
+    target's own work: when target authored its blob, the merged result stands
+    and a warning names the file. A target that *restored* an earlier source
+    version passes gate 3 too, so source's current file replaces that hotfix,
+    and a warning names it (before #430 the merge kept a blend of the two).
 
-    Only paths whose checkout actually succeeds are returned — the operator log
-    must not claim a resolution the index does not reflect.
+    Returns each restored path with the resolution it is recorded under. Only
+    paths whose checkout actually succeeds are returned — the operator log must
+    not claim a resolution the index does not reflect.
     """
     candidates = _diff_paths(tgt, source, "M")
 
-    restored: list[str] = []
+    restored: dict[str, _Resolution] = {}
     for path in candidates:
-        target_blob = subprocess.run(
-            ["git", "rev-parse", f"origin/{tgt}:{path}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        merged_blob = subprocess.run(
-            ["git", "rev-parse", f":{path}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if target_blob.returncode != 0 or merged_blob.returncode != 0:
+        target_blob = _blob(f"origin/{tgt}:{path}")
+        source_blob = _blob(f"origin/{source}:{path}")
+        merged_blob = _blob(f":{path}")
+        if target_blob is None or source_blob is None or merged_blob is None:
             # No stage-0 entry means the path is still unmerged: a real
             # conflict, which the tier loop owns.
             continue
-        if merged_blob.stdout.strip() != target_blob.stdout.strip():
-            # The merge did not take target's side wholesale — either source
-            # won or the hunks merged cleanly. Nothing was silently lost.
+        if merged_blob == source_blob:
+            # Source won outright; nothing of target's leaked in.
             continue
+        took_target = merged_blob == target_blob
         if not _target_blob_is_source_derived(source, tgt, path):
+            kept = f"{tgt}'s version" if took_target else "the three-way merge"
             err_console.print(
                 f"[yellow]Warning:[/yellow] [bold]{path}[/bold] differs on "
                 f"{source} but {tgt}'s copy is not source-derived — keeping "
-                f"{tgt}'s version for you to decide."
+                f"{kept} for you to decide."
             )
             continue
+        if _target_restored_earlier_copy(tgt, path):
+            err_console.print(
+                f"[yellow]Warning:[/yellow] {tgt} restored an earlier {source} "
+                f"version of [bold]{path}[/bold]; taking {source}'s current "
+                f"file. Re-apply that hotfix on {source} if it still matters."
+            )
         # `git checkout <tree-ish> -- <path>` updates the index as well as the
         # worktree, so no separate `git add` is needed to stage the restore.
         checkout = subprocess.run(
@@ -819,7 +873,7 @@ def _propagate_source_reverts(source: str, tgt: str) -> list[str]:
             check=False,
         )
         if checkout.returncode == 0:
-            restored.append(path)
+            restored[path] = _SOURCE_REVERT if took_target else _STALE_TARGET_MERGED
         else:
             detail = checkout.stderr.strip() or "git checkout failed"
             err_console.print(
@@ -827,6 +881,48 @@ def _propagate_source_reverts(source: str, tgt: str) -> list[str]:
                 f"[bold]{path}[/bold] from {source}: {detail}"
             )
     return restored
+
+
+def _blob(spec: str) -> str | None:
+    """Blob id for a ``<rev>:<path>`` or ``:<path>`` spec, None when absent."""
+    result = subprocess.run(
+        ["git", "rev-parse", spec],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _target_restored_earlier_copy(tgt: str, path: str) -> bool:
+    """Return True when target's current blob for *path* is one it held before.
+
+    Target went A → B → A: a hotfix that put back an earlier version, rather
+    than a stale copy of the latest promotion. Gate 3 cannot tell the two apart,
+    since both blobs are in source's history. Only the warning depends on it,
+    so a git error or an exhausted scan answers False.
+    """
+    commits = subprocess.run(
+        [
+            "git",
+            "rev-list",
+            f"--max-count={_SOURCE_HISTORY_SCAN_LIMIT}",
+            f"origin/{tgt}",
+            "--",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if commits.returncode != 0:
+        return False
+    blobs = [_blob(f"{sha}:{path}") for sha in commits.stdout.split()]
+    if not blobs:
+        return False
+    current = blobs[0]
+    replaced = next((i for i, b in enumerate(blobs) if b != current), None)
+    return replaced is not None and current in blobs[replaced:]
 
 
 def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
@@ -846,9 +942,9 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
         f"    # files present on {tgt} but deleted on {source} are 'git rm'-ed to"
         f" propagate the deletion, when {source}'s history shows the deletion and"
         f" {tgt}'s copy is source-derived;"
-        f" files {source} reverted to their merge-base content — which the merge"
-        f" silently resolves in {tgt}'s favour — are restored from {source} when"
-        f" {tgt}'s copy is source-derived;"
+        f" files the clean merge did not resolve to {source}'s content — a revert"
+        f" to merge-base content, or a moved block the merge kept twice — are"
+        f" restored from {source} when {tgt}'s copy is source-derived;"
         f" conflicts in [{auto_owned}] auto-resolved from {source};"
         f" conflicts where {tgt} holds source-derived content also resolved from"
         f" {source};"
@@ -861,6 +957,10 @@ def _print_dry_run_plan(source: str, tgt: str, sync_branch: str) -> None:
     console.print(
         f"    # pre-push guard: origin/{tgt} must be an ancestor of HEAD and"
         " MERGE_HEAD must be cleared, else abort"
+    )
+    console.print(
+        f"    git diff --name-status -z --no-renames origin/{source} HEAD"
+        "  # warn, listing files that still differ from source"
     )
     console.print(f"    git push origin {sync_branch}")
     console.print(
@@ -1014,8 +1114,8 @@ def sync_cmd(
         # The other half of #290, and unconditional for the same reason: a
         # source-side revert to base content merges *cleanly* and takes
         # target's stale copy, so it never reaches the conflict loop below.
-        for restored in _propagate_source_reverts(source, tgt):
-            resolutions.record(_SOURCE_REVERT, restored)
+        for restored, kind in _propagate_source_reverts(source, tgt).items():
+            resolutions.record(kind, restored)
 
         if merge_result.returncode != 0:
             conflicted = _capture(
@@ -1101,6 +1201,7 @@ def sync_cmd(
             _commit_merge_or_staged(f"Pre-merge {tgt} into sync branch")
 
         _assert_merge_finalized(tgt)
+        _report_residuals(source, tgt)
 
         console.print(f"  Pushing [bold]{sync_branch}[/bold]")
         _push_sync_branch(sync_branch)
