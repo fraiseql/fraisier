@@ -368,7 +368,12 @@ def _installed_webhook_unit(project_name: str) -> Path:
 
 
 def _enabled_dump_dirs(config: FraisierConfig | None) -> list[str]:
-    """Every ``pre_migrate_dump.output_dir`` for a gate that is switched on."""
+    """Every ``pre_migrate_dump.output_dir`` for a gate that is switched on.
+
+    Only for fraises that migrate: elsewhere no deploy ever writes a dump (#429).
+    """
+    from fraisier.fraise_roles import fraise_migrates
+
     dirs: list[str] = []
     fraises = getattr(config, "fraises", None) if config is not None else None
     for fraise in (fraises or {}).values():
@@ -376,6 +381,8 @@ def _enabled_dump_dirs(config: FraisierConfig | None) -> list[str]:
             continue
         for env_config in (fraise.get("environments") or {}).values():
             if not isinstance(env_config, dict):
+                continue
+            if not fraise_migrates(fraise, env_config):
                 continue
             pmd = (env_config.get("database") or {}).get("pre_migrate_dump") or {}
             out = pmd.get("output_dir")
@@ -638,7 +645,12 @@ class _DriftGate:
 
 
 def _enabled_drift_gates(config: FraisierConfig | None) -> list[_DriftGate]:
-    """Every enabled ``post_migrate_check`` gate across the config."""
+    """Every enabled ``post_migrate_check`` gate across the config.
+
+    Only for fraises that migrate: the gate defaults to on, and a scheduled or
+    backup fraise has no migration for it to follow (#429).
+    """
+    from fraisier.fraise_roles import fraise_migrates
     from fraisier.post_migrate_check import load_post_migrate_check
 
     gates: list[_DriftGate] = []
@@ -648,6 +660,8 @@ def _enabled_drift_gates(config: FraisierConfig | None) -> list[_DriftGate]:
             continue
         for env_config in (fraise.get("environments") or {}).values():
             if not isinstance(env_config, dict):
+                continue
+            if not fraise_migrates(fraise, env_config):
                 continue
             db = env_config.get("database") or {}
             gate = load_post_migrate_check(db)
@@ -1584,6 +1598,96 @@ def _check_foreign_units(config: FraisierConfig | None) -> CheckResult:
             "they may be another application's running services — review, then "
             "'fraisier scaffold-install --prune-foreign' to disable and delete"
         ),
+    )
+
+
+def _stale_app_unit_candidates(config: FraisierConfig) -> dict[str, str]:
+    """Unit name -> the ``Description=`` its app unit was rendered with.
+
+    One entry per fraise and environment that does not serve, under each name
+    an app unit could have been installed as: the generated
+    ``{project}_{fraise}_{env}.service``, and ``systemd_service`` when set.
+    """
+    from fraisier.fraise_roles import fraise_serves
+    from fraisier.naming import app_service_name
+
+    project = config.project_name
+    candidates: dict[str, str] = {}
+    for fraise_name, fraise in (config.fraises or {}).items():
+        if not isinstance(fraise, dict):
+            continue
+        for env_name, env_config in (fraise.get("environments") or {}).items():
+            if not isinstance(env_config, dict) or fraise_serves(fraise, env_config):
+                continue
+            description = f"Description={fraise_name} ({env_name})"
+            candidates[f"{project}_{fraise_name}_{env_name}.service"] = description
+            candidates[app_service_name(project, fraise_name, env_name, env_config)] = (
+                description
+            )
+    return candidates
+
+
+@register_check("stale_app_units")
+def _check_stale_app_units(config: FraisierConfig | None) -> CheckResult:
+    """App units installed for a fraise that serves nothing (#432).
+
+    Before #432 the scaffold rendered ``core/service.j2`` — uvicorn on port
+    8000 — for every fraise, and ``fraisier setup`` copied and enabled each.
+    Nothing renders those units now, so no manifest knows them and
+    ``foreign_units`` cannot see them, while an enabled one still binds the
+    API's port at boot.
+
+    A unit counts only if it still carries the ``Description=`` line that
+    template has written since v0.3.0: a scheduled fraise's own
+    ``systemd_service`` shares the name, not the body. Removes nothing.
+    """
+    name = "stale_app_units"
+    if config is None:
+        return CheckResult(name, "skip", "no config loaded")
+    if not SYSTEMD_UNIT_DIR.is_dir():
+        return CheckResult(name, "skip", f"{SYSTEMD_UNIT_DIR} is not a directory")
+    try:
+        installed = {p.name: p for p in SYSTEMD_UNIT_DIR.glob("*.service")}
+    except OSError as exc:
+        return CheckResult(name, "skip", f"could not read {SYSTEMD_UNIT_DIR}: {exc}")
+
+    stale: list[tuple[str, bool]] = []
+    for unit, description in sorted(_stale_app_unit_candidates(config).items()):
+        path = installed.get(unit)
+        if path is None:
+            continue
+        try:
+            lines = path.read_text().splitlines()
+        except OSError, UnicodeDecodeError:
+            continue
+        if description not in lines:
+            continue
+        enabled = any(SYSTEMD_UNIT_DIR.glob(f"*.wants/{unit}"))
+        stale.append((unit, enabled))
+
+    if not stale:
+        return CheckResult(
+            name, "pass", "no app unit installed for a non-serving fraise"
+        )
+
+    listed = ", ".join(
+        f"{unit} ({'enabled' if enabled else 'disabled'})" for unit, enabled in stale
+    )
+    commands = [
+        line
+        for unit, _ in stale
+        for line in (
+            f"sudo systemctl disable --now {unit}",
+            f"sudo rm {SYSTEMD_UNIT_DIR / unit}",
+        )
+    ]
+    return CheckResult(
+        name,
+        "warn",
+        f"{len(stale)} app unit(s) installed for a fraise that serves nothing, "
+        f"left by a fraisier before #432 — an enabled one starts uvicorn on "
+        f"port 8000 at boot: {listed}",
+        fix_hint="\n".join([*commands, "sudo systemctl daemon-reload"]),
     )
 
 

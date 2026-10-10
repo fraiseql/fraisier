@@ -28,6 +28,7 @@ from fraisier.config import (
 )
 from fraisier.config.restore_source import PgBackRestSpec, parse_pgbackrest
 from fraisier.dbops._validation import validate_service_name
+from fraisier.fraise_roles import fraise_migrates, fraise_serves
 from fraisier.manifest import build_manifest
 from fraisier.naming import (
     app_service_name,
@@ -364,19 +365,18 @@ def _collect_allowed_services(
     ``ScheduledDeployer`` can enable/restart these units via the helper
     socket on each deploy (#239). This is symmetric in shape to the webhook
     fix in v0.22.2 but covers a separately-discovered gap.
+
+    The app unit is named only for a fraise that serves: any other has none
+    rendered, so naming it would allowlist a unit fraisier never wrote (#432).
     """
     services = [f"fraisier-{project_name}-webhook.service"]
     for fraise in fraises_list:
         fraise_name = fraise.get("name", "")
         if not fraise_name:
             continue
-        fraise_type = fraise.get("type")
         for env_name, raw_env_config in fraise.get("environments", {}).items():
             env_config = raw_env_config or {}
-            if fraise_type == "scheduled":
-                # Folded 06 (#240): for type:scheduled fraises the synthesised
-                # `<project>_<fraise>_<env>.service` is a phantom — no such
-                # unit exists. Only emit the real per-job entries below.
+            if fraise.get("type") == "scheduled":
                 for job in (env_config.get("jobs") or {}).values():
                     for field in ("systemd_service", "systemd_timer"):
                         unit = job.get(field)
@@ -384,7 +384,7 @@ def _collect_allowed_services(
                             continue
                         validate_service_name(unit)
                         services.append(unit)
-            else:
+            if fraise_serves(fraise, env_config):
                 base = _resolve_service_base(
                     project_name, fraise_name, env_name, env_config
                 )
@@ -514,6 +514,7 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
                                 break
             # Enrich each env_config with the precomputed service_base so
             # templates can use it directly without duplicating the resolution logic.
+            # None where the fraise does not serve: no app unit is rendered (#432).
             enriched = {}
             environments = entry.get("environments")
             env_dict: dict[str, Any] = (
@@ -521,8 +522,10 @@ def _build_context(config: FraisierConfig, server: str | None = None) -> dict[st
             )
             for env_name, env_config in env_dict.items():
                 ec = dict(env_config or {})
-                ec["service_base"] = _resolve_service_base(
-                    project_name, name, env_name, ec
+                ec["service_base"] = (
+                    _resolve_service_base(project_name, name, env_name, ec)
+                    if fraise_serves(entry, ec)
+                    else None
                 )
                 enriched[env_name] = ec
             if enriched:
@@ -1046,12 +1049,16 @@ class ScaffoldRenderer:
             self._remove_stale_deploy_units(rendered_files)
             self._remove_stale_webhook_units(rendered_files)
 
-        # Per-fraise service templates (systemd or rc.d based on service_manager)
+        # Per-fraise app units (systemd or rc.d based on service_manager), only
+        # for fraises that serve: the template falls back to uvicorn on port
+        # 8000, which a scheduled or backup fraise must never get (#432).
         service_manager = self.config._config.get("service_manager", "systemd")
         project = self.context["project_name"]
         for fraise in self.context["local_fraises"]:
             name = fraise["name"]
             for env_name, env_config in fraise.get("environments", {}).items():
+                if not fraise_serves(fraise, env_config or {}):
+                    continue
                 base = _resolve_service_base(project, name, env_name, env_config or {})
                 if service_manager == "rc":
                     svc_name = f"rc.d/{base}"
@@ -1731,7 +1738,8 @@ class ScaffoldRenderer:
         retention rule would exit 1 every night, which is the loud refusal the
         command is meant to give a mistaken config, not a schedule to put on a
         host.  "Has a rule" is :func:`fraisier.dbops.backup.has_prune_rule` — the
-        same definition the command acts on.
+        same definition the command acts on. Only for a fraise that migrates:
+        elsewhere no deploy ever writes a dump to prune (#429).
 
         Local fraises only, as the unit-installer helper is: the unit would
         otherwise be rendered for a host that never deploys the fraise.  The
@@ -1746,6 +1754,8 @@ class ScaffoldRenderer:
         for fraise in self.context["local_fraises"]:
             for env_name, env_config in fraise.get("environments", {}).items():
                 if not isinstance(env_config, dict):
+                    continue
+                if not fraise_migrates(fraise, env_config):
                     continue
                 gate = (env_config.get("database") or {}).get("pre_migrate_dump")
                 if not isinstance(gate, dict) or not gate.get("enabled", False):

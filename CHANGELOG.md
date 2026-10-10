@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Doctor judges a drift gate only for a fraise that migrates**
+  ([#429](https://github.com/fraiseql/fraisier/issues/429)). `post_migrate_check` defaults
+  to on, so `post_migrate_check_buildable`, `_alter_safe` and `_names_conform` evaluated
+  it for every fraise: scheduled and backup fraises, which never migrate, were a permanent
+  `confiture build --env cannot resolve` warning. A fraise migrates when it is an `api`
+  with a `database:` block, exactly when `APIDeployer` runs its migration step; a test
+  holds doctor and the deployer to that one definition. An `api` with a `database:` block
+  and no `post_migrate_check` block is still judged. The pre-migrate-dump prune timer and
+  `pre_migrate_dump_writable` follow the same rule: no timer for a dump no deploy writes.
+- **The scaffold renders the app unit only for a fraise that serves**
+  ([#432](https://github.com/fraiseql/fraisier/issues/432)). `core/service.j2`, which falls
+  back to uvicorn on `0.0.0.0:8000`, was rendered for every fraise, scheduled and backup
+  ones included. A fraise serves when it is an `api`, or declares what to run: a
+  `service:` block, or a legacy `exec_command`. The same rule now decides what
+  `fraisier setup` copies and enables, which units the systemctl-helper may act on, and
+  the install script's `WatchdogSec` sweep. A scheduled fraise with a flat
+  `systemd_service:` (no `jobs:`) no longer has a uvicorn unit rendered under the name
+  of the service its timer starts. A scheduled fraise with a fraise-level `exec_command`
+  now has its rendered app unit in the systemctl-helper allowlist, which it had been
+  missing.
+
+### Added
+
+- **`fraisier doctor` `stale_app_units`** names each app unit still installed for a fraise
+  that does not serve, says whether it is enabled, and prints the `systemctl disable
+  --now`, `rm` and `daemon-reload` lines that remove it. It counts a unit only if it still
+  carries the `Description=` line fraisier's app-unit template writes, so a scheduled
+  fraise's own unit of the same name is left alone. Nothing is removed automatically.
+
+### Upgrade note
+
+**Host action.** An upgrade alone does not re-render: the config watcher hashes
+`fraises.yaml` and the template directory, not fraisier's version. The
+systemctl-helper's allowlist changes in this release, so on each host run:
+
+    fraisier scaffold && sudo fraisier scaffold-install --yes
+
+**Orphaned app units.** Hosts scaffolded before this release carry an app unit for
+every scheduled, backup and etl fraise, and `fraisier setup` enabled each one. Nothing
+renders them any more, so nothing tracks them, and an enabled one starts uvicorn on port
+8000 at boot. Run `fraisier doctor --check stale_app_units` on each host: it lists them,
+says which are enabled, and prints the commands that remove them.
+
 ## [0.86.0] - 2026-10-09
 
 ### Changed

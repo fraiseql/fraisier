@@ -866,6 +866,7 @@ echo "  Checking for stale WatchdogSec directives in systemd service files"
 {% for fraise in local_fraises %}
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set svc = env_config.service_base %}
+{% if svc %}
 if _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
     SERVICE_FILE="/etc/systemd/system/{{ svc }}.service"
     if [ -f "$SERVICE_FILE" ] && grep -q "^WatchdogSec=" "$SERVICE_FILE"; then
@@ -874,6 +875,7 @@ if _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
         _run sudo systemctl daemon-reload
     fi
 fi
+{% endif %}
 {% endfor %}
 {% endfor %}
 

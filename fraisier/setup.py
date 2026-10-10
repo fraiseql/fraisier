@@ -487,7 +487,7 @@ class ServerSetup:
         output_dir = self.config.scaffold.output_dir
         project = self.config.project_name
         actions: list[SetupAction] = []
-        for fraise_name, env_name, env_config in self._iter_fraise_environments():
+        for fraise_name, env_name, env_config in self._iter_serving_environments():
             generated = f"{project}_{fraise_name}_{env_name}.service"
             svc = resolve_systemd_service(env_config) or generated
             src = f"{output_dir}/systemd/{generated}"
@@ -639,7 +639,7 @@ class ServerSetup:
         from fraisier.naming import resolve_systemd_service
 
         project = self.config.project_name
-        for fraise_name, env_name, env_config in self._iter_fraise_environments():
+        for fraise_name, env_name, env_config in self._iter_serving_environments():
             generated = f"{project}_{fraise_name}_{env_name}.service"
             svc = resolve_systemd_service(env_config) or generated
             actions.append(
@@ -754,6 +754,18 @@ class ServerSetup:
                 env_config = self.config.get_fraise_environment(fraise_name, env_name)
                 if env_config:
                     yield fraise_name, env_name, env_config
+
+    def _iter_serving_environments(
+        self,
+    ) -> Iterator[tuple[str, str, dict[str, Any]]]:
+        """Like ``_iter_fraise_environments``, for fraises with an app unit (#432)."""
+        from fraisier.fraise_roles import fraise_serves
+
+        for fraise_name, env_name, env_config in self._iter_fraise_environments():
+            fraise = self.config.get_fraise(fraise_name) or {}
+            raw_env = (fraise.get("environments") or {}).get(env_name) or {}
+            if fraise_serves(fraise, raw_env):
+                yield fraise_name, env_name, env_config
 
     def _infer_project_name(self) -> str:
         return self.config.project_name

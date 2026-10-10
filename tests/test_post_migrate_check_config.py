@@ -597,3 +597,117 @@ class TestTheAlterTrapIsVersionGated:
     def test_an_unreadable_version_still_warns(self, tmp_path: Path):
         """Unknown is not proof of safety, so the advisory warning stands."""
         assert self._run(self._dropping_cfg(tmp_path), None).status == "warn"
+
+
+class TestDoctorJudgesOnlyFraisesThatMigrate:
+    """A drift gate exists only where a deploy migrates (#429).
+
+    ``post_migrate_check`` defaults to on, so doctor used to judge a gate for
+    every fraise: scheduled and backup fraises, which never migrate, showed up
+    as permanent ``post_migrate_check_buildable`` noise next to real findings.
+    """
+
+    _TRAP = (
+        "CREATE TABLE core.tb_widget (id BIGINT PRIMARY KEY, legacy TEXT);\n"
+        "ALTER TABLE core.tb_widget DROP COLUMN legacy;\n"
+    )
+
+    def _tree(self, tmp_path: Path) -> Path:
+        """A project tree every gate check would find fault with."""
+        app = tmp_path / "app"
+        (app / "db" / "schema").mkdir(parents=True)
+        (app / "db" / "schema" / "010_tables.sql").write_text(self._TRAP)
+        (app / "confiture.yaml").write_text("name: production\n")
+        return app
+
+    def _config(self, tmp_path: Path, fraises: str) -> FraisierConfig:
+        from fraisier.config import FraisierConfig
+
+        path = tmp_path / "fraises.yaml"
+        path.write_text(
+            "name: myproj\nscaffold:\n  deploy_user: fraisier\nfraises:\n" + fraises
+        )
+        return FraisierConfig(path)
+
+    def _non_migrating(self, tmp_path: Path) -> FraisierConfig:
+        app = self._tree(tmp_path)
+        return self._config(
+            tmp_path,
+            f"""
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        app_path: {app}
+  backup:
+    type: backup
+    environments:
+      production:
+        app_path: {app}
+  api_without_db:
+    type: api
+    environments:
+      production:
+        app_path: {app}
+  etl_with_db:
+    type: etl
+    environments:
+      production:
+        app_path: {app}
+        database:
+          name: db
+""",
+        )
+
+    def _run(self, check: str, cfg: FraisierConfig) -> CheckResult:
+        from packaging.version import Version
+
+        from fraisier import doctor
+
+        with patch.object(
+            doctor, "_confiture_cli_version", return_value=Version("1.10.1")
+        ):
+            return doctor.DOCTOR_CHECKS[check].fn(cfg)
+
+    @pytest.mark.parametrize(
+        "check",
+        [
+            "post_migrate_check_buildable",
+            "post_migrate_check_alter_safe",
+            "post_migrate_check_names_conform",
+        ],
+    )
+    def test_a_fraise_that_never_migrates_has_no_gate(
+        self, tmp_path: Path, check: str
+    ) -> None:
+        result = self._run(check, self._non_migrating(tmp_path))
+        assert result.status == "skip", result.detail
+        assert "gate enabled" in result.detail, "skipped for another reason"
+
+    def test_an_api_with_a_database_and_no_gate_block_is_still_judged(
+        self, tmp_path: Path
+    ) -> None:
+        """The default stays on for the fraises it can actually fire for."""
+        app = self._tree(tmp_path)
+        cfg = self._config(
+            tmp_path,
+            f"""
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        app_path: {app}
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: {app}
+        database:
+          name: db
+          strategy: migrate
+""",
+        )
+        result = self._run("post_migrate_check_buildable", cfg)
+        assert result.status == "warn"
+        assert "my_api (confiture.yaml)" in result.detail
+        assert "nightly" not in result.detail
