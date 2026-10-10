@@ -108,7 +108,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the `Description=` line fraisier's app-unit template writes, so a scheduled
   fraise's own unit of the same name is left alone. Nothing is removed automatically.
 
+### Changed
+
+- **`fraiseql-confiture` 1.34 (`>=1.34.0,<1.35`).** confiture now reads a TVIEW's
+  `time_refresh` and `function_reads`. A mismatch on either is the existing
+  `tview_option_mismatch` warning, so no drift kind or severity changes.
+- **`fraisier doctor`'s `pg_tviews_contract` asks confiture.** It calls
+  `confiture.platform.require_supported_pg_tviews_on` on its own connection, so it
+  fails exactly where the drift gate would refuse. An unreachable database is
+  still a skip. The detail and fix hint are confiture's own.
+
 ### Upgrade note
+
+**⚠️ Upgrade pg_tviews to 0.1.0-beta.26 before this release.** confiture 1.34
+refuses an older pg_tviews with `CONFIG_014`. On such a host the post-migrate drift
+gate fails every deploy of a TVIEW project, even one whose database matches its
+DDL, after the migrations ran. Run `fraisier doctor` first: `pg_tviews_contract`
+names each database to upgrade. Then install the package and run
+`ALTER EXTENSION pg_tviews UPDATE` on each database as a superuser. A database
+without pg_tviews is unaffected.
 
 **Host action.** An upgrade alone does not re-render: the config watcher hashes
 `fraises.yaml` and the template directory, not fraisier's version. This release
