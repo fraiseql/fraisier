@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from fraisier.cli.sync import (
+    _SOURCE_REVERT,
     _propagate_source_reverts,
     _target_blob_is_source_derived,
 )
@@ -158,7 +159,9 @@ class TestTheSilentResurrection:
     def test_reverted_file_is_reported_as_restored(self, repo):
         _premerge(repo)
 
-        assert _propagate_source_reverts("dev", "staging") == ["shared.py"]
+        assert _propagate_source_reverts("dev", "staging") == {
+            "shared.py": _SOURCE_REVERT
+        }
 
     def test_worktree_holds_the_reverted_content(self, repo):
         _premerge(repo)
@@ -230,7 +233,9 @@ class TestConflictsAreLeftToTheTierLoop:
         _diverge_partial_on_dev(repo)
         _premerge(repo)
 
-        assert _propagate_source_reverts("dev", "staging") == ["shared.py"]
+        assert _propagate_source_reverts("dev", "staging") == {
+            "shared.py": _SOURCE_REVERT
+        }
 
 
 class TestNothingToDo:
@@ -246,4 +251,4 @@ class TestNothingToDo:
         _git("fetch", "-q", "origin", cwd=repo)
         _premerge(repo)
 
-        assert _propagate_source_reverts("dev", "staging") == []
+        assert _propagate_source_reverts("dev", "staging") == {}

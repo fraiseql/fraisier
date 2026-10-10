@@ -58,6 +58,16 @@ def _no_source_reverts() -> MagicMock:
     return _mk(stdout="")
 
 
+def _no_residuals() -> MagicMock:
+    """Mock the post-commit `git diff --name-status` residual report (#430).
+
+    Sits right after `_merge_finalize_tail()`: the report runs once per sync,
+    after the pre-merge commit and its invariant check, and lists nothing when
+    the sync branch matches source outside fraisier-owned files.
+    """
+    return _mk(stdout="")
+
+
 def _merge_finalize_tail() -> list[MagicMock]:
     """Mock the post-commit pre-push invariant check (#233 Layer 2, #268).
 
@@ -582,6 +592,7 @@ class TestSyncHappyPath:
             _in_merge(),  # rev-parse MERGE_HEAD (in merge)
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),  # pre-push merge-commit invariant check
+            _no_residuals(),  # residual report
             _mk(returncode=2),  # ls-remote: orphan branch absent
             _mk(),  # git push
             _mk(returncode=1),  # gh pr view (no existing PR)
@@ -646,6 +657,7 @@ class TestSyncHappyPath:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -855,6 +867,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -890,6 +903,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -938,6 +952,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set → commit unconditionally
                 _mk(),  # git commit (merge commit, even with no tree diff)
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -988,6 +1003,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -1095,6 +1111,7 @@ class TestSyncConflicts:
             _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit
             *_merge_finalize_tail(),
+            _no_residuals(),  # residual report
             _mk(returncode=2),  # ls-remote: orphan branch absent
             _mk(),  # git push
             _mk(returncode=1),  # gh pr view (no existing PR)
@@ -1177,6 +1194,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -1219,6 +1237,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -1259,6 +1278,7 @@ class TestSyncConflicts:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -1317,6 +1337,7 @@ class TestSyncConfirmation:
                 _in_merge(),  # MERGE_HEAD set
                 _mk(),  # git commit
                 *_merge_finalize_tail(),
+                _no_residuals(),  # residual report
                 _mk(returncode=2),  # ls-remote: orphan branch absent
                 _mk(),  # git push
                 _mk(returncode=1),  # gh pr view (no existing PR)
@@ -1473,6 +1494,7 @@ class TestSyncBranchForceCreate:
             _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),
+            _no_residuals(),  # residual report
             _mk(returncode=2),  # ls-remote: orphan branch absent
             _mk(),  # git push
             _mk(returncode=1),  # gh pr view (no existing PR)
@@ -1550,6 +1572,7 @@ class TestSyncExistingPR:
             _in_merge(),  # MERGE_HEAD set
             _mk(),  # git commit pre-merge
             *_merge_finalize_tail(),
+            _no_residuals(),  # residual report
             _mk(returncode=2),  # ls-remote: orphan branch absent
             _mk(),  # git push
         ]
@@ -1909,12 +1932,16 @@ class TestSyncPropagatesSourceReverts:
             # ...then the revert pre-pass reports the modified path. Both share
             # the same argv prefix, so these are consumed FIFO in call order.
             .queue("git", "diff", "--name-only", "-z", stdout="app/shared.py\0")
-            # target blob, then the merged index blob — equal, so the merge
-            # took target's side wholesale.
+            # target blob, source blob, then the merged index blob — merged
+            # equals target, so the merge took target's side wholesale.
             .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "rev-parse", stdout="blob2\n")
             .queue("git", "rev-parse", stdout="blob1\n")
             # gate 3: target holds source-derived content
             .queue("git", "rev-parse", stdout="blob1\n")
+            .queue("git", "rev-list", stdout="sha1\n")
+            .queue("git", "rev-parse", stdout="blob1\n")
+            # target's own history of the path: one blob, never restored
             .queue("git", "rev-list", stdout="sha1\n")
             .queue("git", "rev-parse", stdout="blob1\n")
             .queue("git", "checkout", "origin/dev")  # the restore
@@ -1942,6 +1969,7 @@ class TestSyncPropagatesSourceReverts:
             .queue("git", "diff", "--name-only", "-z", stdout="")
             .queue("git", "diff", "--name-only", "-z", stdout="app/hotfix.py\0")
             .queue("git", "rev-parse", stdout="blobT\n")  # target blob
+            .queue("git", "rev-parse", stdout="blobS\n")  # source blob
             .queue("git", "rev-parse", stdout="blobT\n")  # merged == target
             # gate 3 fails: source's history of the path never held blobT
             .queue("git", "rev-parse", stdout="blobT\n")
@@ -2538,6 +2566,7 @@ def _make_promotion_repos(
     *,
     target_diverged: bool = True,
     target_extra_file: bool = False,
+    target_hotfix: bool = False,
 ):
     """Bare origin + work clone shaped like #268.
 
@@ -2547,7 +2576,11 @@ def _make_promotion_repos(
     ``.secrets.baseline`` (tier 1, fraisier-owned) — so the pre-merge
     conflicts ONLY in auto-resolvable files, the reported state. With
     ``target_extra_file`` the target also adds a non-conflicting file, so
-    the resolved tree differs from the source tree.
+    the resolved tree differs from the source tree. With ``target_hotfix``
+    the target also edits ``hotfix.py``, a file source never touches after
+    the fork, so the merge keeps target's own content; deletes ``gone.py``,
+    which source still has; and adds a fraisier-owned
+    ``scripts/generated/staging.sh`` that source never had.
     """
     origin = tmp_path / "origin.git"
     subprocess.run(
@@ -2570,6 +2603,8 @@ def _make_promotion_repos(
     (work / ".secrets.baseline").write_text("base\n")
     (work / "app.py").write_text("print('v1')\n")
     (work / "version.json").write_text('{"version": "1.0.0"}\n')
+    (work / "hotfix.py").write_text("x = 1\n")
+    (work / "gone.py").write_text("y = 1\n")
     _git(work, "add", "-A")
     _git(work, "commit", "-q", "-m", "base")
 
@@ -2580,6 +2615,11 @@ def _make_promotion_repos(
         (work / ".secrets.baseline").write_text("staging-baseline\n")
         if target_extra_file:
             (work / "NOTES.md").write_text("kept from staging\n")
+        if target_hotfix:
+            (work / "hotfix.py").write_text("x = 99  # staging hotfix\n")
+            (work / "gone.py").unlink()
+            (work / "scripts" / "generated").mkdir(parents=True)
+            (work / "scripts" / "generated" / "staging.sh").write_text("true\n")
         _git(work, "add", "-A")
         _git(work, "commit", "-q", "-m", "staging own commit")
         _git(work, "checkout", "-q", "main")
@@ -2648,6 +2688,33 @@ class TestSync268EndToEnd:
         assert len(parents.stdout.split()) == 2
         show = _git(work, "show", f"{self.SYNC_BRANCH}:NOTES.md")
         assert "kept from staging" in show.stdout
+
+    def test_residual_report_lists_what_still_differs_from_source(self, tmp_path):
+        """#430: after the pre-merge, every file that is not source's version is
+        named, split by why. Warn only: the exit code and PR flow are unchanged.
+        Fraisier-owned files never appear, since they are always taken from
+        source."""
+        work = _make_promotion_repos(
+            tmp_path, target_diverged=True, target_extra_file=True, target_hotfix=True
+        )
+        result, gh = self._invoke(tmp_path, work, "--prefer-source")
+        assert result.exit_code == 0, result.output
+        assert any(c[:3] == ["gh", "pr", "create"] for c in gh.gh_calls)
+
+        out = result.output
+        assert "3 file(s) still differ from dev" in out
+        report = out[out.index("still differ from dev") :]
+        assert "  only on staging:\n    NOTES.md\n" in report
+        assert "  staging's own changes:\n    hotfix.py\n" in report
+        assert "  deleted on staging:\n    gone.py\n" in report
+        for owned in ("scripts/generated", ".secrets.baseline", "version.json"):
+            assert owned not in report
+
+    def test_no_residual_report_when_the_result_is_source(self, tmp_path):
+        work = _make_promotion_repos(tmp_path, target_diverged=True)
+        result, _ = self._invoke(tmp_path, work, "--prefer-source")
+        assert result.exit_code == 0, result.output
+        assert "still differ from" not in result.output
 
     def test_target_strictly_behind_source_is_pushable_without_merge_commit(
         self, tmp_path
