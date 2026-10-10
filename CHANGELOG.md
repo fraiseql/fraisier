@@ -19,6 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uv`) unless it is already set. CPython disables the attach for any value, empty
   included, so it is lifted with `UnsetEnvironment=`, not with an empty value; see
   [host hardening](docs/security.md#host-hardening).
+- **Doctor reports root commands that the deploy user can change**
+  ([#433](https://github.com/fraiseql/fraisier/issues/433), detection only; the
+  fix is still to come). The new `root_unit_exec_trust` check finds every command
+  that runs as root and judges what it executes: the executable through its
+  symlinks, its `#!` interpreter, every file of its venv, the base Python that the
+  venv's `pyvenv.cfg` names, the scaffold-install-helper's `install.sh`, and every
+  directory above each. Each must be root-owned and writable only by root. It
+  reads the effective unit from `systemctl show`, so a drop-in that clears
+  `User=` or adds a `+` line counts. Where systemd cannot answer, it reads the
+  unit and its drop-ins under `/etc`, `/run` and `/usr/lib`. It also counts `+`
+  and `!` lines in a unit with `User=`, and `retain.user: root` or
+  `service.user: root`. ⚠️ **It warns on every host with the root helpers
+  installed**, because they run from the deploy user's uv tool dir, so
+  `fraisier doctor` can exit 2 where it exited 0. Until #433's fix ships, treat the deploy user as
+  root-equivalent; see
+  [root helpers](docs/security.md#root-helpers-the-deploy-user-is-root-equivalent-today).
 
 ### Fixed
 

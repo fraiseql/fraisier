@@ -207,6 +207,35 @@ Processes the unit starts (a `confiture` or `uv` subprocess) keep the opt-out,
 because fraisier sets it again for them. Until the drop-in is reverted,
 `fraisier doctor` names it.
 
+## Root helpers: the deploy user is root-equivalent today
+
+**This is a known gap, tracked in
+[#433](https://github.com/fraiseql/fraisier/issues/433).** The root helpers
+(`systemctl-helper`, `scaffold-install-helper`, `unit-installer` and
+`pgbackrest-helper`) run as root from `/home/<deploy_user>/.local/bin`, which is
+the deploy user's uv tool dir. Whoever can write a module those helpers import,
+or the `install.sh` that the scaffold-install-helper runs from
+`/var/lib/fraisier/<project>/scaffold`, runs code as root the next time the
+socket starts the helper. That includes the deploy user and anything running as
+it, the public webhook included. It also includes anyone who can land a commit
+on an auto-deployed branch, because each deploy installs that commit's
+`fraises.yaml` and re-renders the units root installs.
+
+The `SO_PEERCRED` check and the allowlists limit which **requests** a helper
+serves. They cannot protect a helper whose own code the caller can change.
+
+Until #433's fix ships, treat the deploy user as root-equivalent on every host
+fraisier manages.
+
+`fraisier doctor` (`root_unit_exec_trust`) reports every command that runs as
+root from a path someone other than root can change. It reads the effective
+unit (`systemctl show`, so drop-ins count), follows symlinks, a script's `#!`
+interpreter, the venv and the base Python its `pyvenv.cfg` names, and every
+directory above them. It also counts a `+` or `!` command in a unit that sets
+`User=`, and a `retain.user: root` or `service.user: root` unit. Today it
+**warns**, and on every host it names the root helpers. It becomes a failure
+once the fix ships.
+
 ## What Fraisier Does NOT Protect Against
 
 - **Host compromise**: If an attacker has shell access to the deployment server, fraisier cannot protect against them.

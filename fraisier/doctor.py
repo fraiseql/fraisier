@@ -25,6 +25,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2249,6 +2250,473 @@ def _check_remote_debug_disabled(config: FraisierConfig | None) -> CheckResult:
             "a unit installed before #436: `fraisier scaffold && sudo fraisier "
             "scaffold-install --yes`. A drop-in that lifted it for debugging: "
             "`sudo systemctl revert <unit>`, then restart it"
+        ),
+    )
+
+
+#: What ``root_unit_exec_trust`` reports while #433 has no fix shipped: the root
+#: helpers still run from the deploy user's uv tool dir on every host. The
+#: release that moves them to root-owned code flips this to ``"fail"``.
+ROOT_EXEC_TRUST_STATUS: Status = "warn"
+
+#: Where the file reader looks for drop-ins, lowest priority first: a drop-in in
+#: a later root masks a same-named one in an earlier root. Only the fallback
+#: reads these; ``systemctl show`` has already merged every drop-in it knows.
+SYSTEMD_DROPIN_ROOTS: tuple[Path, ...] = (
+    Path("/usr/lib/systemd/system"),
+    Path("/usr/local/lib/systemd/system"),
+    Path("/run/systemd/system"),
+    SYSTEMD_UNIT_DIR,
+)
+
+#: Every directive that starts a process, in the order systemd runs them.
+_EXEC_KEYS = (
+    "ExecCondition",
+    "ExecStartPre",
+    "ExecStart",
+    "ExecStartPost",
+    "ExecReload",
+    "ExecStop",
+    "ExecStopPost",
+)
+
+#: ``*Ex`` carries the prefix flags; the plain property is asked for only to
+#: tell a systemd too old to have ``*Ex`` (< 243) from a unit with no command.
+_SHOW_PROPERTIES = (
+    "LoadState",
+    "NeedDaemonReload",
+    "User",
+    "DynamicUser",
+    *_EXEC_KEYS,
+    *(f"{key}Ex" for key in _EXEC_KEYS),
+)
+
+#: ``systemctl show`` flag names: ``privileged`` is ``+``, ``no-setuid`` is
+#: ``!``. ``!!`` (``ambient``) is ignored wherever ambient capabilities exist,
+#: and systemd 260 says so when it loads one, so it runs as ``User=``.
+_PRIVILEGED_FLAGS = frozenset({"privileged", "no-setuid"})
+
+#: The search path systemd uses for an ``Exec*=`` command that is not absolute.
+_SYSTEMD_EXEC_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+
+_EXEC_VALUE_RE = re.compile(r"([@\-:+!|]*)(.*)", re.DOTALL)
+
+_SYMLINK_DEPTH = 40
+
+_SCRIPT_RUNNING_HELPER = "fraisier-scaffold-install-helper"
+
+
+@dataclass(frozen=True)
+class _ExecCommand:
+    key: str
+    #: ``argv[0]`` is the executable, even under ``@`` (which renames argv[0]).
+    argv: tuple[str, ...]
+    #: ``+`` or ``!``: ``User=`` does not apply, the command runs as root.
+    privileged: bool
+
+
+@dataclass(frozen=True)
+class _EffectiveService:
+    user: str
+    dynamic_user: bool
+    commands: tuple[_ExecCommand, ...]
+
+    def root_commands(self) -> list[_ExecCommand]:
+        """The commands that run as root."""
+        as_root = not self.dynamic_user and self.user in ("", "root", "0")
+        return [c for c in self.commands if as_root or c.privileged]
+
+
+def _systemd_bool(value: str) -> bool:
+    return value.strip().lower() in ("1", "yes", "y", "true", "t", "on")
+
+
+def _parse_show_command(key: str, value: str) -> _ExecCommand | None:
+    """One ``{ path=… ; argv[]=… ; flags=… ; … }`` record of a ``*Ex`` property."""
+    body = value.strip().removeprefix("{").removesuffix("}")
+    fields = {}
+    for part in body.split(" ; "):
+        field, _, content = part.strip().partition("=")
+        fields[field] = content
+    path = fields.get("path", "")
+    if not path:
+        return None
+    args = fields.get("argv[]", "").split()[1:]
+    flags = set(fields.get("flags", "").split())
+    return _ExecCommand(key, (path, *args), bool(flags & _PRIVILEGED_FLAGS))
+
+
+def _parse_systemctl_show(text: str) -> _EffectiveService | None:
+    """The effective service in one unit's ``systemctl show`` output.
+
+    ``None`` when the output cannot answer, so the files are read instead: a
+    unit systemd has not loaded, one changed on disk since the last
+    daemon-reload (the next start runs the file), or a systemd without ``*Ex``
+    properties, where a ``+`` command is indistinguishable from a plain one.
+    """
+    props: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            props.setdefault(key, []).append(value)
+
+    def last(key: str) -> str:
+        return (props.get(key) or [""])[-1]
+
+    if last("LoadState") != "loaded" or last("NeedDaemonReload") == "yes":
+        return None
+    commands: list[_ExecCommand] = []
+    for key in _EXEC_KEYS:
+        if key in props and f"{key}Ex" not in props:
+            return None
+        for value in props.get(f"{key}Ex", []):
+            command = _parse_show_command(key, value)
+            if command is not None:
+                commands.append(command)
+    return _EffectiveService(
+        user=last("User"),
+        dynamic_user=_systemd_bool(last("DynamicUser")),
+        commands=tuple(commands),
+    )
+
+
+def _split_show_output(text: str, names: list[str]) -> dict[str, str]:
+    """``systemctl show a b`` prints one blank-line-separated block per unit."""
+    blocks = [b.strip("\n") + "\n" for b in text.split("\n\n") if b.strip()]
+    if len(blocks) != len(names):
+        return {}
+    return dict(zip(names, blocks, strict=True))
+
+
+def _systemctl_show(names: list[str]) -> dict[str, str]:
+    """Each unit's ``systemctl show`` block; empty when systemd cannot be asked."""
+    if not names:
+        return {}
+    try:
+        proc = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                f"--property={','.join(_SHOW_PROPERTIES)}",
+                "--",
+                *names,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except OSError, subprocess.SubprocessError:
+        return {}
+    if proc.returncode != 0:
+        return {}
+    return _split_show_output(proc.stdout, names)
+
+
+def _dropin_dir_names(unit_name: str) -> list[str]:
+    """Drop-in dirs that apply to *unit_name*, least specific first.
+
+    ``service.d``, then each dash prefix (``a-.service.d`` for ``a-b.service``),
+    then the template (``a@.service.d``), then the unit's own.
+    """
+    stem, _, suffix = unit_name.rpartition(".")
+    prefix, at, instance = stem.partition("@")
+    parts = prefix.split("-")
+    names = [f"{suffix}.d"]
+    names += [f"{'-'.join(parts[:i])}-.{suffix}.d" for i in range(1, len(parts))]
+    if at and instance:
+        names.append(f"{prefix}@.{suffix}.d")
+    names.append(f"{unit_name}.d")
+    return names
+
+
+def _parse_exec_value(key: str, value: str, start_only: bool) -> _ExecCommand | None:
+    match = _EXEC_VALUE_RE.match(value.strip())
+    if match is None:
+        return None
+    prefix, rest = match.group(1), match.group(2)
+    tokens = shlex.split(rest)
+    if "@" in prefix:
+        tokens = tokens[:1] + tokens[2:]
+    if not tokens:
+        return None
+    privileged = start_only or "+" in prefix or ("!" in prefix and "!!" not in prefix)
+    return _ExecCommand(key, tuple(tokens), privileged)
+
+
+def _unit_file_service(unit: Path) -> _EffectiveService:
+    """The effective service from the unit file and its drop-ins.
+
+    The fallback for ``systemctl show``. Reads every drop-in root in
+    ``SYSTEMD_DROPIN_ROOTS`` and every drop-in dir name that applies, keyed by
+    file name so a higher root masks a lower one, then applied in lexical
+    order. An empty ``Exec*=`` clears the list; ``User=`` is last-wins, and an
+    empty one means root.
+    """
+    dropins: dict[str, Path] = {}
+    for root in SYSTEMD_DROPIN_ROOTS:
+        for dirname in _dropin_dir_names(unit.name):
+            for conf in sorted((root / dirname).glob("*.conf")):
+                dropins[conf.name] = conf
+    user = ""
+    dynamic_user = start_only = False
+    values: dict[str, list[str]] = {key: [] for key in _EXEC_KEYS}
+    for path in [unit, *(dropins[n] for n in sorted(dropins))]:
+        for key, value in _service_directives(path):
+            if key == "User":
+                user = value
+            elif key == "DynamicUser":
+                dynamic_user = _systemd_bool(value)
+            elif key == "PermissionsStartOnly":
+                start_only = _systemd_bool(value)
+            elif key in values:
+                values[key] = [*values[key], value] if value else []
+    commands = [
+        _parse_exec_value(key, value, start_only and key != "ExecStart")
+        for key in _EXEC_KEYS
+        for value in values[key]
+    ]
+    return _EffectiveService(
+        user=user,
+        dynamic_user=dynamic_user,
+        commands=tuple(c for c in commands if c is not None),
+    )
+
+
+def _path_stat(path: str) -> tuple[int, int, int]:
+    """``(uid, gid, mode)`` of *path*, not following a final symlink.
+
+    The seam the tests fake: the suite does not run as root.
+    """
+    st = os.lstat(path)
+    return st.st_uid, st.st_gid, st.st_mode
+
+
+def _account_name(uid: int) -> str:
+    import pwd
+
+    try:
+        return f"{pwd.getpwuid(uid).pw_name}, uid {uid}"
+    except KeyError:
+        return f"uid {uid}"
+
+
+def _group_name(gid: int) -> str:
+    import grp
+
+    try:
+        return f"{grp.getgrgid(gid).gr_name}, gid {gid}"
+    except KeyError:
+        return f"gid {gid}"
+
+
+def _entry_flaw(path: str) -> str | None:
+    """Why someone other than root can replace or change *path*, or None.
+
+    A symlink's own owner and mode do not matter: only whoever can write the
+    directory holding it can re-point it. A sticky root-owned directory (like
+    ``/tmp``) does not let anyone replace an entry they do not own, and a
+    directory group-writable by group 0 is writable only by root's group.
+    """
+    uid, gid, mode = _path_stat(path)
+    if stat.S_ISLNK(mode):
+        return None
+    if uid != 0:
+        return f"{path} (owned by {_account_name(uid)})"
+    if stat.S_ISDIR(mode) and mode & stat.S_ISVTX:
+        return None
+    if mode & stat.S_IWOTH:
+        return f"{path} (world-writable)"
+    if mode & stat.S_IWGRP and gid != 0:
+        return f"{path} (group-writable, group {_group_name(gid)})"
+    return None
+
+
+def _chain_flaw(path: str, depth: int = 0) -> str | None:
+    """The first flaw on *path* or any directory above it, following symlinks.
+
+    A symlink is judged where it sits (its directory decides who can re-point
+    it) and then through its target. A component that does not exist ends the
+    walk: everything above it was judged, and that is who could create it.
+    """
+    if depth > _SYMLINK_DEPTH:
+        return f"{path} (symlink loop)"
+    target = Path(path)
+    if not target.is_absolute():
+        return None
+    current = Path("/")
+    components = target.parts[1:]
+    for index in range(len(components) + 1):
+        if index:
+            current = current / components[index - 1]
+        try:
+            flaw = _entry_flaw(str(current))
+            is_link = current.is_symlink()
+        except OSError:
+            return None
+        if flaw is not None:
+            return flaw
+        if is_link:
+            link = current.readlink()
+            resolved = link if link.is_absolute() else current.parent / link
+            rest = components[index:]
+            return _chain_flaw(os.path.normpath(resolved.joinpath(*rest)), depth + 1)
+    return None
+
+
+def _tree_flaw(root: Path) -> str | None:
+    """The first entry under *root* someone other than root can change."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for entry in [*dirnames, *sorted(filenames)]:
+            try:
+                flaw = _entry_flaw(str(Path(dirpath) / entry))
+            except OSError:
+                continue
+            if flaw is not None:
+                return flaw
+    return None
+
+
+def _shebang_interpreter(path: Path) -> str | None:
+    """The interpreter a ``#!`` script names, through ``env`` if it uses it."""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(256)
+    except OSError:
+        return None
+    if not head.startswith(b"#!"):
+        return None
+    tokens = head[2:].split(b"\n", 1)[0].decode(errors="replace").split()
+    if not tokens:
+        return None
+    if Path(tokens[0]).name == "env":
+        named = [t for t in tokens[1:] if not t.startswith("-")]
+        return shutil.which(named[0]) if named else tokens[0]
+    return tokens[0]
+
+
+def _venv_root(binary: Path) -> Path | None:
+    venv = binary.parent.parent
+    if binary.parent.name == "bin" and (venv / "pyvenv.cfg").is_file():
+        return venv
+    return None
+
+
+def _pyvenv_home(venv: Path) -> str | None:
+    try:
+        text = (venv / "pyvenv.cfg").read_text()
+    except OSError, UnicodeDecodeError:
+        return None
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "home":
+            return value.strip()
+    return None
+
+
+def _command_flaw(command: _ExecCommand) -> str | None:
+    """The first path root would execute or import that someone else can change.
+
+    Judged, in order: the executable (through its links), its ``#!``
+    interpreter, the scaffold-install-helper's script, then every file of the
+    venv either belongs to, and the base Python its ``pyvenv.cfg`` names.
+    """
+    executable = command.argv[0]
+    if not executable.startswith("/"):
+        found = shutil.which(executable, path=_SYSTEMD_EXEC_PATH)
+        if found is None:
+            return None
+        executable = found
+    resolved = Path(executable).resolve()
+    interpreter = _shebang_interpreter(resolved)
+    chains = [executable]
+    if interpreter is not None:
+        chains.append(interpreter)
+    if Path(executable).name == _SCRIPT_RUNNING_HELPER and len(command.argv) > 1:
+        chains.append(command.argv[-1])
+    for path in chains:
+        flaw = _chain_flaw(path)
+        if flaw is not None:
+            return flaw
+    candidates = [resolved, *([Path(interpreter)] if interpreter else [])]
+    for venv in dict.fromkeys(v for v in map(_venv_root, candidates) if v):
+        flaw = _tree_flaw(venv)
+        home = _pyvenv_home(venv)
+        if flaw is None and home is not None:
+            flaw = _chain_flaw(home)
+        if flaw is not None:
+            return flaw
+    return None
+
+
+@register_check("root_unit_exec_trust")
+def _check_root_unit_exec_trust(_config: FraisierConfig | None) -> CheckResult:
+    """No command runs as root from code someone else can change (#433).
+
+    A unit with no ``User=``, ``User=root`` or ``User=0`` runs every command as
+    root, and a ``+`` or ``!`` command runs as root whatever ``User=`` says.
+    For each, the executable, its ``#!`` interpreter, the venv either lives in
+    (every file), the base Python that venv's ``pyvenv.cfg`` names, and every
+    directory above them must be root-owned and writable only by root. The
+    scaffold-install-helper's script argument is judged the same way, because
+    the helper runs it.
+
+    It reads the **effective** unit, from ``systemctl show``, which has merged
+    every drop-in (one can clear ``User=`` or add a ``+`` line). Where systemd
+    cannot answer, it reads the files: the unit and its drop-ins under
+    ``SYSTEMD_DROPIN_ROOTS``.
+
+    Every host running fraisier's root helpers today fails it, because they
+    run from the deploy user's uv tool dir. It reports
+    ``ROOT_EXEC_TRUST_STATUS``: ``warn`` until #433's fix ships.
+    """
+    name = "root_unit_exec_trust"
+    if not SYSTEMD_UNIT_DIR.is_dir():
+        return CheckResult(name, "skip", f"{SYSTEMD_UNIT_DIR} is not a directory")
+    try:
+        unit_files = sorted(SYSTEMD_UNIT_DIR.glob("*.service"))
+    except OSError as exc:
+        return CheckResult(name, "skip", f"could not read {SYSTEMD_UNIT_DIR}: {exc}")
+
+    # A template (``a@.service``) is not a name systemctl show accepts.
+    live = _systemctl_show([u.name for u in unit_files if "@." not in u.name])
+    judged = 0
+    flawed: list[str] = []
+    for unit in unit_files:
+        service = _parse_systemctl_show(live[unit.name]) if unit.name in live else None
+        if service is None:
+            try:
+                service = _unit_file_service(unit)
+            except OSError, UnicodeDecodeError, ValueError:
+                continue
+        for command in service.root_commands():
+            judged += 1
+            flaw = _command_flaw(command)
+            if flaw is not None:
+                flawed.append(f"{unit.name} {command.key}={command.argv[0]}: {flaw}")
+                break
+
+    if not judged:
+        return CheckResult(name, "skip", "no installed unit runs a command as root")
+    if not flawed:
+        return CheckResult(
+            name,
+            "pass",
+            f"{judged} command(s) run as root, all from root-owned paths",
+        )
+    return CheckResult(
+        name,
+        ROOT_EXEC_TRUST_STATUS,
+        f"{len(flawed)} unit(s) run code as root that another user can change: "
+        + "; ".join(flawed),
+        fix_hint=(
+            "fraisier's root helpers run from the deploy user's uv tool dir, so "
+            "the deploy user can become root; the fix is tracked in #433, and "
+            "until it ships treat the deploy user as root-equivalent. For any "
+            "other unit listed: make the path and every directory above it "
+            "root-owned and not group- or world-writable, or give the unit a "
+            "non-root `User=`"
         ),
     )
 
