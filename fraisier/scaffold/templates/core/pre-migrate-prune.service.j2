@@ -6,6 +6,7 @@ Documentation=https://fraisier.readthedocs.io/en/latest/deployment-guide.html
 Type=oneshot
 User={{ scaffold.deploy_user }}
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 {# The unit carries a selector, not a policy (#420, as #339 decision 8).
    retention_hours, keep_last and the keep_minimum=1 floor stay in fraises.yaml
    and in the one helper the dump gate itself calls, so a policy change

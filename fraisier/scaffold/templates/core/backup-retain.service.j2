@@ -6,6 +6,7 @@ Documentation=https://fraisier.readthedocs.io/en/latest/deployment-guide.html
 Type=oneshot
 User={{ retain.user }}
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 {# The unit carries a selector, not a policy (#339 decision 8). Directory,
    glob, retention window and floor stay in fraises.yaml: the injection
    surface reaching this file is two validated identifiers, and a policy

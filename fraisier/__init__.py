@@ -27,6 +27,10 @@ import sys
 
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+# Children (confiture, uv) never accept a PEP 768 remote attach (#436). It
+# cannot reach this process, whose interpreter read its env at startup; the
+# units set it for that. setdefault keeps an operator's explicit value.
+os.environ.setdefault("PYTHON_DISABLE_REMOTE_DEBUG", "1")
 
 from importlib.metadata import version  # noqa: E402
 

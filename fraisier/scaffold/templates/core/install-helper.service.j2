@@ -13,6 +13,7 @@ Group={{ install_user }}
 ExecStart=/home/{{ scaffold.deploy_user }}/.local/bin/fraisier-install-helper --deploy-user {{ scaffold.deploy_user }} {{ install_command | join(' ') }}
 
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHON_DISABLE_REMOTE_DEBUG=1
 # Relocate every write-heavy tool dir under app_path (already writable via
 # ReadWritePaths) so ANY install.command — not just `uv sync` — works under
 # ProtectSystem=strict (#280). Covers uv's wheel cache AND its managed-Python

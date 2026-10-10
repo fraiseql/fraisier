@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **No PEP 768 remote attach into a fraisier process**
+  ([#436](https://github.com/fraiseql/fraisier/issues/436)). Python 3.14 lets anything
+  allowed to ptrace a process inject code into it while it runs. Every unit fraisier
+  renders now sets `Environment=PYTHON_DISABLE_REMOTE_DEBUG=1`: the webhook, deploy and
+  timer units, every root helper, and the app unit, where it comes before
+  `service.environment` so a value there overrides it. The FreeBSD rc.d script exports
+  it too. Importing fraisier sets it for the processes fraisier starts (`confiture`,
+  `uv`) unless it is already set. CPython disables the attach for any value, empty
+  included, so it is lifted with `UnsetEnvironment=`, not with an empty value; see
+  [host hardening](docs/security.md#host-hardening).
+
 ### Fixed
 
 - **Doctor judges a drift gate only for a fraise that migrates**
@@ -32,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`fraisier doctor` `remote_debug_disabled`** warns about any installed unit that runs a
+  fraisier binary, or a serving fraise's app unit, whose venv is on Python 3.14 and which
+  would still accept a remote attach. It reads the effective environment: the unit, its
+  `.d/*.conf` drop-ins in order, `EnvironmentFile=` and `UnsetEnvironment=`. It names the
+  drop-in that lifted the opt-out. Below 3.14 it skips.
 - **`fraisier doctor` `stale_app_units`** names each app unit still installed for a fraise
   that does not serve, says whether it is enabled, and prints the `systemctl disable
   --now`, `rm` and `daemon-reload` lines that remove it. It counts a unit only if it still
@@ -41,10 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade note
 
 **Host action.** An upgrade alone does not re-render: the config watcher hashes
-`fraises.yaml` and the template directory, not fraisier's version. The
-systemctl-helper's allowlist changes in this release, so on each host run:
+`fraises.yaml` and the template directory, not fraisier's version. This release
+changes the systemctl-helper's allowlist and adds a line to every unit, root
+helpers included, so on each host run:
 
     fraisier scaffold && sudo fraisier scaffold-install --yes
+
+Until then, `fraisier doctor` warns `remote_debug_disabled` for every fraisier unit
+on that host. That is accurate: they still accept a remote attach.
 
 **Orphaned app units.** Hosts scaffolded before this release carry an app unit for
 every scheduled, backup and etl fraise, and `fraisier setup` enabled each one. Nothing

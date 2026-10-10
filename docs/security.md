@@ -158,6 +158,55 @@ database:
 
 This avoids granting the deploy user OS-level sudo access to the postgres account.
 
+## Host hardening
+
+### No remote attach into a running interpreter (PEP 768)
+
+Python 3.14 lets a debugger attach to a **running** interpreter and execute code
+in it (`python -m pdb -p <pid>`, `sys.remote_exec`). The OS still gates it like
+ptrace (same user or `CAP_SYS_PTRACE`, subject to Yama's `ptrace_scope`), but
+anything already able to ptrace the webhook or a `confiture migrate up` could
+inject Python into a process that holds database credentials.
+
+fraisier opts out everywhere it starts Python:
+
+- every unit it renders, root helpers and the app unit included, sets
+  `Environment=PYTHON_DISABLE_REMOTE_DEBUG=1`. In the app unit it comes before
+  `service.environment`, so a value there overrides it;
+- importing fraisier sets it for the processes fraisier starts (`confiture`,
+  `uv`) when it is not already set, which covers a `fraisier` run from a shell;
+- `fraisier doctor` (`remote_debug_disabled`) warns about any fraisier unit on
+  3.14 that would still accept an attach, drop-ins included.
+
+The opt-out removes only this channel. ptrace itself, and tools that read a
+process's memory through it (`py-spy dump`), are unaffected.
+
+CPython disables the attach for **any** value of the variable, `0` and the empty
+string included (measured on 3.14.5). Only an *unset* variable allows it, so
+`Environment=PYTHON_DISABLE_REMOTE_DEBUG=` does not lift it.
+
+### Lifting it to debug a hung deploy
+
+The interpreter reads the variable when it starts, so lift it **before** the run
+you want to attach to; a process that is already hung cannot be opened up. For a
+deploy (its unit is `fraisier-<fraise>-<env>@.service`; `confiture migrate up`
+runs inside it):
+
+```bash
+sudo systemctl edit fraisier-<fraise>-<env>@.service
+# add:
+#   [Service]
+#   UnsetEnvironment=PYTHON_DISABLE_REMOTE_DEBUG
+# reproduce, then attach to the process:
+sudo python3.14 -m pdb -p <pid>
+# when done, remove the drop-in:
+sudo systemctl revert fraisier-<fraise>-<env>@.service
+```
+
+Processes the unit starts (a `confiture` or `uv` subprocess) keep the opt-out,
+because fraisier sets it again for them. Until the drop-in is reverted,
+`fraisier doctor` names it.
+
 ## What Fraisier Does NOT Protect Against
 
 - **Host compromise**: If an attacker has shell access to the deployment server, fraisier cannot protect against them.

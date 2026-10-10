@@ -2099,6 +2099,160 @@ def _check_unit_interpreter(_config: FraisierConfig | None) -> CheckResult:
     )
 
 
+_REMOTE_DEBUG_VAR = "PYTHON_DISABLE_REMOTE_DEBUG"
+
+
+def _service_directives(path: Path) -> list[tuple[str, str]]:
+    """``(key, value)`` pairs of a unit file's ``[Service]`` section, in order."""
+    section = None
+    directives: list[tuple[str, str]] = []
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line
+            continue
+        key, sep, value = line.partition("=")
+        if section == "[Service]" and sep:
+            directives.append((key.strip(), value.strip()))
+    return directives
+
+
+def _env_file_defines(spec: str, var: str) -> bool:
+    """Whether the ``EnvironmentFile=`` *spec* assigns *var*; unreadable is no."""
+    try:
+        text = Path(spec.removeprefix("-")).read_text()
+    except OSError, UnicodeDecodeError:
+        return False
+    return any(
+        line.strip().partition("=")[0].strip() == var for line in text.splitlines()
+    )
+
+
+def _remote_debug_lifted_by(unit: Path) -> Path | None:
+    """Where the opt-out stops reaching *unit*'s process, or None if it reaches it.
+
+    Follows systemd: the unit, then ``<unit>.d/*.conf`` in lexical order. An
+    empty ``Environment=`` or ``EnvironmentFile=`` clears what came before it,
+    ``UnsetEnvironment=`` applies last. Returns the unit itself when the
+    variable is simply never set, else the file that took it away.
+    """
+    files = [unit, *sorted((unit.parent / f"{unit.name}.d").glob("*.conf"))]
+    assigned = from_file = unset = False
+    removed_by = unit
+    for path in files:
+        for key, value in _service_directives(path):
+            if key == "Environment":
+                tokens = shlex.split(value) if value else []
+                if not tokens and assigned:
+                    assigned, removed_by = False, path
+                if any(t.partition("=")[0] == _REMOTE_DEBUG_VAR for t in tokens):
+                    assigned = True
+            elif key == "EnvironmentFile":
+                if not value and from_file:
+                    from_file, removed_by = False, path
+                elif value and _env_file_defines(value, _REMOTE_DEBUG_VAR):
+                    from_file = True
+            elif key == "UnsetEnvironment":
+                names = [t.partition("=")[0] for t in shlex.split(value)]
+                if not names:
+                    unset = False
+                elif _REMOTE_DEBUG_VAR in names:
+                    unset, removed_by = True, path
+    if (assigned or from_file) and not unset:
+        return None
+    return removed_by
+
+
+def _serving_app_units(config: FraisierConfig | None) -> set[str]:
+    """Installed names of the app units fraisier renders for serving fraises."""
+    if config is None:
+        return set()
+    from fraisier.fraise_roles import fraise_serves
+    from fraisier.naming import app_service_name
+
+    units: set[str] = set()
+    for fraise_name, fraise in (getattr(config, "fraises", None) or {}).items():
+        if not isinstance(fraise, dict):
+            continue
+        for env_name, env_config in (fraise.get("environments") or {}).items():
+            if isinstance(env_config, dict) and fraise_serves(fraise, env_config):
+                units.add(
+                    app_service_name(
+                        config.project_name, fraise_name, env_name, env_config
+                    )
+                )
+    return units
+
+
+@register_check("remote_debug_disabled")
+def _check_remote_debug_disabled(config: FraisierConfig | None) -> CheckResult:
+    """No fraisier unit on Python 3.14 accepts a PEP 768 remote attach (#436).
+
+    3.14 lets anything allowed to ptrace a process inject Python into it while
+    it runs. Every unit fraisier renders sets ``PYTHON_DISABLE_REMOTE_DEBUG``;
+    this finds a unit installed before that, or one whose drop-in lifted it and
+    was never reverted. It reads the **effective** environment, drop-ins
+    included, because a drop-in is the documented way to lift it.
+
+    CPython disables attach for any value, empty included, so "disabled" means
+    "set". Judged: units running a fraisier binary, and the app units of
+    serving fraises, each only once its venv's ``pyvenv.cfg`` says 3.14.
+    """
+    name = "remote_debug_disabled"
+    if not SYSTEMD_UNIT_DIR.is_dir():
+        return CheckResult(name, "skip", f"{SYSTEMD_UNIT_DIR} is not a directory")
+    try:
+        unit_files = sorted(SYSTEMD_UNIT_DIR.glob("*.service"))
+    except OSError as exc:
+        return CheckResult(name, "skip", f"could not read {SYSTEMD_UNIT_DIR}: {exc}")
+
+    app_units = _serving_app_units(config)
+    judged = 0
+    open_units: list[str] = []
+    for unit in unit_files:
+        try:
+            lines = unit.read_text().splitlines()
+        except OSError, UnicodeDecodeError:
+            continue
+        binaries = [b for b in map(_exec_start_binary, lines) if b is not None]
+        if unit.name not in app_units:
+            binaries = [b for b in binaries if Path(b).name.startswith("fraisier")]
+        versions = [v for v in map(_venv_python, binaries) if v is not None]
+        if not versions or max(versions)[:2] < (3, 14):
+            continue
+        judged += 1
+        try:
+            lifted_by = _remote_debug_lifted_by(unit)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            return CheckResult(name, "skip", f"could not read {unit.name}: {exc}")
+        if lifted_by == unit:
+            open_units.append(f"{unit.name} (not set)")
+        elif lifted_by is not None:
+            open_units.append(f"{unit.name} (lifted by {lifted_by})")
+
+    if not judged:
+        return CheckResult(
+            name, "skip", "no fraisier unit runs a venv on Python 3.14 or newer"
+        )
+    if not open_units:
+        return CheckResult(
+            name, "pass", f"{judged} unit(s) refuse a PEP 768 remote attach"
+        )
+    return CheckResult(
+        name,
+        "warn",
+        f"{len(open_units)} of {judged} unit(s) on Python 3.14 accept a PEP 768 "
+        f"remote attach: {', '.join(open_units)}",
+        fix_hint=(
+            "a unit installed before #436: `fraisier scaffold && sudo fraisier "
+            "scaffold-install --yes`. A drop-in that lifted it for debugging: "
+            "`sudo systemctl revert <unit>`, then restart it"
+        ),
+    )
+
+
 @register_check("self_upgrade_failure")
 def _check_self_upgrade_failure(config: FraisierConfig | None) -> CheckResult:
     """A self-upgrade that ran and did not land (#351).
