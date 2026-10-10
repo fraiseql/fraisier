@@ -493,11 +493,9 @@ def _owner_of_unit(renderer: ScaffoldRenderer, source: str) -> tuple[str, str] |
         for env_name, env_config in fraise.get("environments", {}).items():
             socket_unit = deploy_socket_name(env_config, env_name, fraise["name"])
             socket_stem = socket_unit.removesuffix(".socket")
-            candidates = {
-                socket_unit,
-                f"{socket_stem}@.service",
-                f"{env_config.get('service_base', '')}.service",
-            }
+            candidates = {socket_unit, f"{socket_stem}@.service"}
+            if env_config.get("service_base"):
+                candidates.add(f"{env_config['service_base']}.service")
             if stem in candidates:
                 return fraise["name"], env_name
     return None

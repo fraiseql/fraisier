@@ -31,7 +31,13 @@ GATE = {
 }
 
 
-def render(tmp_path, gate: dict | None = GATE, *, user: str = "fraisier") -> Any:
+def render(
+    tmp_path,
+    gate: dict | None = GATE,
+    *,
+    user: str = "fraisier",
+    fraise_type: str = "api",
+) -> Any:
     database: dict = {"strategy": "apply", "name": "api"}
     if gate is not None:
         database["pre_migrate_dump"] = gate
@@ -40,7 +46,7 @@ def render(tmp_path, gate: dict | None = GATE, *, user: str = "fraisier") -> Any
         "scaffold": {"deploy_user": user, "output_dir": str(tmp_path / "output")},
         "fraises": {
             "api": {
-                "type": "api",
+                "type": fraise_type,
                 "environments": {
                     "production": {
                         "app_path": "/var/www/api",
@@ -97,6 +103,22 @@ class TestRenderScope:
         output = render(tmp_path, {"enabled": True, "output_dir": "/x", "keep_last": 3})
 
         assert pre_migrate_units(output) == sorted(names())
+
+
+class TestOnlyAFraiseThatMigratesIsPruned:
+    """A dump gate fills its directory only where a deploy migrates (#429)."""
+
+    def test_an_etl_with_a_gate_gets_no_pair(self, tmp_path):
+        assert pre_migrate_units(render(tmp_path, fraise_type="etl")) == []
+
+    def test_doctor_asks_no_dump_dir_of_it(self, tmp_path):
+        from fraisier import doctor
+
+        render(tmp_path, fraise_type="etl")
+        config = FraisierConfig(tmp_path / "fraises.yaml")
+        result = doctor.DOCTOR_CHECKS["pre_migrate_dump_writable"].fn(config)
+        assert result.status == "skip"
+        assert result.detail == "no pre_migrate_dump gate enabled"
 
 
 class TestService:

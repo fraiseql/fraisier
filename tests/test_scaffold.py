@@ -5998,3 +5998,112 @@ fraises:
         idx = migration_lines[0]
         context_block = "\n".join(lines[max(0, idx - 5) : idx + 5])
         assert "_scope_active" in context_block
+
+
+class TestOnlyServingFraisesGetAnAppUnit:
+    """The app unit is rendered, installed and allowlisted only where it serves (#432)."""
+
+    _FRAISES = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        app_path: /var/www/api
+        jobs:
+          run:
+            systemd_service: nightly-run.service
+            systemd_timer: nightly-run.timer
+  dumps:
+    type: backup
+    environments:
+      production:
+        app_path: /var/www/api
+  loader:
+    type: etl
+    environments:
+      production:
+        app_path: /var/www/etl
+  stack:
+    type: docker_compose
+    environments:
+      production:
+        app_path: /var/www/stack
+  worker:
+    type: etl
+    environments:
+      production:
+        app_path: /var/www/worker
+        service:
+          exec: bin/worker
+  legacy:
+    type: scheduled
+    exec_command: bin/legacy
+    environments:
+      production:
+        app_path: /var/www/legacy
+"""
+    _SERVING = ("my_api", "worker", "legacy")
+    _SILENT = ("nightly", "dumps", "loader", "stack")
+
+    def _config(self, tmp_path, *, service_manager: str = "systemd") -> FraisierConfig:
+        p = tmp_path / "fraises.yaml"
+        p.write_text(
+            f"name: myproj\nservice_manager: {service_manager}\n"
+            f"scaffold:\n  output_dir: {tmp_path / 'out'}\n  deploy_user: deployer\n"
+            + self._FRAISES
+        )
+        return FraisierConfig(p)
+
+    def test_systemd_units_render_only_for_serving_fraises(self, tmp_path):
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        rendered = ScaffoldRenderer(self._config(tmp_path)).render()
+
+        for name in self._SERVING:
+            unit = f"systemd/myproj_{name}_production.service"
+            assert unit in rendered
+            assert (tmp_path / "out" / unit).is_file()
+        for name in self._SILENT:
+            unit = f"systemd/myproj_{name}_production.service"
+            assert unit not in rendered
+            assert not (tmp_path / "out" / unit).exists()
+
+    def test_rc_scripts_render_only_for_serving_fraises(self, tmp_path):
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        rendered = ScaffoldRenderer(
+            self._config(tmp_path, service_manager="rc")
+        ).render(dry_run=True)
+
+        for name in self._SERVING:
+            assert f"rc.d/myproj_{name}_production" in rendered
+        for name in self._SILENT:
+            assert f"rc.d/myproj_{name}_production" not in rendered
+
+    def test_the_systemctl_allowlist_names_no_unrendered_app_unit(self, tmp_path):
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        allowed = ScaffoldRenderer(self._config(tmp_path)).context["allowed_services"]
+
+        for name in self._SERVING:
+            assert f"myproj_{name}_production.service" in allowed
+        for name in self._SILENT:
+            assert f"myproj_{name}_production.service" not in allowed
+        assert "nightly-run.service" in allowed
+
+    def test_the_watchdog_sweep_names_no_unrendered_app_unit(self, tmp_path):
+        from fraisier.scaffold.renderer import ScaffoldRenderer
+
+        ScaffoldRenderer(self._config(tmp_path)).render()
+        install = (tmp_path / "out" / "install.sh").read_text()
+
+        for name in self._SERVING:
+            assert f"/etc/systemd/system/myproj_{name}_production.service" in install
+        for name in self._SILENT:
+            assert f"myproj_{name}_production.service" not in install

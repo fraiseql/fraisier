@@ -1273,3 +1273,57 @@ fraises:
         first_git = categories.index("git")
         first_symlink = categories.index("symlink")
         assert first_git < first_symlink
+
+
+class TestAppServicesOnlyForServingFraises:
+    """setup copies and enables the app unit only where one is rendered (#432)."""
+
+    _CONFIG = """\
+name: tp
+fraises:
+  my_api:
+    type: api
+    environments:
+      production:
+        app_path: /var/www/api
+  nightly:
+    type: scheduled
+    environments:
+      production:
+        app_path: /var/www/api
+  dumps:
+    type: backup
+    environments:
+      production:
+        app_path: /var/www/api
+  worker:
+    type: etl
+    environments:
+      production:
+        app_path: /var/www/worker
+        service:
+          exec: bin/worker
+"""
+
+    def _units(self, actions: list[SetupAction]) -> list[str]:
+        return [a.command[-1].rsplit("/", 1)[-1] for a in actions]
+
+    def test_copies_only_serving_units(self, tmp_path):
+        setup = ServerSetup(_make_config(tmp_path, self._CONFIG), FakeRunner())
+        assert self._units(setup._plan_app_services()) == [
+            "tp_my_api_production.service",
+            "tp_worker_production.service",
+        ]
+
+    def test_enables_only_serving_units(self, tmp_path):
+        setup = ServerSetup(_make_config(tmp_path, self._CONFIG), FakeRunner())
+        enabled = [
+            a.command[-1]
+            for a in setup._plan_systemd_reload()
+            if a.command[:3] == ["sudo", "systemctl", "enable"]
+            and not a.command[-1].startswith("fraisier-")
+        ]
+        assert enabled == [
+            "tp_my_api_production.service",
+            "tp_worker_production.service",
+        ]

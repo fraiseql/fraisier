@@ -271,3 +271,33 @@ class TestExecStartIsRunnable:
             "templates building host artifacts from the local render path "
             "(use scaffold_state_dir):\n" + "\n".join(offenders)
         )
+
+
+class TestOnlyServingFraisesRunUvicorn:
+    """`core/service.j2` falls back to uvicorn on port 8000 (#432).
+
+    Rendered for a fraise that serves nothing, that unit binds the real API's
+    port with a module that does not exist the moment anyone enables it.
+    """
+
+    def test_every_uvicorn_unit_belongs_to_a_serving_fraise(self, rendered):
+        from fraisier.fraise_roles import fraise_serves
+
+        serving = {
+            name
+            for name, fraise in _CONFIG["fraises"].items()
+            for env in fraise["environments"].values()
+            if fraise_serves(fraise, env)
+        }
+        offenders = []
+        for unit in _units(rendered):
+            for value in _directive(unit.read_text(), "ExecStart"):
+                if "/uvicorn " not in value:
+                    continue
+                module = value.split("/uvicorn ", 1)[1].split()[0]
+                if module.split(".", 1)[0] not in serving:
+                    offenders.append(f"{unit.name}: {module}")
+
+        assert not offenders, "uvicorn units for fraises that serve nothing:\n" + (
+            "\n".join(offenders)
+        )
