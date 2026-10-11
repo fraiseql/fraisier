@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.87.0] - 2026-10-11
+
 ### Changed
 
 - **`fraiseql-confiture` 1.34 (`>=1.34.0,<1.35`).** confiture now reads a TVIEW's
