@@ -636,7 +636,7 @@ class TestOneCheckPerMigration:
 
     ``preflight-against-pending-no-down.json`` was **captured**, never composed,
     from ``migrate preflight --against … --config … --scope pending`` (exit 7) on
-    confiture ``main`` @ ``53ac5dfa``, which carries PR #726: m1 has no down file,
+    the published confiture 1.36.0 wheel, which carries PR #726: m1 has no down file,
     m2 depends on m1, m3 is broken on its own. m1 comes back as the static
     ``PFLIGHT_MISSING_DOWN`` *and* a ``PFLIGHT_REPLAY_FAILED`` naming the loader
     error. Probe: ``.phases/2026-10-11-confiture-722-probe/wire_probe.py``.

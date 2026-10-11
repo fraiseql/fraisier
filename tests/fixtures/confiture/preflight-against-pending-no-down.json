@@ -28,7 +28,7 @@
       "line": null,
       "actionable": "Fix the failing migration SQL; see details for the database error.",
       "details": {
-        "error": "SQL migration 20260101000001_create_t.up.sql has no matching .down.sql file.\nExpected: /tmp/tmp7bmk_82q/migrations/20260101000001_create_t.down.sql\nHint: Create 20260101000001_create_t.down.sql with the rollback SQL for this migration"
+        "error": "SQL migration 20260101000001_create_t.up.sql has no matching .down.sql file.\nExpected: /tmp/tmp1527zi1k/migrations/20260101000001_create_t.down.sql\nHint: Create 20260101000001_create_t.down.sql with the rollback SQL for this migration"
       }
     },
     {
