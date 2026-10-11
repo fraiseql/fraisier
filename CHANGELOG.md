@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A migration preflight counts a migration once, however many errors it has**
   ([fraiseql/confiture#722](https://github.com/fraiseql/confiture/issues/722)). From
-  the confiture release after 1.35, a pending migration with no `.down.sql` comes
+  confiture 1.36.0, a pending migration with no `.down.sql` comes
   back as both `PFLIGHT_MISSING_DOWN` and `PFLIGHT_REPLAY_FAILED`, where 1.35 aborted
   the whole preflight with a mislabelled `CONFIG_006`. fraisier made one failed check
   per issue, so that migration read as two failures ("2 of N would fail"). Each failed
