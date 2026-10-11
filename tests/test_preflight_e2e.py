@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import subprocess
 import uuid
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from fraisier.dbops.preflight import run_migration_preflight
 from tests.integration.conftest import _discover_target, unavailable
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Constants and helpers
@@ -432,6 +435,152 @@ class TestPreflightEmptyLedgerGuard:
                 confiture_config=confiture_config,
                 migrations_dir=migrations_dir,
             )
+
+
+def _backup_with_applied(
+    admin_url: str, tmp_path: Path, applied: dict[str, str], *, ledger_schema: str = ""
+) -> Path:
+    """Dump a database whose ledger records *applied* (``{stem: up_sql}``).
+
+    Each migration is applied by ``confiture migrate up`` with a down file, so
+    the ledger is real. *ledger_schema* moves ``tb_confiture`` out of
+    ``public`` afterwards, where a session's ``search_path`` does not find it.
+    """
+    src = f"fraisier_test_applied_{uuid.uuid4().hex[:8]}"
+    _run_psql(admin_url, f"CREATE DATABASE {src}")
+    src_url = _replace_db_in_url(admin_url, src)
+    try:
+        applied_dir = tmp_path / "applied"
+        applied_dir.mkdir()
+        for stem, up_sql in applied.items():
+            (applied_dir / f"{stem}.up.sql").write_text(up_sql)
+            (applied_dir / f"{stem}.down.sql").write_text("SELECT 1;\n")
+        src_cfg = tmp_path / "src.yaml"
+        src_cfg.write_text(f"database_url: {src_url}\n")
+        subprocess.run(
+            [
+                "confiture",
+                "migrate",
+                "up",
+                "--config",
+                str(src_cfg),
+                "--migrations-dir",
+                str(applied_dir),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        if ledger_schema:
+            _run_psql(
+                src_url,
+                f"CREATE SCHEMA {ledger_schema}; "
+                f"ALTER TABLE public.tb_confiture SET SCHEMA {ledger_schema}",
+            )
+        backup = tmp_path / "applied.dump"
+        subprocess.run(
+            ["pg_dump", "-Fc", "-f", str(backup), src_url],
+            check=True,
+            capture_output=True,
+        )
+    finally:
+        _run_psql(admin_url, f"DROP DATABASE IF EXISTS {src}")
+    return backup
+
+
+@pytest.mark.integration
+class TestPreflightJudgesOnlyPending:
+    """confiture 1.35 ``--scope pending``: what a migration already applied in the
+    backup can no longer do to a deploy's preflight.
+
+    Without it, confiture's static checks judge every file in the directory,
+    applied or not. Measured on 1.35.0 in
+    ``.phases/2026-10-11-confiture-1-35-probe/`` (``scope_probe.py``).
+    """
+
+    _APPLIED = "20260101000000_widgets"
+    _PENDING = "20260102000000_add_label"
+
+    def _migrations(self, tmp_path: Path, applied_up: str) -> Path:
+        migrations_dir = tmp_path / "migrations"
+        migrations_dir.mkdir()
+        (migrations_dir / f"{self._APPLIED}.up.sql").write_text(applied_up)
+        (migrations_dir / f"{self._PENDING}.up.sql").write_text(
+            "ALTER TABLE public.widgets ADD COLUMN label TEXT;\n"
+        )
+        (migrations_dir / f"{self._PENDING}.down.sql").write_text(
+            "ALTER TABLE public.widgets DROP COLUMN label;\n"
+        )
+        return migrations_dir
+
+    def test_an_applied_migration_without_a_down_file_does_not_block(
+        self, admin_url, confiture_config, tmp_path
+    ):
+        """A missing ``.down.sql`` is an error-severity ``PFLIGHT_MISSING_DOWN``.
+        On a migration the backup already applied, it blocked every deploy."""
+        up = "CREATE TABLE public.widgets (id BIGINT PRIMARY KEY);\n"
+        backup = _backup_with_applied(admin_url, tmp_path, {self._APPLIED: up})
+
+        result = run_migration_preflight(
+            backup_path=backup,
+            admin_url=admin_url,
+            confiture_config=confiture_config,
+            migrations_dir=self._migrations(tmp_path, up),
+        )
+
+        assert result.all_passed is True, [
+            (m.version, m.error) for m in result.failures
+        ]
+
+    def test_an_applied_non_transactional_migration_is_not_reported_skipped(
+        self, admin_url, confiture_config, tmp_path
+    ):
+        """A skipped check says preflight could not replay a migration this
+        deploy will run. One the backup already applied is not that."""
+        up = (
+            "CREATE TABLE public.widgets (id BIGINT PRIMARY KEY);\n"
+            "CREATE INDEX CONCURRENTLY ix_widgets_id ON public.widgets (id);\n"
+        )
+        backup = _backup_with_applied(admin_url, tmp_path, {self._APPLIED: up})
+        migrations_dir = self._migrations(tmp_path, up)
+        (migrations_dir / f"{self._APPLIED}.down.sql").write_text("SELECT 1;\n")
+
+        result = run_migration_preflight(
+            backup_path=backup,
+            admin_url=admin_url,
+            confiture_config=confiture_config,
+            migrations_dir=migrations_dir,
+        )
+
+        assert [m.version for m in result.skipped_migrations] == []
+
+    def test_a_ledger_in_another_schema_is_refused_by_name(
+        self, admin_url, confiture_config, tmp_path
+    ):
+        """``to_regclass`` does not find ``tb_confiture`` off the search_path, so
+        the backup looked unmanaged and every migration was replayed against a
+        schema that already held them. confiture's ``CONFIG_015`` names where the
+        ledger is; fraisier names the setting that points at it."""
+        from fraisier.errors import DatabaseError
+
+        up = "CREATE TABLE public.widgets (id BIGINT PRIMARY KEY);\n"
+        backup = _backup_with_applied(
+            admin_url, tmp_path, {self._APPLIED: up}, ledger_schema="ops"
+        )
+        migrations_dir = self._migrations(tmp_path, up)
+        (migrations_dir / f"{self._APPLIED}.down.sql").write_text("SELECT 1;\n")
+
+        with pytest.raises(DatabaseError) as exc_info:
+            run_migration_preflight(
+                backup_path=backup,
+                admin_url=admin_url,
+                confiture_config=confiture_config,
+                migrations_dir=migrations_dir,
+            )
+
+        message = str(exc_info.value)
+        assert "CONFIG_015: " in message
+        assert "'ops.tb_confiture'" in message
+        assert "`migration.tracking_table` in the fraise's confiture config" in message
 
 
 @pytest.mark.integration
