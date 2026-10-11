@@ -1054,10 +1054,20 @@ include_dirs:
 ```
 
 `confiture migrate diff --to-env production` builds its desired side from the
-same `include_dirs`, so the same `order` applies there. confiture's own
-`DIFFER_406` hint says to compose the fragment "after the file that creates it".
-Measured on 1.35.0, listing it after that file still fails; only `order` puts it
-after.
+same `include_dirs`, so the same `order` applies there. From confiture 1.36.0 the
+`DIFFER_406` hint says this too (confiture#721); 1.35.0's said to list the
+fragment "after the file that creates it", which still fails.
+
+#### An index named like one pg_tviews owns (`DIFFER_410`)
+
+From confiture 1.36.0 a TVIEW's indexes are compared like a table's, and
+pg_tviews records the indexes it creates itself in
+`tviews.registry.managed_indexes` (pg_tviews 0.1.0-beta.27, e.g. `idx_tv_post_id`).
+A tree that writes a *different* index under one of those names is refused with
+`DIFFER_410`, exit 5: pg_tviews skipped the tree's `CREATE INDEX IF NOT EXISTS`,
+so the database never held it. The gate then could not run, as with `DIFFER_406`.
+Rename the index. A tree that writes exactly pg_tviews' own index is adopted and
+reports nothing.
 
 #### A lost constraint fails the deploy (#412, confiture#506)
 
@@ -1088,8 +1098,10 @@ A column default that no longer matches, a widened type, a dropped
 exit 0 and ships. A dropped **unique** index is not: from confiture 1.35.0 it is
 `critical`, and so is a unique index the database holds INVALID (a failed
 `CREATE INDEX CONCURRENTLY`), so the deploy stops without being asked.
-A materialized view's indexes are compared too. `escalate` is how one deploy says a given loss is not
-acceptable to *it*:
+A materialized view's indexes are compared too, and from confiture 1.36.0 so are
+the indexes a tree writes on a TVIEW: a lost unique one is `critical`, a lost
+plain one a `warning`. The indexes pg_tviews creates itself are never compared.
+`escalate` is how one deploy says a given loss is not acceptable to *it*:
 
 ```yaml
 post_migrate_check:
@@ -1101,7 +1113,9 @@ post_migrate_check:
 
 The kinds `escalate` accepts are exactly the warning-graded ones —
 `missing_index`, `default_mismatch`, `type_mismatch`,
-`nullable_mismatch`, `tview_option_mismatch` and `extra_object` (only with `extra_objects: all`). A name outside that list is a config error rather
+`nullable_mismatch`, `tview_option_mismatch`, `extra_object` (only with
+`extra_objects: all`), `view_definition_mismatch` (only with a `scratch_url`, see
+below) and `object_definition_mismatch`. A name outside that list is a config error rather
 than a gate that quietly declines to fire: an operator who writes
 `missing_indexes` has asked for a promise, and getting silence instead is
 the failure this whole gate exists to avoid. `extra_constraint` is
@@ -1139,6 +1153,41 @@ together with it, because at the default the item is `info` and escalation
 promotes warnings; a config that names it without the opt-in is a validation
 error rather than a gate that cannot fire. Without `escalate` the items are
 reported as warnings and the deploy passes.
+
+##### Redefined views and objects (`view_definition_mismatch`, `object_definition_mismatch`)
+
+confiture 1.36.0 adds two `warning` kinds:
+
+- `object_definition_mismatch`: a domain, composite or range type, policy or rule
+  the database defines otherwise than the tree (confiture#708). A changed role,
+  `NOT NULL` or base type is reported on every gate. A changed expression (a
+  `CHECK`, a `DEFAULT`, a policy's `USING`) is reported only on a scratch server.
+- `view_definition_mismatch`: a view or materialized view whose query the
+  database holds otherwise (confiture#719). It is reported **only** on a scratch
+  server.
+
+The scratch server is the environment YAML's `scratch_url`: a writable server
+where confiture creates a throwaway database, builds the tree and reads it back.
+It is never the target database. fraisier passes no `--scratch-url`, so this key
+alone decides it:
+
+```yaml
+# db/environments/production.yaml
+database_url: postgresql://app@db/app
+scratch_url: postgresql://app@db/postgres
+```
+
+Without `scratch_url`, `escalate: [view_definition_mismatch]` could never fire, so
+the gate refuses to run rather than pass a redefined view. With `on_critical:
+fail`, that fails the deploy.
+
+⚠️ A `scratch_url` changes more than the new kind. A materialized view whose query
+drifted *and* that lost a unique index fails the gate from 1.36.0 (confiture#701).
+On 1.35.0 a scratch server hid that loss; without one it already failed.
+And the scratch build runs only what the tree says: a tree that creates TVIEWs
+must itself run `CREATE EXTENSION IF NOT EXISTS pg_tviews`, or the scratch side
+builds each TVIEW as a plain table and the gate reports it `missing_table`,
+critical. Measured on 1.35.0 and 1.36.0 alike.
 
 ### TVIEWs after a restore or a failover (#422)
 
@@ -1223,9 +1272,12 @@ populated view, `3` it could not check (no pg_tviews, an older one, no
 connection). A host that could not look never reports what a host that looked and
 passed reports.
 
-**pg_tviews must be 0.1.0-beta.26 or later.** confiture 1.34 refuses an older one
+**pg_tviews must be 0.1.0-beta.27 or later.** confiture 1.36 refuses an older one
 with `CONFIG_014`, so on such a host the drift gate fails every deploy of a TVIEW
-project, after its migrations ran. `fraisier doctor` checks this beforehand
+project, after its migrations ran. So does the migration preflight, and `migrate
+up` refuses a migration that creates or drops a TVIEW before applying anything,
+including one that upgrades the extension: upgrade it out of band, before the
+deploy. `fraisier doctor` checks this beforehand
 (`pg_tviews_contract`) by asking confiture's own
 `require_supported_pg_tviews_on`, since `pg_extension.extversion` reads `0.1.0`
 on every beta. Upgrade the package, then run `ALTER EXTENSION pg_tviews UPDATE`

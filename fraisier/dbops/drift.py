@@ -83,7 +83,7 @@ CHECK_FLAGS: dict[str, str] = {
 }
 
 #: Drift kinds confiture grades ``warning``, which a deploy may ask to be fatal
-#: (#412).  ``has_critical_drift`` is blind to all four, so each is exit 0 and
+#: (#412).  ``has_critical_drift`` is blind to all of them, so each is exit 0 and
 #: passes the gate unless it is named in ``post_migrate_check.escalate``.
 #:
 #: Measured, not copied from a changelog — every one of these was emitted by a
@@ -104,7 +104,10 @@ CHECK_FLAGS: dict[str, str] = {
 #: the gate on its own; a plain one stays ``warning``, so the row keeps its
 #: meaning for plain indexes.  1.35.0 also compares a materialized view's indexes,
 #: which 1.34.0 never reported.  Measured on both published wheels in
-#: ``.phases/2026-10-11-confiture-1-35-probe/`` (``O`` to ``T``).
+#: ``.phases/2026-10-11-confiture-1-35-probe/`` (``O`` to ``T``).  From 1.36.0 the
+#: same holds for an index a tree writes on a TVIEW (unique: ``critical``, plain:
+#: ``warning``); the indexes pg_tviews creates itself are never compared
+#: (``.phases/2026-10-12-confiture-1-36-probe/``, ``X`` and ``Y``).
 #:
 #: ``tview_option_mismatch`` is the fifth (confiture 1.29.0, measured in
 #: ``.phases/2026-10-01-confiture-1-29-probe/`` against pg_tviews 0.1.0-beta.20):
@@ -126,6 +129,17 @@ CHECK_FLAGS: dict[str, str] = {
 #: ``info`` (and absent for a kind the DDL never declares), which escalation
 #: never reads.  So the kind is escalatable only with ``extra_objects="all"``,
 #: and :func:`check_schema_drift` refuses the pairing without it.
+#:
+#: ``view_definition_mismatch`` and ``object_definition_mismatch`` are the
+#: seventh and eighth (confiture 1.36.0, #719 and #708), both ``warning``,
+#: measured on the published wheel against pg_tviews 0.1.0-beta.27 in
+#: ``.phases/2026-10-12-confiture-1-36-probe/`` (``AC`` to ``AK``).  A redefined
+#: view or matview is reported **only** at the materialised tier, which
+#: ``--check-live-drift`` reaches from the environment's ``scratch_url``; fraisier
+#: passes no ``--scratch-url``.  So :func:`check_schema_drift` refuses to escalate
+#: it unless that key is set.  A redefined domain or policy is reported at both
+#: tiers (a role or ``NOT NULL`` always; an expression only at the materialised
+#: one), so it needs no such opt-in.
 #:
 #: ⚠️ ``missing_constraint`` and ``constraint_mismatch`` are **not** rows here,
 #: and their absence is the point.  confiture 1.26.0 grades both ``critical``
@@ -158,6 +172,8 @@ ESCALATABLE_KINDS: tuple[str, ...] = (
     "nullable_mismatch",
     "tview_option_mismatch",
     "extra_object",
+    "view_definition_mismatch",
+    "object_definition_mismatch",
 )
 
 #: What ``--extra-objects`` may say (confiture 1.30.0, confiture#596).  At
@@ -166,6 +182,9 @@ ESCALATABLE_KINDS: tuple[str, ...] = (
 #: a kind the DDL declares, and graded ``info``.  At ``all`` every stray object
 #: is reported, graded ``warning``.
 EXTRA_OBJECTS_MODES: tuple[str, ...] = ("declared", "all")
+
+#: The drift kind confiture reports only at the materialised tier (1.36.0).
+_VIEW_REDEFINED = "view_definition_mismatch"
 
 #: ``confiture build --env NAME`` resolves this path under ``--project-dir``.
 _ENV_DIR = ("db", "environments")
@@ -366,6 +385,26 @@ def _connection_target(url: str) -> tuple[str, str, str]:
     host = parts.hostname or (query.get("host") or [""])[0]
     port = str(parts.port or (query.get("port") or [""])[0])
     return host, port, parts.path.lstrip("/")
+
+
+def _declares_scratch_url(confiture_config: Path) -> bool:
+    """Whether the environment names a scratch server for confiture to build on.
+
+    ``migrate validate --check-live-drift`` reads the environment's
+    ``scratch_url`` (``scratch_url_from_config``, confiture 1.36.0), and fraisier
+    passes no ``--scratch-url``, so this key alone decides the tier.
+
+    Raises:
+        ValueError: the config is not YAML.
+    """
+    import yaml
+
+    try:
+        raw: Any = yaml.safe_load(confiture_config.read_text()) or {}
+    except yaml.YAMLError as exc:
+        msg = f"{confiture_config} is not valid YAML: {exc}"
+        raise ValueError(msg) from exc
+    return isinstance(raw, dict) and bool(raw.get("scratch_url"))
 
 
 def _check_urls_agree(confiture_config: Path, database_url: str | None) -> None:
@@ -846,6 +885,17 @@ def check_schema_drift(
     try:
         env_name = _env_for_build(project_dir, config)
         _check_urls_agree(config, database_url)
+        if _VIEW_REDEFINED in escalate and not _declares_scratch_url(config):
+            return DriftResult(
+                passed=False,
+                checks=selected,
+                error=(
+                    f"cannot escalate {_VIEW_REDEFINED!r}: {config} sets no "
+                    f"scratch_url. confiture compares a view's query only on a "
+                    f"scratch server, so without one it never reports this kind "
+                    f"and the gate would never fire on it"
+                ),
+            )
     except (ValueError, OSError) as exc:
         return DriftResult(passed=False, checks=selected, error=str(exc))
 
