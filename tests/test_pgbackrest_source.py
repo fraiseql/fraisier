@@ -125,8 +125,11 @@ class World:
         promote_fails: Exception | None = None,
         residue: dict[str, str] | None = None,
         data_directory: str = DATADIR,
+        rebuild_problem: str | Exception | None = None,
     ) -> None:
         self.data_directory = data_directory
+        self.rebuild_problem = rebuild_problem
+        self.privilege_checked: list[str] = []
         self.archive_mode = archive_mode
         self.reset_fails = reset_fails
         self.database_present = database_present
@@ -169,10 +172,22 @@ class World:
                 side_effect=lambda _url: self.tviews or [],
             )
         )
+        self.stack.enter_context(
+            patch(
+                "fraisier.dbops.tviews.rebuild_privilege_problem",
+                side_effect=self._privilege,
+            )
+        )
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.stack.close()
+
+    def _privilege(self, url: str) -> str | None:
+        self.privilege_checked.append(url)
+        if isinstance(self.rebuild_problem, Exception):
+            raise self.rebuild_problem
+        return self.rebuild_problem
 
     def _promote(self, *_a: Any, **_k: Any) -> None:
         self.events.append("promoted")
@@ -468,6 +483,64 @@ class TestTheCheckedClusterIsTheRestoredOne:
 
         with World(), pytest.raises(RestoreFailedClosed, match="data directory"):
             source.restore(strategy, prepared)
+
+
+class TestTheRebuildGrantIsCheckedBeforeAnythingIsStopped:
+    """The post-restore TVIEW rebuild runs as ``admin_url``'s role (#460).
+
+    pg_tviews 0.1.0-beta.27 stops granting ``pg_tviews_rebuild_all`` to
+    ``PUBLIC``. A physical restore keeps the source's ownership and grants, so a
+    role that cannot run it now will not after the restore either, and finding
+    out then costs a stopped cluster and a stopped service.
+    """
+
+    _PROBLEM = (
+        'role "deploy" cannot execute "tviews".pg_tviews_rebuild_all(boolean). '
+        'Fix: GRANT EXECUTE ON FUNCTION "tviews".pg_tviews_rebuild_all(boolean) '
+        'TO "deploy";'
+    )
+
+    def test_a_missing_grant_is_refused_before_anything_is_stopped(self) -> None:
+        strategy, source, service = build(FakeHelper(online=True))
+
+        with (
+            World(rebuild_problem=self._PROBLEM),
+            pytest.raises(DatabaseError, match=r"GRANT EXECUTE ON FUNCTION"),
+        ):
+            prepare(strategy, source)
+
+        service.stop.assert_not_called()
+
+    def test_it_asks_the_database_that_will_be_restored(self) -> None:
+        strategy, source, _ = build(FakeHelper(online=True))
+
+        with World() as world:
+            prepare(strategy, source)
+
+        assert world.privilege_checked == ["postgresql://postgres@localhost:5433/app"]
+
+    def test_a_check_that_cannot_run_warns_and_lets_the_restore_proceed(
+        self, caplog
+    ) -> None:
+        """The restore's own rebuild still fails closed if the grant is missing."""
+        import psycopg
+
+        strategy, source, _ = build(FakeHelper(online=True))
+
+        with World(
+            rebuild_problem=psycopg.OperationalError('database "app" does not exist')
+        ):
+            assert prepare(strategy, source).backup_label == NEWEST
+
+        assert 'database "app" does not exist' in caplog.text
+
+    def test_a_stopped_cluster_is_not_asked(self) -> None:
+        strategy, source, _ = build(FakeHelper(online=False))
+
+        with World(rebuild_problem=self._PROBLEM) as world:
+            prepare(strategy, source)
+
+        assert world.privilege_checked == []
 
 
 class TestAMalformedReplyFailsClosed:

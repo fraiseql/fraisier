@@ -223,6 +223,65 @@ def _grant_hint(conn: _Executes, schema: str, name: str) -> str:
     )
 
 
+def _rebuild_grant(conn: _Executes, schema: str) -> tuple[str, str]:
+    """The rebuild function's signature, and the ``GRANT`` letting this role run it."""
+    row = conn.execute("SELECT current_user").fetchone()
+    role = row[0] if row else "<role>"
+    function = (
+        sql.SQL("{}.pg_tviews_rebuild_all(boolean)")
+        .format(sql.Identifier(schema))
+        .as_string()
+    )
+    grant = (
+        sql.SQL("GRANT EXECUTE ON FUNCTION {}.pg_tviews_rebuild_all(boolean) TO {}")
+        .format(sql.Identifier(schema), sql.Identifier(role))
+        .as_string()
+    )
+    return function, grant
+
+
+#: What ``pg_tviews_rebuild_all`` needs besides the function grant: it reads each
+#: TVIEW as the caller to find the empty ones and count what it filled.
+_REBUILD_ALSO_NEEDS = (
+    "the role also needs SELECT on every TVIEW; a superuser or the "
+    "extension's owner needs neither"
+)
+
+
+def rebuild_privilege_problem(url: str) -> str | None:
+    """Why the connecting role cannot run ``pg_tviews_rebuild_all``, or ``None``.
+
+    pg_tviews 0.1.0-beta.27 stops granting its bulk maintenance functions to
+    ``PUBLIC`` (#460), so a restore role that is neither a superuser nor the
+    extension's owner meets ``42501`` at the rebuild — after the restore, when
+    the database it replaced is already gone.  This asks the same question with
+    ``has_function_privilege`` while there is still time to refuse, and answers
+    with the ``GRANT`` that fixes it.
+
+    ``None`` when the database has no pg_tviews.  Raises :class:`TviewError` for a
+    pg_tviews without read contract 1, like every other call here.
+    """
+    with _connect(url) as conn:
+        support = _usable(conn)
+        if support is None:
+            return None
+        return _missing_rebuild_grant(conn, str(support.schema))
+
+
+def _missing_rebuild_grant(conn: _Executes, schema: str) -> str | None:
+    function, grant = _rebuild_grant(conn, schema)
+    row = conn.execute(
+        "SELECT has_function_privilege(%s, 'EXECUTE'), current_user", (function,)
+    ).fetchone()
+    if row is None or row[0]:
+        return None
+    return (
+        f"role {row[1]!r} cannot execute {function}, which the post-restore "
+        f"TVIEW rebuild runs (pg_tviews 0.1.0-beta.27 no longer grants it to "
+        f"PUBLIC). Fix: {grant}; {_REBUILD_ALSO_NEEDS}"
+    )
+
+
 def _rebuild(url: str, *, only_empty: bool) -> list[TviewRebuilt]:
     with _connect(url) as conn:
         support = _usable(conn)
@@ -243,6 +302,18 @@ def _rebuild(url: str, *, only_empty: bool) -> list[TviewRebuilt]:
                 ).format(sql.Identifier(str(support.schema))),
                 (only_empty,),
             ).fetchall()
+        except psycopg.errors.InsufficientPrivilege as exc:
+            # Only name the function grant when it is the one missing: a refusal
+            # on a TVIEW the rebuild touches is the same SQLSTATE.
+            missing = _missing_rebuild_grant(conn, str(support.schema))
+            raise TviewError(
+                f"pg_tviews_rebuild_all failed: {exc}. "
+                + (
+                    missing
+                    or "The role may run it but not touch every TVIEW: run the "
+                    "rebuild as a superuser or as the TVIEWs' owner"
+                )
+            ) from exc
         except psycopg.Error as exc:
             raise TviewError(f"pg_tviews_rebuild_all failed: {exc}") from exc
         return [TviewRebuilt(str(entity), int(count)) for entity, count in rows]

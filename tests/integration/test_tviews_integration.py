@@ -145,3 +145,113 @@ def test_a_database_without_pg_tviews_is_unaffected(pg_tviews_target: PgTarget) 
     finally:
         with psycopg.connect(admin, autocommit=True) as conn:
             conn.execute(f"DROP DATABASE IF EXISTS {plain} WITH (FORCE)")
+
+
+#: pg_tviews 0.1.0-beta.27 stops granting its bulk maintenance functions to
+#: ``PUBLIC`` (#460).  Revoking the grant on an earlier version reproduces the
+#: privilege state exactly, so these run on whatever pg_tviews the server has.
+_REBUILDER = "fraisier_it_rebuilder"
+
+
+def _as_role(url: str, role: str) -> str:
+    """*url*, connecting as itself and then acting as *role* (``SET ROLE``).
+
+    A superuser that sets a role loses superuser for privilege checks, which is
+    what a non-superuser restore role is, without a password or a socket mapping.
+    """
+    return f"{url}{'&' if '?' in url else '?'}options=-c%20role%3D{role}"
+
+
+@pytest.fixture
+def without_public_rebuild(url: str) -> Iterator[str]:
+    """*url* as a role that may read every TVIEW but not run the bulk rebuild."""
+    with psycopg.connect(url, autocommit=True) as conn:
+        # Roles are cluster-wide; its grants die with the fixture's database.
+        if not conn.execute(
+            "SELECT 1 FROM pg_roles WHERE rolname = %s", (_REBUILDER,)
+        ).fetchone():
+            conn.execute(f"CREATE ROLE {_REBUILDER}")
+        conn.execute(
+            "REVOKE EXECUTE ON FUNCTION tviews.pg_tviews_rebuild_all(boolean) "
+            "FROM PUBLIC"
+        )
+        # INSERT too: before beta.27 the rebuild writes each TVIEW as the caller
+        # (measured on beta.26), so without it the grant under test is not the
+        # last thing missing.
+        conn.execute(f"GRANT SELECT, INSERT ON tv_post, tv_user TO {_REBUILDER}")
+    yield _as_role(url, _REBUILDER)
+
+
+def test_a_role_without_execute_is_told_the_grant_before_any_restore(
+    without_public_rebuild: str,
+) -> None:
+    problem = tviews.rebuild_privilege_problem(without_public_rebuild)
+
+    assert problem is not None
+    assert (
+        f'GRANT EXECUTE ON FUNCTION "tviews".pg_tviews_rebuild_all(boolean) '
+        f'TO "{_REBUILDER}"'
+    ) in problem
+
+
+def test_the_grant_it_names_is_the_fix(url: str, without_public_rebuild: str) -> None:
+    """The statement in the message is executed verbatim, then the rebuild runs."""
+    problem = tviews.rebuild_privilege_problem(without_public_rebuild)
+    assert problem is not None
+    grant = problem[problem.index("GRANT") :].split(";")[0]
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute(grant)
+    _empty(url, "tv_post")
+
+    assert tviews.rebuild_privilege_problem(without_public_rebuild) is None
+    assert tviews.rebuild_empty_tviews(without_public_rebuild) == [
+        tviews.TviewRebuilt("post", 1)
+    ]
+
+
+def test_a_refused_rebuild_names_the_grant_not_just_the_sqlstate(
+    without_public_rebuild: str,
+) -> None:
+    with pytest.raises(tviews.TviewError) as excinfo:
+        tviews.rebuild_empty_tviews(without_public_rebuild)
+
+    assert "permission denied for function pg_tviews_rebuild_all" in str(excinfo.value)
+    assert (
+        f'GRANT EXECUTE ON FUNCTION "tviews".pg_tviews_rebuild_all(boolean) '
+        f'TO "{_REBUILDER}"'
+    ) in str(excinfo.value)
+
+
+def test_a_superuser_has_no_privilege_problem(url: str) -> None:
+    assert tviews.rebuild_privilege_problem(url) is None
+
+
+def test_a_database_without_pg_tviews_has_no_privilege_problem(
+    pg_tviews_target: PgTarget,
+) -> None:
+    assert tviews.rebuild_privilege_problem(pg_tviews_target.dsn("postgres")) is None
+
+
+def test_a_refusal_on_a_tview_does_not_blame_the_function_grant(url: str) -> None:
+    """A role that may run the rebuild but not read a TVIEW is told that instead.
+
+    ``PUBLIC`` keeps its ``EXECUTE`` here, so the function grant is not missing
+    and a message naming it would send the operator to fix the wrong thing.
+    """
+    with psycopg.connect(url, autocommit=True) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM pg_roles WHERE rolname = %s", (_REBUILDER,)
+        ).fetchone():
+            conn.execute(f"CREATE ROLE {_REBUILDER}")
+        conn.execute(
+            "GRANT EXECUTE ON FUNCTION tviews.pg_tviews_rebuild_all(boolean) TO PUBLIC"
+        )
+    _empty(url, "tv_post")
+
+    with pytest.raises(tviews.TviewError) as excinfo:
+        tviews.rebuild_empty_tviews(_as_role(url, _REBUILDER))
+
+    message = str(excinfo.value)
+    assert "permission denied for table" in message
+    assert "GRANT EXECUTE" not in message
+    assert "superuser" in message

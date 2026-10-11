@@ -1122,6 +1122,31 @@ What fraisier does about it:
 | after the migration, in every deploy | reads each TVIEW and its backing view from `tviews.registry` and refuses one that is empty while its view has rows | the deploy stops, naming each `tv_*`/`v_*` pair |
 | before the service starts in `restore_migrate` | the same probe | the restore stops with the service still down |
 
+**The role that rebuilds** is `admin_url`'s (#460). From pg_tviews 0.1.0-beta.27,
+`pg_tviews_rebuild_all` is no longer executable by `PUBLIC`. So unless that role is a
+superuser or the extension's owner, it needs:
+
+```sql
+GRANT EXECUTE ON FUNCTION tviews.pg_tviews_rebuild_all(boolean) TO <admin_url role>;
+```
+
+It also needs `SELECT` on every TVIEW, because the rebuild reads each one as the caller
+to find the empty ones. Before beta.27 it also writes them as the caller, so it needs
+`INSERT` too (measured on beta.26).
+
+- **pgBackRest restore.** The restore is physical, so the grant comes back with the
+  backup: make it on the source. While the cluster is still up, fraisier asks
+  `has_function_privilege` as that role and refuses before anything is stopped, naming
+  the `GRANT`. A cluster that is already down cannot be asked; the rebuild itself then
+  fails closed with the same `GRANT` in its message.
+- **pg_dump restore.** `CREATE EXTENSION pg_tviews` needs a superuser (it creates a base
+  type), so a dump restore of a pg_tviews database already runs as one and needs no
+  grant. A grant made in the target database would not survive it anyway: the restore
+  drops and recreates the database.
+- **`fraisier db tviews rebuild`, and a rebuild that fails in either restore.** A
+  `42501` names the missing `GRANT`. If the function was allowed and a TVIEW was not,
+  it says that instead.
+
 A TVIEW the deploy role may not read, or whose backing view it may not read, cannot be
 verified. The probe logs `pg_tviews: cannot verify …` naming it and the
 `GRANT SELECT ON <schema>.tv_<entity>` that fixes it, skips it, and does not fail the
