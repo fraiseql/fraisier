@@ -363,6 +363,37 @@ class PgBackRestSource:
 
     # -- choosing the backup (nothing is touched) --------------------------------
 
+    def _require_the_tview_rebuild_grant(self, admin_url: str) -> None:
+        """Refuse now if ``admin_url``'s role could not rebuild TVIEWs after (#460).
+
+        A physical restore brings back the source's extension, owner and grants,
+        and this cluster was restored from the same source before, so the answer
+        here is the answer after the restore — when the cluster is already
+        replaced. The dump path needs no such check: pg_tviews' ``CREATE
+        EXTENSION`` needs a superuser, so a dump restore that reaches its
+        rebuild ran as one.
+
+        A check that cannot run is said and skipped, never fatal: the rebuild
+        itself still fails closed and names the grant.
+        """
+        import psycopg
+
+        from fraisier.dbops import tviews
+        from fraisier.dbops._url import replace_db_name
+        from fraisier.errors import DatabaseError
+
+        try:
+            problem = tviews.rebuild_privilege_problem(
+                replace_db_name(admin_url, self._config.db_name)
+            )
+        except (tviews.TviewError, psycopg.Error) as exc:
+            log.warning(
+                "Could not check the TVIEW rebuild grant before the restore: %s", exc
+            )
+            return
+        if problem:
+            raise DatabaseError(f"{problem}. Nothing was stopped or restored.")
+
     def prepare(
         self,
         strategy: RestoreMigrateStrategy,
@@ -388,6 +419,7 @@ class PgBackRestSource:
         # the restore instead, where it is mandatory.
         if status.get("online"):
             self._require_the_helpers_cluster(strategy._admin_url, status)
+            self._require_the_tview_rebuild_grant(strategy._admin_url)
 
         age_hours = (self._now() - choice.stop).total_seconds() / 3600
         # An instant is the point of a point-in-time refresh: an old backup is not

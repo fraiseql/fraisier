@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A restore no longer finds out after the fact that it cannot rebuild TVIEWs**
+  ([#460](https://github.com/fraiseql/fraisier/issues/460)). From pg_tviews
+  0.1.0-beta.27, `pg_tviews_rebuild_all` is not executable by `PUBLIC`, and the
+  post-restore rebuild runs as `admin_url`'s role. A pgBackRest restore now asks
+  `has_function_privilege` while the cluster is still up, and refuses before anything
+  is stopped. The refusal names the `GRANT EXECUTE ON FUNCTION … TO <role>` that fixes
+  it. A `42501` from the rebuild itself (in either restore, or in
+  `fraisier db tviews rebuild`) now names that grant too. When the function was
+  allowed and a TVIEW was not, it says that instead of `pg_tviews_rebuild_all
+  failed: …`. A pg_dump restore needs no grant: `CREATE EXTENSION pg_tviews` already
+  requires its role to be a superuser. See "The role that rebuilds" in
+  `docs/deployment-guide.md`.
+
 ## [0.86.0] - 2026-10-11
 
 ### Security
