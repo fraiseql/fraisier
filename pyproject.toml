@@ -587,9 +587,23 @@ dependencies = [
   #   * `--exit-codes-json` is unchanged. `tview_004`/`tview_005` are
   #     `confiture lint` rules, which fraisier never runs. pglast's 8.5 floor
   #     is confiture's own.
+  # **1.35.0 grades a lost unique index critical** (confiture#691/#695/#689/
+  # #690/#679). Measured on the published wheels against pg_tviews beta.26,
+  # 1.34.0 vs 1.35.0, in `.phases/2026-10-11-confiture-1-35-probe/`
+  # (`driver13.py`, driver12's fourteen scenarios plus nine index ones):
+  #   * The fourteen agree.
+  #   * ⚠️ A dropped UNIQUE index, a unique index left INVALID and a dropped
+  #     unique index on a matview were a pass and are now `missing_index`
+  #     **critical**: the deploy fails. A plain index stays a warning; on a
+  #     matview it is newly reported (1.34 compared no matview index).
+  #   * ⚠️ A tree that indexes a relation it does not declare, against a
+  #     database that has it, was an `extra_table` warning and is now
+  #     `DIFFER_406`, exit 5: a gate that could not run.
+  #   * A matview or unique index built from itself, and an index on a TVIEW,
+  #     report nothing on either.
   # The floor moves with the cap. 1.34.0 is the first confiture to publish the
   # pg_tviews check that doctor calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.34.0,<1.35",
+  "fraiseql-confiture>=1.35.0,<1.36",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

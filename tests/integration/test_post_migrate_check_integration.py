@@ -877,6 +877,38 @@ class TestALostIndexIsAWarningThisGateCanBeToldToFailOn:
         assert result.exit_code == 0
 
 
+#: The same table with its index declared UNIQUE.
+_DDL_UNIQUE_INDEXED = _DDL_INDEXED.replace("CREATE INDEX", "CREATE UNIQUE INDEX")
+
+
+class TestALostUniqueIndexFailsWithoutBeingAsked:
+    """confiture 1.35.0 grades a missing **unique** index ``critical`` (#691/#695).
+
+    A unique index is a guarantee, not a speed-up: without it duplicates get in.
+    Measured on the published wheels in ``.phases/2026-10-11-confiture-1-35-probe/``
+    (scenario ``O_uidx_dropped``): ``warning`` and a passing deploy on 1.34.0,
+    ``critical`` and a failed one on 1.35.0.  A plain index stays a warning
+    (``P_idx_dropped``, and :class:`TestALostIndexIsAWarningThisGateCanBeToldToFailOn`),
+    so ``escalate: [missing_index]`` still has something to promote.
+    """
+
+    def test_the_gate_fails_on_it_unasked(self, tmp_path, drift_db) -> None:
+        project = _project(
+            tmp_path,
+            drift_db,
+            _MIGRATION_NO_INDEX,
+            extra_ddl={"030_indexed.sql": _DDL_UNIQUE_INDEXED},
+        )
+        assert _migrate(project).success is True
+
+        result = _gate(project)
+
+        assert result.ran, result.error
+        assert not result.passed, result.summary()
+        assert "missing_index" in {item.kind for item in result.critical}
+        assert result.exit_code == 1
+
+
 #: A table whose column needs quotes — the ORM-shaped name confiture refuses to
 #: compare from 1.26.0 (``DIFFER_403``, exit 5).  Declared in the DDL *and*
 #: created live below, so it contributes no drift of its own: the only thing it

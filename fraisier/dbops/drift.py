@@ -99,6 +99,13 @@ CHECK_FLAGS: dict[str, str] = {
 #: ``.phases/2026-09-29-confiture-1-26-probe/`` (scenario ``Y_index_dropped``):
 #: still ``warning``, still exit 0, unchanged from 1.25.1.
 #:
+#: ⚠️ From confiture 1.35.0 it is only **partly** a warning (#691/#695): a missing
+#: *unique* index, and one the database holds INVALID, is ``critical`` and fails
+#: the gate on its own; a plain one stays ``warning``, so the row keeps its
+#: meaning for plain indexes.  1.35.0 also compares a materialized view's indexes,
+#: which 1.34.0 never reported.  Measured on both published wheels in
+#: ``.phases/2026-10-11-confiture-1-35-probe/`` (``O`` to ``T``).
+#:
 #: ``tview_option_mismatch`` is the fifth (confiture 1.29.0, measured in
 #: ``.phases/2026-10-01-confiture-1-29-probe/`` against pg_tviews 0.1.0-beta.20):
 #: ``warning``, exit 0, one item per pinned option (``logged``, ``fillfactor``)
@@ -106,7 +113,11 @@ CHECK_FLAGS: dict[str, str] = {
 #: TVIEW built from its own tree reports no drift at all.  It is admitted because
 #: ``logged`` is the difference between a TVIEW a physical restore empties and
 #: one it keeps.  ``missing_tview`` is critical and ``extra_tview`` is not
-#: reported as a warning, so neither is a row.
+#: reported as a warning, so neither is a row.  Later confitures widen what it
+#: compares, never its severity: ``time_refresh`` and ``function_reads`` from
+#: 1.34.0, and from 1.35.0 a TVIEW's per-table ``uncascaded_tables``, one item
+#: per table, under that subject (pg_tviews#195; from confiture's changelog,
+#: not probed here).  So ``escalate: [tview_option_mismatch]`` promotes those too.
 #:
 #: ``extra_object`` is the sixth (confiture 1.30.0; wire bytes in
 #: ``.phases/2026-10-06-python-3-14-floor/wire-extra-object.json``): a stray
