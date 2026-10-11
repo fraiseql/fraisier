@@ -700,7 +700,7 @@ def _parse_against_issues(data: dict) -> MigrationPreflightResult | None:
 
     confiture emits ``{"ok", "summary": {"migrations_checked": N}, "issues":
     [...]}``. A ``PFLIGHT_NON_TRANSACTIONAL`` warning records a *skipped*
-    migration; every other error-severity issue becomes a failed
+    migration; every other error-severity issue joins its migration's one failed
     ``MigrationCheck``.
 
     Returns ``None`` when an error-severity issue cannot be tied to a migration
@@ -730,7 +730,11 @@ def _parse_against_issues(data: dict) -> MigrationPreflightResult | None:
                 )
                 skipped_versions.add(version)
 
-    # Pass 2: error-severity issues are real failures.
+    # Pass 2: error-severity issues are real failures, one check per migration.
+    # A pending migration with no .down.sql is both a static
+    # PFLIGHT_MISSING_DOWN and a PFLIGHT_REPLAY_FAILED (confiture #722), so its
+    # errors are joined rather than counted twice.
+    failed: dict[str, MigrationCheck] = {}
     for issue in issues:
         if issue.get("severity") != "error":
             continue
@@ -740,14 +744,17 @@ def _parse_against_issues(data: dict) -> MigrationPreflightResult | None:
         if not version:
             return None
         error = (issue.get("details") or {}).get("error") or issue.get("message", "")
-        checks.append(
-            MigrationCheck(
+        check = failed.get(version)
+        if check is None:
+            failed[version] = MigrationCheck(
                 version=version,
                 name=_name_from_issue_message(issue.get("message", "")),
                 passed=False,
                 error=error,
             )
-        )
+        else:
+            check.error = f"{check.error}; {error}"
+    checks.extend(failed.values())
 
     return MigrationPreflightResult(migrations=checks, migrations_checked=checked)
 

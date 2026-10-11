@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that name in the fraise's confiture config. A preflight that confiture refuses
   now reads as its code, message and remedy instead of a raw JSON envelope.
 
+- **A migration preflight counts a migration once, however many errors it has**
+  ([fraiseql/confiture#722](https://github.com/fraiseql/confiture/issues/722)). From
+  the confiture release after 1.35, a pending migration with no `.down.sql` comes
+  back as both `PFLIGHT_MISSING_DOWN` and `PFLIGHT_REPLAY_FAILED`, where 1.35 aborted
+  the whole preflight with a mislabelled `CONFIG_006`. fraisier made one failed check
+  per issue, so that migration read as two failures ("2 of N would fail"). Each failed
+  migration is now one check, with its errors joined by `; `.
+
 ### Upgrade note
 
 **⚠️ Deploys that passed the drift gate can now fail it.** A database that lost a
