@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`fraiseql-confiture` 1.35 (`>=1.35.0,<1.36`).** The post-migrate drift gate now
+  fails on a lost **unique** index: one the database no longer has, one it holds
+  INVALID (a failed `CREATE INDEX CONCURRENTLY`), and one on a materialized view.
+  Each is `missing_index` graded `critical`. A plain index stays a `warning`; on a
+  materialized view it is newly reported, since 1.34 compared no matview index.
+
+### Upgrade note
+
+**⚠️ Deploys that passed the drift gate can now fail it.** A database that lost a
+unique index its DDL declares, or holds one INVALID, fails the gate after the
+migrations ran. Rebuild the index (`REINDEX INDEX CONCURRENTLY` for an INVALID
+one) before upgrading. Separately, a DDL tree that creates an index on a relation
+it does not declare is no longer an `extra_table` warning: confiture refuses it
+with `DIFFER_406`, exit 5, so the gate reports that it could not run. A tree that
+declares the relation only after the index is refused the same way. Compose the file that creates the relation into the
+environment's `include_dirs`, and give the index's directory a higher `order:`.
+Listing it later is not enough, because `include_dirs` builds by `order`, then by
+path. See "An index on a relation the tree does not declare" in
+`docs/deployment-guide.md`.
+
 ## [0.87.0] - 2026-10-11
 
 ### Changed

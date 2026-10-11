@@ -1028,6 +1028,37 @@ else.
 DDL files, so you find it before a deploy does. The check is version-gated:
 below the release that refuses, it says nothing.
 
+#### An index on a relation the tree does not declare (`DIFFER_406`)
+
+The gate compares the live database with what `confiture build --env` builds
+from the environment's `include_dirs`. From confiture 1.35.0, a built schema
+whose index sits on a relation it does not declare, or declares only after
+that index, is refused with `DIFFER_406`, exit 5. Like `DIFFER_403`, the gate
+then could not run, and with `on_critical: fail` the deploy fails after its
+migrations applied. Up to 1.34.0, a tree that left the relation out passed
+with an `extra_table` warning.
+
+The usual cause is index DDL that FraiseQL generates into its own directory,
+beside the files that create the tables. Composing that directory is not
+enough. **The order `include_dirs` lists entries in sequences nothing.** The
+build groups entries by their `order:` value (default `0`) and sorts each group
+by path. So `db/generated/` builds before `db/schema/`, whichever is listed
+first. Give the generated directory a higher `order`:
+
+```yaml
+# db/environments/production.yaml
+include_dirs:
+  - db/schema
+  - path: db/generated     # index DDL for tables db/schema creates
+    order: 10
+```
+
+`confiture migrate diff --to-env production` builds its desired side from the
+same `include_dirs`, so the same `order` applies there. confiture's own
+`DIFFER_406` hint says to compose the fragment "after the file that creates it".
+Measured on 1.35.0, listing it after that file still fails; only `order` puts it
+after.
+
 #### A lost constraint fails the deploy (#412, confiture#506)
 
 `live-drift` reports a dropped foreign key, `CHECK`, `UNIQUE` or primary
@@ -1053,8 +1084,11 @@ rather than a silent no-op — the point of the closed list.
 ##### Escalating the kinds that are still warnings
 
 A column default that no longer matches, a widened type, a dropped
-`NOT NULL` and a dropped index are all still graded `warning`, so each is
-exit 0 and ships. `escalate` is how one deploy says a given loss is not
+`NOT NULL` and a dropped plain index are all still graded `warning`, so each is
+exit 0 and ships. A dropped **unique** index is not: from confiture 1.35.0 it is
+`critical`, and so is a unique index the database holds INVALID (a failed
+`CREATE INDEX CONCURRENTLY`), so the deploy stops without being asked.
+A materialized view's indexes are compared too. `escalate` is how one deploy says a given loss is not
 acceptable to *it*:
 
 ```yaml
