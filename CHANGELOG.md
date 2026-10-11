@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.86.0] - 2026-10-11
+
 ### Security
 
 - **The deploy user is no longer root-equivalent**
@@ -43,11 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     succeeds. Run as anyone but root it refuses, and `--output-dir` is refused.
   - Config validation refuses `service.user`/`service.group` of `root` or `0`, and
     `retain.user: root`, as defence in depth.
-  - `fraisier doctor`: `root_unit_exec_trust` now **fails** instead of warning, and
-    judges a venv run as `bin/python -m`. The new `root_helper_version_skew` and
-    `root_fraisier_command` checks report a root copy behind the deploy copy, and
-    a `sudo fraisier` that would not run the root copy. `unit_entrypoints` also
-    judges the root interpreter.
+  - `fraisier doctor`: the new `root_unit_exec_trust` **fails** on any command that
+    runs as root and executes something the deploy user can change. It judges the
+    executable through its symlinks, its `#!` interpreter, every file of its venv (a
+    `bin/python -m` command included), the base Python that the venv's `pyvenv.cfg`
+    names, and every directory above each: each must be root-owned and writable
+    only by root. It reads the effective unit from `systemctl show`, so a drop-in
+    that clears `User=` or adds a `+` line counts; where systemd cannot answer, it
+    reads the unit and its drop-ins under `/etc`, `/run` and `/usr/lib`. It also
+    counts `+` and `!` lines in a unit with `User=`. The new `root_helper_version_skew`
+    and `root_fraisier_command` checks report a root copy behind the deploy copy,
+    and a `sudo fraisier` that would not run the root copy. `unit_entrypoints` also
+    judges the root interpreter. ⚠️ `fraisier doctor` exits non-zero on every host
+    until its operator steps have run.
 
   See [root helpers](docs/security.md#root-helpers).
 - **No PEP 768 remote attach into a fraisier process**
@@ -60,21 +70,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uv`) unless it is already set. CPython disables the attach for any value, empty
   included, so it is lifted with `UnsetEnvironment=`, not with an empty value; see
   [host hardening](docs/security.md#host-hardening).
-- **Doctor reports root commands that the deploy user can change**
-  ([#433](https://github.com/fraiseql/fraisier/issues/433), detection only; the
-  fix is still to come). The new `root_unit_exec_trust` check finds every command
-  that runs as root and judges what it executes: the executable through its
-  symlinks, its `#!` interpreter, every file of its venv, the base Python that the
-  venv's `pyvenv.cfg` names, the scaffold-install-helper's `install.sh`, and every
-  directory above each. Each must be root-owned and writable only by root. It
-  reads the effective unit from `systemctl show`, so a drop-in that clears
-  `User=` or adds a `+` line counts. Where systemd cannot answer, it reads the
-  unit and its drop-ins under `/etc`, `/run` and `/usr/lib`. It also counts `+`
-  and `!` lines in a unit with `User=`, and `retain.user: root` or
-  `service.user: root`. ⚠️ **It warns on every host with the root helpers
-  installed**, because they run from the deploy user's uv tool dir, so
-  `fraisier doctor` can exit 2 where it exited 0. #433's fix, above, makes it a
-  failure; see [root helpers](docs/security.md#root-helpers).
+
+### Changed
+
+- **`fraiseql-confiture` 1.33 (`>=1.33.0,<1.34`).** 1.31 is the first confiture that
+  reads pg_tviews 0.1.0-beta.25, where a TVIEW's backing view is the one `tviews.registry`
+  names (`tviews.<schema>__tv_<entity>`) and an application `v_<entity>` view is an
+  ordinary view of the tree. 1.32 changes nothing fraisier reads. 1.33 models PostgreSQL
+  18's `NULLS NOT DISTINCT`, `NOT ENFORCED`, temporal keys and `NOT NULL … NOT VALID`, so
+  the drift gate sees them; an unvalidated `NOT NULL` no longer reports a spurious
+  `nullable_mismatch` warning.
+- **The empty-TVIEW probe skips a TVIEW it is not allowed to read, and says so.** When the
+  connecting role gets `permission denied` (SQLSTATE 42501) reading a TVIEW or its backing
+  view, `find_empty_tviews` logs one warning naming the TVIEW, its view and the grant
+  that fixes it, skips that TVIEW, and still checks the rest. Before, it raised and stopped
+  the deploy. Any other error still propagates. The grant names the connecting
+  role (`current_user`), so it can be pasted as it stands.
+- **Under `on_empty: fail`, a TVIEW the probe cannot read stops the gate**, like an empty
+  one, naming it and the `GRANT` that fixes it. That holds for a gate the project declared
+  and for the restore probe; a gate nobody wrote, and `on_empty: warn`, keep the warning.
+  With pg_tviews 0.1.0-beta.25 a role that can read `tv_<entity>` can read its backing
+  view, so this fires only for a role with no `SELECT` on the TVIEW itself.
 
 ### Fixed
 
@@ -166,6 +182,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already did (#190), and fall back to PATH with a warning only when the venv has none. On
   a host where PATH held a different confiture, the gate now runs the pinned version, and
   its verdict can change accordingly.
+- **Doctor's `fraisier_version` hint reinstalls fraisier the way hosts install it**
+  ([#457](https://github.com/fraiseql/fraisier/issues/457)). It said `pip install
+  --force-reinstall fraisier`, but hosts run fraisier from a `uv tool` venv, which has no
+  `pip`, and a `pip` on PATH repairs some other environment. The hint and
+  [the check table](docs/doctor.md) now give bootstrap's form: `uv tool install --force
+  --python 3.14 fraisier==<version>`.
 
 ### Added
 
@@ -182,49 +204,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade note
 
-**Host action.** An upgrade alone does not re-render: the config watcher hashes
-`fraises.yaml` and the template directory, not fraisier's version. This release
-changes the systemctl-helper's allowlist and adds a line to every unit, root
-helpers included, so on each host run:
+**⚠️ #433: one-time operator steps on every host, before relying on a deploy.**
+The root helpers now run a root-owned copy of fraisier that no deploy changes. A host
+upgraded only through the webhook's self-upgrade still runs the root helpers from the
+deploy user's copy, and `fraisier doctor` **fails** `root_unit_exec_trust` there. On
+each host, after the deploy user's copy is on 0.86.0:
 
-    fraisier scaffold && sudo fraisier scaffold-install --yes
+    sudo fraisier scaffold-install
 
-Until then, `fraisier doctor` warns `remote_debug_disabled` for every fraisier unit
-on that host. That is accurate: they still accept a remote attach.
+It renders as root, shows a diff of every root-owned file and of the root policy, and
+asks before writing; `--yes` skips the question, not the diff. On its first run it
+installs the root copy under `/usr/local/lib/fraisier-root` (with its own `uv`) and the
+root-owned `/usr/local/bin/fraisier` link, re-points the root helper units at it, and
+writes `/etc/fraisier/<project>/root-policy.json`. Read the diff: the config it renders is
+one a commit author chose. Then `fraisier doctor` should pass `root_unit_exec_trust`,
+`root_helper_version_skew` and `root_fraisier_command`.
 
-The same run picks up #447 on a host with an env-level `systemd_timer:` or a backup
-job's timer. Until then, a deploy of that fraise still fails at `enable <timer>`.
+From then on:
+- **Every fraisier upgrade needs `sudo fraisier-root-upgrade VERSION`** on each host. The
+  webhook's self-upgrade changes only the deploy user's copy; doctor reports the gap as
+  `root_helper_version_skew`. See [self-upgrade](docs/operations/self-upgrade.md).
+- **A deploy that would change something root owns stops**, and names what is pending:
+  sudoers (so **any `install.command` change**), every nginx file, sockets, users,
+  directories, the root helpers, and any unit outside the root policy. Run
+  `sudo fraisier scaffold-install` to apply it, then deploy again.
+- **`fraisier validate` refuses** `service.user`/`service.group` of `root` or `0`, and
+  `retain.user: root`. A config that sets one stops validating; give the unit or the
+  corpus a non-root owner.
+
+**The same run applies the rest of this release.** An upgrade alone does not
+re-render: the config watcher hashes `fraises.yaml` and the template directory, not
+fraisier's version. This release changes the systemctl-helper's allowlist and adds a
+line to every unit, root helpers included, and only that `sudo fraisier
+scaffold-install` installs them. Until it runs, `fraisier doctor` warns
+`remote_debug_disabled` for every fraisier unit on that host (accurate: they still
+accept a remote attach), and a deploy of a fraise with an env-level `systemd_timer:` or
+a backup job's timer still fails at `enable <timer>` (#447).
 
 **Orphaned app units.** Hosts scaffolded before this release carry an app unit for
 every scheduled, backup and etl fraise, and `fraisier setup` enabled each one. Nothing
 renders them any more, so nothing tracks them, and an enabled one starts uvicorn on port
 8000 at boot. Run `fraisier doctor --check stale_app_units` on each host: it lists them,
 says which are enabled, and prints the commands that remove them.
-
-## [0.86.0] - 2026-10-09
-
-### Changed
-
-- **`fraiseql-confiture` 1.33 (`>=1.33.0,<1.34`).** 1.31 is the first confiture that
-  reads pg_tviews 0.1.0-beta.25, where a TVIEW's backing view is the one `tviews.registry`
-  names (`tviews.<schema>__tv_<entity>`) and an application `v_<entity>` view is an
-  ordinary view of the tree. 1.32 changes nothing fraisier reads. 1.33 models PostgreSQL
-  18's `NULLS NOT DISTINCT`, `NOT ENFORCED`, temporal keys and `NOT NULL … NOT VALID`, so
-  the drift gate sees them; an unvalidated `NOT NULL` no longer reports a spurious
-  `nullable_mismatch` warning.
-- **The empty-TVIEW probe skips a TVIEW it is not allowed to read, and says so.** When the
-  connecting role gets `permission denied` (SQLSTATE 42501) reading a TVIEW or its backing
-  view, `find_empty_tviews` logs one warning naming the TVIEW, its view and the grant
-  that fixes it, skips that TVIEW, and still checks the rest. Before, it raised and stopped
-  the deploy. Any other error still propagates. The grant names the connecting
-  role (`current_user`), so it can be pasted as it stands.
-- **Under `on_empty: fail`, a TVIEW the probe cannot read stops the gate**, like an empty
-  one, naming it and the `GRANT` that fixes it. That holds for a gate the project declared
-  and for the restore probe; a gate nobody wrote, and `on_empty: warn`, keep the warning.
-  With pg_tviews 0.1.0-beta.25 a role that can read `tv_<entity>` can read its backing
-  view, so this fires only for a role with no `SELECT` on the TVIEW itself.
-
-### Upgrade note
 
 **⚠️ A deploy that passed can fail on a constraint the database holds differently.**
 On PostgreSQL 18, a key the DDL declares `NULLS NOT DISTINCT`, `NOT ENFORCED` or temporal

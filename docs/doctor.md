@@ -28,7 +28,7 @@ passed.
 | Check | What it verifies | Network? | Canonical fix |
 |---|---|---|---|
 | `python_version` | the running Python is 3.14 or newer | no | `uv tool install --force --python 3.14 fraisier==<version>` |
-| `fraisier_version` | `importlib.metadata.version("fraisier")` resolves | no | `pip install --force-reinstall fraisier` |
+| `fraisier_version` | `importlib.metadata.version("fraisier")` resolves | no | `uv tool install --force --python 3.14 fraisier==<version>` |
 | `confiture_version` | `confiture --version` resolvable | no | `uv tool install --force --python 3.14 fraisier==<version> --with-executables-from fraiseql-confiture` — the package is `fraiseql-confiture`; `confiture` on PyPI is an unrelated project |
 | `fraises_yaml_loadable` | `fraises.yaml` parses without error | no | `fraisier validate` for details; `fraisier init` for fresh setup |
 | `fraises_yaml_resolves` | every reachable `!envvar` resolves to a set var | no | export the missing variables or move them to `~/.config/fraisier/secrets.env` |
