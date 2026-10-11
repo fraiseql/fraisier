@@ -622,3 +622,50 @@ class TestPreflightDatabaseDropFailure:
             pass
 
         assert drop_called
+
+
+# ---------------------------------------------------------------------------
+# confiture #722: one migration, two error issues
+# ---------------------------------------------------------------------------
+
+CONFITURE_FIXTURES = Path(__file__).parent / "fixtures" / "confiture"
+
+
+class TestOneCheckPerMigration:
+    """A pending migration with no ``.down.sql`` is reported twice (confiture #722).
+
+    ``preflight-against-pending-no-down.json`` was **captured**, never composed,
+    from ``migrate preflight --against … --config … --scope pending`` (exit 7) on
+    confiture ``main`` @ ``53ac5dfa``, which carries PR #726: m1 has no down file,
+    m2 depends on m1, m3 is broken on its own. m1 comes back as the static
+    ``PFLIGHT_MISSING_DOWN`` *and* a ``PFLIGHT_REPLAY_FAILED`` naming the loader
+    error. Probe: ``.phases/2026-10-11-confiture-722-probe/wire_probe.py``.
+    """
+
+    _STDOUT = (
+        CONFITURE_FIXTURES / "preflight-against-pending-no-down.json"
+    ).read_text()
+
+    def _result(self) -> MigrationPreflightResult:
+        with patch("subprocess.run", return_value=_proc(7, self._STDOUT)):
+            return _run_confiture_preflight(
+                Path("confiture.yaml"), Path("db/migrations"), "postgresql:///t"
+            )
+
+    def test_a_migration_with_two_errors_fails_once(self):
+        result = self._result()
+
+        assert result.failure_count == 3
+        assert result.migrations_checked == 3
+
+    def test_each_failed_version_is_listed_once(self):
+        versions = [m.version for m in self._result().failures]
+
+        assert versions == ["20260101000001", "20260101000002", "20260101000003"]
+
+    def test_the_folded_check_keeps_both_errors(self):
+        first = self._result().failures[0]
+
+        assert first.name == "create_t"
+        assert "is not reversible: no matching .down.sql" in (first.error or "")
+        assert "has no matching .down.sql file" in (first.error or "")

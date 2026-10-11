@@ -1,0 +1,96 @@
+{
+  "ok": false,
+  "window_safe": true,
+  "summary": {
+    "errors": 4,
+    "warnings": 0,
+    "info": 0,
+    "migrations_checked": 3,
+    "db_consumed": false
+  },
+  "issues": [
+    {
+      "severity": "error",
+      "code": "PFLIGHT_MISSING_DOWN",
+      "message": "Migration 20260101000001 (create_t) is not reversible: no matching .down.sql.",
+      "migration": "20260101000001",
+      "file": "20260101000001_create_t.up.sql",
+      "line": null,
+      "actionable": "Add a matching .down.sql sibling, or mark the migration explicitly non-reversible.",
+      "details": {}
+    },
+    {
+      "severity": "error",
+      "code": "PFLIGHT_REPLAY_FAILED",
+      "message": "Migration 20260101000001 (create_t) failed to replay against the preflight DB.",
+      "migration": "20260101000001",
+      "file": null,
+      "line": null,
+      "actionable": "Fix the failing migration SQL; see details for the database error.",
+      "details": {
+        "error": "SQL migration 20260101000001_create_t.up.sql has no matching .down.sql file.\nExpected: /tmp/tmp7bmk_82q/migrations/20260101000001_create_t.down.sql\nHint: Create 20260101000001_create_t.down.sql with the rollback SQL for this migration"
+      }
+    },
+    {
+      "severity": "error",
+      "code": "PFLIGHT_REPLAY_FAILED",
+      "message": "Migration 20260101000002 (add_b) failed to replay against the preflight DB.",
+      "migration": "20260101000002",
+      "file": null,
+      "line": null,
+      "actionable": "Fix the failing migration SQL; see details for the database error.",
+      "details": {
+        "error": "SQL execution failed | SQL: ALTER TABLE t ADD COLUMN b int; | Error: relation \"t\" does not exist"
+      }
+    },
+    {
+      "severity": "error",
+      "code": "PFLIGHT_REPLAY_FAILED",
+      "message": "Migration 20260101000003 (broken) failed to replay against the preflight DB.",
+      "migration": "20260101000003",
+      "file": null,
+      "line": null,
+      "actionable": "Fix the failing migration SQL; see details for the database error.",
+      "details": {
+        "error": "SQL execution failed | SQL: ALTER TABLE nope ADD COLUMN c int; | Error: relation \"nope\" does not exist"
+      }
+    }
+  ],
+  "change_set": {
+    "contract_version": 1,
+    "changes": [
+      {
+        "kind": "create_table",
+        "object": "public.t",
+        "migration": "20260101000001",
+        "tier": "additive",
+        "detail": "CREATE TABLE"
+      },
+      {
+        "kind": "add_column",
+        "object": "public.t.b",
+        "migration": "20260101000002",
+        "tier": "additive",
+        "detail": "ADD COLUMN b NULL"
+      },
+      {
+        "kind": "add_column",
+        "object": "public.nope.c",
+        "migration": "20260101000003",
+        "tier": "additive",
+        "detail": "ADD COLUMN c NULL"
+      }
+    ]
+  },
+  "scope": "pending",
+  "ledger": {
+    "table": "tb_confiture",
+    "exists": true
+  },
+  "large_tables": [],
+  "command": "migrate preflight",
+  "parser": {
+    "pglast": "8.5",
+    "pg_major": 18
+  }
+}
