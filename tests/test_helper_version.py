@@ -82,6 +82,16 @@ def _connect_and_send(path: str, payload: bytes = b"ping\n") -> None:
         sock.sendall(payload)
 
 
+def _read_then_close(conn: socket.socket) -> None:
+    """Read the request before closing, as a real helper does.
+
+    Closing unread races the client: when the close lands between its
+    ``connect()`` and ``sendall()``, the client gets ``EPIPE`` (#464).
+    """
+    with conn:
+        conn.recv(64)
+
+
 @pytest.fixture
 def server_pair(tmp_path):
     """A listening AF_UNIX socket plus its path, as systemd would hand over."""
@@ -181,7 +191,7 @@ class TestServeUntilStale:
         stale = threading.Event()
 
         def handle(conn):
-            conn.close()
+            _read_then_close(conn)
             calls.append(1)
             if len(calls) == 1:
                 raise RuntimeError("boom")
@@ -205,7 +215,7 @@ class TestServeUntilStale:
         sock, path = server_pair
         thread = threading.Thread(
             target=serve_until_stale,
-            args=(sock, lambda conn: conn.close()),
+            args=(sock, _read_then_close),
             kwargs={"is_stale": lambda: False, "poll_interval": 0.02},
             daemon=True,
         )
