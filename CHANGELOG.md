@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each is `missing_index` graded `critical`. A plain index stays a `warning`; on a
   materialized view it is newly reported, since 1.34 compared no matview index.
 
+### Fixed
+
+- **A migration the backup already applied no longer fails the migration
+  preflight.** Both the deploy preflight and `fraisier db preflight` pass confiture's
+  `--scope pending` (1.35), so its static checks judge only what the ledger has not
+  applied. Before, an applied migration without a `.down.sql` was an
+  error-severity `PFLIGHT_MISSING_DOWN` that failed every deploy, and an applied
+  non-transactional one was reported as skipped. A backup whose ledger sits in a
+  schema off the `search_path` used to look unmanaged, so every migration was
+  replayed against a schema that already held them. It is now refused with
+  `CONFIG_015`, which names where the ledger is; set `migration.tracking_table` to
+  that name in the fraise's confiture config. A preflight that confiture refuses
+  now reads as its code, message and remedy instead of a raw JSON envelope.
+
 ### Upgrade note
 
 **⚠️ Deploys that passed the drift gate can now fail it.** A database that lost a

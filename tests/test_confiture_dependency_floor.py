@@ -19,6 +19,8 @@ test is why it cannot be lowered by accident.
 from __future__ import annotations
 
 import importlib
+import os
+import subprocess
 import tomllib
 from importlib.metadata import version as installed_version
 from pathlib import Path
@@ -147,3 +149,52 @@ def test_confiture_import_surface_resolves(module_name: str, attribute: str) -> 
     assert hasattr(module, attribute), (
         f"{module_name}.{attribute} is gone — a fraisier deploy path imports it"
     )
+
+
+#: The confiture release whose ``migrate preflight`` takes ``--scope pending``,
+#: which fraisier's deploy and ``db preflight`` both pass. Older ones refuse
+#: the flag, so every preflight would fail before it judged anything.
+PREFLIGHT_SCOPE_PENDING_FLOOR = Version("1.35.0")
+
+
+def test_the_floor_ships_preflight_scope_pending() -> None:
+    assert _declared_floor() >= PREFLIGHT_SCOPE_PENDING_FLOOR
+
+
+def test_installed_preflight_reads_scope_pending(tmp_path: Path) -> None:
+    """The installed confiture takes the flag and reads a ledger for it.
+
+    With no tracking database to read, ``--scope pending`` is refused with
+    ``CONFIG_010`` rather than judging every file under a ``pending`` label.
+    fraisier always passes ``--config``, so a ``CONFIG_010`` from a deploy
+    means fraisier dropped it.
+    """
+    from fraisier.dbops.confiture_contract import envelope_error_code
+    from fraisier.dbops.confiture_executable import confiture_executable
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    result = subprocess.run(
+        [
+            confiture_executable(),
+            "migrate",
+            "preflight",
+            "--migrations-dir",
+            str(migrations_dir),
+            "--format",
+            "json",
+            "--no-config",
+            "--scope",
+            "pending",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={k: v for k, v in os.environ.items() if "DATABASE_URL" not in k},
+        timeout=60,
+    )
+    assert envelope_error_code(result.stdout) == "CONFIG_010", (
+        result.stdout + result.stderr
+    )
+    assert result.returncode == 5

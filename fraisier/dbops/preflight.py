@@ -25,7 +25,9 @@ from urllib.parse import urlparse
 
 from fraisier.dbops.confiture_contract import (
     classify_confiture_failure,
+    envelope_error_actionable,
     envelope_error_code,
+    envelope_error_message,
 )
 from fraisier.dbops.confiture_executable import confiture_executable
 
@@ -619,22 +621,41 @@ def _extract_preflight_issues(stdout: str) -> str | None:
     return "\n".join(lines) if lines else None
 
 
+#: ``--scope pending``'s "the ledger is only in another schema" (confiture 1.35).
+#: Its remedy names "the config preflight reads", which fraisier writes from the
+#: fraise's own confiture config and deletes, so it needs fraisier's sentence too.
+_LEDGER_ELSEWHERE_CODE = "CONFIG_015"
+
+
 def _format_preflight_failure(returncode: int, stdout: str, stderr: str) -> str:
     """Build a diagnostic message from a fatal confiture preflight exit.
 
     confiture writes its structured failure report (issue code, offending
     migration, the underlying error/path) to *stdout* as JSON. fraisier
     historically surfaced only *stderr* — typically empty for these failures —
-    leaving operators with a bare ``exit N`` and no cause (#259). This extracts
-    the human detail from stdout when present, falls back to the raw stdout,
+    leaving operators with a bare ``exit N`` and no cause (#259). An error
+    envelope reads as ``CODE: message`` and confiture's remedy; otherwise this
+    extracts the issue lines from stdout when present, falls back to the raw stdout,
     includes any stderr, and always appends the recovery hint. The exit is named
     by its canonical semantic class (the contract table), so the operator reads
     "database unreachable" or "no migration ledger" rather than a bare integer.
     """
-    failure_class = classify_confiture_failure(returncode, envelope_error_code(stdout))
+    code = envelope_error_code(stdout)
+    failure_class = classify_confiture_failure(returncode, code)
     lines = [f"confiture preflight failed (exit {returncode}, {failure_class})."]
     detail = _extract_preflight_issues(stdout)
-    if detail:
+    message = envelope_error_message(stdout)
+    if code is not None and message is not None:
+        lines.append(f"{code}: {message}")
+        actionable = envelope_error_actionable(stdout)
+        if actionable:
+            lines.append(f"Fix: {actionable}")
+        if code == _LEDGER_ELSEWHERE_CODE:
+            lines.append(
+                "fraisier's preflight reads that name from "
+                "`migration.tracking_table` in the fraise's confiture config."
+            )
+    elif detail:
         lines.append(detail)
     elif stdout.strip():
         lines.append(stdout.strip()[:2000])
@@ -732,14 +753,13 @@ def _parse_against_issues(data: dict) -> MigrationPreflightResult | None:
 
 
 def _run_confiture_preflight(
-    confiture_config: Path | None,
+    confiture_config: Path,
     migrations_dir: Path,
     against_url: str,
     *,
-    since: str | None = None,
     timeout_seconds: int = 120,
 ) -> MigrationPreflightResult:
-    """Run ``confiture migrate preflight --against`` via subprocess.
+    """Run ``confiture migrate preflight --against --scope pending`` via subprocess.
 
     Invokes the confiture CLI with ``--format json`` so the output can be
     parsed into a structured ``MigrationPreflightResult``.  With ``--against``,
@@ -747,16 +767,21 @@ def _run_confiture_preflight(
     both valid outcomes that are parsed.  Any other exit code (validation,
     connection, config) indicates a fatal error.
 
+    ``--scope pending`` (confiture 1.35) makes the static checks judge only
+    what the ledger has not applied.  Without it, a migration the backup
+    already applied and that has no ``.down.sql`` was an error-severity
+    ``PFLIGHT_MISSING_DOWN``, failing the deploy, and an applied
+    non-transactional one was reported skipped.  A database with no ledger
+    has applied nothing, so every migration is pending; a ledger only in
+    another schema is ``CONFIG_015`` (exit 5), never "no ledger".  Measured on
+    1.35.0 in ``.phases/2026-10-11-confiture-1-35-probe/`` (``scope_probe.py``).
+
     Args:
         confiture_config: Config file used to resolve the pending set (its
             tracking table is queried).  Pass the preflight DB's own config so
-            pending detection matches the restored backup; ``None`` to fall back
-            to ``since``/all-files resolution.
+            pending detection matches the restored backup.
         migrations_dir: Directory containing migration files.
         against_url: PostgreSQL URL of the temporary preflight database.
-        since: When set (and ``confiture_config`` is ``None``), resolve pending
-            as every migration with version >= this value — used when the backup
-            carries no tracking table, so every migration is pending.
         timeout_seconds: Maximum wall-clock time for the preflight subprocess.
 
     Returns:
@@ -777,11 +802,11 @@ def _run_confiture_preflight(
         str(migrations_dir),
         "--format",
         "json",
+        "--config",
+        str(confiture_config),
+        "--scope",
+        "pending",
     ]
-    if confiture_config is not None:
-        cmd += ["--config", str(confiture_config)]
-    if since is not None:
-        cmd += ["--since", since]
     result = subprocess.run(
         cmd,
         check=False,
@@ -941,31 +966,20 @@ def run_migration_preflight(
             preflight_db.restore_schema(schema_path)
             preflight_db.restore_tracking_data(backup_path, tracking_table)
 
-            if not preflight_db.has_table(tracking_table):
-                # Backup predates/omits confiture tracking → no migration is
-                # recorded as applied, and with no tracking table there are no
-                # migration-managed objects to collide with, so every migration
-                # is genuinely pending.
-                result = _run_confiture_preflight(
-                    confiture_config=None,
-                    migrations_dir=migrations_dir,
-                    against_url=preflight_db.url,
-                    since="00000000000000",
-                    timeout_seconds=timeout_seconds,
-                )
-            else:
+            if preflight_db.has_table(tracking_table):
                 _guard_against_empty_ledger(preflight_db, tracking_table)
-                # Backup carries confiture tracking → resolve pending from the
-                # self-consistent preflight DB, matching a real restore (#250).
-                preflight_cfg = _write_preflight_config(
-                    preflight_db.url, tracking_table, schema_path.parent
-                )
-                result = _run_confiture_preflight(
-                    confiture_config=preflight_cfg,
-                    migrations_dir=migrations_dir,
-                    against_url=preflight_db.url,
-                    timeout_seconds=timeout_seconds,
-                )
+            # Resolve pending from the self-consistent preflight DB, matching a
+            # real restore (#250). A backup without a ledger has applied
+            # nothing, and confiture says so itself: every migration is pending.
+            preflight_cfg = _write_preflight_config(
+                preflight_db.url, tracking_table, schema_path.parent
+            )
+            result = _run_confiture_preflight(
+                confiture_config=preflight_cfg,
+                migrations_dir=migrations_dir,
+                against_url=preflight_db.url,
+                timeout_seconds=timeout_seconds,
+            )
 
         total_ms = int((time.monotonic() - start) * 1000)
         return MigrationPreflightResult(

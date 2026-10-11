@@ -164,20 +164,12 @@ class TestRunConfiturePreflight:
         assert "--config" in cmd
         assert "custom.yaml" in cmd
 
-    def test_command_omits_config_when_none(self):
+    def test_command_judges_only_pending_migrations(self):
         with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
-            _run_confiture_preflight(None, self._MIGRATIONS, self._URL)
+            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
         cmd = mock_run.call_args[0][0]
-        assert "--config" not in cmd
-
-    def test_command_includes_since_when_set(self):
-        with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
-            _run_confiture_preflight(
-                None, self._MIGRATIONS, self._URL, since="00000000000000"
-            )
-        cmd = mock_run.call_args[0][0]
-        assert "--since" in cmd
-        assert "00000000000000" in cmd
+        assert cmd[cmd.index("--scope") + 1] == "pending"
+        assert "--since" not in cmd
 
     def test_command_includes_migrations_dir(self):
         with patch("subprocess.run", return_value=_proc(0, _pf_json())) as mock_run:
@@ -279,6 +271,86 @@ class TestRunConfiturePreflight:
         msg = str(exc_info.value)
         assert "PFLIGHT_CONFIG_INVALID" in msg
         assert "--skip-preflight" in msg
+
+    # -- confiture 1.35 ``--scope pending`` refusals, captured from 1.35.0 in
+    # .phases/2026-10-11-confiture-1-35-probe/ (wire-scope-*.json) --
+
+    @staticmethod
+    def _envelope(code: str, message: str, actionable: str) -> str:
+        return json.dumps(
+            {
+                "ok": False,
+                "parser": {"pglast": "8.5", "pg_major": 18},
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "severity": "error",
+                    "details": {},
+                    "migration": None,
+                    "file": None,
+                    "line": None,
+                    "actionable": actionable,
+                },
+                "command": "migrate preflight",
+            },
+            indent=2,
+        )
+
+    _CONFIG_015 = (
+        "CONFIG_015",
+        "--scope pending: the ledger 'tb_confiture' does not resolve for this "
+        "session, but a relation of that name exists in other.tb_confiture",
+        "Point at the existing ledger \u2014 set `migration.tracking_table` to "
+        "'other.tb_confiture' in the config preflight reads, or put its schema on "
+        "the connection's search_path",
+    )
+    _CONFIG_010 = (
+        "CONFIG_010",
+        "--scope pending reads the tracking database's ledger, and no database "
+        "was given",
+        "Pass --database-url, --config/--env, or set CONFITURE_DATABASE_URL",
+    )
+    _CONFIG_006 = (
+        "CONFIG_006",
+        'Failed to connect to database: connection failed: connection to server at "'
+        '127.0.0.1", port 1 failed: Connection refused\n\tIs the server running on '
+        "that host and accepting TCP/IP connections?",
+        "Check that the database server is running and the connection credentials "
+        "are correct",
+    )
+
+    def _refusal(self, exit_code: int, envelope: tuple[str, str, str]) -> str:
+        with (
+            patch(
+                "subprocess.run",
+                return_value=_proc(exit_code, self._envelope(*envelope)),
+            ),
+            pytest.raises(DatabaseError) as exc_info,
+        ):
+            _run_confiture_preflight(self._CFG, self._MIGRATIONS, self._URL)
+        return str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("exit_code", "envelope"),
+        [(5, _CONFIG_015), (5, _CONFIG_010), (3, _CONFIG_006)],
+        ids=["CONFIG_015", "CONFIG_010", "CONFIG_006"],
+    )
+    def test_a_refusal_reads_as_its_code_message_and_remedy(self, exit_code, envelope):
+        code, message, actionable = envelope
+        msg = self._refusal(exit_code, envelope)
+        assert f"{code}: {message}" in msg
+        assert f"Fix: {actionable}" in msg
+        assert '"ok": false' not in msg
+
+    def test_a_ledger_in_another_schema_names_where_fraisier_reads_its_name(self):
+        """confiture's remedy names "the config preflight reads", which is a file
+        fraisier wrote and deleted. The operator sets it in the fraise's config."""
+        msg = self._refusal(5, self._CONFIG_015)
+        assert "`migration.tracking_table` in the fraise's confiture config" in msg
+
+    def test_another_refusal_does_not_name_the_tracking_table(self):
+        msg = self._refusal(5, self._CONFIG_010)
+        assert "fraise's confiture config" not in msg
 
     def test_fatal_exit_falls_back_to_stderr_when_stdout_empty(self):
         with (
