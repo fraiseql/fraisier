@@ -117,7 +117,7 @@ Fraisier supports separating the **deploy user** (runs deployments) from the **a
 
 | User | Role | Privileges |
 |------|------|-----------|
-| `deploy_user` | Runs `fraisier deploy`, webhook, backups | CREATEDB (for rebuild strategy), sudoers for systemctl, git worktree write |
+| `deploy_user` | Runs `fraisier deploy`, webhook, backups | CREATEDB (for rebuild strategy), the root helpers' sockets, a sudoers rule to run `install.command` as `install.user`, git worktree write |
 | `service.user` | Runs the application process | Connect to own DB, read app files |
 
 ### Configuration
@@ -136,11 +136,9 @@ fraises:
           user: myapp               # app runs as myapp
 ```
 
-When `service.user` differs from `deploy_user`, `fraisier setup` will:
-1. Create both system accounts
-2. Set `app_path` ownership to the app user
-3. Add the deploy user to the app user's group for write access during deployment
-4. Install sudoers for the deploy user's systemctl access
+`sudo fraisier scaffold-install` creates both system accounts and installs the
+sudoers rule that lets the deploy user run `install.command` as `install.user`.
+Neither account may be root: see [Root helpers](#root-helpers).
 
 ### When single-user is acceptable
 
@@ -210,11 +208,9 @@ because fraisier sets it again for them. Until the drop-in is reverted,
 ## Root helpers
 
 fraisier runs four helpers as root: `systemctl-helper`, `scaffold-install-helper`,
-`unit-installer` and `pgbackrest-helper`. Until
-[#433](https://github.com/fraiseql/fraisier/issues/433) they ran from the deploy
-user's uv tool dir, and the scaffold-install-helper ran a deploy-rendered
-`install.sh`, so the deploy user was root-equivalent. Two people can act as the
-deploy user here, and the model has to hold against both:
+`unit-installer` and `pgbackrest-helper`. Only the deploy user can reach their
+sockets, and the deploy user must not be able to become root through them. Two
+people can act as the deploy user, and the model holds against both:
 
 - anyone who can land a commit on an auto-deployed branch, with no host access,
   because each deploy installs that commit's `fraises.yaml` and re-renders the
@@ -242,8 +238,8 @@ and sudo's `secure_path`.
 
 ### What a deploy may install as root
 
-A deploy still re-renders the scaffold as the deploy user. The
-scaffold-install-helper now reads that render as **untrusted input** and runs
+A deploy re-renders the scaffold as the deploy user. The
+scaffold-install-helper reads that render as **untrusted input** and runs
 nothing from it. It applies only what the **root policy**
 (`/etc/fraisier/<project>/root-policy.json`) allows. Only an operator's
 `sudo fraisier scaffold-install` writes that file, and the helper refuses it
@@ -299,15 +295,14 @@ root from a path someone other than root can change. It reads the effective unit
 through `systemctl show`, so drop-ins count. It follows symlinks, a script's `#!`
 interpreter, the venv (a `bin/python -m` command included) and the base Python
 named in its `pyvenv.cfg`, and every directory above them. It also counts a `+`
-or `!` command in a unit that sets `User=`. Since #433's fix it **fails**. A host
-fails until an operator has installed the root copy and re-run
-`sudo fraisier scaffold-install`.
+or `!` command in a unit that sets `User=`. It **fails**, so a host fails until
+an operator has installed the root copy and run `sudo fraisier scaffold-install`.
 
 ## What Fraisier Does NOT Protect Against
 
-- **Host compromise**: If an attacker has shell access to the deployment server, fraisier cannot protect against them.
+- **Root on the host**: fraisier cannot protect against an attacker who is already root. Lesser footholds are in the model: the deploy user cannot become root ([Root helpers](#root-helpers)), and the app user cannot do what the deploy user does ([User Separation](#user-separation)).
 - **Network MitM**: Fraisier does not manage TLS. Use a reverse proxy (nginx, Caddy) with TLS termination.
-- **Config file tampering**: If an attacker can write to `fraises.yaml`, command validation reduces but does not eliminate risk. Protect the config file with filesystem permissions.
+- **What `fraises.yaml` asks of the deploy user**: whoever can write `fraises.yaml`, a commit author on an auto-deployed branch included, chooses the commands each deploy runs as the deploy user and with its database roles. Input validation narrows what a value can smuggle, but not what is run. The root boundary holds against it; what the deploy user can reach does not. Protect the branch, and the file with filesystem permissions.
 - **Secrets in config**: Fraisier does not encrypt secrets at rest. Source secrets from environment variables instead of embedding them in `fraises.yaml`:
   - **`!envvar VAR_NAME`** (deferred, recommended): a custom YAML tag that parses into a placeholder; the `os.environ['VAR_NAME']` lookup is deferred to consumption time and re-reads on every access. Missing variables raise `ConfigurationError` *when the value is actually consumed*, naming the full YAML key path of the placeholder. Subcommands that do not enter a section (`--help`, `--version`, `ship --help`, etc.) do not require its env tags. Run `fraisier validate --resolve-envvars` to force-resolve every reference in one pass for a pre-deploy CI gate. Works anywhere in `fraises.yaml`, including `git.<provider>.webhook_secret`, `smoke_tests.headers`, and `database.database_url`.
   - **`${VAR_NAME}`** (runtime): scoped to the `notifications:` and `hooks:` blocks only. Expanded by the dispatcher at fire time. Do not use elsewhere — most consumers read the YAML value literally and will not expand it.
