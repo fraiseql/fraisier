@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`escalate` accepts `view_definition_mismatch` and `object_definition_mismatch`**
+  (confiture 1.36). The first is a view or materialized view whose query the database
+  holds otherwise. confiture reports it only on a scratch server (`scratch_url` in the
+  environment YAML), so the gate refuses to escalate it without one rather than run
+  a check that cannot fire. The second is a redefined domain, type, policy or rule,
+  reported with or without a scratch server.
+
 ### Changed
 
+- **`fraiseql-confiture` 1.36 (`>=1.36.0,<1.37`), which needs pg_tviews
+  0.1.0-beta.27.** The drift gate compares the indexes a DDL tree writes on a TVIEW:
+  a lost unique one is `missing_index` graded `critical`, a lost plain one a warning.
+  A tree index named like one pg_tviews created on that TVIEW is refused with
+  `DIFFER_410`. With a `scratch_url`, a materialized view whose query drifted is now
+  `view_definition_mismatch` and its indexes are compared. A failed migration exits 1
+  instead of 3 (confiture#727), which changes the class fraisier logs for it from
+  `db_unreachable` to `internal_error`.
 - **`fraiseql-confiture` 1.35 (`>=1.35.0,<1.36`).** The post-migrate drift gate now
   fails on a lost **unique** index: one the database no longer has, one it holds
   INVALID (a failed `CREATE INDEX CONCURRENTLY`), and one on a materialized view.
@@ -50,6 +67,17 @@ environment's `include_dirs`, and give the index's directory a higher `order:`.
 Listing it later is not enough, because `include_dirs` builds by `order`, then by
 path. See "An index on a relation the tree does not declare" in
 `docs/deployment-guide.md`.
+
+**⚠️ Upgrade pg_tviews to 0.1.0-beta.27 first, out of band.** confiture 1.36 refuses
+an older one with `CONFIG_014` in `fraisier doctor` (`pg_tviews_contract`), the
+migration preflight, the drift gate, and `migrate up` of a migration that creates or
+drops a TVIEW, before anything is applied. So a migration cannot do the upgrade.
+Run `ALTER EXTENSION pg_tviews UPDATE` on each database before deploying. The gate
+can then fail on a unique index lost from a TVIEW, or stop with `DIFFER_410` on a
+tree index that takes a name pg_tviews owns (rename it). With `scratch_url` set,
+a TVIEW tree must itself run `CREATE EXTENSION IF NOT EXISTS pg_tviews`, or the
+scratch build makes each TVIEW a plain table and the gate fails on it. See
+"Redefined views and objects" in `docs/deployment-guide.md`.
 
 ## [0.87.0] - 2026-10-11
 

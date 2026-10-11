@@ -1,0 +1,41 @@
+{
+  "check": "live_drift",
+  "database_name": "fraisier_probe_tv136",
+  "expected_schema_source": "file:/tmp/fraisier-drift-f9u3g0ue/expected_schema.sql",
+  "has_drift": true,
+  "has_critical_drift": false,
+  "critical_count": 0,
+  "warning_count": 1,
+  "info_count": 0,
+  "tables_checked": 2,
+  "columns_checked": 7,
+  "indexes_checked": 4,
+  "constraints_checked": 5,
+  "constraint_definitions_compared": 5,
+  "objects_checked": 1,
+  "detection_time_ms": 1,
+  "drift_items": [
+    {
+      "type": "view_definition_mismatch",
+      "severity": "warning",
+      "object": "public.v_post",
+      "expected": "684ef381c852",
+      "actual": "3e87dcf8911e",
+      "message": "View 'public.v_post' is defined differently in database; `migrate validate --check-body-views --show-diff` prints both queries",
+      "subject": {
+        "schema": "public",
+        "relation": "v_post",
+        "name": null,
+        "arguments": null,
+        "role": null
+      }
+    }
+  ],
+  "fidelity": "materialised",
+  "ok": true,
+  "command": "migrate validate",
+  "parser": {
+    "pglast": "8.5",
+    "pg_major": 18
+  }
+}

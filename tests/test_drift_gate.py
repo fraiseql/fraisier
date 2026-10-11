@@ -1016,6 +1016,9 @@ class TestEscalationVocabularyIsClosedHereToo:
         Asserted against :data:`ESCALATABLE_KINDS` itself rather than a copy, so
         a kind added there is exercised here without a second edit.
         """
+        env = project / "db/environments/production.yaml"
+        # `view_definition_mismatch` is refused without one.
+        env.write_text(env.read_text() + "scratch_url: postgresql:///postgres\n")
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = _fake_confiture(INDEX_LOST)
             result = check_schema_drift(
