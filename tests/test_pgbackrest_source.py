@@ -401,7 +401,7 @@ class TestRestore:
         with caplog.at_level("INFO"):
             self.run(world=World(tviews=[TviewRebuilt("post", 3)]))
 
-        assert "pg_tviews: rebuilt 1 empty TVIEW(s) post=3rows" in caplog.text
+        assert "pg_tviews: rebuilt 1 reset TVIEW(s) post=3rows" in caplog.text
 
     def test_ownership_is_reassigned_when_asked(self) -> None:
         with patch(

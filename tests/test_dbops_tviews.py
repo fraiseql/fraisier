@@ -331,6 +331,62 @@ class TestRebuild:
             tviews.rebuild_empty_tviews("postgresql:///app")
 
 
+class TestRebuildPrivilege:
+    """The GRANT the #460 precheck names, and nothing a beta.27 caller lacks."""
+
+    def test_names_only_the_function_grant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pg_tviews 0.1.0-beta.27 rebuilds and counts each TVIEW as its owner: the
+        caller needs no privilege on the tables, so asking for one would be a false
+        fix (measured)."""
+        conn = FakeConn(
+            EXTENSION,
+            CONTRACT_ONE,
+            ("SELECT current_user", [("deployer",)]),
+            ("has_function_privilege", [(False, "deployer")]),
+        )
+        patch_connect(monkeypatch, conn)
+
+        problem = tviews.rebuild_privilege_problem("postgresql:///app")
+
+        assert problem is not None
+        assert problem.endswith(
+            'Fix: GRANT EXECUTE ON FUNCTION "tviews".pg_tviews_rebuild_all(boolean) '
+            'TO "deployer"'
+        )
+
+    def test_a_refusal_past_the_function_grant_blames_the_tview_owner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With ``EXECUTE`` granted, a ``42501`` is the TVIEW owner's: beta.27
+        rebuilds as the owner, so a superuser gets the same refusal (measured).
+        Telling the operator to rerun as a superuser would be a false fix."""
+        conn = FakeConn(
+            EXTENSION,
+            CONTRACT_ONE,
+            ("pg_is_in_recovery", [(False,)]),
+            (
+                "pg_tviews_rebuild_all(only_empty",
+                psycopg.errors.InsufficientPrivilege(
+                    "permission denied for table tb_post"
+                ),
+            ),
+            ("SELECT current_user", [("deployer",)]),
+            ("has_function_privilege", [(True, "deployer")]),
+        )
+        patch_connect(monkeypatch, conn)
+
+        with pytest.raises(tviews.TviewError) as excinfo:
+            tviews.rebuild_empty_tviews("postgresql:///app")
+
+        message = str(excinfo.value)
+        assert "permission denied for table tb_post" in message
+        assert "owner" in message
+        assert "superuser" not in message
+        assert "GRANT EXECUTE" not in message
+
+
 class TestProfile:
     def test_each_row_is_keyed_by_column_name(
         self, monkeypatch: pytest.MonkeyPatch

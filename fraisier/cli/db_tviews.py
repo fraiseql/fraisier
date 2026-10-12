@@ -83,7 +83,7 @@ def tviews_status(ctx: click.Context, fraise: str, env: str, as_json: bool) -> N
     \b
     Exit codes:
       0  every TVIEW that should have rows has them
-      1  a TVIEW is empty while its backing view has rows — rebuild it
+      1  a TVIEW is empty while its backing view has rows — rebuild --all
       3  could not check: no pg_tviews, an older pg_tviews, or no connection
 
     \b
@@ -166,7 +166,11 @@ def _print_status(
                 f"[red]Empty:[/red] {found.tview} has no rows, its view "
                 f"{found.view} does"
             )
-        console.print("  Run `fraisier db tviews rebuild` on the primary.")
+        console.print(
+            "  Run `fraisier db tviews rebuild` on the primary; it fills only the "
+            "TVIEWs PostgreSQL reset, so for a LOGGED one or one emptied by hand "
+            "run `fraisier db tviews rebuild --all`."
+        )
     else:
         console.print("[green]No TVIEW is empty under a populated view.[/green]")
 
@@ -179,8 +183,8 @@ def _print_status(
     "everything",
     is_flag=True,
     help=(
-        "Rebuild every TVIEW, not only the empty UNLOGGED ones. For a LOGGED "
-        "TVIEW the probe reports, or one you suspect is stale."
+        "Rebuild every TVIEW, not only the ones PostgreSQL reset. For a LOGGED "
+        "TVIEW the probe reports, one emptied by hand, or one you suspect is stale."
     ),
 )
 @click.option(
@@ -196,10 +200,11 @@ def tviews_rebuild(
 
     Run it on the primary once it is promoted, or after a crash-recovery start:
     an UNLOGGED TVIEW is empty after either and nothing else notices.  By default
-    only TVIEWs that are empty while their view has rows are filled
+    only the TVIEWs PostgreSQL reset are filled
     (``pg_tviews_rebuild_all(only_empty)``), dependencies first and without
-    ``TRUNCATE``, so readers are not blocked.  On a standby pg_tviews refuses,
-    and this says so and exits non-zero.
+    ``TRUNCATE``, so readers are not blocked; ``--all`` also refills one that is
+    merely empty.  On a standby pg_tviews refuses, and this says so and exits
+    non-zero.
 
     Holds the same per-fraise deployment lock the webhook uses.
 
@@ -246,7 +251,13 @@ def tviews_rebuild(
         raise SystemExit(1) from exc
 
     if not rebuilt:
-        console.print("Nothing to rebuild: no TVIEW was empty under a populated view.")
+        if everything:
+            console.print("Nothing to rebuild: the database has no TVIEW.")
+        else:
+            console.print(
+                "Nothing to rebuild: no TVIEW was reset. One that is empty for "
+                "another reason (LOGGED, or emptied by hand) needs --all."
+            )
         return
     for entry in rebuilt:
         console.print(f"[green]Rebuilt[/green] {entry.entity}: {entry.rows} row(s)")

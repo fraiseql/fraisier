@@ -63,6 +63,14 @@ class TestOnEmptyFail:
         assert "public.v_post" in str(exc.value)
         assert "db tviews rebuild" in str(exc.value)
 
+    def test_it_says_all_also_refills_one_emptied_by_hand(self, app: Path) -> None:
+        """From pg_tviews 0.1.0-beta.27 a plain rebuild fills only what PostgreSQL
+        reset; a TVIEW a migration or a hand emptied is not reset."""
+        with pytest.raises(DeploymentError) as exc:
+            _probe(_deployer(app, enabled=True), app, found=EMPTY)
+
+        assert "add --all for a LOGGED one or one emptied by hand" in str(exc.value)
+
     def test_it_is_the_default_when_no_block_is_written(self, app: Path) -> None:
         with pytest.raises(DeploymentError):
             _probe(_deployer(app), app, found=EMPTY)
