@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`fraiseql-confiture` 1.36 (`>=1.36.0,<1.37`), which needs pg_tviews
+- **`fraiseql-confiture` 1.36 (`>=1.36.1,<1.37`), which needs pg_tviews
   0.1.0-beta.27.** The drift gate compares the indexes a DDL tree writes on a TVIEW:
   a lost unique one is `missing_index` graded `critical`, a lost plain one a warning.
   A tree index named like one pg_tviews created on that TVIEW is refused with
@@ -75,9 +75,9 @@ drops a TVIEW, before anything is applied. So a migration cannot do the upgrade.
 Run `ALTER EXTENSION pg_tviews UPDATE` on each database before deploying. The gate
 can then fail on a unique index lost from a TVIEW, or stop with `DIFFER_410` on a
 tree index that takes a name pg_tviews owns (rename it). With `scratch_url` set,
-a TVIEW tree must itself run `CREATE EXTENSION IF NOT EXISTS pg_tviews`, or the
-scratch build makes each TVIEW a plain table and the gate fails on it. See
-"Redefined views and objects" in `docs/deployment-guide.md`.
+a TVIEW tree needs a scratch server that has pg_tviews installed; one without it
+is refused with `CONFIG_014`. See "Redefined views and objects" in
+`docs/deployment-guide.md`.
 
 ## [0.87.0] - 2026-10-11
 

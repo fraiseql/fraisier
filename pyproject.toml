@@ -626,9 +626,15 @@ dependencies = [
   #     (`.phases/2026-10-11-confiture-727-probe/`).
   #   * `--scope pending` preflight and the `include_dirs` composition probes
   #     (`.phases/2026-10-11-confiture-1-35-probe/`) give the same results.
+  # The floor is 1.36.1, not 1.36.0 (confiture#730): with `scratch_url`, 1.36.0
+  # built a tree's TVIEWs as plain tables on the scratch server unless the tree
+  # ran `CREATE EXTENSION pg_tviews` itself, so a TVIEW tree compared with itself
+  # failed on a critical `missing_table`. 1.36.1 creates the extension there and
+  # refuses a scratch server without pg_tviews with CONFIG_014; the other 39
+  # driver14 scenarios are identical (`result-1.36.1.txt`).
   # The floor moves with the cap. 1.34.0 is the first confiture to publish the
   # pg_tviews check that doctor calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.36.0,<1.37",
+  "fraiseql-confiture>=1.36.1,<1.37",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
