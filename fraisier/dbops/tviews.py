@@ -240,14 +240,6 @@ def _rebuild_grant(conn: _Executes, schema: str) -> tuple[str, str]:
     return function, grant
 
 
-#: What ``pg_tviews_rebuild_all`` needs besides the function grant: it reads each
-#: TVIEW as the caller to find the empty ones and count what it filled.
-_REBUILD_ALSO_NEEDS = (
-    "the role also needs SELECT on every TVIEW; a superuser or the "
-    "extension's owner needs neither"
-)
-
-
 def rebuild_privilege_problem(url: str) -> str | None:
     """Why the connecting role cannot run ``pg_tviews_rebuild_all``, or ``None``.
 
@@ -278,7 +270,7 @@ def _missing_rebuild_grant(conn: _Executes, schema: str) -> str | None:
     return (
         f"role {row[1]!r} cannot execute {function}, which the post-restore "
         f"TVIEW rebuild runs (pg_tviews 0.1.0-beta.27 no longer grants it to "
-        f"PUBLIC). Fix: {grant}; {_REBUILD_ALSO_NEEDS}"
+        f"PUBLIC). Fix: {grant}"
     )
 
 
@@ -304,14 +296,15 @@ def _rebuild(url: str, *, only_empty: bool) -> list[TviewRebuilt]:
             ).fetchall()
         except psycopg.errors.InsufficientPrivilege as exc:
             # Only name the function grant when it is the one missing: a refusal
-            # on a TVIEW the rebuild touches is the same SQLSTATE.
+            # on a table a TVIEW reads is the same SQLSTATE.
             missing = _missing_rebuild_grant(conn, str(support.schema))
             raise TviewError(
                 f"pg_tviews_rebuild_all failed: {exc}. "
                 + (
                     missing
-                    or "The role may run it but not touch every TVIEW: run the "
-                    "rebuild as a superuser or as the TVIEWs' owner"
+                    or "pg_tviews rebuilds each TVIEW as its owner, so that owner "
+                    "lacks a privilege on what the TVIEW reads; grant it to the "
+                    "owner"
                 )
             ) from exc
         except psycopg.Error as exc:
@@ -320,7 +313,7 @@ def _rebuild(url: str, *, only_empty: bool) -> list[TviewRebuilt]:
 
 
 def rebuild_empty_tviews(url: str) -> list[TviewRebuilt]:
-    """Fill every UNLOGGED TVIEW that is empty while its backing view is not.
+    """Fill every UNLOGGED TVIEW PostgreSQL reset (a crash, failover or restore).
 
     ``pg_tviews_rebuild_all(only_empty => true)``: dependencies first, no
     ``TRUNCATE`` so readers are not blocked, and a healthy TVIEW is left alone.
@@ -336,7 +329,7 @@ def rebuild_all_tviews(url: str) -> list[TviewRebuilt]:
     """Rebuild **every** TVIEW from its backing view, empty or not.
 
     The repair for a TVIEW the probe reports that ``only_empty`` will not touch
-    (a LOGGED one), and for a TVIEW suspected stale rather than empty.
+    (a LOGGED one, or one emptied by hand), and for one suspected stale.
     """
     return _rebuild(url, only_empty=False)
 

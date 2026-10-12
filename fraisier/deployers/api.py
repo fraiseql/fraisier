@@ -805,7 +805,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             f"has rows: {pairs}. A restore, a crash-recovery start or a failover "
             f"empties an UNLOGGED TVIEW and nothing else notices. Run "
             f"`fraisier db tviews rebuild {self.fraise_name} -e "
-            f"{self.environment}` (add --all for a LOGGED one)"
+            f"{self.environment}` (add --all for a LOGGED one or one emptied by hand)"
         )
         if gate.on_empty == "warn":
             logger.warning("%s", message)

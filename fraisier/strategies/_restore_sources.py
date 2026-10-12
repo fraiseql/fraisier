@@ -36,11 +36,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
     from fraisier.config.restore_source import PgBackRestSpec
     from fraisier.dbops.archive import ArchiveCheck
+    from fraisier.dbops.tviews import TviewRebuilt
 
     from ._restore import RestoreConfig, RestoreMigrateStrategy
 
@@ -287,13 +288,7 @@ class DumpSource:
         # and one that never looked must not read alike (#422). None means the
         # database has no pg_tviews.
         if restore_result.tviews_rebuilt is not None:
-            log.info(
-                "pg_tviews: rebuilt %d empty TVIEW(s)%s",
-                len(restore_result.tviews_rebuilt),
-                "".join(
-                    f" {r.entity}={r.rows}rows" for r in restore_result.tviews_rebuilt
-                ),
-            )
+            _log_rebuilt(restore_result.tviews_rebuilt)
 
         return SourceRestored(
             started_at=started_at,
@@ -302,6 +297,20 @@ class DumpSource:
             unchecked_schemas=check.unchecked_schemas,
             phases={"pg_restore": restore_secs},
         )
+
+
+def _log_rebuilt(rebuilt: Iterable[TviewRebuilt]) -> None:
+    """Log what the post-restore TVIEW rebuild filled, the same way on both paths.
+
+    "reset", not "empty": a dump leaves out pg_tviews' validity table, so from
+    0.1.0-beta.27 a dump restore refills every TVIEW, populated ones included.
+    """
+    rebuilt = tuple(rebuilt)
+    log.info(
+        "pg_tviews: rebuilt %d reset TVIEW(s)%s",
+        len(rebuilt),
+        "".join(f" {r.entity}={r.rows}rows" for r in rebuilt),
+    )
 
 
 def _size_or_zero(path: Path) -> int:
@@ -644,10 +653,5 @@ class PgBackRestSource:
         # restore empties every UNLOGGED TVIEW (#422).
         restored_url = replace_db_name(admin_url, cfg.db_name)
         if tviews.tviews_installed(restored_url):
-            rebuilt = tviews.rebuild_empty_tviews(restored_url)
-            log.info(
-                "pg_tviews: rebuilt %d empty TVIEW(s)%s",
-                len(rebuilt),
-                "".join(f" {r.entity}={r.rows}rows" for r in rebuilt),
-            )
+            _log_rebuilt(tviews.rebuild_empty_tviews(restored_url))
         return phases

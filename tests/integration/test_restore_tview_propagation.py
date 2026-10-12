@@ -13,7 +13,7 @@ too: restoring by hand with ``--disable-triggers`` leaves ``tv_post`` at the old
 value, so this assertion can see a dead TVIEW.  This test is the regression pin
 for either side of that changing.
 
-Needs pg_tviews 0.1.0-beta.20 or later on the server.  CI has none, so there
+Needs pg_tviews 0.1.0-beta.27 on the server.  CI has none, so there
 this skips — the ``pg_tviews_target`` fixture says so — and the PR records that
 it ran locally.
 """
@@ -64,6 +64,7 @@ def _drop_databases(target: PgTarget) -> None:
 @pytest.mark.parametrize("jobs", [1, 4])
 def test_a_restored_tview_follows_its_base_tables(pg_tviews_target, tmp_path, jobs):
     from fraisier.dbops.restore import restore_backup
+    from fraisier.dbops.tviews import TviewRebuilt
 
     target = pg_tviews_target
     dump_path = tmp_path / "src.dump"
@@ -97,8 +98,9 @@ def test_a_restored_tview_follows_its_base_tables(pg_tviews_target, tmp_path, jo
             jobs=jobs,
         )
         assert result.success is True, result.error
-        # a dump carries UNLOGGED data, so the rebuild finds nothing to do
-        assert result.tviews_rebuilt == ()
+        # A dump leaves out pg_tviews' UNLOGGED validity table, so from
+        # 0.1.0-beta.27 every TVIEW restores as reset and the rebuild refills it.
+        assert result.tviews_rebuilt == (TviewRebuilt("post", 1),)
 
         with psycopg.connect(target.dsn(_DST_DB), autocommit=True) as conn:
             restored = conn.execute(

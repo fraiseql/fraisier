@@ -1204,7 +1204,7 @@ What fraisier does about it:
 
 | When | What | Failing means |
 |---|---|---|
-| after a `pg_restore` (`db restore`, `restore_migrate`) | calls `pg_tviews_rebuild_all(only_empty => true)` on the restored database; the result is logged as `pg_tviews: rebuilt N empty TVIEW(s)` and carried on `RestoreResult.tviews_rebuilt` (`None` = the database has no pg_tviews) | the restore fails with `stage="tview_rebuild"`, before the service starts |
+| after a `pg_restore` (`db restore`, `restore_migrate`) | calls `pg_tviews_rebuild_all(only_empty => true)` on the restored database; the result is logged as `pg_tviews: rebuilt N reset TVIEW(s)` and carried on `RestoreResult.tviews_rebuilt` (`None` = the database has no pg_tviews) | the restore fails with `stage="tview_rebuild"`, before the service starts |
 | after the migration, in every deploy | reads each TVIEW and its backing view from `tviews.registry` and refuses one that is empty while its view has rows | the deploy stops, naming each `tv_*`/`v_*` pair |
 | before the service starts in `restore_migrate` | the same probe | the restore stops with the service still down |
 
@@ -1216,9 +1216,10 @@ superuser or the extension's owner, it needs:
 GRANT EXECUTE ON FUNCTION tviews.pg_tviews_rebuild_all(boolean) TO <admin_url role>;
 ```
 
-It also needs `SELECT` on every TVIEW, because the rebuild reads each one as the caller
-to find the empty ones. Before beta.27 it also writes them as the caller, so it needs
-`INSERT` too (measured on beta.26).
+That is all it needs: pg_tviews rebuilds, reads and counts each TVIEW as its owner, so
+the role needs no privilege on the TVIEWs themselves (measured on beta.27). For the same
+reason a refusal past that grant is the owner's (it lost `SELECT` on a table its TVIEW
+reads, say), and a superuser gets it too.
 
 - **pgBackRest restore.** The restore is physical, so the grant comes back with the
   backup: make it on the source. While the cluster is still up, fraisier asks
@@ -1230,8 +1231,8 @@ to find the empty ones. Before beta.27 it also writes them as the caller, so it 
   grant. A grant made in the target database would not survive it anyway: the restore
   drops and recreates the database.
 - **`fraisier db tviews rebuild`, and a rebuild that fails in either restore.** A
-  `42501` names the missing `GRANT`. If the function was allowed and a TVIEW was not,
-  it says that instead.
+  `42501` names the missing `GRANT`. If the function was allowed, the refusal is the
+  TVIEW owner's, and it says so instead.
 
 A TVIEW the deploy role may not read, or whose backing view it may not read, cannot be
 verified. The probe logs `pg_tviews: cannot verify …` naming it and the
@@ -1251,18 +1252,25 @@ does; `fail` is the default for the same reason it is there. The probe follows
 asked. A probe that *could not run* fails a gate you declared and only warns for
 the default one, exactly as the drift gate does.
 
-A pg_dump restore does **not** empty a TVIEW — the dump carries UNLOGGED data — so
-on that path the rebuild normally finds nothing to do and costs one query. It is
-there because a physical restore is the case where it is not a no-op.
+A pg_dump restore does not empty a TVIEW (the dump carries UNLOGGED data), but it
+does leave out pg_tviews' own validity table. So every TVIEW restores as *reset*, and
+the rebuild refills each one from its backing view: on a dump restore it costs one
+full pass over every backing view, not one query (measured on beta.27). On a
+physical restore it is what puts the rows back.
 
 **After a failover or a crash restart** fraisier is not in the loop, so the step is
 yours. Promote, then, on the new primary:
 
 ```bash
 fraisier db tviews status api -e production     # what is empty? exits 1 if any
-fraisier db tviews rebuild api -e production    # fill the empty UNLOGGED ones
+fraisier db tviews rebuild api -e production    # fill the ones PostgreSQL reset
 fraisier db tviews rebuild api -e production --all   # a LOGGED one, or a stale one
 ```
+
+From pg_tviews 0.1.0-beta.27, `rebuild` without `--all` fills only the TVIEWs
+**PostgreSQL reset**: UNLOGGED ones that a crash, failover or restore emptied. A TVIEW
+that is merely empty (truncated by hand, say) is not a reset one, so only `--all`
+refills it. `status` and the deploy gate's refusal both say so.
 
 `status` reads `pg_tviews_profile()`, which is read-only and works on a standby.
 An UNLOGGED TVIEW cannot be *read* on a standby, so there the emptiness check is

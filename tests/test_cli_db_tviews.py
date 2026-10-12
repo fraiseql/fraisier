@@ -73,6 +73,15 @@ class TestStatus:
         assert "public.tv_post" in result.output
         assert "public.v_post" in result.output
 
+    def test_an_empty_tview_names_the_rebuild_that_refills_any_empty_one(
+        self, runner, cfg
+    ) -> None:
+        """A plain rebuild fills only what PostgreSQL reset (pg_tviews
+        0.1.0-beta.27); a LOGGED TVIEW, or one emptied by hand, needs ``--all``."""
+        result = _status(runner, empty=EMPTY)
+
+        assert "fraisier db tviews rebuild --all" in result.output
+
     def test_no_pg_tviews_is_not_a_pass(self, runner, cfg) -> None:
         result = _status(runner, installed=False)
 
@@ -164,6 +173,23 @@ class TestRebuild:
 
         assert result.exit_code == 0
         assert "nothing" in result.output.lower()
+
+    def test_nothing_reset_points_at_all_for_one_that_is_merely_empty(
+        self, runner, cfg
+    ) -> None:
+        """Without ``--all`` only reset TVIEWs are filled, so "nothing" must not
+        read as "nothing is empty" when ``status`` just said one was."""
+        result, *_ = _rebuild(runner)
+
+        assert "no TVIEW was reset" in result.output
+        assert "--all" in result.output
+
+    def test_nothing_under_all_does_not_point_at_all(self, runner, cfg) -> None:
+        result, *_ = _rebuild(runner, "--all")
+
+        assert result.exit_code == 0
+        assert "no TVIEW" in result.output
+        assert "--all" not in result.output
 
     def test_a_standby_is_refused_plainly_and_exits_nonzero(self, runner, cfg) -> None:
         result, *_ = _rebuild(

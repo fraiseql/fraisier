@@ -54,6 +54,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per issue, so that migration read as two failures ("2 of N would fail"). Each failed
   migration is now one check, with its errors joined by `; `.
 
+- **TVIEW rebuild advice matches pg_tviews 0.1.0-beta.27**
+  ([#460](https://github.com/fraiseql/fraisier/issues/460)). beta.27 rebuilds, reads
+  and counts each TVIEW as its owner, and `only_empty` refills only the TVIEWs
+  PostgreSQL reset (measured). So:
+  - A `42501` from the rebuild with `EXECUTE` granted is the TVIEW owner's, and a
+    superuser gets it too. The message used to say "run the rebuild as a superuser",
+    and now it blames the owner.
+  - The #460 refusal no longer asks for `SELECT` on every TVIEW, which the role does
+    not need.
+  - `fraisier db tviews rebuild` without `--all` does nothing for a TVIEW that is
+    merely empty (LOGGED, or emptied by hand). Its "nothing to rebuild" line said "no
+    TVIEW was empty" right after `status` reported one. It now says no TVIEW was
+    reset and points at `--all`, and so do `status` and the deploy gate's refusal.
+  - A pg_dump restore leaves out pg_tviews' validity table, so it now refills every
+    TVIEW: one full pass over the backing views, not the single query
+    `docs/deployment-guide.md` promised. The restore logs
+    `pg_tviews: rebuilt N reset TVIEW(s)`, which used to read "empty".
+
 ### Upgrade note
 
 **⚠️ Deploys that passed the drift gate can now fail it.** A database that lost a

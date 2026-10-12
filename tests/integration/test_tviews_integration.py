@@ -1,11 +1,11 @@
 """fraisier's pg_tviews calls against a real pg_tviews (#422).
 
 An UNLOGGED TVIEW is emptied by a crash-recovery start, a failover or a physical
-restore.  ``TRUNCATE`` reproduces the state exactly as pg_tviews itself reports
+restore.  :func:`_empty` reproduces the state exactly as pg_tviews itself reports
 it (``is_empty`` and ``needs_rebuild`` both true), without needing a cluster to
 crash.
 
-Needs pg_tviews 0.1.0-beta.20 or later; CI has none, so there this skips and the
+Needs pg_tviews 0.1.0-beta.27; CI has none, so there this skips and the
 PR records that it ran locally.
 """
 
@@ -76,8 +76,19 @@ def url(pg_tviews_target: PgTarget) -> Iterator[str]:
 
 
 def _empty(url: str, table: str) -> None:
+    """Leave *table* as a reset empties it.
+
+    A reset TVIEW is an UNLOGGED one missing from ``tviews.pg_tview_valid``, the
+    UNLOGGED table a reset empties with it.  A TVIEW that is merely empty is not
+    rebuilt by ``only_empty`` (beta.27).
+    """
     with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute(f"ALTER TABLE {table} SET UNLOGGED")
         conn.execute(f"TRUNCATE {table}")
+        conn.execute(
+            "DELETE FROM tviews.pg_tview_valid WHERE table_oid = %s::regclass",
+            (table,),
+        )
 
 
 def test_a_healthy_database_has_nothing_empty(url: str) -> None:
@@ -148,9 +159,10 @@ def test_a_database_without_pg_tviews_is_unaffected(pg_tviews_target: PgTarget) 
 
 
 #: pg_tviews 0.1.0-beta.27 stops granting its bulk maintenance functions to
-#: ``PUBLIC`` (#460).  Revoking the grant on an earlier version reproduces the
-#: privilege state exactly, so these run on whatever pg_tviews the server has.
+#: ``PUBLIC`` (#460).  Revoking it here keeps the fixture independent of the
+#: extension's defaults.
 _REBUILDER = "fraisier_it_rebuilder"
+_OWNER = "fraisier_it_tview_owner"
 
 
 def _as_role(url: str, role: str) -> str:
@@ -164,7 +176,11 @@ def _as_role(url: str, role: str) -> str:
 
 @pytest.fixture
 def without_public_rebuild(url: str) -> Iterator[str]:
-    """*url* as a role that may read every TVIEW but not run the bulk rebuild."""
+    """*url* as a role with no privilege on a TVIEW and none on the rebuild.
+
+    beta.27 rebuilds and counts each TVIEW as its owner, so ``EXECUTE`` is
+    the only thing this role is missing.
+    """
     with psycopg.connect(url, autocommit=True) as conn:
         # Roles are cluster-wide; its grants die with the fixture's database.
         if not conn.execute(
@@ -175,10 +191,6 @@ def without_public_rebuild(url: str) -> Iterator[str]:
             "REVOKE EXECUTE ON FUNCTION tviews.pg_tviews_rebuild_all(boolean) "
             "FROM PUBLIC"
         )
-        # INSERT too: before beta.27 the rebuild writes each TVIEW as the caller
-        # (measured on beta.26), so without it the grant under test is not the
-        # last thing missing.
-        conn.execute(f"GRANT SELECT, INSERT ON tv_post, tv_user TO {_REBUILDER}")
     yield _as_role(url, _REBUILDER)
 
 
@@ -195,7 +207,8 @@ def test_a_role_without_execute_is_told_the_grant_before_any_restore(
 
 
 def test_the_grant_it_names_is_the_fix(url: str, without_public_rebuild: str) -> None:
-    """The statement in the message is executed verbatim, then the rebuild runs."""
+    """The statement in the message is executed verbatim, then the rebuild runs
+    for a role that has nothing on the TVIEWs themselves."""
     problem = tviews.rebuild_privilege_problem(without_public_rebuild)
     assert problem is not None
     grant = problem[problem.index("GRANT") :].split(";")[0]
@@ -232,26 +245,43 @@ def test_a_database_without_pg_tviews_has_no_privilege_problem(
     assert tviews.rebuild_privilege_problem(pg_tviews_target.dsn("postgres")) is None
 
 
-def test_a_refusal_on_a_tview_does_not_blame_the_function_grant(url: str) -> None:
-    """A role that may run the rebuild but not read a TVIEW is told that instead.
+def test_a_refusal_on_a_table_names_the_owner_not_the_function_grant(
+    url: str,
+) -> None:
+    """With ``EXECUTE`` granted, a ``42501`` is the TVIEW owner's.
 
-    ``PUBLIC`` keeps its ``EXECUTE`` here, so the function grant is not missing
-    and a message naming it would send the operator to fix the wrong thing.
+    beta.27 rebuilds each TVIEW as its owner, so a superuser is refused the same
+    way (measured): naming the function grant, or a superuser, would be a false
+    fix.  The owner here has lost ``SELECT`` on the table its TVIEW reads.
     """
     with psycopg.connect(url, autocommit=True) as conn:
         if not conn.execute(
-            "SELECT 1 FROM pg_roles WHERE rolname = %s", (_REBUILDER,)
+            "SELECT 1 FROM pg_roles WHERE rolname = %s", (_OWNER,)
         ).fetchone():
-            conn.execute(f"CREATE ROLE {_REBUILDER}")
+            conn.execute(f"CREATE ROLE {_OWNER}")
+        conn.execute(f"GRANT CREATE ON SCHEMA public TO {_OWNER}")
+        conn.execute(f"SET ROLE {_OWNER}")
         conn.execute(
-            "GRANT EXECUTE ON FUNCTION tviews.pg_tviews_rebuild_all(boolean) TO PUBLIC"
+            "CREATE TABLE tb_note (pk_note bigint PRIMARY KEY, id uuid NOT NULL "
+            "UNIQUE, body text)"
         )
-    _empty(url, "tv_post")
+        conn.execute(
+            "INSERT INTO tb_note VALUES "
+            "(1, '00000000-0000-0000-0000-0000000000b1', 'hi')"
+        )
+        conn.execute(
+            "CREATE TABLE tv_note AS SELECT pk_note, id, "
+            "jsonb_build_object('body', body) AS data FROM tb_note"
+        )
+        conn.execute(f"REVOKE SELECT ON tb_note FROM {_OWNER}")
+        conn.execute("RESET ROLE")
+    _empty(url, "tv_note")
 
     with pytest.raises(tviews.TviewError) as excinfo:
-        tviews.rebuild_empty_tviews(_as_role(url, _REBUILDER))
+        tviews.rebuild_empty_tviews(url)
 
     message = str(excinfo.value)
-    assert "permission denied for table" in message
+    assert "permission denied for table tb_note" in message
+    assert "owner" in message
     assert "GRANT EXECUTE" not in message
-    assert "superuser" in message
+    assert "superuser" not in message
