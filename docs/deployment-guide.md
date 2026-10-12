@@ -1184,10 +1184,13 @@ fail`, that fails the deploy.
 ⚠️ A `scratch_url` changes more than the new kind. A materialized view whose query
 drifted *and* that lost a unique index fails the gate from 1.36.0 (confiture#701).
 On 1.35.0 a scratch server hid that loss; without one it already failed.
-And the scratch build runs only what the tree says: a tree that creates TVIEWs
-must itself run `CREATE EXTENSION IF NOT EXISTS pg_tviews`, or the scratch side
-builds each TVIEW as a plain table and the gate reports it `missing_table`,
-critical. Measured on 1.35.0 and 1.36.0 alike.
+And a tree that declares TVIEWs needs a scratch server with pg_tviews
+installed, the release the target database runs. From confiture 1.36.1 (the
+floor fraisier pins) confiture creates the extension in the scratch database
+itself, and a scratch server without pg_tviews is refused with `CONFIG_014`,
+exit 5, so the gate cannot run. Up to 1.36.0 such a tree was built with each
+TVIEW as a plain table, and the gate failed on a false `missing_table`
+(confiture#730).
 
 ### TVIEWs after a restore or a failover (#422)
 
