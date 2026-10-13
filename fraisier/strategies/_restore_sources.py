@@ -302,8 +302,10 @@ class DumpSource:
 def _log_rebuilt(rebuilt: Iterable[TviewRebuilt]) -> None:
     """Log what the post-restore TVIEW rebuild filled, the same way on both paths.
 
-    "reset", not "empty": a dump leaves out pg_tviews' validity table, so from
-    0.1.0-beta.27 a dump restore refills every TVIEW, populated ones included.
+    "reset", not "empty". pg_tviews 0.1.0-beta.27 and beta.28 leave their
+    validity table out of a dump, so a dump restore refills every TVIEW,
+    populated ones included.  From beta.29 validity travels with the rows, and a
+    plain dump restore normally refills nothing.
     """
     rebuilt = tuple(rebuilt)
     log.info(

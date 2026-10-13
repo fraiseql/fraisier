@@ -1,0 +1,73 @@
+{
+  "label": "beta27",
+  "contract_version": 1,
+  "pg_tview_valid_columns": [
+    "table_oid"
+  ],
+  "function_result": [
+    [
+      "TABLE(entity text, rows bigint)",
+      "only_empty boolean DEFAULT true"
+    ]
+  ],
+  "healthy": {
+    "only_empty": true,
+    "description": [
+      [
+        "entity",
+        25
+      ],
+      [
+        "rows",
+        20
+      ]
+    ],
+    "rows": []
+  },
+  "reset": {
+    "only_empty": true,
+    "description": [
+      [
+        "entity",
+        25
+      ],
+      [
+        "rows",
+        20
+      ]
+    ],
+    "rows": [
+      [
+        "post",
+        5
+      ]
+    ]
+  },
+  "all": {
+    "only_empty": false,
+    "description": [
+      [
+        "entity",
+        25
+      ],
+      [
+        "rows",
+        20
+      ]
+    ],
+    "rows": [
+      [
+        "post",
+        5
+      ],
+      [
+        "user",
+        3
+      ]
+    ]
+  },
+  "counts_after": [
+    5,
+    3
+  ]
+}
