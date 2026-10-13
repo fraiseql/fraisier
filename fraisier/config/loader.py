@@ -35,6 +35,7 @@ import yaml
 
 from fraisier.config._lazy_env import LazyEnv
 from fraisier.config._validation import (
+    backup_tview_data,
     parse_retain_entries,
     parse_timer_families,
     validate_branch_mapping,
@@ -214,7 +215,7 @@ class FraisierConfig:
         validate_restore_clusters(self._config.get("fraises", {}))
         validate_service_manager(self._config.get("service_manager"))
         # Drop any cached Stage-2 results from a prior load.
-        for prop in ("notifications", "hooks", "backup_retention"):
+        for prop in ("notifications", "hooks", "backup_retention", "backup_tview_data"):
             self.__dict__.pop(prop, None)
         self._get_validated_env.cache_clear()
 
@@ -248,6 +249,11 @@ class FraisierConfig:
             validate_hooks,
             self._config.get("hooks", {}),
         )
+
+    @functools.cached_property
+    def backup_tview_data(self) -> str:
+        """``backup.tview_data``, validated: ``keep`` or ``exclude`` (#471)."""
+        return backup_tview_data(self._config.get("backup"))
 
     @functools.cached_property
     def backup_retention(self) -> tuple[RetainEntry, ...]:

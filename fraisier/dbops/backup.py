@@ -13,12 +13,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import psycopg
+
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
 from fraisier.dbops.archive import ArchiveVerdict, verify_archive
 from fraisier.dbops.operations import _pg_cmd
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +30,12 @@ _COMPRESSION_RE = re.compile(r"^(zstd|lz4|gzip|none)(:\d+)?$")
 # dump is rejected as implausibly small. Tuned to catch truncation (the
 # #202 incident) while tolerating legitimate fluctuation between runs.
 _SIZE_SANITY_RATIO = 0.5
+
+# The marker a dump that left TVIEW rows out carries after its timestamp (#471).
+# Such a dump is about half the size of a full one, so it is a size series of
+# its own; every existing ``*_{algo}.dump`` and ``*.dump`` glob still matches it.
+_LEAN_MARKER = "_lean"
+_LEAN_NAME_RE = re.compile(r"_\d{8}_\d{4}_lean(?:_[a-z0-9]+)?\.dump$")
 
 
 def _validate_compression(value: str) -> None:
@@ -95,15 +103,92 @@ def _previous_same_mode_backup(
     """Return the newest prior dump for *db_name*/*mode*, excluding *current_path*.
 
     Returns None if no prior dumps exist. Used by the size-sanity check
-    to detect implausibly small new backups.
+    to detect implausibly small new backups. A lean dump is compared only with
+    lean ones and a full dump only with full ones (#471).
     """
     current = Path(current_path).resolve()
+    lean = is_lean_dump(current)
     candidates = [
-        p for p in output_dir.glob(f"{db_name}_{mode}_*.dump") if p.resolve() != current
+        p
+        for p in output_dir.glob(f"{db_name}_{mode}_*.dump")
+        if p.resolve() != current and is_lean_dump(p) == lean
     ]
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def is_lean_dump(path: Path | str) -> bool:
+    """*path* is named as a dump that left TVIEW rows out (#471)."""
+    return _LEAN_NAME_RE.search(Path(path).name) is not None
+
+
+def _quoted(schema: str, name: str) -> str:
+    """A ``pg_dump`` pattern matching exactly ``schema.name``.
+
+    Inside double quotes every pattern character is literal, and a double quote
+    is written twice: the same rule as an SQL identifier.
+    """
+    return ".".join('"' + part.replace('"', '""') + '"' for part in (schema, name))
+
+
+def _kept_tview_rows(backup_path: str, tviews: Sequence[tuple[str, str]]) -> str:
+    """Why the dump is not lean, or ``""``.
+
+    ``--exclude-table-data`` that matches nothing gives a full dump without a
+    word (``--strict-names`` does not cover it), so the archive is asked what
+    it holds: each TVIEW's table and none of its rows.  An archive that cannot
+    be read here was already reported by the TOC check.
+    """
+    check = verify_archive(backup_path)
+    if not check.is_valid:
+        return ""
+    missing = [f"{s}.{n}" for s, n in tviews if not check.has_table(s, n)]
+    kept = [f"{s}.{n}" for s, n in tviews if check.has_table_data(s, n)]
+    problems = []
+    if kept:
+        problems.append(f"it still carries the rows of {', '.join(kept)}")
+    if missing:
+        problems.append(f"it does not create {', '.join(missing)}")
+    return "; ".join(problems)
+
+
+def tviews_to_exclude(
+    tview_data: str, *, database_url: str | None, db_name: str
+) -> list[tuple[str, str]] | None:
+    """The TVIEWs a dump of *db_name* must leave the rows of out (#471).
+
+    ``None`` for ``tview_data: keep``.  For ``exclude``, the registry of the
+    database ``pg_dump`` will dump, which is its positional *db_name* and not
+    the database the URL names.  ``[]`` when that database has no pg_tviews:
+    logged, and the dump is a plain full one.
+
+    Raises :class:`~fraisier.dbops.tviews.TviewError` when the list cannot be
+    read: no URL, a pg_tviews fraisier cannot read, or no connection.  Dumping
+    everything instead would quietly ignore what was asked for.
+    """
+    from fraisier.dbops import tviews
+    from fraisier.dbops._url import replace_db_name
+
+    if tview_data != "exclude":
+        return None
+    if not database_url:
+        raise tviews.TviewError(
+            "tview_data: exclude reads the TVIEW registry, which needs "
+            "database.database_url"
+        )
+    try:
+        found = tviews.list_tviews(replace_db_name(database_url, db_name))
+    except (tviews.TviewError, psycopg.Error) as exc:
+        raise tviews.TviewError(
+            f"tview_data: exclude could not list the TVIEWs of {db_name}: {exc}"
+        ) from exc
+    if not found:
+        log.info(
+            "tview_data: exclude, but %s has no pg_tviews: dumping everything",
+            db_name,
+        )
+    return found
 
 
 @dataclass
@@ -124,6 +209,7 @@ def run_backup(
     mode: str = "full",
     excluded_tables: list[str] | None = None,
     jobs: int = 1,
+    tview_tables: Sequence[tuple[str, str]] | None = None,
 ) -> BackupResult:
     """Run pg_dump with custom-format compression.
 
@@ -142,6 +228,11 @@ def run_backup(
             (``-Fd -j N``) writing a ``.dump/`` directory containing
             ``toc.dat`` plus per-table ``*.dat`` blobs. Parallelism comes
             from concurrent table COPYs.
+        tview_tables: pg_tviews TVIEWs, as ``(schema, name)``, whose rows are
+            left out (``tview_data: exclude``, #471).  The tables are still
+            created; a restore refills them from their backing views.  The
+            file is named ``…_lean`` and size-checked against lean dumps only,
+            and the archive must show every TVIEW without its rows.
     """
     if not isinstance(jobs, int) or isinstance(jobs, bool) or jobs < 1:
         msg = f"jobs must be a positive integer, got {jobs!r}"
@@ -153,7 +244,8 @@ def run_backup(
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M")
     algo = compression.split(":", maxsplit=1)[0]
     suffix = f"_{algo}" if algo != "none" else ""
-    filename = f"{db_name}_{mode}_{timestamp}{suffix}.dump"
+    lean = _LEAN_MARKER if tview_tables else ""
+    filename = f"{db_name}_{mode}_{timestamp}{lean}{suffix}.dump"
     backup_path = f"{output_dir}/{filename}"
 
     # pg_dump itself creates the directory for -Fd and refuses if it already exists.
@@ -168,6 +260,9 @@ def run_backup(
         for table in excluded_tables:
             validate_pg_identifier(table, "excluded table")
             cmd.extend(["-T", table])
+
+    for schema, name in tview_tables or ():
+        cmd.extend(["--exclude-table-data", _quoted(schema, name)])
 
     cmd.append(db_name)
 
@@ -187,6 +282,15 @@ def run_backup(
             backup_path=backup_path,
             error=f"backup failed TOC verification: {toc_err}",
         )
+
+    if tview_tables:
+        problem = _kept_tview_rows(backup_path, tview_tables)
+        if problem:
+            return BackupResult(
+                success=False,
+                backup_path=backup_path,
+                error=f"the lean dump is not lean: {problem}",
+            )
 
     prev = _previous_same_mode_backup(
         Path(output_dir), db_name=db_name, mode=mode, current_path=backup_path

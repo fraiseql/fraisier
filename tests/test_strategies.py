@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -258,7 +258,57 @@ class TestMigrateStrategyPreMigrateDumpGate:
             compression="zstd:9",
             mode="full",
             jobs=1,
+            tview_tables=None,
         )
+
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_tview_data_exclude_leaves_the_tviews_rows_out(
+        self, mock_preflight, mock_up, mock_backup, mock_pending
+    ):
+        """#471: the TVIEWs come from the registry of the database being dumped."""
+        from fraisier.dbops.backup import BackupResult
+
+        mock_backup.return_value = BackupResult(success=True, backup_path="/x.dump")
+        mock_up.return_value = MigrationResult(success=True, steps_applied=1)
+
+        with patch(
+            "fraisier.dbops.tviews.list_tviews", return_value=[("public", "tv_post")]
+        ) as listed:
+            result = self._strategy(tview_data="exclude").execute(
+                CONFIG,
+                migrations_dir=MDIR,
+                database_url="postgresql://app@db/postgres",
+            )
+
+        assert result.success
+        listed.assert_called_once_with("postgresql://app@db/proddb")
+        assert mock_backup.call_args.kwargs["tview_tables"] == [("public", "tv_post")]
+
+    @patch("fraisier.dbops.confiture.has_pending", return_value=True)
+    @patch("fraisier.dbops.backup.run_backup")
+    @patch("fraisier.strategies._core.migrate_up")
+    @patch("fraisier.strategies._core.preflight")
+    def test_tviews_that_cannot_be_listed_abort_before_dumping(
+        self, mock_preflight, mock_up, mock_backup, mock_pending
+    ):
+        from fraisier.dbops.tviews import TviewError
+
+        with patch(
+            "fraisier.dbops.tviews.list_tviews",
+            side_effect=TviewError("pg_tviews here predates read contract 1"),
+        ):
+            result = self._strategy(tview_data="exclude").execute(
+                CONFIG, migrations_dir=MDIR, database_url="postgresql://app@db/x"
+            )
+
+        assert not result.success
+        assert "migrations NOT applied" in result.errors[0]
+        assert "contract 1" in result.errors[0]
+        mock_backup.assert_not_called()
+        mock_up.assert_not_called()
 
     @patch("fraisier.dbops.confiture.has_pending", return_value=True)
     @patch("fraisier.dbops.backup.run_backup")
@@ -813,7 +863,10 @@ class TestRestoreMigrateStrategy:
             # gets, in confiture's own default schema. When an archive *does*
             # state one, both values come from it instead — #343.
             min_tables_schema="public",
+            # The same check, so the restore can tell a lean archive (#471).
+            archive=ANY,
         )
+        assert mock_restore.call_args.kwargs["archive"].verdict is not None
         mock_table.assert_called_once_with(
             "staging_db", min_threshold=300, connection_url=_ADMIN_URL
         )

@@ -233,6 +233,7 @@ class TestBackup:
             mode="full",
             excluded_tables=[],
             jobs=1,
+            tview_tables=None,
         )
 
     def test_backup_insufficient_disk_space_exits_1(self, runner, mock_config):
@@ -287,6 +288,7 @@ class TestBackup:
             mode="slim",
             excluded_tables=["logs", "events"],
             jobs=1,
+            tview_tables=None,
         )
 
     def test_backup_passes_jobs_from_config(self, runner, mock_config):
@@ -322,6 +324,61 @@ class TestBackup:
 
         assert result.exit_code == 0
         assert mock_backup.call_args.kwargs["jobs"] == 8
+
+    def test_tview_data_exclude_leaves_the_tviews_rows_out(self, runner, mock_config):
+        """#471: the registry of the database the dump reads, not the URL's."""
+        mock_config._config = {"backup": {"tview_data": "exclude"}}
+        result_mock = MagicMock(success=True, backup_path="/backup/mydb.dump")
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch("fraisier.dbops.backup.check_disk_space", return_value=True),
+            patch(
+                "fraisier.dbops.tviews.list_tviews",
+                return_value=[("public", "tv_post")],
+            ) as listed,
+            patch(
+                "fraisier.dbops.backup.run_backup", return_value=result_mock
+            ) as mock_backup,
+        ):
+            result = runner.invoke(main, ["backup", "my_api", "-e", "production"])
+
+        assert result.exit_code == 0, result.output
+        assert listed.call_args.args[0].endswith("/mydb")
+        assert mock_backup.call_args.kwargs["tview_tables"] == [("public", "tv_post")]
+
+    def test_tviews_that_cannot_be_listed_fail_the_backup(self, runner, mock_config):
+        from fraisier.dbops.tviews import TviewError
+
+        mock_config._config = {"backup": {"tview_data": "exclude"}}
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch("fraisier.dbops.backup.check_disk_space", return_value=True),
+            patch(
+                "fraisier.dbops.tviews.list_tviews",
+                side_effect=TviewError("predates read contract 1"),
+            ),
+            patch("fraisier.dbops.backup.run_backup") as mock_backup,
+        ):
+            result = runner.invoke(main, ["backup", "my_api", "-e", "production"])
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)  # refused, not crashed
+        assert "contract 1" in result.output
+        mock_backup.assert_not_called()
+
+    def test_a_mistyped_tview_data_fails_the_backup(self, runner, mock_config):
+        mock_config._config = {"backup": {"tview_data": "lean"}}
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch("fraisier.dbops.backup.check_disk_space", return_value=True),
+            patch("fraisier.dbops.backup.run_backup") as mock_backup,
+        ):
+            result = runner.invoke(main, ["backup", "my_api", "-e", "production"])
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)  # refused, not crashed
+        assert "tview_data" in result.output
+        mock_backup.assert_not_called()
 
 
 class TestDbRestore:

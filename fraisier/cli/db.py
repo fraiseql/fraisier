@@ -1184,8 +1184,11 @@ def backup_cmd(
         fraisier backup management -e production --mode slim
         fraisier backup management -e production --jobs 4
     """
-    from fraisier.dbops.backup import check_disk_space, run_backup
+    from fraisier.config._validation import ValidationError, backup_tview_data
+    from fraisier.dbops._url import resolve_db_url
+    from fraisier.dbops.backup import check_disk_space, run_backup, tviews_to_exclude
     from fraisier.dbops.guard import is_external_db
+    from fraisier.dbops.tviews import TviewError
 
     config = ctx.obj["config"]
     fraise_cfg, env_config = _get_db_config(config, fraise, env)
@@ -1235,6 +1238,16 @@ def backup_cmd(
 
     effective_jobs = jobs if jobs is not None else int(backup_cfg.get("jobs", 1))
 
+    try:
+        tview_tables = tviews_to_exclude(
+            backup_tview_data(backup_cfg),
+            database_url=resolve_db_url(database_url),
+            db_name=db_name,
+        )
+    except (ValidationError, TviewError) as exc:
+        console.print(f"[red]Backup refused:[/red] {exc}")
+        raise SystemExit(1) from exc
+
     result = run_backup(
         db_name=db_name,
         output_dir=output_dir,
@@ -1243,6 +1256,7 @@ def backup_cmd(
         mode=mode,
         excluded_tables=excluded_tables,
         jobs=effective_jobs,
+        tview_tables=tview_tables,
     )
 
     if result.success:

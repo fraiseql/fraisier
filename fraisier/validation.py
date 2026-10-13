@@ -43,6 +43,7 @@ def _collect_all_validation_errors(
         ("notifications", lambda: config.notifications),
         ("hooks", lambda: config.hooks),
         ("backup.environments", lambda: config.backup_retention),
+        ("backup.tview_data", lambda: config.backup_tview_data),
         # `scaffold` was absent from this list until #341, and nothing noticed
         # because no section under it raised. `scaffold.systemd.timers` is the
         # first that does, and without this a typo'd timer name escaped the

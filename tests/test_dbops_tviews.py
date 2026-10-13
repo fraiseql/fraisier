@@ -243,6 +243,41 @@ class TestAnUnreadableTviewCannotBeVerified:
         assert not caplog.records
 
 
+class TestListTviews:
+    """The TVIEWs a lean dump leaves the data of out (#471), from the registry."""
+
+    def test_every_registered_tview_by_schema_and_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        conn = FakeConn(
+            EXTENSION,
+            CONTRACT_ONE,
+            ('FROM "tviews".registry', [("Mixed", "tv_note"), ("public", "tv_post")]),
+        )
+        patch_connect(monkeypatch, conn)
+
+        assert tviews.list_tviews("postgresql:///app") == [
+            ("Mixed", "tv_note"),
+            ("public", "tv_post"),
+        ]
+        assert "ORDER BY" in conn.queries[-1][0]
+
+    def test_a_database_without_pg_tviews_has_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(monkeypatch, FakeConn(("FROM pg_extension", [])))
+
+        assert tviews.list_tviews("postgresql:///app") == []
+
+    def test_an_outdated_pg_tviews_is_refused_not_read_as_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(2,)])))
+
+        with pytest.raises(tviews.TviewError):
+            tviews.list_tviews("postgresql:///app")
+
+
 class TestFindEmpty:
     def test_a_tview_with_no_rows_over_a_view_with_rows_is_reported(
         self, monkeypatch: pytest.MonkeyPatch

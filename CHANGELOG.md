@@ -16,6 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a check that cannot fire. The second is a redefined domain, type, policy or rule,
   reported with or without a scratch server.
 
+- **`tview_data: exclude` leaves TVIEW rows out of a dump**
+  ([#471](https://github.com/fraiseql/fraisier/issues/471)). It is opt-in, on the
+  top-level `backup:` block (`fraisier backup run`) and on
+  `database.pre_migrate_dump`; the default is `keep`.
+  - The TVIEWs come from pg_tviews' registry and go to `pg_dump` as quoted
+    `--exclude-table-data` patterns.
+  - The archive is checked for each TVIEW without its rows.
+  - The file is named `…_lean` and size-checked against lean dumps only.
+  - fraisier's restore refills every TVIEW from its view when the archive left
+    them out (`pg_tviews_rebuild_all(only_empty => false)`), because
+    `only_empty` skips a LOGGED TVIEW and, on pg_tviews beta.29, an excluded
+    UNLOGGED one.
+  - The dump is about half the size (measured). From beta.29 the price is a
+    full refill on restore, which a full dump avoids.
+  - ⚠️ A lean dump restored with plain `pg_restore` leaves the TVIEWs empty until
+    `fraisier db tviews rebuild --all`.
+
 ### Changed
 
 - **`fraiseql-confiture` 1.36 (`>=1.36.1,<1.37`), which needs pg_tviews

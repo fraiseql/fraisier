@@ -449,6 +449,12 @@ fraisier backup my_api -e production --mode slim
 
 The positional form above is shorthand for `fraisier backup run my_api -e production`.
 
+With `tview_data: exclude` in the top-level `backup:` block, the dump leaves every
+pg_tviews TVIEW's rows out. The file is then named `…_lean`, and the backup fails
+if the archive still carries a TVIEW's rows or if fraisier cannot read pg_tviews.
+A restore through fraisier refills the TVIEWs; a plain `pg_restore` does not. See
+[Leaving TVIEW rows out of a dump](deployment-guide.md#leaving-tview-rows-out-of-a-dump-tview_data-471).
+
 ---
 
 ### fraisier backup prune

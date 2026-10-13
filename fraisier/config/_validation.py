@@ -661,6 +661,34 @@ def _validate_post_migrate(fraise_name: str, db: dict) -> list[str]:
     return errors
 
 
+#: ``tview_data``: keep TVIEW rows in a dump (the default) or leave them out (#471).
+TVIEW_DATA_VALUES = ("keep", "exclude")
+
+
+def _tview_data_error(block: dict[str, Any], where: str) -> str | None:
+    value = block.get("tview_data", "keep")
+    if value in TVIEW_DATA_VALUES:
+        return None
+    return (
+        f"{where}.tview_data must be one of {', '.join(TVIEW_DATA_VALUES)}, "
+        f"got {value!r}"
+    )
+
+
+def backup_tview_data(backup: Any) -> str:
+    """The top-level ``backup.tview_data``, validated; ``keep`` when unset (#471).
+
+    A typo raises rather than meaning ``keep``: whoever asked for lean dumps
+    would otherwise get full ones and never be told.
+    """
+    if not isinstance(backup, dict):
+        return "keep"
+    error = _tview_data_error(cast("dict[str, Any]", backup), "backup")
+    if error:
+        raise ValidationError(error)
+    return str(backup.get("tview_data", "keep"))
+
+
 def _validate_pre_migrate_dump(fraise_name: str, db: dict) -> list[str]:
     """Return validation errors for a ``database.pre_migrate_dump`` block (#419).
 
@@ -731,6 +759,10 @@ def _validate_pre_migrate_dump(fraise_name: str, db: dict) -> list[str]:
                 f"{where} {text!r} contains whitespace, which splits it into "
                 f"several paths in ReadWritePaths="
             )
+
+    tview_error = _tview_data_error(block, f"{fraise_name}: {location}")
+    if tview_error:
+        errors.append(tview_error)
 
     if "prune_schedule" in block:
         prune_errors: list[str] = []
