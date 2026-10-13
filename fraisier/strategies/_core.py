@@ -65,6 +65,9 @@ class MigrateStrategy(Strategy):
       busy day: the number of dumps kept is the number of migrating deploys in
       the window. Either rule alone is a complete policy; set together, a dump
       goes when it fails *either* one.
+    - ``tview_data`` (``keep`` | ``exclude``, default ``keep``) — ``exclude``
+      leaves every pg_tviews TVIEW's rows out of the dump (#471); fraisier's
+      restore refills them from their backing views.
     """
 
     def __init__(
@@ -106,8 +109,10 @@ class MigrateStrategy(Strategy):
             check_disk_space,
             prune_pre_migrate_corpus,
             run_backup,
+            tviews_to_exclude,
         )
         from fraisier.dbops.confiture import has_pending
+        from fraisier.dbops.tviews import TviewError
 
         if not has_pending(
             confiture_config, migrations_dir=migrations_dir, database_url=db_url
@@ -130,6 +135,15 @@ class MigrateStrategy(Strategy):
                 f"in {output_dir} — refusing to migrate without a fresh dump"
             )
 
+        try:
+            tview_tables = tviews_to_exclude(
+                self._dump_config.get("tview_data", "keep"),
+                database_url=db_url,
+                db_name=self._db_name,
+            )
+        except TviewError as exc:
+            return f"pre-migration dump gate failed — migrations NOT applied: {exc}"
+
         result = run_backup(
             db_name=self._db_name,
             output_dir=output_dir,
@@ -137,6 +151,7 @@ class MigrateStrategy(Strategy):
             compression=self._dump_config.get("compression", "zstd:9"),
             mode="full",
             jobs=int(self._dump_config.get("jobs", 1)),
+            tview_tables=tview_tables,
         )
         if not result.success:
             return (

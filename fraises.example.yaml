@@ -144,6 +144,9 @@ fraises:
           #   prune_schedule: daily  # systemd OnCalendar for the timer that applies
           #                          # both rules between deploys (#420); needs
           #                          # `scaffold-install`. The newest dump is never pruned.
+          #   tview_data: exclude    # leave pg_tviews TVIEW rows out (#471); default keep.
+          #                          # fraisier's restore refills them; a plain
+          #                          # pg_restore does not.
           # Post-migration schema-drift gate (#395). ON BY DEFAULT — this
           # block declines or tunes it, it is not what turns it on. Asks
           # confiture whether the live database matches the schema this

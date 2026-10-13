@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from confiture.exceptions import RestoreError
 
+from fraisier.dbops.archive import ArchiveCheck, ArchiveVerdict, _read_toc
 from fraisier.dbops.restore import (
     find_latest_backup,
     restore_backup,
@@ -567,3 +568,131 @@ class TestFindLatestBackup:
 
         result = find_latest_backup(tmp_path, preferred_compression="lz4")
         assert result == lz4_dir
+
+
+_TOCS = Path(__file__).parent / "fixtures" / "pg_tviews"
+_REGISTRY = [("Mixed", "tv_note"), ("public", "tv_post"), ("public", "tv_user")]
+
+
+def _archive(kind: str) -> ArchiveCheck:
+    """An archive check read from a real ``pg_restore --list`` (beta.29)."""
+    toc = _read_toc((_TOCS / f"toc-{kind}-beta29.txt").read_text())
+    return ArchiveCheck(
+        ArchiveVerdict.VALID,
+        "",
+        toc.table_data_by_schema,
+        table_entries=toc.tables,
+        table_data_entries=toc.table_data,
+    )
+
+
+class TestLeanArchiveRefill:
+    """A dump that left TVIEW rows out is refilled whole, not ``only_empty`` (#471).
+
+    ``only_empty`` refills only a TVIEW PostgreSQL *reset*: never a LOGGED one
+    (the default from pg_tviews beta.28), and on beta.29 not an UNLOGGED one
+    either, since its validity row survives ``--exclude-table-data`` (measured).
+    """
+
+    def _restore(self, archive: ArchiveCheck | None, path="/backups/prod.dump"):
+        return restore_backup(
+            backup_path=path,
+            db_name="staging",
+            connection_url=_TEST_URL,
+            archive=archive,
+        )
+
+    def test_a_lean_archive_is_refilled_whole(self):
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=True),
+            patch("fraisier.dbops.restore.list_tviews", return_value=_REGISTRY),
+            patch(
+                "fraisier.dbops.restore.rebuild_all_tviews",
+                return_value=[TviewRebuilt("post", 5000)],
+            ) as whole,
+            patch("fraisier.dbops.restore.rebuild_empty_tviews") as only_empty,
+        ):
+            result = self._restore(_archive("lean"))
+
+        assert result.success, result.error
+        assert result.tviews_rebuilt == (TviewRebuilt("post", 5000),)
+        assert result.tviews_refilled_lean is True
+        assert whole.call_args.args[0].endswith("/staging")
+        only_empty.assert_not_called()
+
+    def test_a_full_archive_keeps_only_empty(self):
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=True),
+            patch("fraisier.dbops.restore.list_tviews", return_value=_REGISTRY),
+            patch("fraisier.dbops.restore.rebuild_all_tviews") as whole,
+            patch(
+                "fraisier.dbops.restore.rebuild_empty_tviews", return_value=[]
+            ) as only_empty,
+        ):
+            result = self._restore(_archive("full"))
+
+        assert result.tviews_rebuilt == ()
+        assert result.tviews_refilled_lean is False
+        only_empty.assert_called_once()
+        whole.assert_not_called()
+
+    def test_a_table_without_data_that_is_no_tview_is_not_lean(self):
+        """A partitioned parent has a ``TABLE`` entry and no ``TABLE DATA``."""
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=True),
+            patch(
+                "fraisier.dbops.restore.list_tviews",
+                return_value=[("Mixed", "tb_note")],
+            ),
+            patch("fraisier.dbops.restore.rebuild_all_tviews") as whole,
+            patch("fraisier.dbops.restore.rebuild_empty_tviews", return_value=[]),
+        ):
+            self._restore(_archive("lean"))
+
+        whole.assert_not_called()
+
+    def test_an_unread_archive_falls_back_to_the_lean_name(self):
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=True),
+            patch(
+                "fraisier.dbops.restore.rebuild_all_tviews", return_value=[]
+            ) as whole,
+        ):
+            self._restore(None, path="/b/prod_full_20261013_1200_lean_zstd.dump")
+
+        whole.assert_called_once()
+
+    def test_a_lean_archive_over_an_unreadable_pg_tviews_fails_not_skips(self):
+        """Skipping, as a full archive does, would serve every TVIEW empty."""
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore.tviews_installed", return_value=False),
+            patch(
+                "fraisier.dbops.restore.rebuild_all_tviews",
+                side_effect=TviewError("predates read contract 1"),
+            ),
+        ):
+            result = self._restore(
+                _archive("lean"), path="/b/prod_full_20261013_1200_lean_zstd.dump"
+            )
+
+        assert not result.success
+        assert result.stage == "tview_rebuild"
+        assert "contract 1" in result.error
+
+    def test_the_log_says_which_refill_ran(self, caplog):
+        from fraisier.strategies._restore_sources import _log_rebuilt
+
+        with caplog.at_level("INFO"):
+            _log_rebuilt([TviewRebuilt("post", 5000)], lean=True)
+            _log_rebuilt([TviewRebuilt("user", 3)])
+
+        assert (
+            "pg_tviews: refilled 1 TVIEW(s) left out of a lean dump post=5000rows"
+            in caplog.text
+        )
+        assert "pg_tviews: rebuilt 1 reset TVIEW(s) user=3rows" in caplog.text

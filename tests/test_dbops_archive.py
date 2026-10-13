@@ -13,6 +13,8 @@ import tokenize
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 import fraisier
 from fraisier.dbops.archive import ArchiveVerdict, verify_archive
 
@@ -327,3 +329,62 @@ class TestTheArchiveStatesItsSchemaFloor:
 
         assert check.verdict is ArchiveVerdict.INVALID
         assert check.table_data_by_schema == {}
+
+
+_TVIEW_TOCS = Path(__file__).parent / "fixtures" / "pg_tviews"
+
+
+class TestTableEntries:
+    """Which tables an archive creates and which it carries data for (#471).
+
+    A lean dump (``--exclude-table-data``) keeps a TVIEW's ``TABLE`` entry and
+    drops its ``TABLE DATA`` one; the restore refills what is missing. The TOCs
+    are ``pg_restore --list`` of real dumps, captured on pg_tviews beta.27 and
+    beta.29.
+    """
+
+    @pytest.mark.parametrize("version", ["beta27", "beta29"])
+    def test_a_lean_dump_creates_its_tviews_without_their_data(
+        self, tmp_path: Path, version: str
+    ):
+        toc = (_TVIEW_TOCS / f"toc-lean-{version}.txt").read_text()
+        check = _valid_with_toc(tmp_path, toc)
+
+        for schema, name in [("public", "tv_post"), ("Mixed", "tv_note")]:
+            assert check.has_table(schema, name)
+            assert not check.has_table_data(schema, name)
+        assert check.has_table_data("Mixed", "tb_note")
+
+    @pytest.mark.parametrize("version", ["beta27", "beta29"])
+    def test_a_full_dump_carries_their_data(self, tmp_path: Path, version: str):
+        toc = (_TVIEW_TOCS / f"toc-full-{version}.txt").read_text()
+        check = _valid_with_toc(tmp_path, toc)
+
+        assert check.has_table_data("public", "tv_post")
+        assert check.has_table_data("Mixed", "tv_note")
+
+    def test_a_name_is_matched_whole_not_as_a_prefix(self, tmp_path: Path):
+        toc = "221; 1259 16495 TABLE DATA public tv_post_archive postgres\n"
+        check = _valid_with_toc(tmp_path, toc)
+
+        assert not check.has_table_data("public", "tv_post")
+        assert check.has_table_data("public", "tv_post_archive")
+
+    def test_a_name_with_a_space_is_matched(self, tmp_path: Path):
+        """``pg_restore --list`` prints names unquoted, so a name is never parsed
+        out of a line, only matched against one the caller already knows."""
+        toc = (
+            "221; 1259 16495 TABLE public my table postgres\n"
+            "222; 0 16495 TABLE DATA public my table postgres\n"
+        )
+        check = _valid_with_toc(tmp_path, toc)
+
+        assert check.has_table("public", "my table")
+        assert check.has_table_data("public", "my table")
+        assert not check.has_table("public", "my")
+
+    def test_an_unread_archive_knows_no_tables(self, tmp_path: Path):
+        check = verify_archive(tmp_path / "absent.dump")
+
+        assert check.table_entries is None
+        assert check.table_data_entries is None

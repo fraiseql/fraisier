@@ -27,16 +27,21 @@ from confiture.exceptions import RestoreError
 
 from fraisier.dbops._url import replace_db_name
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
+from fraisier.dbops.backup import is_lean_dump
 from fraisier.dbops.operations import _pg_cmd
 from fraisier.dbops.tviews import (
     TviewError,
     TviewRebuilt,
+    list_tviews,
+    rebuild_all_tviews,
     rebuild_empty_tviews,
     tviews_installed,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from fraisier.dbops.archive import ArchiveCheck
 
 
 @dataclass
@@ -65,6 +70,9 @@ class RestoreResult:
     #: What ``pg_tviews_rebuild_all(only_empty)`` filled after the restore: ``()``
     #: when nothing was empty, ``None`` when the database has no pg_tviews (#422).
     tviews_rebuilt: tuple[TviewRebuilt, ...] | None = None
+    #: The archive left TVIEW rows out (``tview_data: exclude``), so every TVIEW
+    #: was refilled from its view rather than only the reset ones (#471).
+    tviews_refilled_lean: bool = False
 
 
 def _connection_params(
@@ -170,6 +178,7 @@ def restore_backup(
     jobs: int = 1,
     min_tables: int = 0,
     min_tables_schema: str = "public",
+    archive: ArchiveCheck | None = None,
 ) -> RestoreResult:
     """Restore a pg_dump backup into *db_name* via confiture's three-phase restore.
 
@@ -285,11 +294,15 @@ def restore_backup(
     # the maintenance database the drop/create ran from.
     restored_url = replace_db_name(connection_url, db_name)
     try:
-        tviews_rebuilt = (
-            tuple(rebuild_empty_tviews(restored_url))
-            if tviews_installed(restored_url)
-            else None
-        )
+        lean = _lean_archive(restored_url, backup_path, archive)
+        if lean:
+            tviews_rebuilt: tuple[TviewRebuilt, ...] | None = tuple(
+                rebuild_all_tviews(restored_url)
+            )
+        elif tviews_installed(restored_url):
+            tviews_rebuilt = tuple(rebuild_empty_tviews(restored_url))
+        else:
+            tviews_rebuilt = None
     except (TviewError, psycopg.Error) as exc:
         return RestoreResult(
             success=False,
@@ -305,7 +318,34 @@ def restore_backup(
         matviews_refreshed=result.matviews_refreshed,
         analyze_ran=result.analyze_ran,
         tviews_rebuilt=tviews_rebuilt,
+        tviews_refilled_lean=lean,
     )
+
+
+def _lean_archive(url: str, backup_path: str, archive: ArchiveCheck | None) -> bool:
+    """The archive left TVIEW rows out, so ``only_empty`` would not refill them.
+
+    ``only_empty`` refills only a TVIEW PostgreSQL *reset*.  A LOGGED one (the
+    default from pg_tviews beta.28) never is, and on beta.29 an UNLOGGED one
+    keeps its validity row through ``--exclude-table-data``: either way it
+    would be served empty (measured, #471).
+
+    The archive's table of contents decides when it was read and pg_tviews can
+    be: a registered TVIEW the archive creates without its rows.  It is never
+    "any table without rows", which a partitioned parent also is.  Otherwise
+    the file name decides; a lean name implies the source had pg_tviews, since
+    a dump with nothing to exclude is never named lean.  The caller then
+    refills with :func:`rebuild_all_tviews`, which raises on a pg_tviews it
+    cannot read rather than skipping.
+    """
+    if archive is not None and archive.table_entries is not None:
+        if tviews_installed(url):
+            return any(
+                archive.has_table(schema, name)
+                and not archive.has_table_data(schema, name)
+                for schema, name in list_tviews(url)
+            )
+    return is_lean_dump(backup_path)
 
 
 def validate_table_count(

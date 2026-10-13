@@ -260,6 +260,7 @@ class DumpSource:
             jobs=cfg.jobs,
             min_tables=floor_tables,
             min_tables_schema=floor_schema,
+            archive=check,
         )
         restore_secs = restore_result.duration_seconds
         if not restore_result.success:
@@ -288,7 +289,10 @@ class DumpSource:
         # and one that never looked must not read alike (#422). None means the
         # database has no pg_tviews.
         if restore_result.tviews_rebuilt is not None:
-            _log_rebuilt(restore_result.tviews_rebuilt)
+            _log_rebuilt(
+                restore_result.tviews_rebuilt,
+                lean=restore_result.tviews_refilled_lean,
+            )
 
         return SourceRestored(
             started_at=started_at,
@@ -299,17 +303,22 @@ class DumpSource:
         )
 
 
-def _log_rebuilt(rebuilt: Iterable[TviewRebuilt]) -> None:
+def _log_rebuilt(rebuilt: Iterable[TviewRebuilt], *, lean: bool = False) -> None:
     """Log what the post-restore TVIEW rebuild filled, the same way on both paths.
 
     "reset", not "empty". pg_tviews 0.1.0-beta.27 and beta.28 leave their
     validity table out of a dump, so a dump restore refills every TVIEW,
     populated ones included.  From beta.29 validity travels with the rows, and a
     plain dump restore normally refills nothing.
+
+    *lean*: the archive left TVIEW rows out (#471), so every TVIEW was refilled,
+    reset or not, and the line says so.
     """
     rebuilt = tuple(rebuilt)
     log.info(
-        "pg_tviews: rebuilt %d reset TVIEW(s)%s",
+        "pg_tviews: refilled %d TVIEW(s) left out of a lean dump%s"
+        if lean
+        else "pg_tviews: rebuilt %d reset TVIEW(s)%s",
         len(rebuilt),
         "".join(f" {r.entity}={r.rows}rows" for r in rebuilt),
     )

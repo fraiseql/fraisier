@@ -1,0 +1,68 @@
+;
+; Archive created at 2026-10-13 20:14:16 UTC
+;     dbname: src
+;     TOC Entries: 57
+;     Compression: gzip
+;     Dump Version: 1.16-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 18.6 (Debian 18.6-1.pgdg13+2)
+;     Dumped by pg_dump version: 18.6 (Debian 18.6-1.pgdg13+2)
+;
+;
+; Selected TOC Entries:
+;
+7; 2615 16770 SCHEMA - Mixed postgres
+3629; 0 0 ACL - SCHEMA public pg_database_owner
+6; 2615 16626 SCHEMA - tviews postgres
+2; 3079 16627 EXTENSION - pg_tviews 
+3630; 0 0 COMMENT - EXTENSION pg_tviews 
+236; 1259 16845 TABLE Mixed tb_note postgres
+238; 1259 16860 TABLE Mixed tv_note postgres
+231; 1259 16782 TABLE public tb_post postgres
+3631; 0 0 ACL public TABLE tb_post postgres
+230; 1259 16771 TABLE public tb_user postgres
+3632; 0 0 ACL public TABLE tb_user postgres
+235; 1259 16823 TABLE public tv_post postgres
+3633; 0 0 ACL public TABLE tv_post postgres
+233; 1259 16802 TABLE public tv_user postgres
+3634; 0 0 ACL public TABLE tv_user postgres
+237; 1259 16856 VIEW tviews Mixed__tv_note postgres
+234; 1259 16819 VIEW tviews public__tv_post postgres
+3635; 0 0 ACL tviews TABLE public__tv_post postgres
+232; 1259 16798 VIEW tviews public__tv_user postgres
+3636; 0 0 ACL tviews TABLE public__tv_user postgres
+3622; 0 16845 TABLE DATA Mixed tb_note postgres
+3621; 0 16782 TABLE DATA public tb_post postgres
+3620; 0 16771 TABLE DATA public tb_user postgres
+3390; 0 16664 TABLE DATA tviews pg_tview_helpers postgres
+3389; 0 16628 TABLE DATA tviews pg_tview_meta postgres
+3391; 0 16681 TABLE DATA tviews pg_tview_valid postgres
+3446; 2606 16855 CONSTRAINT Mixed tb_note tb_note_id_key postgres
+3448; 2606 16853 CONSTRAINT Mixed tb_note tb_note_pkey postgres
+3451; 2606 16872 CONSTRAINT Mixed tv_note tv_note_pkey postgres
+3436; 2606 16792 CONSTRAINT public tb_post tb_post_id_key postgres
+3438; 2606 16790 CONSTRAINT public tb_post tb_post_pkey postgres
+3432; 2606 16781 CONSTRAINT public tb_user tb_user_id_key postgres
+3434; 2606 16779 CONSTRAINT public tb_user tb_user_pkey postgres
+3444; 2606 16835 CONSTRAINT public tv_post tv_post_pkey postgres
+3441; 2606 16814 CONSTRAINT public tv_user tv_user_pkey postgres
+3449; 1259 16873 INDEX Mixed idx_tv_note_id postgres
+3442; 1259 16836 INDEX public idx_tv_post_id postgres
+3439; 1259 16815 INDEX public idx_tv_user_id postgres
+3464; 2620 16875 TRIGGER Mixed tb_note trg_tview_flush_note_on_Mixed_tb_note postgres
+3465; 2620 16874 TRIGGER Mixed tb_note trg_tview_row_note_on_Mixed_tb_note postgres
+3466; 2620 16876 TRIGGER Mixed tb_note trg_tview_truncate_note_on_Mixed_tb_note postgres
+3453; 2620 16839 TRIGGER public tb_user trg_tview_delta_d_post_on_public_tb_user postgres
+3454; 2620 16837 TRIGGER public tb_user trg_tview_delta_i_post_on_public_tb_user postgres
+3455; 2620 16838 TRIGGER public tb_user trg_tview_delta_u_post_on_public_tb_user postgres
+3461; 2620 16843 TRIGGER public tb_post trg_tview_flush_post_on_public_tb_post postgres
+3456; 2620 16840 TRIGGER public tb_user trg_tview_flush_post_on_public_tb_user postgres
+3457; 2620 16817 TRIGGER public tb_user trg_tview_flush_user_on_public_tb_user postgres
+3462; 2620 16842 TRIGGER public tb_post trg_tview_row_post_on_public_tb_post postgres
+3458; 2620 16816 TRIGGER public tb_user trg_tview_row_user_on_public_tb_user postgres
+3463; 2620 16844 TRIGGER public tb_post trg_tview_truncate_post_on_public_tb_post postgres
+3459; 2620 16841 TRIGGER public tb_user trg_tview_truncate_post_on_public_tb_user postgres
+3460; 2620 16818 TRIGGER public tb_user trg_tview_truncate_user_on_public_tb_user postgres
+3452; 2606 16793 FK CONSTRAINT public tb_post tb_post_fk_user_fkey postgres

@@ -118,6 +118,29 @@ class ArchiveCheck:
         covered = {floor[0]} if floor else set()
         return tuple(sorted(set(self.table_data_by_schema) - covered))
 
+    table_entries: tuple[str, ...] | None = None
+    """Every ``TABLE`` entry as ``"schema name"``; ``None`` if unread.
+
+    ``pg_restore --list`` prints names unquoted, so a name with a space cannot
+    be parsed out of a line. Ask :meth:`has_table` with a name you already
+    know instead (#471).
+    """
+
+    table_data_entries: tuple[str, ...] | None = None
+    """Every ``TABLE DATA`` entry, the same way; ``None`` if unread."""
+
+    def has_table(self, schema: str, name: str) -> bool:
+        """The archive creates table *schema*.*name*."""
+        return _has_entry(self.table_entries, schema, name)
+
+    def has_table_data(self, schema: str, name: str) -> bool:
+        """The archive carries *schema*.*name*'s rows."""
+        return _has_entry(self.table_data_entries, schema, name)
+
+
+def _has_entry(entries: tuple[str, ...] | None, schema: str, name: str) -> bool:
+    return f"{schema} {name}" in (entries or ())
+
 
 #: Fields of a TOC entry once the ``dumpId;`` prefix is removed:
 #: ``catalogId oid TAG SCHEMA NAME OWNER``. The tag begins at index 2.
@@ -126,8 +149,20 @@ _TAG_INDEX = 2
 _MIN_ENTRY_FIELDS = 6
 
 
-def _table_data_counts(toc: str) -> dict[str, int]:
-    """Count ``TABLE DATA`` entries per schema in a ``pg_restore --list`` TOC.
+@dataclass(frozen=True)
+class _Toc:
+    table_data_by_schema: dict[str, int]
+    tables: tuple[str, ...]
+    table_data: tuple[str, ...]
+
+
+def _read_toc(toc: str) -> _Toc:
+    """Read the ``TABLE`` and ``TABLE DATA`` entries of a ``pg_restore --list`` TOC.
+
+    ``TABLE DATA`` entries are counted per schema, and both kinds are kept as
+    ``"schema name"`` text for :meth:`ArchiveCheck.has_table`. The owner is the
+    last field: an archive always records it (``pg_dump -O`` is ignored for the
+    custom and directory formats), and fraisier's roles carry no space.
 
     ``relkind='r'`` is what this is apples-to-apples with: pg_dump emits one
     ``TABLE DATA`` entry per dumped base table whatever its row count, emits
@@ -139,6 +174,8 @@ def _table_data_counts(toc: str) -> dict[str, int]:
     ``my TABLE DATA table`` would otherwise be counted as an entry it is not.
     """
     counts: dict[str, int] = {}
+    tables: list[str] = []
+    table_data: list[str] = []
     for raw in toc.splitlines():
         line = raw.strip()
         if not line or line.startswith(";"):
@@ -149,11 +186,13 @@ def _table_data_counts(toc: str) -> dict[str, int]:
         fields = rest.split()
         if len(fields) < _MIN_ENTRY_FIELDS:
             continue
-        if fields[_TAG_INDEX : _TAG_INDEX + 2] != ["TABLE", "DATA"]:
-            continue
-        schema = fields[_TAG_INDEX + 2]
-        counts[schema] = counts.get(schema, 0) + 1
-    return counts
+        if fields[_TAG_INDEX : _TAG_INDEX + 2] == ["TABLE", "DATA"]:
+            schema = fields[_TAG_INDEX + 2]
+            counts[schema] = counts.get(schema, 0) + 1
+            table_data.append(" ".join(fields[_TAG_INDEX + 2 : -1]))
+        elif fields[_TAG_INDEX] == "TABLE":
+            tables.append(" ".join(fields[_TAG_INDEX + 1 : -1]))
+    return _Toc(counts, tuple(tables), tuple(table_data))
 
 
 def _list_command(path: Path) -> list[str]:
@@ -211,6 +250,11 @@ def verify_archive(path: Path | str) -> ArchiveCheck:
             or f"pg_restore --list exited with code {result.returncode}",
         )
 
+    toc = _read_toc(result.stdout or "")
     return ArchiveCheck(
-        ArchiveVerdict.VALID, "", _table_data_counts(result.stdout or "")
+        ArchiveVerdict.VALID,
+        "",
+        toc.table_data_by_schema,
+        table_entries=toc.tables,
+        table_data_entries=toc.table_data,
     )

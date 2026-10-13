@@ -15,7 +15,9 @@ from fraisier.dbops.backup import (
     check_disk_space,
     cleanup_old_backups,
     run_backup,
+    tviews_to_exclude,
 )
+from fraisier.dbops.tviews import TviewError
 
 _TEST_URL = "postgresql://app:pass@localhost:5432/proddb"
 
@@ -881,3 +883,219 @@ class TestCleanupOutcome:
 
         assert outcome.removed == ()
         assert outside.exists()
+
+
+_TVIEW_TOCS = Path(__file__).parent / "fixtures" / "pg_tviews"
+_TVIEWS = [("Mixed", "tv_note"), ("public", "tv_post"), ("public", "tv_user")]
+
+
+def _fake_dump(size: int, toc: str):
+    """A ``subprocess.run`` that writes a *size*-byte dump and lists *toc*."""
+
+    def fake_run(cmd, **_kwargs):
+        if cmd[0] == "pg_dump":
+            Path(cmd[cmd.index("-f") + 1]).write_bytes(b"y" * size)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if cmd[0] == "pg_restore":
+            return MagicMock(returncode=0, stdout=toc, stderr="")
+        raise AssertionError(f"unexpected cmd: {cmd[0]}")
+
+    return fake_run
+
+
+def _toc(kind: str) -> str:
+    return (_TVIEW_TOCS / f"toc-{kind}-beta29.txt").read_text()
+
+
+class TestLeanDump:
+    """``tview_data: exclude`` leaves every TVIEW's rows out of the dump (#471)."""
+
+    def test_each_tview_is_excluded_by_its_quoted_name(self, tmp_path: Path):
+        with patch("subprocess.run", side_effect=_fake_dump(100, _toc("lean"))) as run:
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=_TVIEWS,
+            )
+
+        assert result.success is True, result.error
+        cmd = run.call_args_list[0][0][0]
+        excluded = [
+            cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--exclude-table-data"
+        ]
+        assert excluded == [
+            '"Mixed"."tv_note"',
+            '"public"."tv_post"',
+            '"public"."tv_user"',
+        ]
+        assert cmd[-1] == "proddb"
+
+    def test_a_double_quote_in_a_name_is_doubled(self, tmp_path: Path):
+        with patch("subprocess.run", side_effect=_fake_dump(100, "")) as run:
+            run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=[('we"ird', "tv_x")],
+            )
+
+        cmd = run.call_args_list[0][0][0]
+        assert '"we""ird"."tv_x"' in cmd
+
+    def test_a_lean_dump_is_named_as_one(self, tmp_path: Path):
+        with patch("subprocess.run", side_effect=_fake_dump(100, _toc("lean"))):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=_TVIEWS,
+            )
+
+        assert Path(result.backup_path).name.startswith("proddb_full_")
+        assert "_lean" in Path(result.backup_path).name
+
+    @pytest.mark.parametrize("tview_tables", [None, []])
+    def test_no_tviews_is_a_plain_full_dump(self, tmp_path: Path, tview_tables):
+        with patch("subprocess.run", side_effect=_fake_dump(100, _toc("full"))) as run:
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=tview_tables,
+            )
+
+        assert result.success is True
+        assert "--exclude-table-data" not in run.call_args_list[0][0][0]
+        assert "_lean" not in result.backup_path
+
+    def test_a_dump_that_kept_a_tviews_rows_fails(self, tmp_path: Path):
+        """``--exclude-table-data`` that matches nothing gives a full dump, silently;
+        ``--strict-names`` does not cover it. The archive says what it holds."""
+        with patch("subprocess.run", side_effect=_fake_dump(100, _toc("full"))):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=_TVIEWS,
+            )
+
+        assert result.success is False
+        assert "Mixed.tv_note" in result.error
+        assert "public.tv_post" in result.error
+
+    def test_a_tview_the_archive_does_not_create_fails(self, tmp_path: Path):
+        with patch("subprocess.run", side_effect=_fake_dump(100, _toc("lean"))):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=[*_TVIEWS, ("public", "tv_gone")],
+            )
+
+        assert result.success is False
+        assert "public.tv_gone" in result.error
+
+    def test_a_lean_dump_is_not_compared_with_a_full_one(self, tmp_path: Path):
+        (tmp_path / "proddb_full_20250101_0000_zstd.dump").write_bytes(b"x" * 1000)
+
+        with patch("subprocess.run", side_effect=_fake_dump(300, _toc("lean"))):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=_TVIEWS,
+            )
+
+        assert result.success is True, result.error
+
+    def test_a_lean_dump_is_compared_with_the_previous_lean_one(self, tmp_path: Path):
+        (tmp_path / "proddb_full_20250101_0000_lean_zstd.dump").write_bytes(b"x" * 1000)
+
+        with patch("subprocess.run", side_effect=_fake_dump(300, _toc("lean"))):
+            result = run_backup(
+                db_name="proddb",
+                output_dir=str(tmp_path),
+                database_url=_TEST_URL,
+                tview_tables=_TVIEWS,
+            )
+
+        assert result.success is False
+        assert "sanity" in result.error
+
+    def test_a_full_dump_is_not_compared_with_a_lean_one(self, tmp_path: Path):
+        full = tmp_path / "proddb_full_20250101_0000_zstd.dump"
+        full.write_bytes(b"x" * 500)
+        lean = tmp_path / "proddb_full_20250102_0000_lean_zstd.dump"
+        lean.write_bytes(b"x" * 5000)
+        os.utime(full, (1_000_000, 1_000_000))
+        os.utime(lean, (2_000_000, 2_000_000))
+
+        with patch("subprocess.run", side_effect=_fake_dump(400, _toc("full"))):
+            result = run_backup(
+                db_name="proddb", output_dir=str(tmp_path), database_url=_TEST_URL
+            )
+
+        assert result.success is True, result.error
+
+
+class TestTviewsToExclude:
+    """What ``tview_data`` asks a dump to leave out, read from the dumped database."""
+
+    def test_keep_asks_nothing_of_the_database(self):
+        with patch("fraisier.dbops.tviews.list_tviews") as listed:
+            assert (
+                tviews_to_exclude("keep", database_url=_TEST_URL, db_name="proddb")
+                is None
+            )
+        listed.assert_not_called()
+
+    def test_exclude_reads_the_registry_of_the_database_pg_dump_dumps(self):
+        """``pg_dump`` dumps its positional database, not the URL's."""
+        with patch(
+            "fraisier.dbops.tviews.list_tviews", return_value=[("public", "tv_post")]
+        ) as listed:
+            got = tviews_to_exclude(
+                "exclude",
+                database_url="postgresql://app:pass@localhost:5432/postgres",
+                db_name="proddb",
+            )
+
+        assert got == [("public", "tv_post")]
+        listed.assert_called_once_with("postgresql://app:pass@localhost:5432/proddb")
+
+    def test_no_pg_tviews_is_logged_and_dumps_everything(self, caplog):
+        with (
+            caplog.at_level(logging.INFO, logger="fraisier.dbops.backup"),
+            patch("fraisier.dbops.tviews.list_tviews", return_value=[]),
+        ):
+            got = tviews_to_exclude("exclude", database_url=_TEST_URL, db_name="proddb")
+
+        assert got == []
+        assert "no pg_tviews" in caplog.text
+
+    def test_no_url_is_refused(self):
+        with pytest.raises(TviewError, match="database_url"):
+            tviews_to_exclude("exclude", database_url=None, db_name="proddb")
+
+    def test_an_unreadable_pg_tviews_is_refused(self):
+        with (
+            patch(
+                "fraisier.dbops.tviews.list_tviews",
+                side_effect=TviewError("predates read contract 1"),
+            ),
+            pytest.raises(TviewError, match=r"tview_data: exclude.*contract 1"),
+        ):
+            tviews_to_exclude("exclude", database_url=_TEST_URL, db_name="proddb")
+
+    def test_a_connection_failure_is_refused_too(self):
+        import psycopg
+
+        with (
+            patch(
+                "fraisier.dbops.tviews.list_tviews",
+                side_effect=psycopg.OperationalError("connection refused"),
+            ),
+            pytest.raises(TviewError, match="connection refused"),
+        ):
+            tviews_to_exclude("exclude", database_url=_TEST_URL, db_name="proddb")

@@ -1300,6 +1300,66 @@ deploy. `fraisier doctor` checks this beforehand
 on every beta. Upgrade the package, then run `ALTER EXTENSION pg_tviews UPDATE`
 on each database as a superuser.
 
+### Leaving TVIEW rows out of a dump: `tview_data` (#471)
+
+A TVIEW's rows can be rebuilt from its backing view, so a dump does not have to
+carry them. `tview_data: exclude` leaves them out of `fraisier backup run` (top-level
+`backup:` block) and of the pre-migration dump gate (`database.pre_migrate_dump`):
+
+```yaml
+backup:
+  tview_data: exclude          # keep (default) | exclude
+fraises:
+  api:
+    environments:
+      production:
+        database:
+          pre_migrate_dump:
+            enabled: true
+            output_dir: /var/lib/postgresql/pre_migrate
+            tview_data: exclude
+```
+
+**What it trades.** The dump is smaller and faster to write: about half the size
+on a small read model (measured on beta.27 and beta.29). That matters most for the
+gate, which runs inside every migrating deploy. The restore pays for it: every
+TVIEW is refilled from its view. On pg_tviews beta.27 and beta.28 a dump restore
+refills every TVIEW anyway, so the lean dump costs nothing there. From beta.29 a
+full dump restores its TVIEWs trusted with nothing to refill, so the refill is the
+real cost of the smaller dump.
+
+- **The TVIEWs come from pg_tviews' registry** of the database `pg_dump` dumps,
+  never from a `tv_*` name: a plain table may carry that name. Each is passed to
+  `pg_dump --exclude-table-data` quoted. The tables are still created.
+- **The dump is checked.** `--exclude-table-data` that matches nothing gives a
+  full dump without a word, so the archive's table of contents must show every
+  TVIEW without its rows, or the backup fails.
+- **No pg_tviews in the database:** logged, and the dump is a plain full one. **A
+  pg_tviews fraisier cannot read**, or no connection to read it: the backup
+  fails and the gate aborts the deploy before migrating. Dumping everything
+  instead would quietly ignore the setting. On this release that includes
+  pg_tviews beta.28 and later. The message then says "upgrade to beta.20",
+  which is wrong for a newer one. confiture 1.36 refuses those versions too
+  (`CONFIG_014`).
+- **Lean dumps are a size series of their own.** They are named
+  `{db}_{mode}_{timestamp}_lean[_{algo}].dump`. The size check (a dump under half
+  of the previous one fails) compares a lean dump only with lean ones, and a full
+  dump only with full ones. Retention does not separate them: `keep_last`, the
+  gate's newest-dump floor and a `retain` `match` count lean and full dumps
+  together, so the newest kept dump may be a lean one.
+- **fraisier's restore refills them explicitly.** When the archive creates a
+  registered TVIEW without its rows (or, if the archive could not be read, when
+  the file is named `_lean`), the restore runs
+  `pg_tviews_rebuild_all(only_empty => false)` instead of `only_empty`, and logs
+  `pg_tviews: refilled N TVIEW(s) left out of a lean dump`. `only_empty` would
+  miss them: it never refills a LOGGED TVIEW (the default from beta.28), and from
+  beta.29 an excluded UNLOGGED one keeps its validity row.
+- ⚠️ **A lean dump restored outside fraisier** (a plain `pg_restore`) leaves every
+  TVIEW empty, and `fraisier db tviews rebuild` without `--all` will not fill
+  them. Run `fraisier db tviews rebuild FRAISE -e ENV --all`, or
+  `SELECT * FROM tviews.pg_tviews_rebuild_all(only_empty => false)`, before the
+  application reads them. This is why the default is `keep`.
+
 ### `database.post_migrate`: SQL hooks after migrate
 
 A list of steps; each step runs exactly one of `sql_dir` (every `.sql`

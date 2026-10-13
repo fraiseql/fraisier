@@ -218,6 +218,27 @@ def find_empty_tviews(
         return empty
 
 
+def list_tviews(url: str) -> list[tuple[str, str]]:
+    """Every TVIEW in the registry, as ``(schema, name)``, sorted.
+
+    What a lean dump leaves the data of out (#471).  It comes from the
+    registry and never from a ``tv_*`` name pattern: a plain table may carry
+    that name, and fraiseql v1 schemas are full of them.  ``[]`` when the
+    database has no pg_tviews.  Raises :class:`TviewError` for a pg_tviews this
+    module cannot read, because "no TVIEWs" would then dump everything quietly.
+    """
+    with _connect(url) as conn:
+        support = _usable(conn)
+        if support is None:
+            return []
+        rows = conn.execute(
+            sql.SQL("SELECT r.schema, r.name FROM {}.registry r ORDER BY 1, 2").format(
+                sql.Identifier(str(support.schema))
+            )
+        ).fetchall()
+        return [(str(schema), str(name)) for schema, name in rows]
+
+
 def _grant_hint(conn: _Executes, schema: str, name: str) -> str:
     """The ``GRANT`` that lets the connecting role read a TVIEW, ready to paste."""
     row = conn.execute("SELECT current_user").fetchone()
