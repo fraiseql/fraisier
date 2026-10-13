@@ -1252,11 +1252,17 @@ does; `fail` is the default for the same reason it is there. The probe follows
 asked. A probe that *could not run* fails a gate you declared and only warns for
 the default one, exactly as the drift gate does.
 
-A pg_dump restore does not empty a TVIEW (the dump carries UNLOGGED data), but it
-does leave out pg_tviews' own validity table. So every TVIEW restores as *reset*, and
-the rebuild refills each one from its backing view: on a dump restore it costs one
-full pass over every backing view, not one query (measured on beta.27). On a
-physical restore it is what puts the rows back.
+A pg_dump restore does not empty a TVIEW (the dump carries UNLOGGED data). What it
+does with pg_tviews' validity table depends on the version:
+
+- **beta.27 and beta.28** leave the validity table out of the dump. Every TVIEW
+  restores as *reset*, and the rebuild refills each one from its backing view. On a
+  dump restore that costs one full pass over every backing view, not one query
+  (measured on beta.27).
+- **From beta.29** the validity table travels with the rows, so a plain dump
+  restore comes back trusted and the rebuild normally finds nothing to do.
+
+On a physical restore, on every version, the rebuild is what puts the rows back.
 
 **After a failover or a crash restart** fraisier is not in the loop, so the step is
 yours. Promote, then, on the new primary:

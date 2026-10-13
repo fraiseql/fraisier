@@ -67,10 +67,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     merely empty (LOGGED, or emptied by hand). Its "nothing to rebuild" line said "no
     TVIEW was empty" right after `status` reported one. It now says no TVIEW was
     reset and points at `--all`, and so do `status` and the deploy gate's refusal.
-  - A pg_dump restore leaves out pg_tviews' validity table, so it now refills every
-    TVIEW: one full pass over the backing views, not the single query
-    `docs/deployment-guide.md` promised. The restore logs
+  - On pg_tviews beta.27 and beta.28 a pg_dump restore leaves out the validity
+    table, so it refills every TVIEW: one full pass over the backing views, not the
+    single query `docs/deployment-guide.md` promised. (From beta.29 the validity
+    travels with the dump, and a plain restore refills nothing.) The restore logs
     `pg_tviews: rebuilt N reset TVIEW(s)`, which used to read "empty".
+- **The TVIEW rebuild reads pg_tviews beta.29's result**
+  ([#472](https://github.com/fraiseql/fraisier/issues/472)). beta.29 renames
+  `pg_tviews_rebuild_all`'s `rows` column to `rows_inserted`, and
+  `SELECT entity, rows` would fail there with `column "rows" does not exist`.
+  fraisier now reads the result by column name and accepts either. A result with
+  neither column is refused with the columns it got. This has no effect yet: this
+  release reads only pg_tviews' contract 1, which beta.28 and later do not offer.
+  It is in place for the contract-2 support that follows.
 
 ### Upgrade note
 

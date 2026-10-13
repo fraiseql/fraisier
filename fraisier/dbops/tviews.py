@@ -53,7 +53,13 @@ class TviewsSupport:
 
 @dataclass(frozen=True)
 class TviewRebuilt:
-    """One entity ``pg_tviews_rebuild_all`` filled, and how many rows it holds now."""
+    """One entity ``pg_tviews_rebuild_all`` filled, and the row count it reported.
+
+    The count is the TVIEW's size afterwards up to pg_tviews 0.1.0-beta.28, and
+    from beta.29 the rows the call inserted (#472).  They differ only for a
+    TVIEW that was refilled while it still held rows, which beta.27 does after a
+    dump restore and reports as its full size.  No caller branches on which.
+    """
 
     entity: str
     rows: int
@@ -287,13 +293,13 @@ def _rebuild(url: str, *, only_empty: bool) -> list[TviewRebuilt]:
                 "after promotion"
             )
         try:
-            rows = conn.execute(
+            cursor = conn.execute(
                 sql.SQL(
-                    "SELECT entity, rows FROM {}.pg_tviews_rebuild_all"
-                    "(only_empty => %s)"
+                    "SELECT * FROM {}.pg_tviews_rebuild_all(only_empty => %s)"
                 ).format(sql.Identifier(str(support.schema))),
                 (only_empty,),
-            ).fetchall()
+            )
+            rows = cursor.fetchall()
         except psycopg.errors.InsufficientPrivilege as exc:
             # Only name the function grant when it is the one missing: a refusal
             # on a table a TVIEW reads is the same SQLSTATE.
@@ -309,7 +315,24 @@ def _rebuild(url: str, *, only_empty: bool) -> list[TviewRebuilt]:
             ) from exc
         except psycopg.Error as exc:
             raise TviewError(f"pg_tviews_rebuild_all failed: {exc}") from exc
-        return [TviewRebuilt(str(entity), int(count)) for entity, count in rows]
+        names = [column.name for column in cursor.description or ()]
+        entity, count = _rebuild_columns(names)
+        return [TviewRebuilt(str(row[entity]), int(row[count])) for row in rows]
+
+
+#: The count's name, newest first: beta.29 renamed ``rows`` (#472).
+_REBUILD_COUNT_COLUMNS = ("rows_inserted", "rows")
+
+
+def _rebuild_columns(names: list[str]) -> tuple[int, int]:
+    """Where the entity and the count sit in ``pg_tviews_rebuild_all``'s result."""
+    count = next((c for c in _REBUILD_COUNT_COLUMNS if c in names), None)
+    if "entity" not in names or count is None:
+        raise TviewError(
+            f"pg_tviews_rebuild_all returned columns {', '.join(names)}; fraisier "
+            f"reads entity and one of {', '.join(_REBUILD_COUNT_COLUMNS)}"
+        )
+    return names.index("entity"), names.index(count)
 
 
 def rebuild_empty_tviews(url: str) -> list[TviewRebuilt]:

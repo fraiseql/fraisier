@@ -6,6 +6,8 @@ against a real pg_tviews in ``tests/integration/test_tviews_integration.py``.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -57,6 +59,31 @@ def patch_connect(monkeypatch: pytest.MonkeyPatch, conn: FakeConn) -> None:
 
 EXTENSION = ("FROM pg_extension", [("tviews",)])
 CONTRACT_ONE = ("contract_version", [(1,)])
+
+#: ``pg_tviews_rebuild_all``'s wire, captured from a real server per version by
+#: ``SELECT * FROM tviews.pg_tviews_rebuild_all(...)`` (#472).
+WIRE = Path(__file__).parent / "fixtures" / "pg_tviews"
+
+
+def _rebuild_wire(version: str) -> tuple[tuple[str, ...], list[tuple[Any, ...]]]:
+    """The column names and rows a refill of one reset TVIEW returned on *version*."""
+    capture = json.loads((WIRE / f"rebuild_all-{version}.json").read_text())
+    reset = capture["reset"]
+    names = tuple(name for name, _type in reset["description"])
+    return names, [tuple(row) for row in reset["rows"]]
+
+
+def _rebuild_conn(
+    names: tuple[str, ...], rows: list[tuple[Any, ...]] | Exception
+) -> FakeConn:
+    conn = FakeConn(
+        EXTENSION,
+        CONTRACT_ONE,
+        ("pg_is_in_recovery", [(False,)]),
+        ("pg_tviews_rebuild_all", rows),
+    )
+    conn.columns = names
+    return conn
 
 
 class TestSupport:
@@ -266,34 +293,52 @@ class TestFindEmpty:
 
 
 class TestRebuild:
-    def test_only_empty_is_asked_for_by_default_and_rows_are_returned(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("version", ["beta27", "beta29"])
+    def test_the_count_is_read_by_column_name_on_either_side_of_the_rename(
+        self, monkeypatch: pytest.MonkeyPatch, version: str
     ) -> None:
-        conn = FakeConn(
-            EXTENSION,
-            CONTRACT_ONE,
-            ("pg_is_in_recovery", [(False,)]),
-            ("pg_tviews_rebuild_all", [("post", 3)]),
-        )
+        """beta.29 renamed ``rows`` to ``rows_inserted`` (#472); both are read."""
+        names, rows = _rebuild_wire(version)
+        conn = _rebuild_conn(names, rows)
         patch_connect(monkeypatch, conn)
 
         rebuilt = tviews.rebuild_empty_tviews("postgresql:///app")
 
-        assert rebuilt == [tviews.TviewRebuilt("post", 3)]
+        assert rebuilt == [tviews.TviewRebuilt("post", 5)]
         assert conn.queries[-1] == (
-            'SELECT entity, rows FROM "tviews".pg_tviews_rebuild_all(only_empty => %s)',
+            'SELECT * FROM "tviews".pg_tviews_rebuild_all(only_empty => %s)',
             (True,),
         )
+
+    def test_the_columns_are_found_wherever_they_sit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(
+            monkeypatch, _rebuild_conn(("rows_inserted", "entity"), [(7, "post")])
+        )
+
+        assert tviews.rebuild_empty_tviews("postgresql:///app") == [
+            tviews.TviewRebuilt("post", 7)
+        ]
+
+    @pytest.mark.parametrize("names", [("entity", "n"), ("name", "rows")])
+    def test_an_unknown_result_shape_names_what_it_got(
+        self, monkeypatch: pytest.MonkeyPatch, names: tuple[str, str]
+    ) -> None:
+        patch_connect(monkeypatch, _rebuild_conn(names, [("post", 5)]))
+
+        with pytest.raises(tviews.TviewError) as excinfo:
+            tviews.rebuild_empty_tviews("postgresql:///app")
+
+        message = str(excinfo.value)
+        assert ", ".join(names) in message
+        assert "rows_inserted" in message
+        assert "rows" in message
 
     def test_rebuilding_everything_says_so(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        conn = FakeConn(
-            EXTENSION,
-            CONTRACT_ONE,
-            ("pg_is_in_recovery", [(False,)]),
-            ("pg_tviews_rebuild_all", []),
-        )
+        conn = _rebuild_conn(*_rebuild_wire("beta29"))
         patch_connect(monkeypatch, conn)
 
         tviews.rebuild_all_tviews("postgresql:///app")
@@ -319,11 +364,8 @@ class TestRebuild:
     def test_a_failed_rebuild_surfaces_the_server_message(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        conn = FakeConn(
-            EXTENSION,
-            CONTRACT_ONE,
-            ("pg_is_in_recovery", [(False,)]),
-            ("pg_tviews_rebuild_all", psycopg.errors.InternalError("refresh blew up")),
+        conn = _rebuild_conn(
+            ("entity", "rows"), psycopg.errors.InternalError("refresh blew up")
         )
         patch_connect(monkeypatch, conn)
 
