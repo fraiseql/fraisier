@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **fraisier reads only pg_tviews 0.1.0-beta.28's read contract 2**
+  ([#461](https://github.com/fraiseql/fraisier/issues/461)), the only one confiture
+  reads (confiture #714). A pg_tviews on contract 1 is refused as outdated, with
+  "upgrade it to 0.1.0-beta.28 together with confiture"; one past contract 2 is
+  refused with "upgrade fraisier". `fraisier db tviews status` composes `tview` from
+  beta.28's `schema` and `name` profile columns, so the table and `--json` keep
+  naming each TVIEW. The TVIEW rebuild (#472) and `tview_data: exclude` (#471) now
+  run on beta.28 and later instead of being skipped or refused as outdated. On
+  beta.28 a pg_dump restore refills only the UNLOGGED TVIEWs, not every one as the
+  0.88.0 notes say: a LOGGED TVIEW, the default from beta.28, keeps its rows and has
+  no validity row to lose (measured). See "TVIEWs after a restore or a failover" in
+  `docs/deployment-guide.md`.
+
+### Upgrade note
+
+**Upgrade the pg_tviews extension and confiture together.** Both fraisier and
+confiture read only contract 2 now: on a beta.27 or older host confiture refuses
+with `CONFIG_014`, so the drift gate fails every TVIEW deploy, and fraisier's own
+TVIEW checks refuse it too. Install pg_tviews 0.1.0-beta.28 or later, run
+`ALTER EXTENSION pg_tviews UPDATE` on each database as a superuser, and upgrade
+fraisier (which brings the confiture that reads contract 2) in the same change.
+
 ## [0.88.0] - 2026-10-16
 
 ### Added

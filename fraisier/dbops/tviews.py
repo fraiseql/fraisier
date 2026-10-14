@@ -6,8 +6,8 @@ nothing then tells the application: every count passes and the read model is
 simply gone.  This module is how fraisier sees that, and the one place that
 knows how pg_tviews is spoken to.
 
-Everything goes through pg_tviews' documented read contract 1 — the
-``tviews.registry`` view and ``contract_version()`` — never ``pg_tview_meta``,
+Everything goes through pg_tviews' documented read contract 2 (0.1.0-beta.28)
+— the ``tviews.registry`` view and ``contract_version()`` — never ``pg_tview_meta``,
 and never a name inferred from another (``v_<entity>`` from ``tv_<entity>``).
 The extension's schema is read from the catalog rather than assumed to be
 ``tviews``.
@@ -27,8 +27,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: The read contract fraisier speaks.  confiture 1.29 requires the same one.
-CONTRACT = 1
+#: The read contract fraisier speaks (pg_tviews 0.1.0-beta.28), and the only one
+#: confiture reads (confiture #714): a host upgrades both together.  It replaced the
+#: profile's ``tview`` column, which :func:`profile_tviews` composes back.
+CONTRACT = 2
 
 _CONNECT_TIMEOUT_SECONDS = 10
 
@@ -45,10 +47,15 @@ class TviewError(RuntimeError):
 
 @dataclass(frozen=True)
 class TviewsSupport:
-    """What a database offers: ``absent``, ``outdated`` (no contract 1) or ``ok``."""
+    """What a database offers: ``absent``, ``outdated``, ``newer`` or ``ok``.
 
-    state: Literal["absent", "outdated", "ok"]
+    ``outdated`` offers an older read contract than fraisier speaks; ``newer``
+    offers a later one, which only a newer fraisier reads.
+    """
+
+    state: Literal["absent", "outdated", "newer", "ok"]
     schema: str | None = None
+    contract: int | None = None
 
 
 @dataclass(frozen=True)
@@ -84,7 +91,7 @@ class EmptyTview:
 
 
 def read_support(conn: _Executes) -> TviewsSupport:
-    """Classify *conn*'s database: no pg_tviews, pg_tviews without contract 1, or ready.
+    """Classify *conn*'s database: no pg_tviews, an unreadable contract, or ready.
 
     ``pg_extension.extversion`` is no help — it reads ``0.1.0`` on every beta —
     so this asks the function confiture asks.  Run on an autocommit connection:
@@ -105,9 +112,11 @@ def read_support(conn: _Executes) -> TviewsSupport:
         ).fetchone()
     except psycopg.Error:
         return TviewsSupport("outdated", schema)
-    if contract is None or contract[0] != CONTRACT:
+    if contract is None or contract[0] < CONTRACT:
         return TviewsSupport("outdated", schema)
-    return TviewsSupport("ok", schema)
+    if contract[0] > CONTRACT:
+        return TviewsSupport("newer", schema, contract[0])
+    return TviewsSupport("ok", schema, CONTRACT)
 
 
 def _connect(url: str) -> Connection:
@@ -117,14 +126,15 @@ def _connect(url: str) -> Connection:
 
 
 def tviews_installed(url: str) -> bool:
-    """True only when pg_tviews is present **and** speaks contract 1."""
+    """True only when pg_tviews is present **and** speaks a contract fraisier reads."""
     with _connect(url) as conn:
         return read_support(conn).state == "ok"
 
 
 _HINT_OUTDATED = (
-    "pg_tviews here predates read contract 1; upgrade it to 0.1.0-beta.20 or "
-    "later and run its scripts/migrate-from-0.1.0.sql"
+    f"pg_tviews here predates read contract {CONTRACT}; upgrade it to "
+    "0.1.0-beta.28 together with confiture, which reads only that contract, then "
+    "run ALTER EXTENSION pg_tviews UPDATE"
 )
 
 
@@ -138,6 +148,11 @@ def _usable(conn: _Executes) -> TviewsSupport | None:
     support = read_support(conn)
     if support.state == "outdated":
         raise TviewError(_HINT_OUTDATED)
+    if support.state == "newer":
+        raise TviewError(
+            f"pg_tviews here offers read contract {support.contract}, which this "
+            f"fraisier does not read (it reads {CONTRACT}); upgrade fraisier"
+        )
     return support if support.state == "ok" else None
 
 
@@ -278,7 +293,7 @@ def rebuild_privilege_problem(url: str) -> str | None:
     with the ``GRANT`` that fixes it.
 
     ``None`` when the database has no pg_tviews.  Raises :class:`TviewError` for a
-    pg_tviews without read contract 1, like every other call here.
+    pg_tviews whose read contract fraisier cannot read, like every other call here.
     """
     with _connect(url) as conn:
         support = _usable(conn)
@@ -384,7 +399,9 @@ def profile_tviews(url: str) -> list[dict[str, Any]]:
     Read-only, and callable on a standby — which is the point: it is what an
     operator looks at *before* deciding to rebuild.  Rows are keyed by the
     function's own column names, so a column pg_tviews adds reaches the caller
-    without a change here.  ``[]`` when the database has no pg_tviews.
+    without a change here.  ``tview`` is composed from the ``schema`` and ``name``
+    columns, so callers that name a TVIEW keep one key.  ``[]`` when the database
+    has no pg_tviews.
     """
     with _connect(url) as conn:
         support = _usable(conn)
@@ -396,4 +413,8 @@ def profile_tviews(url: str) -> list[dict[str, Any]]:
             )
         )
         names = [column.name for column in cursor.description or ()]
-        return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+        rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+    for row in rows:
+        if "tview" not in row and {"schema", "name"} <= row.keys():
+            row["tview"] = f"{row['schema']}.{row['name']}"
+    return rows

@@ -5,8 +5,8 @@ restore.  :func:`_empty` reproduces the state exactly as pg_tviews itself report
 it (``is_empty`` and ``needs_rebuild`` both true), without needing a cluster to
 crash.
 
-Needs pg_tviews 0.1.0-beta.27.  The ``tviews`` CI leg runs it; elsewhere it
-skips without one.
+Needs pg_tviews read contract 2 (0.1.0-beta.30, the release confiture 1.37
+requires).  The ``tviews`` CI leg runs it; elsewhere it skips without one.
 """
 
 from __future__ import annotations
@@ -80,15 +80,34 @@ def _empty(url: str, table: str) -> None:
 
     A reset TVIEW is an UNLOGGED one missing from ``tviews.pg_tview_valid``, the
     UNLOGGED table a reset empties with it.  A TVIEW that is merely empty is not
-    rebuilt by ``only_empty`` (beta.27).
+    rebuilt by ``only_empty`` (from beta.27).
+
+    beta.28 keys that table by the TVIEW's OID, beta.29 by its entity
+    (pg_tviews#236), so the key is read from the table rather than assumed.
     """
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute(f"ALTER TABLE {table} SET UNLOGGED")
         conn.execute(f"TRUNCATE {table}")
-        conn.execute(
-            "DELETE FROM tviews.pg_tview_valid WHERE table_oid = %s::regclass",
-            (table,),
-        )
+        key = conn.execute(
+            "SELECT attname FROM pg_attribute "
+            "WHERE attrelid = 'tviews.pg_tview_valid'::regclass "
+            "AND attname IN ('table_oid', 'entity') AND NOT attisdropped"
+        ).fetchall()
+        if key == [("entity",)]:
+            conn.execute(
+                "DELETE FROM tviews.pg_tview_valid WHERE entity IN ("
+                "SELECT entity FROM tviews.registry "
+                "WHERE format('%%I.%%I', schema, name)::regclass = %s::regclass)",
+                (table,),
+            )
+        elif key == [("table_oid",)]:
+            conn.execute(
+                "DELETE FROM tviews.pg_tview_valid WHERE table_oid = %s::regclass",
+                (table,),
+            )
+        else:
+            msg = f"tviews.pg_tview_valid has no key this helper knows: {key}"
+            raise AssertionError(msg)
 
 
 def test_a_healthy_database_has_nothing_empty(url: str) -> None:
@@ -178,8 +197,8 @@ def _as_role(url: str, role: str) -> str:
 def without_public_rebuild(url: str) -> Iterator[str]:
     """*url* as a role with no privilege on a TVIEW and none on the rebuild.
 
-    beta.27 rebuilds and counts each TVIEW as its owner, so ``EXECUTE`` is
-    the only thing this role is missing.
+    pg_tviews rebuilds and counts each TVIEW as its owner (from beta.27), so
+    ``EXECUTE`` is the only thing this role is missing.
     """
     with psycopg.connect(url, autocommit=True) as conn:
         # Roles are cluster-wide; its grants die with the fixture's database.
@@ -250,9 +269,10 @@ def test_a_refusal_on_a_table_names_the_owner_not_the_function_grant(
 ) -> None:
     """With ``EXECUTE`` granted, a ``42501`` is the TVIEW owner's.
 
-    beta.27 rebuilds each TVIEW as its owner, so a superuser is refused the same
-    way (measured): naming the function grant, or a superuser, would be a false
-    fix.  The owner here has lost ``SELECT`` on the table its TVIEW reads.
+    pg_tviews rebuilds each TVIEW as its owner (from beta.27), so a superuser is
+    refused the same way (measured): naming the function grant, or a superuser,
+    would be a false fix.  The owner here has lost ``SELECT`` on the table its
+    TVIEW reads.
     """
     with psycopg.connect(url, autocommit=True) as conn:
         if not conn.execute(
