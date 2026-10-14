@@ -54,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moves only the first. Both are now on 0.17.0, and `tests/test_ruff_pin.py`
   fails when they disagree, so the next autoupdate has to bump the lock with it.
   0.17.0 needs no code change: `ruff check` and `ruff format --check` are clean.
+- **CI runs the TVIEW tests** ([#476](https://github.com/fraiseql/fraisier/issues/476)).
+  They skipped on every CI run because no CI server carried pg_tviews, so each
+  TVIEW claim rested on a local run. A `tviews` leg in `quality-gate.yml` builds
+  pg_tviews at a pinned commit (`ci/pg-tviews/Dockerfile`, confiture's build,
+  beta.26) and runs every test using `pg_tviews_target` (`-m tviews`, the mark
+  derived from the fixture). `FRAISIER_TEST_PG_TVIEWS=1` turns a TVIEW skip there
+  into a failure, and the Quality Gate waits on the leg.
 
 ### Fixed
 
