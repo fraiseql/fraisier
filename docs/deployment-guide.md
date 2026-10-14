@@ -1255,10 +1255,11 @@ the default one, exactly as the drift gate does.
 A pg_dump restore does not empty a TVIEW (the dump carries UNLOGGED data). What it
 does with pg_tviews' validity table depends on the version:
 
-- **beta.27 and beta.28** leave the validity table out of the dump. Every TVIEW
-  restores as *reset*, and the rebuild refills each one from its backing view. On a
-  dump restore that costs one full pass over every backing view, not one query
-  (measured on beta.27).
+- **beta.27 and beta.28** leave the validity table out of the dump. Every UNLOGGED
+  TVIEW restores as *reset*, and the rebuild refills each one from its backing view.
+  On a dump restore that costs one full pass over those backing views, not one query
+  (measured on beta.27 and beta.28). A LOGGED TVIEW, the default from beta.28, has
+  no validity row to lose and is left alone.
 - **From beta.29** the validity table travels with the rows, so a plain dump
   restore comes back trusted and the rebuild normally finds nothing to do.
 
@@ -1278,6 +1279,13 @@ From pg_tviews 0.1.0-beta.27, `rebuild` without `--all` fills only the TVIEWs
 that is merely empty (truncated by hand, say) is not a reset one, so only `--all`
 refills it. `status` and the deploy gate's refusal both say so.
 
+pg_tviews 0.1.0-beta.28 changed two more things here (#461):
+
+- A TVIEW is **LOGGED** unless it is declared `logged: false`, so a failover, a crash
+  restart or a physical restore keeps it.
+- After a crash restart or a promotion, pg_tviews itself refills the reset TVIEWs in
+  every database (`pg_tviews.auto_rebuild_databases = '*'`, its default).
+
 `status` reads `pg_tviews_profile()`, which is read-only and works on a standby.
 An UNLOGGED TVIEW cannot be *read* on a standby, so there the emptiness check is
 reported as unavailable rather than guessed. `rebuild` refuses on a standby —
@@ -1289,12 +1297,14 @@ populated view, `3` it could not check (no pg_tviews, an older one, no
 connection). A host that could not look never reports what a host that looked and
 passed reports.
 
-**pg_tviews must be 0.1.0-beta.27 or later.** confiture 1.36 refuses an older one
-with `CONFIG_014`, so on such a host the drift gate fails every deploy of a TVIEW
-project, after its migrations ran. So does the migration preflight, and `migrate
-up` refuses a migration that creates or drops a TVIEW before applying anything,
-including one that upgrades the extension: upgrade it out of band, before the
-deploy. `fraisier doctor` checks this beforehand
+**pg_tviews must be 0.1.0-beta.28 or later.** fraisier and confiture both read only
+its read contract 2, so upgrade the extension and confiture together. On an older
+pg_tviews confiture refuses with `CONFIG_014`, so on such a host the drift gate fails
+every deploy of a TVIEW project, after its migrations ran. So does the migration
+preflight, and `migrate up` refuses a migration that creates or drops a TVIEW before
+applying anything, including one that upgrades the extension: upgrade it out of band,
+before the deploy. fraisier's own TVIEW checks refuse it with the same advice.
+`fraisier doctor` checks this beforehand
 (`pg_tviews_contract`) by asking confiture's own
 `require_supported_pg_tviews_on`, since `pg_extension.extversion` reads `0.1.0`
 on every beta. Upgrade the package, then run `ALTER EXTENSION pg_tviews UPDATE`
@@ -1324,9 +1334,10 @@ fraises:
 on a small read model (measured on beta.27 and beta.29). That matters most for the
 gate, which runs inside every migrating deploy. The restore pays for it: every
 TVIEW is refilled from its view. On pg_tviews beta.27 and beta.28 a dump restore
-refills every TVIEW anyway, so the lean dump costs nothing there. From beta.29 a
-full dump restores its TVIEWs trusted with nothing to refill, so the refill is the
-real cost of the smaller dump.
+refills every UNLOGGED TVIEW anyway, so for those the lean dump costs nothing. A
+LOGGED one (the default from beta.28), and from beta.29 any TVIEW, restores from a
+full dump with nothing to refill, so there the refill is the real cost of the
+smaller dump.
 
 - **The TVIEWs come from pg_tviews' registry** of the database `pg_dump` dumps,
   never from a `tv_*` name: a plain table may carry that name. Each is passed to
@@ -1337,10 +1348,9 @@ real cost of the smaller dump.
 - **No pg_tviews in the database:** logged, and the dump is a plain full one. **A
   pg_tviews fraisier cannot read**, or no connection to read it: the backup
   fails and the gate aborts the deploy before migrating. Dumping everything
-  instead would quietly ignore the setting. On this release that includes
-  pg_tviews beta.28 and later. The message then says "upgrade to beta.20",
-  which is wrong for a newer one. confiture 1.36 refuses those versions too
-  (`CONFIG_014`).
+  instead would quietly ignore the setting. That includes a pg_tviews older
+  than beta.28, which offers only read contract 1; the message says to upgrade
+  it together with confiture.
 - **Lean dumps are a size series of their own.** They are named
   `{db}_{mode}_{timestamp}_lean[_{algo}].dump`. The size check (a dump under half
   of the previous one fails) compares a lean dump only with lean ones, and a full

@@ -2,12 +2,14 @@
 
 The dump leaves every TVIEW's rows out, the archive must show it, and fraisier's
 restore refills every TVIEW from its backing view, after which writes still
-propagate.  ``tv_user`` is LOGGED, which ``only_empty`` never refills: the
-control restores the same archive without the explicit refill and finds it
-empty, so the test can see the gap it closes.
+propagate.  ``tv_user`` is LOGGED (the default from beta.28), which
+``only_empty`` never refills: the control restores the same archive without the
+explicit refill and finds it empty, so the test can see the gap it closes.
+``tv_post`` is UNLOGGED, so the refill covers both kinds.
 
-Needs pg_tviews 0.1.0-beta.27 on the server (``pg_tviews_set_logged``).  The
-``tviews`` CI leg runs it; elsewhere it skips without one.
+Needs pg_tviews read contract 2 (0.1.0-beta.30, the release confiture 1.37
+requires) on the server.  The ``tviews`` CI leg runs it; elsewhere it skips
+without one.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ CREATE TABLE tb_post (
     pk_post bigint PRIMARY KEY, id uuid NOT NULL UNIQUE,
     fk_user bigint REFERENCES tb_user, title text
 );
-CREATE TABLE tv_post AS
+CREATE UNLOGGED TABLE tv_post AS
 SELECT p.pk_post, p.id, jsonb_build_object('id', p.id, 'author', u.name) AS data
 FROM tb_post p JOIN tb_user u ON u.pk_user = p.fk_user;
 CREATE TABLE tv_user AS
@@ -77,7 +79,6 @@ def lean_dump(pg_tviews_target: PgTarget, tmp_path: Path):
         target,
         _SRC_DB,
         _TREE,
-        "SELECT tviews.pg_tviews_set_logged('user', true)",
         "INSERT INTO tb_user SELECT g, gen_random_uuid(), 'u' || g "
         "FROM generate_series(1, 30) g",
         "INSERT INTO tb_post SELECT g, gen_random_uuid(), 1 + g % 30, 't' || g "

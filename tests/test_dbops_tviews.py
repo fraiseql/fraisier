@@ -58,7 +58,7 @@ def patch_connect(monkeypatch: pytest.MonkeyPatch, conn: FakeConn) -> None:
 
 
 EXTENSION = ("FROM pg_extension", [("tviews",)])
-CONTRACT_ONE = ("contract_version", [(1,)])
+CONTRACT_TWO = ("contract_version", [(2,)])
 
 #: ``pg_tviews_rebuild_all``'s wire, captured from a real server per version by
 #: ``SELECT * FROM tviews.pg_tviews_rebuild_all(...)`` (#472).
@@ -78,7 +78,7 @@ def _rebuild_conn(
 ) -> FakeConn:
     conn = FakeConn(
         EXTENSION,
-        CONTRACT_ONE,
+        CONTRACT_TWO,
         ("pg_is_in_recovery", [(False,)]),
         ("pg_tviews_rebuild_all", rows),
     )
@@ -100,13 +100,15 @@ class TestSupport:
 
         assert support.state == "outdated"
 
-    def test_outdated_when_the_contract_is_not_one(self) -> None:
-        support = tviews.read_support(FakeConn(EXTENSION, ("contract_version", [(0,)])))
+    def test_contract_one_is_outdated(self) -> None:
+        """confiture reads only contract 2 (confiture #714), so fraisier does too
+        (#461): a host must upgrade pg_tviews and confiture together."""
+        support = tviews.read_support(FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
         assert support.state == "outdated"
 
-    def test_ok_on_contract_one_and_carries_the_extension_schema(self) -> None:
-        conn = FakeConn(("FROM pg_extension", [("pgx",)]), CONTRACT_ONE)
+    def test_ok_on_contract_two_and_carries_the_extension_schema(self) -> None:
+        conn = FakeConn(("FROM pg_extension", [("pgx",)]), CONTRACT_TWO)
 
         support = tviews.read_support(conn)
 
@@ -114,16 +116,30 @@ class TestSupport:
         # resolved from the catalog, not assumed to be `tviews`
         assert '"pgx".contract_version()' in conn.queries[-1][0]
 
-    def test_installed_is_true_only_on_contract_one(
+    def test_a_contract_past_two_is_newer_not_outdated(self) -> None:
+        support = tviews.read_support(FakeConn(EXTENSION, ("contract_version", [(3,)])))
+
+        assert support.state == "newer"
+
+    def test_a_newer_contract_says_to_upgrade_fraisier(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        patch_connect(monkeypatch, FakeConn(EXTENSION, CONTRACT_ONE))
+        """Telling an operator to upgrade a pg_tviews that is ahead would be wrong."""
+        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(3,)])))
+
+        with pytest.raises(tviews.TviewError, match=r"contract 3.*upgrade fraisier"):
+            tviews.find_empty_tviews("postgresql:///app")
+
+    def test_installed_is_true_only_on_contract_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(monkeypatch, FakeConn(EXTENSION, CONTRACT_TWO))
         assert tviews.tviews_installed("postgresql:///app") is True
 
         patch_connect(monkeypatch, FakeConn(("FROM pg_extension", [])))
         assert tviews.tviews_installed("postgresql:///app") is False
 
-        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(0,)])))
+        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
         assert tviews.tviews_installed("postgresql:///app") is False
 
 
@@ -156,7 +172,7 @@ class TestAnUnreadableTviewCannotBeVerified:
     def _conn(self, first: Any) -> FakeConn:
         return FakeConn(
             EXTENSION,
-            CONTRACT_ONE,
+            CONTRACT_TWO,
             REGISTRY,
             (
                 'EXISTS (SELECT 1 FROM "public"."tv_post"',
@@ -251,7 +267,7 @@ class TestListTviews:
     ) -> None:
         conn = FakeConn(
             EXTENSION,
-            CONTRACT_ONE,
+            CONTRACT_TWO,
             ('FROM "tviews".registry', [("Mixed", "tv_note"), ("public", "tv_post")]),
         )
         patch_connect(monkeypatch, conn)
@@ -272,9 +288,11 @@ class TestListTviews:
     def test_an_outdated_pg_tviews_is_refused_not_read_as_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(2,)])))
+        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(tviews.TviewError):
+        with pytest.raises(
+            tviews.TviewError, match=r"beta\.28 together with confiture"
+        ):
             tviews.list_tviews("postgresql:///app")
 
 
@@ -284,7 +302,7 @@ class TestFindEmpty:
     ) -> None:
         conn = FakeConn(
             EXTENSION,
-            CONTRACT_ONE,
+            CONTRACT_TWO,
             REGISTRY,
             probe('public"."tv_post', tv=False, view=True),
             probe('app"."tv_user', tv=True, view=True),
@@ -302,7 +320,7 @@ class TestFindEmpty:
     ) -> None:
         conn = FakeConn(
             EXTENSION,
-            CONTRACT_ONE,
+            CONTRACT_TWO,
             REGISTRY,
             probe('public"."tv_post', tv=False, view=False),
             probe('app"."tv_user', tv=False, view=False),
@@ -321,9 +339,11 @@ class TestFindEmpty:
     def test_an_outdated_pg_tviews_is_an_error_not_a_clean_bill(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(0,)])))
+        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(tviews.TviewError, match=r"0\.1\.0-beta\.20"):
+        with pytest.raises(
+            tviews.TviewError, match=r"0\.1\.0-beta\.28 together with confiture"
+        ):
             tviews.find_empty_tviews("postgresql:///app")
 
 
@@ -383,7 +403,7 @@ class TestRebuild:
     def test_a_standby_is_refused_in_plain_words(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        conn = FakeConn(EXTENSION, CONTRACT_ONE, ("pg_is_in_recovery", [(True,)]))
+        conn = FakeConn(EXTENSION, CONTRACT_TWO, ("pg_is_in_recovery", [(True,)]))
         patch_connect(monkeypatch, conn)
 
         with pytest.raises(tviews.TviewError, match=r"recovery.*primary"):
@@ -419,7 +439,7 @@ class TestRebuildPrivilege:
         fix (measured)."""
         conn = FakeConn(
             EXTENSION,
-            CONTRACT_ONE,
+            CONTRACT_TWO,
             ("SELECT current_user", [("deployer",)]),
             ("has_function_privilege", [(False, "deployer")]),
         )
@@ -441,7 +461,7 @@ class TestRebuildPrivilege:
         Telling the operator to rerun as a superuser would be a false fix."""
         conn = FakeConn(
             EXTENSION,
-            CONTRACT_ONE,
+            CONTRACT_TWO,
             ("pg_is_in_recovery", [(False,)]),
             (
                 "pg_tviews_rebuild_all(only_empty",
@@ -468,11 +488,11 @@ class TestProfile:
     def test_each_row_is_keyed_by_column_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        columns = ("entity", "tview", "persistence", "rows_estimate", "warnings")
+        columns = ("entity", "schema", "name", "persistence", "rows_estimate")
         conn = FakeConn(
             EXTENSION,
-            CONTRACT_ONE,
-            ("pg_tviews_profile", [("post", "tv_post", "unlogged", 12, [])]),
+            CONTRACT_TWO,
+            ("pg_tviews_profile", [("post", "public", "tv_post", "unlogged", 12)]),
         )
         conn.columns = columns
         patch_connect(monkeypatch, conn)
@@ -483,6 +503,27 @@ class TestProfile:
         assert row["persistence"] == "unlogged"
         assert row["rows_estimate"] == 12
         assert conn.queries[-1][0] == 'SELECT * FROM "tviews".pg_tviews_profile()'
+
+    def test_each_row_still_names_its_tview(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """beta.28 returns ``schema``/``name`` in place of ``tview`` (#461).
+
+        ``db tviews status`` prints ``tview`` and ``--json`` hands it on, so a
+        contract-2 row gets it composed rather than printing ``None``.
+        """
+        conn = FakeConn(
+            EXTENSION,
+            CONTRACT_TWO,
+            ("pg_tviews_profile", [("post", "app", "tv_post", "logged")]),
+        )
+        conn.columns = ("entity", "schema", "name", "persistence")
+        patch_connect(monkeypatch, conn)
+
+        (row,) = tviews.profile_tviews("postgresql:///app")
+
+        assert row["tview"] == "app.tv_post"
+        assert (row["schema"], row["name"]) == ("app", "tv_post")
 
     def test_a_database_without_pg_tviews_has_no_profile(
         self, monkeypatch: pytest.MonkeyPatch

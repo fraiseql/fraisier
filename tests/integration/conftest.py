@@ -36,6 +36,7 @@ from urllib.parse import quote, unquote, urlparse
 
 import pytest
 
+from fraisier.dbops.tviews import CONTRACT
 from fraisier.locking import file_deployment_lock
 
 if TYPE_CHECKING:
@@ -396,7 +397,7 @@ def pytest_collection_modifyitems(items: list[Any]) -> None:
 
 @pytest.fixture
 def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
-    """A server with pg_tviews read contract 1 (0.1.0-beta.20 or later), or skip.
+    """A server with pg_tviews read contract 2 (0.1.0-beta.28 or later), or skip.
 
     **Skips even under ``FRAISIER_INTEGRATION=1``, on purpose.**  The main CI
     server has no pg_tviews, so a TVIEW test cannot be mandatory there.  The
@@ -423,8 +424,8 @@ def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
     finally:
         with psycopg.connect(pg_target.dsn(_MAINTENANCE_DB), autocommit=True) as conn:
             conn.execute(f"DROP DATABASE IF EXISTS {probe_db} WITH (FORCE)")
-    if contract is None or contract[0] != 1:
-        _skip_no_tviews("pg_tviews here predates read contract 1 (0.1.0-beta.20)")
+    if contract is None or contract[0] != CONTRACT:
+        _skip_no_tviews(f"pg_tviews here does not offer read contract {CONTRACT}")
     return pg_target
 
 
