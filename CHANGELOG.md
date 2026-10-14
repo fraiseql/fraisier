@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   INVALID (a failed `CREATE INDEX CONCURRENTLY`), and one on a materialized view.
   Each is `missing_index` graded `critical`. A plain index stays a `warning`; on a
   materialized view it is newly reported, since 1.34 compared no matview index.
+- **ruff 0.17.0, and the lock cannot drift from CI's ruff again**
+  ([#404](https://github.com/fraiseql/fraisier/pull/404)). CI lints with the
+  `ruff-pre-commit` rev (#361), and `uv run ruff` with `uv.lock`; the autoupdate
+  moves only the first. Both are now on 0.17.0, and `tests/test_ruff_pin.py`
+  fails when they disagree, so the next autoupdate has to bump the lock with it.
+  0.17.0 needs no code change: `ruff check` and `ruff format --check` are clean.
 
 ### Fixed
 
