@@ -371,18 +371,38 @@ def pg_target(_pg_server: PgTarget | None) -> PgTarget:
 
 
 def _skip_no_tviews(reason: str) -> NoReturn:
-    pytest.skip(f"{reason}; CI has none")  # ty: ignore[too-many-positional-arguments]
+    """Skip for *reason* — unless this run declared its server carries pg_tviews.
+
+    ``FRAISIER_TEST_PG_TVIEWS=1`` is the ``tviews`` CI leg saying so, and there
+    a skip is the harness missing what was provided, the silence #370 was.
+    """
+    if os.getenv("FRAISIER_TEST_PG_TVIEWS") == "1":
+        loud = f"FRAISIER_TEST_PG_TVIEWS=1 declares pg_tviews, but {reason}"
+        pytest.fail(loud)  # ty: ignore[invalid-argument-type]
+    quiet = f"{reason}; only the tviews CI leg has one"
+    pytest.skip(quiet)  # ty: ignore[too-many-positional-arguments]
+
+
+def mark_tview_tests(items: list[Any]) -> None:
+    """Mark every test that needs a pg_tviews server, for ``-m tviews``."""
+    for item in items:
+        if "pg_tviews_target" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.tviews)
+
+
+def pytest_collection_modifyitems(items: list[Any]) -> None:
+    mark_tview_tests(items)
 
 
 @pytest.fixture
 def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
     """A server with pg_tviews read contract 1 (0.1.0-beta.20 or later), or skip.
 
-    **Skips even under ``FRAISIER_INTEGRATION=1``, on purpose.**  No CI service
-    container carries pg_tviews, so a TVIEW test cannot be mandatory there; it
-    runs on a developer box whose server has the extension, and the PR records
-    that it did.  That is the one reason a skip is accepted here — the
-    ``unavailable`` rule above is for tests CI is *supposed* to run.
+    **Skips even under ``FRAISIER_INTEGRATION=1``, on purpose.**  The main CI
+    server has no pg_tviews, so a TVIEW test cannot be mandatory there.  The
+    ``tviews`` leg of quality-gate.yml runs these tests (``-m tviews``, see
+    ``mark_tview_tests``) against a pinned pg_tviews and sets
+    ``FRAISIER_TEST_PG_TVIEWS=1``, which turns every skip here into a failure.
     """
     psycopg = pytest.importorskip("psycopg")
     probe_db = "fraisier_it_tviews_probe"

@@ -22,7 +22,13 @@ import pytest
 from _pytest.outcomes import Failed, Skipped
 
 from tests.integration import conftest
-from tests.integration.conftest import PgTarget, _discover_target, unavailable
+from tests.integration.conftest import (
+    PgTarget,
+    _discover_target,
+    _skip_no_tviews,
+    mark_tview_tests,
+    unavailable,
+)
 from tests.test_preflight_e2e import _get_admin_url
 
 _WORKFLOW_DIR = Path(__file__).resolve().parent.parent / ".github" / "workflows"
@@ -488,3 +494,115 @@ class TestWorkflowsCarryTheHarnessEnv:
             _runs_the_suite("uv run pytest \\\n  tests/ \\\n  --cov=fraisier") is True
         )
         assert _runs_the_suite("echo no tests here") is False
+
+
+class TestTviewsRequired:
+    """``FRAISIER_TEST_PG_TVIEWS=1`` says the server carries pg_tviews.
+
+    The TVIEW tests skip on a server without it, even under
+    ``FRAISIER_INTEGRATION=1``, because the main CI server has none.  The
+    ``tviews`` leg provides one, and there a skip means the harness missed it:
+    a leg that skipped every TVIEW test would be a green tick over nothing.
+    """
+
+    def test_a_tviews_run_fails_instead_of_skipping(self, monkeypatch):
+        """Both outcomes are caught: a ``Skipped`` escaping ``raises(Failed)``
+        would report this test as skipped, the silence it exists to catch."""
+        monkeypatch.setenv("FRAISIER_TEST_PG_TVIEWS", "1")
+
+        with pytest.raises((Failed, Skipped), match="no pg_tviews here") as caught:
+            _skip_no_tviews("no pg_tviews here")
+
+        assert caught.type is Failed
+
+    def test_any_other_run_still_skips(self, monkeypatch):
+        monkeypatch.delenv("FRAISIER_TEST_PG_TVIEWS", raising=False)
+
+        with pytest.raises(Skipped, match="no pg_tviews here"):
+            _skip_no_tviews("no pg_tviews here")
+
+    def test_any_other_value_is_not_a_declaration(self, monkeypatch):
+        monkeypatch.setenv("FRAISIER_TEST_PG_TVIEWS", "0")
+
+        with pytest.raises(Skipped):
+            _skip_no_tviews("no pg_tviews here")
+
+
+class TestTviewTestsAreMarked:
+    """The leg selects ``-m tviews``, and the mark follows the fixture.
+
+    A file list in the workflow would miss the next TVIEW test; the fixture is
+    what makes a test a TVIEW test, so it is what the mark is derived from.
+    """
+
+    @staticmethod
+    def _item(*fixturenames: str) -> SimpleNamespace:
+        item = SimpleNamespace(fixturenames=list(fixturenames), marks=[])
+        item.add_marker = item.marks.append
+        return item
+
+    def test_a_test_using_the_tviews_server_is_marked(self):
+        item = self._item("tmp_path", "pg_tviews_target")
+
+        mark_tview_tests([item])
+
+        assert [m.name for m in item.marks] == ["tviews"]
+
+    def test_any_other_test_is_not(self):
+        item = self._item("tmp_path", "pg_target")
+
+        mark_tview_tests([item])
+
+        assert item.marks == []
+
+
+class TestTheTviewsLeg:
+    """quality-gate.yml runs the TVIEW tests against a pinned pg_tviews."""
+
+    WORKFLOW = _WORKFLOW_DIR / "quality-gate.yml"
+    DOCKERFILE = _WORKFLOW_DIR.parent.parent / "ci" / "pg-tviews" / "Dockerfile"
+
+    @classmethod
+    def _jobs(cls) -> dict:
+        import yaml
+
+        return yaml.safe_load(cls.WORKFLOW.read_text())["jobs"]
+
+    @classmethod
+    def _pytest_steps(cls) -> list[dict]:
+        steps = cls._jobs()["tviews"]["steps"]
+        return [s for s in steps if _runs_the_suite(s.get("run") or "")]
+
+    def test_the_leg_runs_only_the_tview_tests(self):
+        (step,) = self._pytest_steps()
+
+        assert "-m tviews" in step["run"]
+
+    def test_the_leg_declares_its_server_carries_pg_tviews(self):
+        (step,) = self._pytest_steps()
+
+        assert str(step["env"].get("FRAISIER_TEST_PG_TVIEWS")) == "1"
+
+    def test_the_leg_builds_the_pinned_image(self):
+        builds = [
+            s
+            for s in self._jobs()["tviews"]["steps"]
+            if str(s.get("uses", "")).startswith("docker/build-push-action")
+        ]
+
+        assert [s["with"]["context"] for s in builds] == ["ci/pg-tviews"]
+
+    def test_the_image_pins_pg_tviews_by_commit(self):
+        """A tag or branch can move under the cache; a commit cannot."""
+        refs = re.findall(
+            r"^ARG PG_TVIEWS_REF=(\S+)$", self.DOCKERFILE.read_text(), re.MULTILINE
+        )
+
+        assert len(refs) == 1
+        assert re.fullmatch(r"[0-9a-f]{40}", refs[0])
+
+    def test_the_quality_gate_waits_for_the_leg(self):
+        gate = self._jobs()["quality-gate"]
+
+        assert "tviews" in gate["needs"]
+        assert "needs.tviews.result" in gate["steps"][0]["run"]

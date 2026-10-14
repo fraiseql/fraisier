@@ -156,16 +156,83 @@ jobs:
         severity: 'CRITICAL,HIGH'
       continue-on-error: true
 
+  tviews:
+    name: TVIEWs (pg_tviews)
+    runs-on: ubuntu-latest
+    # pg_tviews is in no distribution, so this leg builds it at a pinned commit
+    # (ci/pg-tviews/Dockerfile, the same build confiture's CI runs) and caches
+    # the layers. The `test` job's server has no pg_tviews and skips the TVIEW
+    # tests; this leg runs them, and FRAISIER_TEST_PG_TVIEWS=1 makes any of
+    # them that still skips a failure.
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: docker/setup-buildx-action@v3
+
+    - name: Build a PostgreSQL 18 carrying pg_tviews
+      uses: docker/build-push-action@v6
+      with:
+        context: ci/pg-tviews
+        tags: fraisier-pg-tviews:18
+        load: true
+        cache-from: type=gha,scope=pg-tviews
+        cache-to: type=gha,scope=pg-tviews,mode=max
+
+    - name: Start it
+      run: |
+        docker run -d --name pg-tviews-db \
+          -e POSTGRES_USER=fraisier -e POSTGRES_PASSWORD=fraisier \
+          -e POSTGRES_DB=fraisier_test -p 5432:5432 fraisier-pg-tviews:18
+        for _ in $(seq 1 60); do
+          docker exec pg-tviews-db pg_isready -U fraisier && break
+          sleep 1
+        done
+
+    - name: PostgreSQL 18 client tools
+      # The restore tests run pg_dump and pg_restore here, and the runner's
+      # stock client is older than the server: pg_dump refuses that.
+      run: |
+        sudo apt-get install -y --no-install-recommends postgresql-common
+        sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+        sudo apt-get install -y --no-install-recommends postgresql-client-18
+        echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.14'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install ".[dev]"
+
+    - name: Run the TVIEW tests
+      env:
+        FRAISIER_TEST_PG_URL: postgresql://fraisier:fraisier@localhost:5432/fraisier_test
+        FRAISIER_INTEGRATION: '1'
+        FRAISIER_TEST_PG_TVIEWS: '1'
+      run: |
+        pg_dump --version
+        uv run pytest tests/integration -m tviews -v --tb=short -rs
+
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
-    needs: [test, lint, type-check, security]
+    needs: [test, tviews, lint, type-check, security]
     if: always()
     steps:
       - name: Check quality gate status
         run: |
           if [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "Tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.tviews.result }}" != "success" ]]; then
+            echo "TVIEW tests failed"
             exit 1
           fi
           if [[ "${{ needs.lint.result }}" != "success" ]]; then
