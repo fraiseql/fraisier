@@ -6,8 +6,8 @@ propagate.  ``tv_user`` is LOGGED, which ``only_empty`` never refills: the
 control restores the same archive without the explicit refill and finds it
 empty, so the test can see the gap it closes.
 
-Needs pg_tviews 0.1.0-beta.27 on the server (``pg_tviews_set_logged``).  CI has
-none, so there this skips, and the PR records that it ran locally.
+Needs pg_tviews 0.1.0-beta.27 on the server (``pg_tviews_set_logged``).  The
+``tviews`` CI leg runs it; elsewhere it skips without one.
 """
 
 from __future__ import annotations
