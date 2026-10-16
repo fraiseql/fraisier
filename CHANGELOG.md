@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.89.0] - 2026-10-16
+
 ### Changed
 
 - **`fraiseql-confiture` 1.37 (`>=1.37.0,<1.38`), which needs pg_tviews
