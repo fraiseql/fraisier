@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.88.0] - 2026-10-16
+
 ### Added
 
 - **`escalate` accepts `view_definition_mismatch` and `object_definition_mismatch`**
@@ -134,7 +136,10 @@ can then fail on a unique index lost from a TVIEW, or stop with `DIFFER_410` on 
 tree index that takes a name pg_tviews owns (rename it). With `scratch_url` set,
 a TVIEW tree needs a scratch server that has pg_tviews installed; one without it
 is refused with `CONFIG_014`. See "Redefined views and objects" in
-`docs/deployment-guide.md`.
+`docs/deployment-guide.md`. beta.27 also stops granting `pg_tviews_rebuild_all` to
+`PUBLIC`, and every restore runs it: grant `EXECUTE` on it to each role that restores
+(a pgBackRest restore refuses before stopping anything and names the `GRANT`; a
+dump restore fails at its `tview_rebuild` step, after the database was replaced).
 
 ## [0.87.0] - 2026-10-11
 
