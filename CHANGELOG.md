@@ -9,27 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **fraisier reads only pg_tviews 0.1.0-beta.28's read contract 2**
+- **`fraiseql-confiture` 1.37 (`>=1.37.0,<1.38`), which needs pg_tviews
+  0.1.0-beta.30.** confiture reads pg_tviews' read contract 2 (confiture #714) and
+  refuses an older pg_tviews with `CONFIG_014`. A TVIEW is LOGGED by default under
+  contract 2, so the drift gate reads a tree that pins nothing as LOGGED: a tree
+  that pins LOGGED is no longer a `tview_option_mismatch` warning, and one that pins
+  UNLOGGED against a TVIEW built at the default now is. An option the model does not
+  compare (`data_gin_index`, `group_keys`, …) is never drift. Measured on the
+  published wheels, 1.36.1 against beta.27 and 1.37.0 against beta.30: the other 42
+  drift-gate scenarios give the same verdicts, and `--exit-codes-json` is unchanged.
+- **fraisier reads only pg_tviews' read contract 2**
   ([#461](https://github.com/fraiseql/fraisier/issues/461)), the only one confiture
-  reads (confiture #714). A pg_tviews on contract 1 is refused as outdated, with
-  "upgrade it to 0.1.0-beta.28 together with confiture"; one past contract 2 is
-  refused with "upgrade fraisier". `fraisier db tviews status` composes `tview` from
-  beta.28's `schema` and `name` profile columns, so the table and `--json` keep
-  naming each TVIEW. The TVIEW rebuild (#472) and `tview_data: exclude` (#471) now
-  run on beta.28 and later instead of being skipped or refused as outdated. On
-  beta.28 a pg_dump restore refills only the UNLOGGED TVIEWs, not every one as the
-  0.88.0 notes say: a LOGGED TVIEW, the default from beta.28, keeps its rows and has
-  no validity row to lose (measured). See "TVIEWs after a restore or a failover" in
-  `docs/deployment-guide.md`.
+  1.37 reads. A pg_tviews on contract 1 is refused as outdated, with "upgrade it to
+  0.1.0-beta.30 together with confiture", then `ALTER EXTENSION pg_tviews UPDATE`
+  and `pg_tviews_reregister_all()`; one past contract 2 is refused with "upgrade
+  fraisier". `fraisier db tviews status` composes `tview` from contract 2's
+  `schema` and `name` profile columns, so the table and `--json` keep naming each
+  TVIEW. The TVIEW rebuild (#472) and `tview_data: exclude` (#471) run on contract
+  2 instead of being skipped or refused as outdated. A pg_dump restore refills only
+  the UNLOGGED TVIEWs a dump without pg_tviews' validity table resets, not every one
+  as the 0.88.0 notes say: a LOGGED TVIEW keeps its rows and has no validity row to
+  lose (measured on the beta.28 build). See "TVIEWs after a restore or a failover"
+  in `docs/deployment-guide.md`.
+- **CI's `tviews` leg runs pg_tviews 0.1.0-beta.30** (the commit of its signed tag,
+  `9e0d70b4`), the release confiture 1.37 requires.
 
 ### Upgrade note
 
-**Upgrade the pg_tviews extension and confiture together.** Both fraisier and
-confiture read only contract 2 now: on a beta.27 or older host confiture refuses
-with `CONFIG_014`, so the drift gate fails every TVIEW deploy, and fraisier's own
-TVIEW checks refuse it too. Install pg_tviews 0.1.0-beta.28 or later, run
-`ALTER EXTENSION pg_tviews UPDATE` on each database as a superuser, and upgrade
-fraisier (which brings the confiture that reads contract 2) in the same change.
+**⚠️ Upgrade pg_tviews to 0.1.0-beta.30 and fraisier together, out of band.**
+fraisier and confiture 1.37 read only contract 2, and fraisier 0.88.0 with
+confiture 1.36 reads only contract 1, so neither half works alone. On a beta.27 or
+older host confiture refuses with `CONFIG_014`: the drift gate fails every deploy
+of a TVIEW project after its migrations ran, and `migrate up` refuses a migration
+that creates or drops a TVIEW, so a migration cannot do the upgrade. fraisier's own
+TVIEW checks refuse the host too. On each database, as a superuser, run
+`ALTER EXTENSION pg_tviews UPDATE`, then `SELECT * FROM
+tviews.pg_tviews_reregister_all()` once (confiture's `CONFIG_014` hint), and upgrade
+fraisier in the same change. `fraisier doctor`'s `pg_tviews_contract` says whether a
+host is ready. A project migration that calls pg_tviews directly must speak
+contract 2: the name parameter is `tview` (it was `tview_name`), and
+`pg_tviews_create_aggregate()` is gone (`pg_tviews_create()` with `group_keys`).
 
 ## [0.88.0] - 2026-10-16
 

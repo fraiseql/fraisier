@@ -6,7 +6,7 @@ nothing then tells the application: every count passes and the read model is
 simply gone.  This module is how fraisier sees that, and the one place that
 knows how pg_tviews is spoken to.
 
-Everything goes through pg_tviews' documented read contract 2 (0.1.0-beta.28)
+Everything goes through pg_tviews' documented read contract 2 (0.1.0-beta.30)
 — the ``tviews.registry`` view and ``contract_version()`` — never ``pg_tview_meta``,
 and never a name inferred from another (``v_<entity>`` from ``tv_<entity>``).
 The extension's schema is read from the catalog rather than assumed to be
@@ -27,9 +27,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: The read contract fraisier speaks (pg_tviews 0.1.0-beta.28), and the only one
-#: confiture reads (confiture #714): a host upgrades both together.  It replaced the
-#: profile's ``tview`` column, which :func:`profile_tviews` composes back.
+#: The read contract fraisier speaks (pg_tviews 0.1.0-beta.30, the first release to
+#: offer it), and the only one confiture reads (confiture #714): a host upgrades
+#: both together.  It replaced the profile's ``tview`` column, which
+#: :func:`profile_tviews` composes back.
 CONTRACT = 2
 
 _CONNECT_TIMEOUT_SECONDS = 10
@@ -133,8 +134,9 @@ def tviews_installed(url: str) -> bool:
 
 _HINT_OUTDATED = (
     f"pg_tviews here predates read contract {CONTRACT}; upgrade it to "
-    "0.1.0-beta.28 together with confiture, which reads only that contract, then "
-    "run ALTER EXTENSION pg_tviews UPDATE"
+    "0.1.0-beta.30 together with confiture, which reads only that contract, then "
+    "run ALTER EXTENSION pg_tviews UPDATE, then "
+    "SELECT * FROM tviews.pg_tviews_reregister_all()"
 )
 
 

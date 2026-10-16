@@ -1279,7 +1279,8 @@ From pg_tviews 0.1.0-beta.27, `rebuild` without `--all` fills only the TVIEWs
 that is merely empty (truncated by hand, say) is not a reset one, so only `--all`
 refills it. `status` and the deploy gate's refusal both say so.
 
-pg_tviews 0.1.0-beta.28 changed two more things here (#461):
+Read contract 2 (pg_tviews 0.1.0-beta.30, the first release to offer it) changes two
+more things here (#461):
 
 - A TVIEW is **LOGGED** unless it is declared `logged: false`, so a failover, a crash
   restart or a physical restore keeps it.
@@ -1297,7 +1298,7 @@ populated view, `3` it could not check (no pg_tviews, an older one, no
 connection). A host that could not look never reports what a host that looked and
 passed reports.
 
-**pg_tviews must be 0.1.0-beta.28 or later.** fraisier and confiture both read only
+**pg_tviews must be 0.1.0-beta.30 or later.** fraisier and confiture both read only
 its read contract 2, so upgrade the extension and confiture together. On an older
 pg_tviews confiture refuses with `CONFIG_014`, so on such a host the drift gate fails
 every deploy of a TVIEW project, after its migrations ran. So does the migration
@@ -1308,7 +1309,8 @@ before the deploy. fraisier's own TVIEW checks refuse it with the same advice.
 (`pg_tviews_contract`) by asking confiture's own
 `require_supported_pg_tviews_on`, since `pg_extension.extversion` reads `0.1.0`
 on every beta. Upgrade the package, then run `ALTER EXTENSION pg_tviews UPDATE`
-on each database as a superuser.
+on each database as a superuser, then `SELECT * FROM tviews.pg_tviews_reregister_all()`
+once, as confiture's `CONFIG_014` hint says.
 
 ### Leaving TVIEW rows out of a dump: `tview_data` (#471)
 
@@ -1349,7 +1351,7 @@ smaller dump.
   pg_tviews fraisier cannot read**, or no connection to read it: the backup
   fails and the gate aborts the deploy before migrating. Dumping everything
   instead would quietly ignore the setting. That includes a pg_tviews older
-  than beta.28, which offers only read contract 1; the message says to upgrade
+  than beta.30, which offers only read contract 1; the message says to upgrade
   it together with confiture.
 - **Lean dumps are a size series of their own.** They are named
   `{db}_{mode}_{timestamp}_lean[_{algo}].dump`. The size check (a dump under half
