@@ -5,8 +5,8 @@ restore.  :func:`_empty` reproduces the state exactly as pg_tviews itself report
 it (``is_empty`` and ``needs_rebuild`` both true), without needing a cluster to
 crash.
 
-Needs pg_tviews 0.1.0-beta.27; CI has none, so there this skips and the
-PR records that it ran locally.
+Needs pg_tviews 0.1.0-beta.27.  The ``tviews`` CI leg runs it; elsewhere it
+skips without one.
 """
 
 from __future__ import annotations

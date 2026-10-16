@@ -4,7 +4,7 @@
 # pgrx version it pins (Cargo.toml: pgrx = "=0.17.0") against PGDG's PostgreSQL 18,
 # and the tree `cargo pgrx package` writes is copied onto the official image of the
 # same Debian release. This is confiture's ci/pg-tviews build. The ref is the
-# commit of the signed v0.1.0-beta.26 tag (`git rev-parse v0.1.0-beta.26^{commit}`),
+# commit of the signed v0.1.0-beta.27 tag (`git rev-parse v0.1.0-beta.27^{commit}`),
 # the release this fraisier requires. It moves in the same change that moves the
 # TVIEW tests to another release. Fetched by SHA so a build reproduces and the
 # layer cache never serves another tree under the same ref.
@@ -18,7 +18,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 RUN cargo install --locked cargo-pgrx --version 0.17.0
 RUN cargo pgrx init --pg18 /usr/lib/postgresql/18/bin/pg_config
-ARG PG_TVIEWS_REF=ed9f9883ec85ab1f026c0b067b30d150bef3b9b3
+ARG PG_TVIEWS_REF=4820bfb7505d8c0614d5151dfbc2d1a0f2ab0596
 WORKDIR /src
 RUN git init -q \
  && git fetch -q --depth 1 https://github.com/fraiseql/pg_tviews "$PG_TVIEWS_REF" \

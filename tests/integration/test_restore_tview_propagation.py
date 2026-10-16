@@ -13,9 +13,8 @@ too: restoring by hand with ``--disable-triggers`` leaves ``tv_post`` at the old
 value, so this assertion can see a dead TVIEW.  This test is the regression pin
 for either side of that changing.
 
-Needs pg_tviews 0.1.0-beta.27 on the server.  CI has none, so there
-this skips — the ``pg_tviews_target`` fixture says so — and the PR records that
-it ran locally.
+Needs pg_tviews 0.1.0-beta.27 on the server.  The ``tviews`` CI leg runs it;
+elsewhere it skips without one — the ``pg_tviews_target`` fixture says so.
 """
 
 from __future__ import annotations

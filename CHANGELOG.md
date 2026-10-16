@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   They skipped on every CI run because no CI server carried pg_tviews, so each
   TVIEW claim rested on a local run. A `tviews` leg in `quality-gate.yml` builds
   pg_tviews at a pinned commit (`ci/pg-tviews/Dockerfile`, confiture's build,
-  beta.26) and runs every test using `pg_tviews_target` (`-m tviews`, the mark
+  beta.27) and runs every test using `pg_tviews_target` (`-m tviews`, the mark
   derived from the fixture). `FRAISIER_TEST_PG_TVIEWS=1` turns a TVIEW skip there
   into a failure, and the Quality Gate waits on the leg.
 
