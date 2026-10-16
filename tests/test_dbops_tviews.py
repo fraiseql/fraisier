@@ -290,10 +290,37 @@ class TestListTviews:
     ) -> None:
         patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(
-            tviews.TviewError, match=r"beta\.28 together with confiture"
-        ):
+        with pytest.raises(tviews.TviewError, match=r"together with confiture"):
             tviews.list_tviews("postgresql:///app")
+
+
+class TestOutdatedAdvice:
+    """The upgrade an outdated pg_tviews is told to make is the one confiture needs."""
+
+    def outdated_message(self, monkeypatch: pytest.MonkeyPatch) -> str:
+        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
+        with pytest.raises(tviews.TviewError) as caught:
+            tviews.list_tviews("postgresql:///app")
+        return str(caught.value)
+
+    def test_it_names_the_pg_tviews_the_installed_confiture_requires(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Asked of the installed confiture, so its next floor fails this first."""
+        import confiture.platform
+
+        minimum = confiture.platform.MINIMUM_PG_TVIEWS
+
+        assert f"upgrade it to {minimum} together" in self.outdated_message(monkeypatch)
+
+    def test_it_names_the_reregistration_the_upgrade_needs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """confiture 1.37's ``CONFIG_014`` hint: re-register after the UPDATE."""
+        assert self.outdated_message(monkeypatch).endswith(
+            "run ALTER EXTENSION pg_tviews UPDATE, then "
+            "SELECT * FROM tviews.pg_tviews_reregister_all()"
+        )
 
 
 class TestFindEmpty:
@@ -341,9 +368,7 @@ class TestFindEmpty:
     ) -> None:
         patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(
-            tviews.TviewError, match=r"0\.1\.0-beta\.28 together with confiture"
-        ):
+        with pytest.raises(tviews.TviewError, match=r"together with confiture"):
             tviews.find_empty_tviews("postgresql:///app")
 
 

@@ -397,7 +397,7 @@ def pytest_collection_modifyitems(items: list[Any]) -> None:
 
 @pytest.fixture
 def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
-    """A server with pg_tviews read contract 2 (0.1.0-beta.28 or later), or skip.
+    """A server with pg_tviews read contract 2 (0.1.0-beta.30 or later), or skip.
 
     **Skips even under ``FRAISIER_INTEGRATION=1``, on purpose.**  The main CI
     server has no pg_tviews, so a TVIEW test cannot be mandatory there.  The

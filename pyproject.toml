@@ -632,9 +632,28 @@ dependencies = [
   # failed on a critical `missing_table`. 1.36.1 creates the extension there and
   # refuses a scratch server without pg_tviews with CONFIG_014; the other 39
   # driver14 scenarios are identical (`result-1.36.1.txt`).
+  # **1.37.0 reads pg_tviews' read contract 2 and needs pg_tviews 0.1.0-beta.30**
+  # (confiture#714), the first release to offer it. fraisier reads only contract 2
+  # too (#461), so the floor is 1.37.0: a 1.36 refuses every contract-2 host with
+  # CONFIG_014. Neither confiture reads the other's pg_tviews, so the probe runs
+  # each against its own: 1.36.1 on beta.27 vs 1.37.0 on beta.30, on the published
+  # wheels, in `.phases/2026-10-16-confiture-1-37-probe/` (`driver15.py`,
+  # driver14's forty scenarios plus four; its 1.36.1 run reproduces
+  # `result-1.36.1.txt` line for line):
+  #   * Forty-two agree. A TVIEW is LOGGED by default under contract 2, so a tree
+  #     that pins LOGGED is clean (1.36.1: a `tview_option_mismatch` warning), and
+  #     one that pins UNLOGGED against a TVIEW built at the default is that warning.
+  #   * An option the model does not compare (`data_gin_index`) is never drift,
+  #     whether or not the database holds it.
+  #   * `--exit-codes-json` is byte-identical. CONFIG_014's hint now names beta.30
+  #     and `pg_tviews_reregister_all()`, which fraisier's own refusal repeats.
+  #   * Every confiture symbol fraisier and its tests import resolves on 1.37.0.
+  #   * fraisier writes no `pg_tviews_create*` call, so contract 2's renamed
+  #     `tview` parameter and the removed `pg_tviews_create_aggregate()` reach
+  #     only a project's own migrations.
   # The floor moves with the cap. 1.34.0 is the first confiture to publish the
   # pg_tviews check that doctor calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.36.1,<1.37",
+  "fraiseql-confiture>=1.37.0,<1.38",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

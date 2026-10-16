@@ -59,15 +59,15 @@ def _config(*urls: str | None) -> Any:
     return SimpleNamespace(fraises={"api": {"environments": envs}})
 
 
-#: confiture 1.36.0's own refusal, captured from ``require_supported_pg_tviews_on``
-#: against a pg_tviews 0.1.0-beta.26 server, not composed.
+#: confiture 1.37.0's own refusal, captured from ``require_supported_pg_tviews_on``
+#: against a pg_tviews 0.1.0-beta.27 server (read contract 1), not composed.
 _REFUSAL = ConfigurationError(
-    "pg_tviews 0.1.0-beta.26's tviews.registry has no managed_indexes; "
-    "confiture reads the registry of pg_tviews 0.1.0-beta.27 and later.",
+    "pg_tviews 0.1.0-beta.27 offers read contract 1; confiture reads contract 2.",
     error_code="CONFIG_014",
     resolution_hint=(
-        "Upgrade the server's pg_tviews to 0.1.0-beta.27 or later, then "
-        "ALTER EXTENSION pg_tviews UPDATE"
+        "Upgrade the server's pg_tviews to 0.1.0-beta.30 or later: "
+        "ALTER EXTENSION pg_tviews UPDATE, then "
+        "SELECT * FROM tviews.pg_tviews_reregister_all()"
     ),
 )
 
@@ -115,9 +115,9 @@ def test_fails_when_confiture_refuses_the_pg_tviews(monkeypatch) -> None:
     )
 
     assert result.status == "fail"
-    assert "has no managed_indexes" in result.detail
+    assert "offers read contract 1" in result.detail
     assert "0.1.0-beta.27" in result.detail
-    assert "ALTER EXTENSION pg_tviews UPDATE" in (result.fix_hint or "")
+    assert "pg_tviews_reregister_all()" in (result.fix_hint or "")
 
 
 def test_asks_confiture_on_its_own_connection_not_the_url(monkeypatch) -> None:
@@ -132,7 +132,7 @@ def test_passes_when_confiture_reads_the_pg_tviews(monkeypatch) -> None:
     result, _asked = _run(monkeypatch, _FakeConn(extension=True, contract=1), URL)
 
     assert result.status == "pass"
-    assert "0.1.0-beta.27" in result.detail
+    assert confiture.platform.MINIMUM_PG_TVIEWS in result.detail
 
 
 def test_an_unreachable_database_is_a_skip_not_a_verdict(monkeypatch) -> None:
