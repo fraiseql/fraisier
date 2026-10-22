@@ -651,9 +651,23 @@ dependencies = [
   #   * fraisier writes no `pg_tviews_create*` call, so contract 2's renamed
   #     `tview` parameter and the removed `pg_tviews_create_aggregate()` reach
   #     only a project's own migrations.
+  # **1.38.0 and 1.39.0 change nothing fraisier reads.** 1.38.0 adds
+  # `confiture.load_migration_class` and pins fraiseql's surface in its contract
+  # tests (fraisier's were pinned already). 1.39.0 adds `seed drift`, `build_003`
+  # extension handling and `--require-complete` exit 2 on a degraded run; fraisier
+  # runs none of them. pglast 8.7 drops redundant parentheses from generated SQL
+  # and moves every payload's `parser` key to 8.7; fraisier reads neither, and no
+  # fixture here compares bytes with a live run. `MINIMUM_PG_TVIEWS` is still
+  # beta.30. driver15's forty-four scenarios, 1.37.0 vs 1.39.0 on the published
+  # wheels, both against pg_tviews beta.32, in `.phases/2026-10-22-v0.90.0/
+  # confiture-probe/`: every verdict and exit code is identical (35 pass, 8 exit 1,
+  # 2 exit 5), each `migrate validate` payload differs only in `parser` (8.5 → 8.7)
+  # and run-specific paths and timings, `--exit-codes-json` is byte-identical, and
+  # 1.37.0 on beta.32 reproduces its beta.30 record line for line. Every confiture
+  # symbol fraisier and its tests import resolves on 1.39.0.
   # The floor moves with the cap. 1.34.0 is the first confiture to publish the
   # pg_tviews check that doctor calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.37.0,<1.38",
+  "fraiseql-confiture>=1.39.0,<1.40",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

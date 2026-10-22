@@ -1413,10 +1413,14 @@ smaller dump.
   `pg_tviews_rebuild_all(only_empty => false)` instead of `only_empty`, and logs
   `pg_tviews: refilled N TVIEW(s) left out of a lean dump`. `only_empty` would
   miss them: it never refills a LOGGED TVIEW (the default from beta.28), and from
-  beta.29 an excluded UNLOGGED one keeps its validity row.
+  beta.29 an excluded UNLOGGED one keeps its validity row. beta.32's refill on the
+  first write does not replace it: a read before any write would see none.
 - ⚠️ **A lean dump restored outside fraisier** (a plain `pg_restore`) leaves every
   TVIEW empty, and `fraisier db tviews rebuild` without `--all` will not fill
-  them. Run `fraisier db tviews rebuild FRAISE -e ENV --all`, or
+  them. From pg_tviews beta.32 the first write that reaches an empty TVIEW
+  refills it, but nothing does before that write: an application that reads
+  first reads no rows (measured on beta.32, and the same on beta.30, where the
+  write does not refill it either). Run `fraisier db tviews rebuild FRAISE -e ENV --all`, or
   `SELECT * FROM tviews.pg_tviews_rebuild_all(only_empty => false)`, before the
   application reads them. This is why the default is `keep`.
 

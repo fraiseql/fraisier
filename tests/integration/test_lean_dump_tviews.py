@@ -171,3 +171,38 @@ def test_control_only_empty_leaves_the_logged_tview_empty(
     assert _count(target, _DST_DB, "tv_user") == 0
     empty = tviews.find_empty_tviews(target.dsn(_DST_DB))
     assert "public.tv_user" in {e.tview for e in empty}
+
+
+def _installed_pg_tviews(target: PgTarget) -> str:
+    with psycopg.connect(target.dsn(_DST_DB), autocommit=True) as conn:
+        row = conn.execute(
+            "SELECT extversion FROM pg_extension WHERE extname = 'pg_tviews'"
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def test_without_the_refill_a_lean_tview_reads_empty_until_a_write(
+    lean_dump, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Why the refill stays on beta.32, which refills on the first write.
+
+    beta.32 refills a TVIEW restored without its rows when a write first reaches
+    it.  Nothing refills it before that write, so an application that reads
+    first reads nothing: the refill fraisier runs at restore time is what closes
+    that window, on every contract-2 release.  The write half is asserted only
+    on a release that has it, so the same test reads beta.30 and beta.32.
+    """
+    target, path = lean_dump
+    monkeypatch.setattr("fraisier.dbops.restore.is_lean_dump", lambda _path: False)
+
+    result = _restore(target, path, archive=None)
+
+    assert result.success is True, result.error
+    assert result.tviews_refilled_lean is False
+    assert _count(target, _DST_DB, "tv_user") == 0
+    assert _count(target, _DST_DB, "tv_post") == 0
+    _exec(target, _DST_DB, "UPDATE tb_user SET name = 'grace' WHERE pk_user = 1")
+    refilled_on_write = _count(target, _DST_DB, "tv_user") == 30
+    beta = int(_installed_pg_tviews(target).rsplit(".", 1)[-1])
+    assert refilled_on_write is (beta >= 32)
