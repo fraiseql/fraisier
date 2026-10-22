@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from fraisier.dbops._validation import validate_pg_identifier
 from fraisier.dbops.operations import (
+    DEFAULT_TEMPLATE_STRATEGY,
     _pg_cmd,
     create_db,
     drop_db,
@@ -68,9 +69,14 @@ def reset_from_template(
     db_name: str,
     *,
     prefix: str = "template_",
+    strategy: str = DEFAULT_TEMPLATE_STRATEGY,
     connection_url: str,
 ) -> TemplateResult:
-    """Reset *db_name* by dropping and recreating from its template."""
+    """Reset *db_name* by dropping and recreating from its template.
+
+    *strategy* is how the copy is made (#479), see
+    :func:`fraisier.dbops.operations.create_db`.
+    """
     template_name = f"{prefix}{db_name}"
 
     # Force-disconnect and drop the live database
@@ -93,6 +99,7 @@ def reset_from_template(
     code, _, stderr = create_db(
         db_name,
         template=template_name,
+        strategy=strategy,
         connection_url=connection_url,
     )
     if code != 0:

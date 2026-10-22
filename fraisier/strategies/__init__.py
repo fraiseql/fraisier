@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fraisier.config.restore_source import parse_pgbackrest
+from fraisier.dbops.operations import DEFAULT_TEMPLATE_STRATEGY
 
 from ._alembic import AlembicMigrateStrategy
 from ._base import (
@@ -71,6 +72,9 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             "admin_url": admin_url,
             "create_template": bool(kwargs.get("create_template", False)),
             "template_name": kwargs.get("template_name"),
+            "template_strategy": kwargs.get(
+                "template_strategy", DEFAULT_TEMPLATE_STRATEGY
+            ),
         }
         if kwargs.get("app_version"):
             rebuild_kwargs["app_version"] = kwargs["app_version"]
@@ -100,6 +104,9 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
             target_owner=restore_cfg.get("target_owner"),
             create_template=bool(restore_cfg.get("create_template", False)),
             template_name=restore_cfg.get("template_name"),
+            template_strategy=restore_cfg.get(
+                "template_strategy", DEFAULT_TEMPLATE_STRATEGY
+            ),
             min_tables=int(restore_cfg.get("min_tables", 0)),
             jobs=int(restore_cfg.get("jobs", 1)),
             preferred_compression=restore_cfg.get("preferred_compression"),

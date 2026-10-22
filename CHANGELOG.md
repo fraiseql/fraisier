@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Template copies use `STRATEGY = FILE_COPY`**
+  ([#479](https://github.com/fraiseql/fraisier/issues/479)): a restore's rollback
+  template (step 8), the rollback from it, rebuild's snapshot and `fraisier db
+  reset`. PostgreSQL 15+ copies a template with `WAL_LOG` by default, writing the
+  whole database through WAL: on a 98 GB staging restore that copy took 1,666 s
+  with 173 checkpoints, a third of the run, with the service stopped. Measured on
+  PostgreSQL 17 at 3.7 GB, `FILE_COPY` is 3× faster and writes 5 kB of WAL instead
+  of 3.7 GB. New keys `restore.template_strategy` (the restore's template and its
+  rollback) and `database.template_strategy` (rebuild and `db reset`) take
+  `file_copy` (default) or `wal_log`; `wal_log` runs the old `createdb -T`. Below
+  PostgreSQL 15 the strategy is omitted, decided on the connection that copies. See
+  "Template copies" in `docs/deployment-guide.md`.
+
+### Upgrade note
+
+**⚠️ Template copies now default to `FILE_COPY`.** No host action is needed.
+`FILE_COPY` checkpoints before and after the copy, flushing every dirty buffer in
+the cluster, where `WAL_LOG` streams the copy through WAL instead. On a busy shared
+cluster, or for a template of a few MB, `WAL_LOG` can be the cheaper copy: set
+`restore.template_strategy: wal_log` (restore) or `database.template_strategy:
+wal_log` (rebuild, `db reset`) to keep the old `createdb -T`.
+
 ## [0.89.0] - 2026-10-16
 
 ### Changed
