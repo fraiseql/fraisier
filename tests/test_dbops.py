@@ -85,7 +85,20 @@ class TestResetFromTemplate:
         calls = mock_run.call_args_list
         cmds = [" ".join(c[0][0]) for c in calls]
         assert any("dropdb" in c and "mydb" in c for c in cmds)
-        assert any("createdb" in c and "-T" in c and "template_mydb" in c for c in cmds)
+        # #479: the default copy is CREATE DATABASE … STRATEGY = FILE_COPY.
+        (copy,) = [c for c in calls if c.kwargs.get("input")]
+        assert "template=template_mydb" in copy[0][0]
+        assert "STRATEGY = FILE_COPY" in copy.kwargs["input"]
+
+    def test_reset_from_template_wal_log_runs_createdb(self):
+        from fraisier.dbops.templates import reset_from_template
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            reset_from_template("mydb", strategy="wal_log", connection_url=_TEST_URL)
+
+        cmds = [" ".join(c[0][0]) for c in mock_run.call_args_list]
+        assert any("createdb" in c and "-T template_mydb" in c for c in cmds)
 
     def test_reset_force_disconnects_before_drop(self):
         from fraisier.dbops.templates import reset_from_template

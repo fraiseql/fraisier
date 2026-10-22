@@ -52,6 +52,104 @@ class TestCreateDbIntegration:
                 conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")  # ty: ignore[no-matching-overload]
 
 
+def _wal_bytes_of(url: str, action) -> int:
+    with psycopg.connect(url, autocommit=True) as conn:
+        before = conn.execute("SELECT pg_current_wal_lsn()").fetchone()
+        assert before is not None
+        action()
+        row = conn.execute(
+            "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), %s)", (before[0],)
+        ).fetchone()
+        assert row is not None
+        return int(row[0])
+
+
+class TestCreateDbStrategyIntegration:
+    """#479: what ``strategy="file_copy"`` does to a real server."""
+
+    @pytest.fixture
+    def source_db(self, pg_superuser_url):
+        # ~40 MB, so the WAL a WAL_LOG copy writes stands well clear of the
+        # noise other sessions on a shared server add.
+        name = f"src_{uuid.uuid4().hex[:12]}"
+        with psycopg.connect(pg_superuser_url, autocommit=True) as conn:
+            conn.execute(f"CREATE DATABASE {name}")  # ty: ignore[no-matching-overload]
+        source_url = pg_superuser_url.rsplit("/", 1)[0] + f"/{name}"
+        with psycopg.connect(source_url, autocommit=True) as conn:
+            conn.execute(
+                "CREATE TABLE t AS SELECT g, md5(g::text) || md5((-g)::text) AS pad "
+                "FROM generate_series(1, 400000) g"
+            )
+        yield name
+        _drop(pg_superuser_url, name)
+
+    def test_file_copy_copies_the_template(self, pg_superuser_url, source_db):
+        from fraisier.dbops.operations import create_db
+
+        copy = f"Copy_{uuid.uuid4().hex[:8]}"
+        try:
+            code, _, stderr = create_db(
+                copy,
+                template=source_db,
+                strategy="file_copy",
+                connection_url=pg_superuser_url,
+            )
+            assert code == 0, stderr
+            copy_url = pg_superuser_url.rsplit("/", 1)[0] + f"/{copy}"
+            with psycopg.connect(copy_url) as conn:
+                row = conn.execute("SELECT count(*) FROM t").fetchone()
+            assert row == (400000,)
+        finally:
+            _drop(pg_superuser_url, f'"{copy}"')
+
+    def test_file_copy_writes_almost_no_wal(self, pg_superuser_url, source_db):
+        from fraisier.dbops.operations import create_db
+
+        wal: dict[str | None, int] = {}
+        for strategy in ("file_copy", None):
+            copy = f"copy_{uuid.uuid4().hex[:8]}"
+            try:
+                wal[strategy] = _wal_bytes_of(
+                    pg_superuser_url,
+                    lambda copy=copy, strategy=strategy: create_db(
+                        copy,
+                        template=source_db,
+                        strategy=strategy,
+                        connection_url=pg_superuser_url,
+                    ),
+                )
+            finally:
+                _drop(pg_superuser_url, copy)
+        # Measured on PG 17 at 3.7 GB: WAL_LOG 3,677 MB of WAL, FILE_COPY ~5 kB.
+        assert wal[None] > 30 * 1024 * 1024
+        assert wal["file_copy"] < 10 * 1024 * 1024
+
+    def test_file_copy_refuses_a_source_with_other_sessions(
+        self, pg_superuser_url, source_db
+    ):
+        from fraisier.dbops.operations import create_db
+
+        source_url = pg_superuser_url.rsplit("/", 1)[0] + f"/{source_db}"
+        copy = f"copy_{uuid.uuid4().hex[:8]}"
+        # CREATE DATABASE waits ~5 s for other sessions to leave before failing.
+        with psycopg.connect(source_url):
+            code, _, stderr = create_db(
+                copy,
+                template=source_db,
+                strategy="file_copy",
+                connection_url=pg_superuser_url,
+            )
+        assert code != 0
+        assert f'source database "{source_db}" is being accessed by other users' in (
+            stderr
+        )
+
+
+def _drop(url: str, name: str) -> None:
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")  # ty: ignore[no-matching-overload]
+
+
 class TestDropDbIntegration:
     """Test drop_db against a real PostgreSQL container."""
 

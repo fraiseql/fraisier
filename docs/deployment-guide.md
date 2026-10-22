@@ -668,6 +668,54 @@ fraisier db migrate my_api -e production
 fraisier db migrate my_api -e production -d down
 ```
 
+### Template copies: `template_strategy` (#479)
+
+Every template copy fraisier makes is a `CREATE DATABASE … TEMPLATE …`: a
+restore's rollback template (step 8 of `restore_migrate`, `restore.create_template`),
+the rollback that recreates the database from it, rebuild's snapshot
+(`database.create_template`) and `fraisier db reset`. From PostgreSQL 15 that
+statement copies with `WAL_LOG` by default, which writes every block of the
+source through WAL. fraisier asks for `FILE_COPY` instead, which copies the
+database directory with one checkpoint on each side and writes almost no WAL.
+
+```yaml
+database:
+  strategy: restore_migrate
+  restore:
+    create_template: true
+    template_strategy: file_copy   # default; or wal_log
+---
+database:
+  strategy: rebuild
+  create_template: true
+  template_strategy: file_copy     # default; also what `fraisier db reset` uses
+```
+
+`restore.template_strategy` governs the restore's template and the rollback from
+it; `database.template_strategy` governs rebuild's snapshot and `db reset`. Each
+takes `file_copy` or `wal_log`, and the config loader refuses anything else.
+
+Measured on PostgreSQL 17, a 3.7 GB database: `WAL_LOG` took 9–11 s and wrote
+3.7 GB of WAL over 6 checkpoints; `FILE_COPY` took 3 s and wrote 5 kB. On a 98 GB
+staging restore the `WAL_LOG` copy took 1,666 s, a third of the run, with the
+service still stopped.
+
+- **Below PostgreSQL 15** fraisier omits the strategy: there it is always a file
+  copy, and the server refuses the option (`option "strategy" not recognized`).
+  The version is read on the connection that runs the `CREATE DATABASE`, so the
+  `psql` client may be any version from 10.
+- **`wal_log`** runs plain `createdb -T`, exactly what fraisier ran before 0.90.0.
+  Choose it when the two checkpoints cost more than the WAL: `FILE_COPY`'s
+  checkpoints flush every dirty buffer in the cluster, so on a busy shared
+  cluster, or for a template of a few MB, `WAL_LOG` can be the cheaper copy.
+- Either way the source must have no other session. Every site terminates the
+  source's backends first; one that reconnects fails the copy with
+  `source database "…" is being accessed by other users`.
+
+`fraisier.testing`'s per-test clones are unchanged (`WAL_LOG` from 15): they copy
+small templates many times, where `FILE_COPY` measured slower (62–83 ms against
+49–62 ms for 8 MB).
+
 ### Rebuild strategy: template version stamp
 
 When `database.strategy: rebuild` and `database.create_template: true`, fraisier

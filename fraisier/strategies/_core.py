@@ -18,6 +18,7 @@ from fraisier.dbops.confiture import (
     preflight,
 )
 from fraisier.dbops.operations import (
+    DEFAULT_TEMPLATE_STRATEGY,
     create_db,
     drop_db,
     run_psql,
@@ -263,6 +264,7 @@ class RebuildStrategy(Strategy):
         admin_url: str | LazyEnv | None = None,
         create_template: bool = False,
         template_name: str | None = None,
+        template_strategy: str = DEFAULT_TEMPLATE_STRATEGY,
         app_version: str | None = None,
     ) -> None:
         self._required_roles: list[str] = []
@@ -275,6 +277,7 @@ class RebuildStrategy(Strategy):
             validate_pg_identifier(template_name, "template name")
         self._create_template = create_template
         self._template_name = template_name
+        self._template_strategy = template_strategy
         if app_version:
             # Loud failure on a typo'd fraises.yaml value. Auto-discovered
             # values from version.json / pyproject.toml are validated
@@ -545,7 +548,10 @@ class RebuildStrategy(Strategy):
             # itself fails closed if any backend is still attached.
             terminate_backends(db_name, connection_url=admin_url)
             code, _, stderr = create_db(
-                template_name, template=db_name, connection_url=admin_url
+                template_name,
+                template=db_name,
+                strategy=self._template_strategy,
+                connection_url=admin_url,
             )
             if code != 0:
                 raise subprocess.CalledProcessError(code, "createdb", stderr=stderr)

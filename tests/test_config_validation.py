@@ -1,5 +1,7 @@
 """Tests for config validation at load time."""
 
+import re
+
 import pytest
 
 from fraisier.config import FraisierConfig
@@ -464,6 +466,69 @@ fraises:
 """,
         )
         with pytest.raises(ValidationError, match=r"preferred_compression"):
+            eager_load(config_file)
+
+
+_RESTORE_ENV = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          restore:
+            backup_dir: /var/backups
+            template_strategy: {value}
+"""
+
+_REBUILD_ENV = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      development:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: rebuild
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          create_template: true
+          template_strategy: {value}
+"""
+
+
+class TestTemplateStrategyValidation:
+    """#479: ``restore.template_strategy`` and ``database.template_strategy``."""
+
+    @pytest.mark.parametrize(
+        "env", [_RESTORE_ENV, _REBUILD_ENV], ids=["restore", "rebuild"]
+    )
+    @pytest.mark.parametrize("value", ["file_copy", "wal_log"])
+    def test_accepts_each_strategy(self, tmp_path, env, value):
+        config_file = _write_config(tmp_path, env.format(value=value))
+        eager_load(config_file)
+
+    @pytest.mark.parametrize(
+        ("env", "key"),
+        [
+            (_RESTORE_ENV, "restore.template_strategy"),
+            (_REBUILD_ENV, "database.template_strategy"),
+        ],
+        ids=["restore", "rebuild"],
+    )
+    @pytest.mark.parametrize("value", ["FILE_COPY", "copy", "true"])
+    def test_rejects_anything_else(self, tmp_path, env, key, value):
+        config_file = _write_config(tmp_path, env.format(value=value))
+        with pytest.raises(
+            ValidationError,
+            match=rf"{re.escape(key)} must be one of file_copy, wal_log",
+        ):
             eager_load(config_file)
 
 

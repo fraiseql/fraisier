@@ -229,6 +229,7 @@ def db_reset(
         fraisier db reset management -e development --force
     """
     from fraisier.dbops.guard import is_external_db
+    from fraisier.dbops.operations import DEFAULT_TEMPLATE_STRATEGY
     from fraisier.dbops.templates import reset_from_template
 
     config = ctx.obj["config"]
@@ -269,7 +270,10 @@ def db_reset(
     try:
         with deployment_lock(fraise):
             result = reset_from_template(
-                db_name, prefix=prefix, connection_url=admin_url
+                db_name,
+                prefix=prefix,
+                strategy=db_cfg.get("template_strategy", DEFAULT_TEMPLATE_STRATEGY),
+                connection_url=admin_url,
             )
     except DeploymentLockError as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -742,6 +746,7 @@ def db_restore(
             )
 
             from fraisier.config.schema import PreflightConfig
+            from fraisier.dbops.operations import DEFAULT_TEMPLATE_STRATEGY
             from fraisier.naming import pgbackrest_helper_socket_path
             from fraisier.post_migrate_check import load_post_migrate_check
 
@@ -760,6 +765,9 @@ def db_restore(
                     target_owner=restore_cfg.get("target_owner"),
                     create_template=bool(restore_cfg.get("create_template", False)),
                     template_name=restore_cfg.get("template_name"),
+                    template_strategy=restore_cfg.get(
+                        "template_strategy", DEFAULT_TEMPLATE_STRATEGY
+                    ),
                     min_tables=int(restore_cfg.get("min_tables", 0)),
                     jobs=jobs if jobs is not None else int(restore_cfg.get("jobs", 1)),
                     preferred_compression=(

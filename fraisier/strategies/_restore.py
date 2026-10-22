@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from fraisier.config.schema import PreflightConfig
 from fraisier.dbops.confiture import migrate_down, migrate_up
+from fraisier.dbops.operations import DEFAULT_TEMPLATE_STRATEGY
 
 from ._base import Strategy, StrategyResult
 from ._restore_sources import DumpSource, PgBackRestSource
@@ -36,6 +37,9 @@ class RestoreConfig:
     target_owner: str | None = None
     create_template: bool = False
     template_name: str | None = None
+    #: ``restore.template_strategy`` (#479): how step 8 and the template
+    #: rollback copy, ``file_copy`` or ``wal_log``.
+    template_strategy: str = DEFAULT_TEMPLATE_STRATEGY
     min_tables: int = 0
     jobs: int = 1
     preferred_compression: str | None = None
@@ -359,7 +363,10 @@ class RestoreMigrateStrategy(Strategy):
                 )
             terminate_backends(cfg.db_name, connection_url=self._admin_url)
             code, _, stderr = create_db(
-                template_name, template=cfg.db_name, connection_url=self._admin_url
+                template_name,
+                template=cfg.db_name,
+                strategy=cfg.template_strategy,
+                connection_url=self._admin_url,
             )
             if code != 0:  # pragma: no cover
                 raise DatabaseError(
@@ -524,6 +531,7 @@ class RestoreMigrateStrategy(Strategy):
                 code, _, stderr = create_db(
                     self._config.db_name,
                     template=template_name,
+                    strategy=self._config.template_strategy,
                     connection_url=self._admin_url,
                 )
                 if code != 0:  # pragma: no cover
@@ -536,6 +544,7 @@ class RestoreMigrateStrategy(Strategy):
             tmpl_result = reset_from_template(
                 self._config.db_name,
                 prefix=prefix,
+                strategy=self._config.template_strategy,
                 connection_url=self._admin_url,
             )
             if not tmpl_result.success:  # pragma: no cover

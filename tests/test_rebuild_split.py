@@ -314,6 +314,37 @@ class TestRebuildStrategyTemplateCreation:
         assert template_call[0][0] == "template_myapp"
         assert template_call[1]["template"] == "myapp"
 
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [({}, "file_copy"), ({"template_strategy": "wal_log"}, "wal_log")],
+    )
+    @pytest.mark.usefixtures("_mock_rebuild_deps")
+    def test_template_snapshot_uses_the_template_strategy(
+        self, _mock_rebuild_deps, kwargs, expected
+    ):
+        """#479: the snapshot copy asks for the configured strategy, default file_copy."""
+        builder_instance = _mock_rebuild_deps["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        with (
+            patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
+            patch(
+                "fraisier.strategies._core.create_db", return_value=(0, "", "")
+            ) as mock_create,
+        ):
+            strategy = RebuildStrategy(
+                create_template=True,
+                admin_url="postgresql://postgres@localhost/postgres",
+                **kwargs,
+            )
+            strategy.execute(Path("confiture.yaml"))
+
+        fresh_db, template_copy = mock_create.call_args_list
+        assert template_copy.kwargs["strategy"] == expected
+        # The empty database rebuild starts from is no template copy.
+        assert "strategy" not in fresh_db.kwargs
+
     @pytest.mark.usefixtures("_mock_rebuild_deps")
     def test_execute_with_template_terminates_source_before_clone(
         self, _mock_rebuild_deps

@@ -1,5 +1,7 @@
 """Tests for template-based database reset operations."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from fraisier.dbops.templates import (
@@ -9,6 +11,30 @@ from fraisier.dbops.templates import (
 )
 
 _TEST_URL = "postgresql://user:pass@localhost:5432/testdb"
+
+
+class TestResetFromTemplateStrategy:
+    """#479: the template -> database copy asks for a strategy, default file_copy."""
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [({}, "file_copy"), ({"strategy": "wal_log"}, "wal_log")],
+    )
+    def test_passes_the_strategy_to_create_db(self, monkeypatch, kwargs, expected):
+        seen: dict = {}
+
+        def fake_create(db_name, **kw):
+            seen.update(kw)
+            return (0, "", "")
+
+        ok = MagicMock(return_value=(0, "", ""))
+        monkeypatch.setattr("fraisier.dbops.templates.terminate_backends", ok)
+        monkeypatch.setattr("fraisier.dbops.templates.drop_db", ok)
+        monkeypatch.setattr("fraisier.dbops.templates.create_db", fake_create)
+
+        assert reset_from_template("mydb", connection_url=_TEST_URL, **kwargs).success
+        assert seen["template"] == "template_mydb"
+        assert seen["strategy"] == expected
 
 
 class TestConnectionUrlPassthrough:
@@ -25,7 +51,7 @@ class TestConnectionUrlPassthrough:
             captured_urls.append(connection_url)
             return (0, "", "")
 
-        def fake_create(db_name, *, template=None, owner=None, connection_url):
+        def fake_create(db_name, *, template=None, connection_url, **_kw):
             captured_urls.append(connection_url)
             return (0, "", "")
 
@@ -50,7 +76,7 @@ class TestConnectionUrlPassthrough:
             captured_urls.append(connection_url)
             return (0, "", "")
 
-        def fake_create(db_name, *, template=None, owner=None, connection_url):
+        def fake_create(db_name, *, template=None, connection_url, **_kw):
             captured_urls.append(connection_url)
             return (0, "", "")
 

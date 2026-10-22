@@ -1184,6 +1184,8 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 self.database_config.get("create_template", False)
             )
             kwargs["template_name"] = self.database_config.get("template_name")
+            if "template_strategy" in self.database_config:
+                kwargs["template_strategy"] = self.database_config["template_strategy"]
             if self.database_config.get("app_version"):
                 kwargs["app_version"] = self.database_config["app_version"]
         if resolved == "migrate" and self.database_config.get("pre_migrate_dump"):

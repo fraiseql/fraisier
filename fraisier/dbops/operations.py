@@ -216,19 +216,86 @@ def drop_db(
     return _pg_cmd(["dropdb", "--if-exists", db_name], connection_url=connection_url)
 
 
+#: How ``CREATE DATABASE … TEMPLATE`` copies the source (#479). ``wal_log`` is
+#: PostgreSQL 15+'s default and writes every block through WAL; ``file_copy``
+#: copies the directory with a checkpoint on each side and writes almost no WAL.
+TEMPLATE_STRATEGIES = ("file_copy", "wal_log")
+DEFAULT_TEMPLATE_STRATEGY = "file_copy"
+
+# `STRATEGY` arrived in PostgreSQL 15; a 14 server answers it with
+# `ERROR:  option "strategy" not recognized`, and before 15 every copy is a
+# file copy anyway. The server's version is read on the connection that runs
+# the CREATE, so no separate probe can disagree with it, and `\if` needs only
+# psql >= 10 where `createdb -S` needs a >= 15 client too.
+_FILE_COPY_SCRIPT = """\
+SELECT current_setting('server_version_num')::int >= 150000 AS has_strategy \\gset
+\\if :has_strategy
+{create} STRATEGY = FILE_COPY;
+\\else
+{create};
+\\endif
+"""
+
+
+def _create_db_file_copy(
+    db_name: str,
+    *,
+    template: str | None,
+    owner: str | None,
+    connection_url: str,
+) -> tuple[int, str, str]:
+    """``CREATE DATABASE … STRATEGY = FILE_COPY`` through ``psql -f -``.
+
+    The names are bound as ``:"var"``, which psql substitutes only in input it
+    lexes itself, hence stdin rather than ``-c``.
+    """
+    bound = {"db_name": db_name, "template": template, "owner": owner}
+    create = 'CREATE DATABASE :"db_name"'
+    if template:
+        create += ' TEMPLATE :"template"'
+    if owner:
+        create += ' OWNER :"owner"'
+    cmd = ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1"]
+    for name, value in bound.items():
+        if value:
+            cmd.extend(["-v", f"{name}={value}"])
+    cmd.extend(["-f", "-"])
+    return _pg_cmd(
+        cmd,
+        connection_url=connection_url,
+        input_text=_FILE_COPY_SCRIPT.format(create=create),
+    )
+
+
 def create_db(
     db_name: str,
     *,
     template: str | None = None,
     owner: str | None = None,
+    strategy: str | None = None,
     connection_url: str,
 ) -> tuple[int, str, str]:
-    """Create database *db_name*, optionally from *template*."""
+    """Create database *db_name*, optionally from *template*.
+
+    *strategy* ``"file_copy"`` asks for ``STRATEGY = FILE_COPY``, omitted on a
+    server older than 15. ``"wal_log"`` and ``None`` run plain ``createdb``,
+    which is WAL_LOG from 15 on.
+    """
     validate_pg_identifier(db_name, "database name")
     if template:
         validate_pg_identifier(template, "template name")
     if owner:
         validate_pg_identifier(owner, "owner name")
+    if strategy is not None and strategy not in TEMPLATE_STRATEGIES:
+        msg = (
+            f"Invalid template strategy: {strategy!r} — must be one of "
+            f"{', '.join(TEMPLATE_STRATEGIES)}"
+        )
+        raise ValueError(msg)
+    if strategy == "file_copy":
+        return _create_db_file_copy(
+            db_name, template=template, owner=owner, connection_url=connection_url
+        )
     cmd = ["createdb"]
     if template:
         cmd.extend(["-T", template])

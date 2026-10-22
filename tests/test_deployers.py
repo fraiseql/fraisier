@@ -1260,6 +1260,28 @@ class TestAPIDeployerRebuildAppVersion:
             deployer._resolve_strategy()
 
 
+class TestAPIDeployerRebuildTemplateStrategy:
+    """#479: APIDeployer plumbs database.template_strategy to RebuildStrategy."""
+
+    @pytest.mark.parametrize(
+        ("extra", "expected"),
+        [({}, "file_copy"), ({"template_strategy": "wal_log"}, "wal_log")],
+    )
+    def test_reads_template_strategy(self, extra, expected):
+        deployer = APIDeployer(
+            {
+                "app_path": "/tmp/x",
+                "database": {
+                    "strategy": "rebuild",
+                    "create_template": True,
+                    **extra,
+                },
+            }
+        )
+        strategy, *_ = deployer._resolve_strategy()
+        assert strategy._template_strategy == expected
+
+
 class TestAPIDeployerPreMigrateDump:
     """APIDeployer plumbs database.pre_migrate_dump through to MigrateStrategy."""
 

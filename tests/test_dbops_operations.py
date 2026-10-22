@@ -461,3 +461,77 @@ class TestCreateDb:
     def test_create_db_rejects_bad_template(self):
         with pytest.raises(ValueError, match="Invalid template name"):
             create_db("newdb", template="bad template!", connection_url=_TEST_URL)
+
+
+def _run_create_db(**kwargs):
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        create_db("newdb", connection_url=_TEST_URL, **kwargs)
+    return mock_run.call_args
+
+
+class TestCreateDbStrategy:
+    """#479: a template copy can ask for ``STRATEGY = FILE_COPY``."""
+
+    def test_file_copy_runs_a_psql_script_on_stdin(self):
+        call = _run_create_db(template="tmpl", strategy="file_copy")
+        cmd = call[0][0]
+        assert cmd[0] == "psql"
+        assert cmd[-2:] == ["-f", "-"]
+        assert "STRATEGY = FILE_COPY" in call.kwargs["input"]
+
+    def test_file_copy_binds_the_names_instead_of_quoting_them(self):
+        call = _run_create_db(template="tmpl", owner="appuser", strategy="file_copy")
+        cmd = call[0][0]
+        assert "db_name=newdb" in cmd
+        assert "template=tmpl" in cmd
+        assert "owner=appuser" in cmd
+        script = call.kwargs["input"]
+        assert 'CREATE DATABASE :"db_name" TEMPLATE :"template" OWNER :"owner"' in (
+            script
+        )
+        assert "newdb" not in script
+        assert "tmpl" not in script
+
+    def test_file_copy_stops_on_the_first_error(self):
+        # `psql -f` exits 0 after a failed statement without it.
+        cmd = _run_create_db(template="tmpl", strategy="file_copy")[0][0]
+        assert cmd[cmd.index("ON_ERROR_STOP=1") - 1] == "-v"
+
+    def test_file_copy_omits_the_strategy_below_postgres_15(self):
+        # PG 14 answers `STRATEGY` with: ERROR:  option "strategy" not recognized
+        script = _run_create_db(template="tmpl", strategy="file_copy").kwargs["input"]
+        assert "current_setting('server_version_num')::int >= 150000" in script
+        with_strategy, without = script.split("\\else")
+        assert "STRATEGY = FILE_COPY" in with_strategy
+        assert "STRATEGY" not in without
+        assert 'CREATE DATABASE :"db_name" TEMPLATE :"template";' in without
+
+    def test_file_copy_without_owner_binds_no_owner(self):
+        call = _run_create_db(template="tmpl", strategy="file_copy")
+        assert not any(arg.startswith("owner=") for arg in call[0][0])
+        assert "OWNER" not in call.kwargs["input"]
+
+    @pytest.mark.parametrize("strategy", [None, "wal_log"])
+    def test_wal_log_and_none_keep_the_createdb_command(self, strategy):
+        call = _run_create_db(template="tmpl", strategy=strategy)
+        cmd = call[0][0]
+        assert cmd[0] == "createdb"
+        assert "-S" not in cmd
+        assert "--strategy" not in cmd
+        assert call.kwargs.get("input") is None
+
+    def test_unknown_strategy_is_refused(self):
+        with pytest.raises(ValueError, match="template strategy"):
+            create_db(
+                "newdb", template="tmpl", strategy="bogus", connection_url=_TEST_URL
+            )
+
+    def test_file_copy_still_validates_identifiers(self):
+        with pytest.raises(ValueError, match="Invalid template name"):
+            create_db(
+                "newdb",
+                template='x"; DROP DATABASE y; --',
+                strategy="file_copy",
+                connection_url=_TEST_URL,
+            )

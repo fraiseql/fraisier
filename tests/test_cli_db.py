@@ -58,8 +58,27 @@ class TestDbReset:
 
         assert result.exit_code == 0
         mock_reset.assert_called_once_with(
-            "mydb", prefix="template_", connection_url=_ADMIN_URL
+            "mydb",
+            prefix="template_",
+            strategy="file_copy",
+            connection_url=_ADMIN_URL,
         )
+
+    def test_db_reset_uses_database_template_strategy(self, runner, mock_config):
+        """#479: `db reset` copies with database.template_strategy."""
+        db_cfg = mock_config.get_fraise_environment.return_value["database"]
+        db_cfg["template_strategy"] = "wal_log"
+        result_mock = MagicMock(success=True, template_name="template_mydb")
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.dbops.templates.reset_from_template", return_value=result_mock
+            ) as mock_reset,
+        ):
+            result = runner.invoke(main, ["db", "reset", "my_api", "-e", "production"])
+
+        assert result.exit_code == 0
+        assert mock_reset.call_args.kwargs["strategy"] == "wal_log"
 
     def test_db_reset_failure_exits_1(self, runner, mock_config):
         """db reset failure exits with error."""
@@ -667,6 +686,42 @@ class TestDbRestore:
         assert result.exit_code == 0
         cfg = mock_init.call_args[0][0]
         assert cfg.preferred_compression == "lz4"
+
+    @pytest.mark.parametrize(
+        ("restore_extra", "expected"),
+        [({}, "file_copy"), ({"template_strategy": "wal_log"}, "wal_log")],
+    )
+    def test_db_restore_passes_template_strategy(
+        self, runner, restore_config, restore_extra, expected
+    ):
+        """#479: restore.template_strategy reaches RestoreConfig, default file_copy."""
+        db_cfg = restore_config.get_fraise_environment.return_value["database"]
+        db_cfg["restore"].update(restore_extra)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=0,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+            schema_floor=None,
+            unchecked_schemas=(),
+        )
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.__init__",
+                return_value=None,
+            ) as mock_init,
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch("fraisier.systemd.SystemdServiceManager"),
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 0, result.output
+        assert mock_init.call_args[0][0].template_strategy == expected
 
     def test_db_restore_skips_external_db(self, runner, restore_config):
         """db restore skips when external_db is true."""

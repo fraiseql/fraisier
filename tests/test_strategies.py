@@ -1085,6 +1085,49 @@ class TestRestoreMigrateStrategy:
         assert len(template_drop_calls) == 1
         assert template_drop_calls[0].kwargs.get("clear_template_flag") is True
 
+    @pytest.mark.parametrize(
+        ("overrides", "expected"),
+        [({}, "file_copy"), ({"template_strategy": "wal_log"}, "wal_log")],
+    )
+    @patch("fraisier.strategies._restore.migrate_up")
+    @patch("fraisier.dbops.restore.restore_backup")
+    @patch("fraisier.dbops.operations.create_db")
+    @patch("fraisier.dbops.operations.drop_db")
+    @patch("fraisier.dbops.operations.terminate_backends")
+    @patch("fraisier.dbops.restore.validate_backup_age", return_value=True)
+    @patch("fraisier.dbops.restore.find_latest_backup")
+    def test_step_8_copies_the_template_with_the_template_strategy(
+        self,
+        mock_find,
+        mock_age,
+        mock_term,
+        mock_drop,
+        mock_create,
+        mock_restore,
+        mock_up,
+        overrides,
+        expected,
+    ):
+        """#479: step 8 asks for restore.template_strategy, default file_copy."""
+        mock_find.return_value = Path("/backup/db.dump")
+        mock_drop.return_value = (0, "", "")
+        mock_create.return_value = (0, "", "")
+        mock_restore.return_value = RestoreResult(success=True)
+        mock_up.return_value = MigrationResult(success=True, steps_applied=0)
+
+        strategy = _make_strategy(
+            create_template=True, template_name="tpl_staging", **overrides
+        )
+        strategy.execute(CONFIG, migrations_dir=MDIR)
+
+        (template_copy,) = [
+            call
+            for call in mock_create.call_args_list
+            if call.args and call.args[0] == "tpl_staging"
+        ]
+        assert template_copy.kwargs["template"] == "staging_db"
+        assert template_copy.kwargs["strategy"] == expected
+
     @patch("fraisier.strategies._restore.migrate_up")
     @patch("fraisier.dbops.restore.restore_backup")
     @patch("fraisier.dbops.operations.create_db")
@@ -1164,8 +1207,26 @@ class TestRestoreMigrateStrategy:
         assert result.success
         # Should drop staging_db then create from template
         mock_create.assert_called_once_with(
-            "staging_db", template="staging_tmpl", connection_url=_ADMIN_URL
+            "staging_db",
+            template="staging_tmpl",
+            strategy="file_copy",
+            connection_url=_ADMIN_URL,
         )
+
+    @patch("fraisier.dbops.operations.create_db", return_value=(0, "", ""))
+    @patch("fraisier.dbops.operations.drop_db", return_value=(0, "", ""))
+    @patch("fraisier.dbops.operations.terminate_backends")
+    def test_rollback_with_template_uses_the_template_strategy(
+        self, mock_term, mock_drop, mock_create
+    ):
+        strategy = _make_strategy(
+            create_template=True,
+            template_name="staging_tmpl",
+            template_strategy="wal_log",
+        )
+        strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
+
+        assert mock_create.call_args.kwargs["strategy"] == "wal_log"
 
     @patch("fraisier.dbops.templates.reset_from_template")
     def test_rollback_with_default_template_name(self, mock_reset):
@@ -1177,8 +1238,23 @@ class TestRestoreMigrateStrategy:
 
         assert result.success
         mock_reset.assert_called_once_with(
-            "staging_db", prefix="template_", connection_url=_ADMIN_URL
+            "staging_db",
+            prefix="template_",
+            strategy="file_copy",
+            connection_url=_ADMIN_URL,
         )
+
+    @patch("fraisier.dbops.templates.reset_from_template")
+    def test_rollback_with_default_template_name_uses_the_template_strategy(
+        self, mock_reset
+    ):
+        mock_reset.return_value = TemplateResult(
+            success=True, template_name="template_staging_db"
+        )
+        strategy = _make_strategy(create_template=True, template_strategy="wal_log")
+        strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
+
+        assert mock_reset.call_args.kwargs["strategy"] == "wal_log"
 
 
 # ---------------------------------------------------------------------------
@@ -1216,6 +1292,27 @@ class TestGetStrategy:
         s = get_strategy("rebuild", create_template=True)
         assert isinstance(s, RebuildStrategy)
         assert s._create_template is True
+
+    def test_rebuild_template_strategy_defaults_to_file_copy(self):
+        s = get_strategy("rebuild", create_template=True)
+        assert s._template_strategy == "file_copy"  # ty: ignore[unresolved-attribute]
+
+    def test_rebuild_forwards_template_strategy(self):
+        s = get_strategy("rebuild", create_template=True, template_strategy="wal_log")
+        assert s._template_strategy == "wal_log"  # ty: ignore[unresolved-attribute]
+
+    @pytest.mark.parametrize(
+        ("restore_extra", "expected"),
+        [({}, "file_copy"), ({"template_strategy": "wal_log"}, "wal_log")],
+    )
+    def test_restore_migrate_reads_template_strategy(self, restore_extra, expected):
+        s = get_strategy(
+            "restore_migrate",
+            db_name="staging_db",
+            admin_url=_ADMIN_URL,
+            restore_config={**_SAMPLE_RESTORE_CONFIG, **restore_extra},
+        )
+        assert s._config.template_strategy == expected  # ty: ignore[unresolved-attribute]
 
     def test_rebuild_with_template_name(self):
         s = get_strategy("rebuild", create_template=True, template_name="snap_myapp")

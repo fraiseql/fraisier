@@ -27,6 +27,7 @@ from fraisier.config.schema import (
     RetainEntry,
 )
 from fraisier.dbops._strategies import ADMIN_STRATEGIES
+from fraisier.dbops.operations import TEMPLATE_STRATEGIES
 from fraisier.errors import ConfigurationError, ValidationError
 
 _GIT_URL_RE = re.compile(
@@ -308,6 +309,9 @@ def _validate_environment(fraise_name: str, env: dict) -> None:
                 "postgresql:///postgres?host=/var/run/postgresql"
             )
         errors.extend(_validate_database_url(fraise_name, db))
+        errors.extend(
+            _template_strategy_errors(fraise_name, "database.template_strategy", db)
+        )
 
     # Preflight configuration validation
     if isinstance(db, dict) and db.get("preflight"):
@@ -481,6 +485,9 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
                     f"{fraise_name}: restore.jobs must be a positive integer, "
                     f"got {jobs!r}"
                 )
+        errors.extend(
+            _template_strategy_errors(fraise_name, "restore.template_strategy", restore)
+        )
         pref = restore.get("preferred_compression")
         if pref is not None and not isinstance(pref, LazyEnv):
             valid_algos = {"zstd", "lz4", "gzip", "none"}
@@ -490,6 +497,17 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
                     f"of {', '.join(sorted(valid_algos))}, got {pref!r}"
                 )
     return errors
+
+
+def _template_strategy_errors(fraise_name: str, key: str, block: dict) -> list[str]:
+    """How a template copy is made (#479); absent means ``file_copy``."""
+    value = block.get("template_strategy")
+    if value is None or value in TEMPLATE_STRATEGIES:
+        return []
+    return [
+        f"{fraise_name}: {key} must be one of {', '.join(TEMPLATE_STRATEGIES)}, "
+        f"got {value!r}"
+    ]
 
 
 def _validate_pgbackrest_source(fraise_name: str, restore: dict) -> list[str]:
