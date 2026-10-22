@@ -52,7 +52,7 @@ def test_restore_backup_populates_matview_end_to_end(pg_target, tmp_path, jobs):
 
     Proves confiture's deferred-refresh path runs through fraisier for both the
     serial (``jobs=1``) and parallel (``jobs=4``) restore paths — the parallel
-    case is the exact printoptim_backend#1960 incident condition (a matview
+    case is the exact downstream incident condition (a matview
     refresh replanning on empty stats during the ``--jobs 4`` data phase).  The
     matview must end up filled (not left ``WITH NO DATA``) and the deferral
     accounting is surfaced on fraisier's RestoreResult.

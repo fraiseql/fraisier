@@ -110,13 +110,13 @@ fraises:
     description: Long-lock alerter
     environments:
       production:
-        app_path: /var/www/api.printoptim.io
+        app_path: /var/www/api.acme.io
         jobs:
           poll:
-            name: printoptim-long-lock-alerter
+            name: acme-long-lock-alerter
             description: Polls pg_locks every minute
-            systemd_service: printoptim-long-lock-alerter.service
-            systemd_timer: printoptim-long-lock-alerter.timer
+            systemd_service: acme-long-lock-alerter.service
+            systemd_timer: acme-long-lock-alerter.timer
             schedule: "*-*-* *:*:00"
 """
     )
@@ -134,13 +134,13 @@ def test_enumerate_scheduled_units_yields_service_and_timer(tmp_path):
 
     assert len(units) == 2, f"expected service + timer, got {units!r}"
     assert {u.unit_name for u in units} == {
-        "printoptim-long-lock-alerter.service",
-        "printoptim-long-lock-alerter.timer",
+        "acme-long-lock-alerter.service",
+        "acme-long-lock-alerter.timer",
     }
 
     by_name = {u.unit_name: u for u in units}
-    timer = by_name["printoptim-long-lock-alerter.timer"]
-    service = by_name["printoptim-long-lock-alerter.service"]
+    timer = by_name["acme-long-lock-alerter.timer"]
+    service = by_name["acme-long-lock-alerter.service"]
 
     assert timer.is_timer is True
     assert service.is_timer is False
@@ -150,11 +150,9 @@ def test_enumerate_scheduled_units_yields_service_and_timer(tmp_path):
     assert timer.job_name == "poll"
 
     assert timer.source_path == Path(
-        "/var/www/api.printoptim.io/scripts/systemd/printoptim-long-lock-alerter.timer"
+        "/var/www/api.acme.io/scripts/systemd/acme-long-lock-alerter.timer"
     )
-    assert timer.dest_path == Path(
-        "/etc/systemd/system/printoptim-long-lock-alerter.timer"
-    )
+    assert timer.dest_path == Path("/etc/systemd/system/acme-long-lock-alerter.timer")
     assert isinstance(timer, ScheduledUnitInstall)
 
 

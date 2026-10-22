@@ -9,7 +9,7 @@
    triggers regeneration at all.
 
 `jinja2.ChoiceLoader` falls through to the built-in template when the first
-loader's directory is missing — no exception, no warning. On printoptim.dev the
+loader's directory is missing — no exception, no warning. On acme.dev the
 customised file was `sudoers.j2`, so the operator believed a privilege rule was
 deployed when it was not.
 """

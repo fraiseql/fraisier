@@ -73,10 +73,10 @@ class TestConfigSnapshotFollowsTheSyncedFile:
             {
                 "database": {
                     "strategy": "migrate",
-                    "name": "printoptim",
+                    "name": "acme",
                     "pre_migrate_dump": {
                         "enabled": True,
-                        "output_dir": "/var/backups/printoptim/pre_migrate",
+                        "output_dir": "/var/backups/acme/pre_migrate",
                     },
                 }
             }
@@ -87,7 +87,7 @@ class TestConfigSnapshotFollowsTheSyncedFile:
             app_path: /var/www/api
             database:
               strategy: migrate
-              name: printoptim
+              name: acme
               pre_migrate_dump:
                 enabled: true
                 output_dir: /var/lib/postgresql/pre_migrate
@@ -117,7 +117,7 @@ class TestConfigSnapshotFollowsTheSyncedFile:
             app_path: /var/www/api
             database:
               strategy: migrate
-              name: printoptim
+              name: acme
             """,
         )
 
@@ -170,7 +170,7 @@ class TestTheSyncItselfRefreshes:
             app_path: /var/www/api
             database:
               strategy: migrate
-              name: printoptim
+              name: acme
               pre_migrate_dump:
                 enabled: true
                 output_dir: /var/lib/postgresql/pre_migrate
@@ -182,10 +182,10 @@ class TestTheSyncItselfRefreshes:
                 "app_path": str(app_path),
                 "database": {
                     "strategy": "migrate",
-                    "name": "printoptim",
+                    "name": "acme",
                     "pre_migrate_dump": {
                         "enabled": True,
-                        "output_dir": "/var/backups/printoptim/pre_migrate",
+                        "output_dir": "/var/backups/acme/pre_migrate",
                     },
                 },
             }
@@ -270,7 +270,7 @@ class TestTheGateNamesItsDirectoryUpFront:
         output_dir = str(tmp_path / "dumps")
         strategy = MigrateStrategy(
             pre_migrate_dump={"enabled": True, "output_dir": output_dir},
-            db_name="printoptim",
+            db_name="acme",
         )
 
         logged_before_dump: list[str] = []
@@ -288,7 +288,7 @@ class TestTheGateNamesItsDirectoryUpFront:
             strategy._run_dump_gate(
                 tmp_path / "confiture.yaml",
                 migrations_dir=tmp_path,
-                db_url="postgresql://localhost/printoptim",
+                db_url="postgresql://localhost/acme",
             )
 
         assert any(output_dir in message for message in logged_before_dump), (

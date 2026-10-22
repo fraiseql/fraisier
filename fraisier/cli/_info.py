@@ -161,7 +161,7 @@ def status(
     Examples:
         fraisier status                        # Global view filtered to current server
         fraisier status --all                  # Show fraises for all servers
-        fraisier status --server printoptim.io # Show fraises for a specific server
+        fraisier status --server acme.io # Show fraises for a specific server
         fraisier status my_api production      # Single fraise view
     """
     config = ctx.obj["config"]

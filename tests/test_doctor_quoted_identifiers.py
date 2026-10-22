@@ -284,7 +284,7 @@ class TestOnlyIdentifiersAreScanned:
 class TestAnApostropheInsideAQuotedIdentifier:
     """An identifier may contain a ``'``, and it does not open a string literal.
 
-    Found on a real schema: printoptim_backend declares
+    Found on a real schema: acme_backend declares
     ``"Licence d'impression sécurisée intégrée"`` — a quoted identifier with a
     French apostrophe in it. The scan blanked string literals *before* it knew
     where identifiers were, so that apostrophe opened a literal that ran to the

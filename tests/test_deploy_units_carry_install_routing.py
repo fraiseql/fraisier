@@ -10,7 +10,7 @@ was given ``FRAISIER_INSTALL_SOCKET_<FRAISE>_<ENV>`` in its environment
 The webhook unit had the routing. The deploy-daemon unit — the one behind
 every ``trigger-deploy``, and so behind every timer and CLI deploy — did not.
 Same config, same render, two units that run the same code, one wired.
-Reported from printoptim.dev (#324): the deploy failed in ~3s with
+Reported from acme.dev (#324): the deploy failed in ~3s with
 *"sudo: The 'no new privileges' flag is set"* while the identical deploy
 through the webhook succeeded.
 

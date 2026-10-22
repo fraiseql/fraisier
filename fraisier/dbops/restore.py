@@ -8,7 +8,7 @@ restore phases, runs a post-load ``ANALYZE``, then refreshes the matviews on
 real statistics.  A stats-sensitive matview otherwise replans into a
 catastrophic nested loop on the empty ``pg_statistic`` of a freshly loaded
 database, turning a restore into a multi-hour hang (confiture #172,
-printoptim_backend#1960).  Ownership is reassigned afterwards and the caller
+a downstream incident).  Ownership is reassigned afterwards and the caller
 validates the restore by checking the table count against a minimum threshold.
 """
 

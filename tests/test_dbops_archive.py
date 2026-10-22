@@ -225,7 +225,7 @@ class TestVerifyArchiveCommand:
 #: all), and a quoted table name that *contains* the words TABLE DATA.
 _TOC = """;
 ; Archive created at 2026-08-09 02:00:00 UTC
-;     dbname: printoptim
+;     dbname: acme
 ;     TOC Entries: 12
 ;     Format: CUSTOM
 ;     Dumped by pg_dump version: 16.3

@@ -5,7 +5,7 @@ deployment in ``deployment_lock(fraise)``. The `db restore` CLI never acquired
 it, so a timer-, cron- or hand-driven restore ran completely unsynchronised
 with deploys of the same fraise.
 
-Incident (printoptim.dev, 2026-07-30 00:00 UTC): the staging-restore timer fired
+Incident (acme.dev, 2026-07-30 00:00 UTC): the staging-restore timer fired
 mid-deploy, stopped the API service and terminated every connection to the
 staging database — killing the in-flight deploy's pg_restore
 (``FATAL: terminating connection due to administrator command``) and leaving

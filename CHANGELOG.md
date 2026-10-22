@@ -2969,7 +2969,7 @@ Tracing two of them turned up a further defect each, neither reported.
 
 [#362](https://github.com/fraiseql/fraisier/issues/362). fraisier 0.65.0 capped
 `fraiseql-confiture` at `<0.45`. confiture 0.45.0 shipped, and the cap — not
-lockfile inertia — is what held downstream in place: `printoptim_backend`
+lockfile inertia — is what held downstream in place: `acme_backend`
 raising its own floor to `fraiseql-confiture[ast]>=0.44.0` resolved straight
 back to 0.44.x, silently, because a transitive cap wins over a direct floor and
 says nothing while it does. Second time this has happened, after 0.38.1 → 0.44.0.
@@ -4346,7 +4346,7 @@ render time instead of on a production host.
   of a uv-managed project shipped a lockfile whose own `[[package]]` entry was
   one bump behind. Any later bare `uv run` then re-locked mid-command and
   dirtied the tree, which `fraisier sync` aborts on — hit twice on
-  printoptim_backend on 2026-08-03 alone. `refresh_uv_lock()` runs `uv lock`
+  acme_backend on 2026-08-03 alone. `refresh_uv_lock()` runs `uv lock`
   when a sibling lockfile exists, and warns rather than fails when uv is
   absent, unexecutable, or slow: it runs *after* `bump_version` has committed
   pyproject.toml, so raising there would abort a ship on a half-applied bump —
@@ -4375,10 +4375,10 @@ render time instead of on a production host.
 
   ```yaml
   servers:
-    printoptim-io:
+    acme-io:
       machine_hostnames: [pio]
   environments:
-    production: {server: printoptim-io}
+    production: {server: acme-io}
   ```
 
   matched nothing on `pio`, and no match returned `None`, which the caller
@@ -4416,14 +4416,14 @@ render time instead of on a production host.
   denies outright:
 
   ```
-  Install command failed (exit code 1): sudo -H -u printoptim_app …
+  Install command failed (exit code 1): sudo -H -u acme_app …
     stderr: sudo: The "no new privileges" flag is set, which prevents sudo
             from running as root.
   ```
 
   The identical deploy through the webhook succeeded — same config, same
   render, two units running the same code, one wired. Reported from
-  printoptim.dev.
+  acme.dev.
 
   Fixed as a symmetry property rather than a patch: a test sweeps every
   rendered unit whose `ExecStart` performs a deploy **in process**, and
@@ -4461,7 +4461,7 @@ Two things will look new on the first run:
 ## [0.56.0] - 2026-08-03
 
 Closes #325. **The webhook unit installed on a machine was not the one
-rendered for it.** Reported from production (printoptim.io, 2026-08-03): a
+rendered for it.** Reported from production (acme.io, 2026-08-03): a
 prod-only host running the unit built for the dev host, so
 `ProtectSystem=strict` denied every write to the production bare repo and
 `git fetch` aborted with exit 255.
@@ -4662,7 +4662,7 @@ Absorbs v0.53.1, which was merged but never published.
 
 ### Fixed
 
-- **The dump gate's `output_dir` is now writable from the webhook unit's sandbox** (`core/fraisier-webhook.service.j2`, #317). The generated unit runs `ProtectSystem=strict` with a `ReadWritePaths=` list covering only the fraisier state dirs and the app/git trees. `database.pre_migrate_dump.output_dir` was never propagated into it, so `pg_dump` failed with `Read-only file system` and the gate — correctly — aborted the deploy. On any strict install, which is every scaffold-generated unit, the feature was a guaranteed deploy blocker on first use. Hit in production on printoptim.io, 2026-08-01.
+- **The dump gate's `output_dir` is now writable from the webhook unit's sandbox** (`core/fraisier-webhook.service.j2`, #317). The generated unit runs `ProtectSystem=strict` with a `ReadWritePaths=` list covering only the fraisier state dirs and the app/git trees. `database.pre_migrate_dump.output_dir` was never propagated into it, so `pg_dump` failed with `Read-only file system` and the gate — correctly — aborted the deploy. On any strict install, which is every scaffold-generated unit, the feature was a guaranteed deploy blocker on first use. Hit in production on acme.io, 2026-08-01.
 - **`fraisier bootstrap` now uploads `scaffold.template_dir`** (`bootstrap.py`, #318). `_upload_config` uploaded exactly one file, so a freshly bootstrapped host had a `fraises.yaml` whose relative `template_dir` pointed at a directory nothing had created — the same single-file omission #312 fixed on the deploy path, at provisioning time instead. It now uploads the tree alongside the config, replacing it wholesale so a template deleted upstream cannot survive and keep shadowing a built-in.
 
 ### Added
@@ -4687,7 +4687,7 @@ Absorbs v0.53.1, which was merged but never published.
 ## [0.53.0] - 2026-07-31
 
 Closes #310, #311 and #312 — all three found by running fraisier in anger on
-printoptim.dev, and all three of the same shape: **something silently did not
+acme.dev, and all three of the same shape: **something silently did not
 happen, and nothing said so.**
 
 Two of them are the halves of one incident. On 2026-07-30 at 00:00 UTC the
@@ -4923,7 +4923,7 @@ wrong tree.
 ## [0.46.0] - 2026-07-22
 
 Install-path hardening. Five defects on one deploy path, all surfaced by a
-single incident: a `printoptim` `install.command` change (a `bash -c` wrapper)
+single incident: a `acme` `install.command` change (a `bash -c` wrapper)
 that failed to deploy, gave no useful error, then "succeeded but did nothing"
 once patched — and, when the socket path was investigated, turned out to be
 blocked by a stale allowlist under a strict sandbox.
@@ -4956,11 +4956,11 @@ Unifies confiture's exit-code / error-code classification onto a single, confitu
 
 ## [0.44.0] - 2026-07-16
 
-Closes the standalone-restore tail of the ACL-stripping bug first fixed for the deploy path in printoptim_backend#1681: `fraisier db restore` now re-applies the configured grant scripts, so a database refreshed outside a full deploy is no longer left grantless.
+Closes the standalone-restore tail of the ACL-stripping bug first fixed for the deploy path in a downstream deployment: `fraisier db restore` now re-applies the configured grant scripts, so a database refreshed outside a full deploy is no longer left grantless.
 
 ### Fixed
 
-- **`fraisier db restore <fraise> <env>` now re-applies the configured `database.post_migrate` grant scripts after a successful restore** ([#273](https://github.com/fraiseql/fraisier/issues/273)). The `restore_migrate` strategy restores with `pg_restore --no-owner --no-acl` and, by design, applies no grants — re-applying `database.post_migrate` was the deployer's responsibility (`_run_post_migrate`). The webhook deploy path ran it; the standalone `db restore` CLI called `strategy.execute(...)` and returned on success **without** it. Any environment refreshed via the CLI — e.g. a nightly "restore staging from production backup" timer — therefore came back with every non-`public` schema stripped of `USAGE`, and any application/ETL/reporting role that isn't the schema owner could no longer connect. Real incident: a staging DB refreshed nightly by `restore-staging-from-production-backup.timer` wiped `printoptim_etl`'s grants every night at 00:00 UTC, yielding ~615 failed ETL runs over 7 days (`permission denied for schema tenant`) — each restore re-wiping the grants a human had manually replayed. `db_restore` now runs the post_migrate hooks after a successful restore and exits non-zero if a `halt` step fails.
+- **`fraisier db restore <fraise> <env>` now re-applies the configured `database.post_migrate` grant scripts after a successful restore** ([#273](https://github.com/fraiseql/fraisier/issues/273)). The `restore_migrate` strategy restores with `pg_restore --no-owner --no-acl` and, by design, applies no grants — re-applying `database.post_migrate` was the deployer's responsibility (`_run_post_migrate`). The webhook deploy path ran it; the standalone `db restore` CLI called `strategy.execute(...)` and returned on success **without** it. Any environment refreshed via the CLI — e.g. a nightly "restore staging from production backup" timer — therefore came back with every non-`public` schema stripped of `USAGE`, and any application/ETL/reporting role that isn't the schema owner could no longer connect. Real incident: a staging DB refreshed nightly by `restore-staging-from-production-backup.timer` wiped `acme_etl`'s grants every night at 00:00 UTC, yielding ~615 failed ETL runs over 7 days (`permission denied for schema tenant`) — each restore re-wiping the grants a human had manually replayed. `db_restore` now runs the post_migrate hooks after a successful restore and exits non-zero if a `halt` step fails.
 
 ### Changed
 
@@ -4973,7 +4973,7 @@ Continues the confiture 0.33 migration shipped in 0.41.0: adopts fraiseql-confit
 ### Changed
 
 - **Confiture integration bumped to fraiseql-confiture 0.35.x** (pinned `>=0.35.0,<0.36`, was `>=0.33.0,<0.34`). The migrate/build/preflight surface fraisier targets is unchanged across 0.33→0.35 (`Migrator.from_config` → `MigratorSession.up/down/status/preflight`; the preflight `--against` `{ok, summary, issues[]}` JSON + exit `0`/`7` contract); 0.34 additionally defaults `Environment.name`/`include_dirs` so a migrate-only config validates directly, and 0.35 carries the restore matview fix adopted below. The upper bound still prevents silent drift onto a future schema change ([#262](https://github.com/fraiseql/fraisier/issues/262)).
-- **Staging restore now runs through confiture's three-phase `DatabaseRestorer` instead of a single `pg_restore`** ([#270](https://github.com/fraiseql/fraisier/issues/270)). `dbops/restore.restore_backup` previously shelled out to `pg_restore -d <db> --no-owner --no-acl [-j N] <dump>` directly — so confiture's restorer, and its matview fix, never touched fraisier's restore path. A backup carrying a stats-sensitive materialized view then refreshed it **inside the parallel data phase on the empty `pg_statistic` of a freshly loaded database**, replanning into a catastrophic nested loop (25 min – 2h+) that hung the deploy and left staging unusable (the printoptim_backend#1960 incident: 2h+ on `REFRESH MATERIALIZED VIEW mv_maintenance_price` under `--jobs 4`). `restore_backup` now delegates to `confiture.core.restorer.DatabaseRestorer`, which holds every matview `REFRESH` out of the restore phases, runs a database-wide `ANALYZE`, then refreshes on real statistics (confiture #172). It maps the caller's `connection_url` to confiture's discrete `-h/-p/-U` (netloc **or** socket `?host=` form) with any password threaded through as `PGPASSWORD`, keeps the post-restore `REASSIGN OWNED` ownership fix and the identifier/path validation, sets `parallel_restore` for `jobs > 1`, and leaves confiture's own min-tables check off (the strategy validates the table count itself after `migrate up`). A confiture `RestoreError` (e.g. an unsupported plain-SQL dump) is returned as a failed `RestoreResult` rather than raised, so the strategy's `.success` branch is unchanged.
+- **Staging restore now runs through confiture's three-phase `DatabaseRestorer` instead of a single `pg_restore`** ([#270](https://github.com/fraiseql/fraisier/issues/270)). `dbops/restore.restore_backup` previously shelled out to `pg_restore -d <db> --no-owner --no-acl [-j N] <dump>` directly — so confiture's restorer, and its matview fix, never touched fraisier's restore path. A backup carrying a stats-sensitive materialized view then refreshed it **inside the parallel data phase on the empty `pg_statistic` of a freshly loaded database**, replanning into a catastrophic nested loop (25 min – 2h+) that hung the deploy and left staging unusable (a downstream incident: 2h+ on `REFRESH MATERIALIZED VIEW mv_maintenance_price` under `--jobs 4`). `restore_backup` now delegates to `confiture.core.restorer.DatabaseRestorer`, which holds every matview `REFRESH` out of the restore phases, runs a database-wide `ANALYZE`, then refreshes on real statistics (confiture #172). It maps the caller's `connection_url` to confiture's discrete `-h/-p/-U` (netloc **or** socket `?host=` form) with any password threaded through as `PGPASSWORD`, keeps the post-restore `REASSIGN OWNED` ownership fix and the identifier/path validation, sets `parallel_restore` for `jobs > 1`, and leaves confiture's own min-tables check off (the strategy validates the table count itself after `migrate up`). A confiture `RestoreError` (e.g. an unsupported plain-SQL dump) is returned as a failed `RestoreResult` rather than raised, so the strategy's `.success` branch is unchanged.
 
 ### Added
 
@@ -5867,7 +5867,7 @@ Combines the confiture 0.33 migration and restore-preflight guard (developed as 
 - **`/run/fraisier/` still root-owned: `systemctl-helper.socket` had `RuntimeDirectory=fraisier`** —
   the socket unit (which runs as root via `SocketUser=root`) also declared `RuntimeDirectory=fraisier`
   with `RuntimeDirectoryMode=0755`. On every socket start/restart, systemd recreated `/run/fraisier/`
-  owned by root, overwriting the `printoptim_deploy`-owned directory managed by the webhook service.
+  owned by root, overwriting the `acme_deploy`-owned directory managed by the webhook service.
   Removed `RuntimeDirectory` and `RuntimeDirectoryMode` from the socket unit; `/run/fraisier/` is
   now managed exclusively by the webhook service.
 
