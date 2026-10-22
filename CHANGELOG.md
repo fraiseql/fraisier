@@ -24,8 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ruff 0.17.1** in both the pre-commit hook and `uv.lock`
   ([#478](https://github.com/fraiseql/fraisier/pull/478) moved only the hook, which
   `tests/test_ruff_pin.py` refuses). No code change: both ruff gates are clean.
+- **`fraiseql-confiture` 1.39 (`>=1.39.0,<1.40`).** Nothing fraisier reads
+  changed in 1.38.0 or 1.39.0: `seed drift`, `build_003`'s extension handling and
+  `--require-complete`'s exit 2 belong to commands fraisier does not run, and
+  pglast 8.7's fewer parentheses reach only generated SQL and the `parser` key.
+  Measured on the published wheels, 1.37.0 against 1.39.0 on pg_tviews beta.32:
+  the 44 drift-gate scenarios give the same verdicts and exit codes, and
+  `--exit-codes-json` is unchanged. confiture still needs pg_tviews 0.1.0-beta.30
+  or later.
+- **CI's `tviews` leg runs pg_tviews 0.1.0-beta.32** (the commit of its signed
+  tag, `778346fb`). beta.31 and beta.32 change no read contract (catalog revision
+  9); beta.32 drops `publish_skipped` from `pg_tviews_queue_stats()`, which
+  fraisier never read. beta.32 refills a TVIEW restored without its rows on the
+  first write that reaches it. Reads before that write still see no rows, so the
+  refill fraisier's restore runs after a lean dump (`tview_data: exclude`) stays,
+  and a test now holds both halves on beta.30 and beta.32.
 
 ### Upgrade note
+
+**⚠️ fraisier now requires `fraiseql-confiture` 1.39.** An environment pinned
+to confiture 1.37 or 1.38 must upgrade it together with fraisier. pg_tviews
+stays at 0.1.0-beta.30 or later.
 
 **⚠️ Template copies now default to `FILE_COPY`.** No host action is needed.
 `FILE_COPY` checkpoints before and after the copy, flushing every dirty buffer in
