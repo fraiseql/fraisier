@@ -11,7 +11,7 @@ generated ``install.sh``, ``ServerSetup._plan_webhook_service`` and
 skipped, or silently copied whatever stale unslugged file survived in the
 state dir from an earlier, differently-filtered render.
 
-The reported symptom (printoptim.io, 2026-08-03) was a production-only host
+The reported symptom (acme.io, 2026-08-03) was a production-only host
 running the webhook unit built for the dev host: ``ProtectSystem=strict`` plus
 a ``ReadWritePaths=`` list holding the *other* machine's git/www trees, so
 ``git fetch`` in the bare repo failed with exit 255 and production could not
@@ -39,7 +39,7 @@ import pytest
 from fraisier.config import FraisierConfig
 from fraisier.scaffold.renderer import ScaffoldRenderer
 
-# A printoptim-shaped config: two logical servers, development+staging sharing
+# An acme-shaped config: two logical servers, development+staging sharing
 # one machine, production alone on the other. `server:` in the global
 # `environments:` section.
 _GLOBAL_SERVERS = """\
@@ -48,17 +48,17 @@ scaffold:
   deploy_user: fraisier
   output_dir: {out}
 servers:
-  printoptim-dev:
+  acme-dev:
     machine_hostnames: [pdev]
-  printoptim-io:
+  acme-io:
     machine_hostnames: [pio]
 environments:
   development:
-    server: printoptim-dev
+    server: acme-dev
   staging:
-    server: printoptim-dev
+    server: acme-dev
   production:
-    server: printoptim-io
+    server: acme-io
 fraises:
   api:
     type: api
@@ -85,24 +85,24 @@ scaffold:
   deploy_user: fraisier
   output_dir: {out}
 servers:
-  printoptim-dev:
+  acme-dev:
     machine_hostnames: [pdev]
-  printoptim-io:
+  acme-io:
     machine_hostnames: [pio]
 fraises:
   api:
     type: api
     environments:
       development:
-        server: printoptim-dev
+        server: acme-dev
         app_path: /var/www/api.dev
         git_repo: /var/git/api.dev.git
       staging:
-        server: printoptim-dev
+        server: acme-dev
         app_path: /var/www/api.st
         git_repo: /var/git/api.st.git
       production:
-        server: printoptim-io
+        server: acme-io
         app_path: /var/www/api.io
         git_repo: /var/git/api.io.git
 """
@@ -117,13 +117,13 @@ scaffold:
   deploy_user: fraisier
   output_dir: {out}
 servers:
-  printoptim-dev:
+  acme-dev:
     machine_hostnames: [pdev]
-  printoptim-io:
+  acme-io:
     machine_hostnames: [pio]
 environments:
   development:
-    server: printoptim-dev
+    server: acme-dev
 fraises:
   api:
     type: api
@@ -145,31 +145,31 @@ scaffold:
   deploy_user: fraisier
   output_dir: {out}
 servers:
-  printoptim-dev:
+  acme-dev:
     machine_hostnames: [pdev]
-  printoptim-io:
+  acme-io:
     machine_hostnames: [pio]
 environments:
   development:
-    server: printoptim-dev
+    server: acme-dev
   staging:
-    server: printoptim-dev
+    server: acme-dev
   production:
-    server: printoptim-io
+    server: acme-io
 fraises:
   api:
     type: api
     environments:
       development:
-        server: printoptim-dev
+        server: acme-dev
         app_path: /var/www/api.dev
         git_repo: /var/git/api.dev.git
       staging:
-        server: printoptim-dev
+        server: acme-dev
         app_path: /var/www/api.st
         git_repo: /var/git/api.st.git
       production:
-        server: printoptim-io
+        server: acme-io
         app_path: /var/www/api.io
         git_repo: /var/git/api.io.git
 """
@@ -269,8 +269,8 @@ class TestOneResolverForWhichEnvironmentsAreLocal:
         config = FraisierConfig(cfg_path)
 
         assert set(_collect_unique_servers(config)) == {
-            "printoptim-dev",
-            "printoptim-io",
+            "acme-dev",
+            "acme-io",
         }
 
     @pytest.mark.parametrize(
@@ -293,8 +293,8 @@ class TestOneResolverForWhichEnvironmentsAreLocal:
             for server in _collect_unique_servers(config)
         }
         assert split == {
-            "printoptim-dev": {"development", "staging"},
-            "printoptim-io": {"production"},
+            "acme-dev": {"development", "staging"},
+            "acme-io": {"production"},
         }
 
 
@@ -365,7 +365,7 @@ class TestInstallShSelectsTheWebhookUnitByHostname:
     def test_each_machine_selects_its_own_slugged_source(self, tmp_path):
         _, out = _render(tmp_path, _GLOBAL_SERVERS)
 
-        for machine, slug in (("pdev", "printoptim-dev"), ("pio", "printoptim-io")):
+        for machine, slug in (("pdev", "acme-dev"), ("pio", "acme-io")):
             result = _run_install_sh(out, machine)
             assert result.returncode == 0, f"{machine}: stderr={result.stderr}"
             src = _installed_webhook_source(result)
@@ -402,14 +402,14 @@ class TestNoFallbackToAnUnsluggedLeftover:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         src = _installed_webhook_source(result)
         assert src is not None, "no webhook unit installed"
-        assert src.name == "fraisier-myproj-webhook-printoptim-io.service", (
+        assert src.name == "fraisier-myproj-webhook-acme-io.service", (
             f"installed the stale unslugged leftover instead: {src}"
         )
 
     def test_missing_slugged_unit_is_a_hard_error(self, tmp_path):
         """A known machine whose unit is absent must fail, never skip."""
         _, out = _render(tmp_path, _GLOBAL_SERVERS)
-        (out / "fraisier-myproj-webhook-printoptim-io.service").unlink()
+        (out / "fraisier-myproj-webhook-acme-io.service").unlink()
 
         result = _run_install_sh(out, "pio")
         assert result.returncode != 0, (
@@ -420,7 +420,7 @@ class TestNoFallbackToAnUnsluggedLeftover:
 
     def test_missing_slugged_unit_does_not_reach_for_the_unslugged_one(self, tmp_path):
         _, out = _render(tmp_path, _GLOBAL_SERVERS)
-        (out / "fraisier-myproj-webhook-printoptim-io.service").unlink()
+        (out / "fraisier-myproj-webhook-acme-io.service").unlink()
         (out / "fraisier-myproj-webhook.service").write_text("[Service]\n")
 
         result = _run_install_sh(out, "pio")
@@ -453,18 +453,18 @@ class TestModeIsAFunctionOfTheConfigAlone:
         files = ScaffoldRenderer(config).render(dry_run=True)
 
         assert "fraisier-myproj-webhook.service" not in files
-        assert "fraisier-myproj-webhook-printoptim-dev.service" in files
-        assert "fraisier-myproj-webhook-printoptim-io.service" in files
+        assert "fraisier-myproj-webhook-acme-dev.service" in files
+        assert "fraisier-myproj-webhook-acme-io.service" in files
 
     def test_server_filter_narrows_which_slugs_not_the_mode(self, tmp_path):
         cfg_path = tmp_path / "fraises.yaml"
         cfg_path.write_text(_GLOBAL_SERVERS.format(out=tmp_path / "out"))
         config = FraisierConfig(cfg_path)
 
-        files = ScaffoldRenderer(config, server="printoptim-io").render(dry_run=True)
+        files = ScaffoldRenderer(config, server="acme-io").render(dry_run=True)
 
-        assert "fraisier-myproj-webhook-printoptim-io.service" in files
-        assert "fraisier-myproj-webhook-printoptim-dev.service" not in files
+        assert "fraisier-myproj-webhook-acme-io.service" in files
+        assert "fraisier-myproj-webhook-acme-dev.service" not in files
         assert "fraisier-myproj-webhook.service" not in files, (
             "a --server render wrote the host-agnostic name — that file is what "
             "goes stale and then gets installed on the wrong box (#325)"
@@ -474,8 +474,8 @@ class TestModeIsAFunctionOfTheConfigAlone:
         cfg_path = tmp_path / "fraises.yaml"
         cfg_path.write_text(
             _GLOBAL_SERVERS.format(out=tmp_path / "out")
-            .replace("    server: printoptim-dev\n", "")
-            .replace("    server: printoptim-io\n", "")
+            .replace("    server: acme-dev\n", "")
+            .replace("    server: acme-io\n", "")
         )
         config = FraisierConfig(cfg_path)
 
@@ -492,9 +492,7 @@ class TestModeIsAFunctionOfTheConfigAlone:
         config = FraisierConfig(cfg_path)
 
         unfiltered = ScaffoldRenderer(config).render(dry_run=True)
-        filtered = ScaffoldRenderer(config, server="printoptim-dev").render(
-            dry_run=True
-        )
+        filtered = ScaffoldRenderer(config, server="acme-dev").render(dry_run=True)
 
         def slugged(files):
             return {f for f in files if f.startswith("fraisier-myproj-webhook")}
@@ -519,8 +517,8 @@ class TestTheMachineToUnitMapReachesTheContext:
         config = FraisierConfig(cfg_path)
 
         assert _build_context(config)["machine_webhook_map"] == {
-            "pdev": "fraisier-myproj-webhook-printoptim-dev.service",
-            "pio": "fraisier-myproj-webhook-printoptim-io.service",
+            "pdev": "fraisier-myproj-webhook-acme-dev.service",
+            "pio": "fraisier-myproj-webhook-acme-io.service",
         }
 
     def test_single_host_mode_has_no_map(self, tmp_path):
@@ -530,8 +528,8 @@ class TestTheMachineToUnitMapReachesTheContext:
         cfg_path = tmp_path / "fraises.yaml"
         cfg_path.write_text(
             _GLOBAL_SERVERS.format(out=tmp_path / "out")
-            .replace("    server: printoptim-dev\n", "")
-            .replace("    server: printoptim-io\n", "")
+            .replace("    server: acme-dev\n", "")
+            .replace("    server: acme-io\n", "")
         )
         config = FraisierConfig(cfg_path)
 
@@ -553,9 +551,9 @@ class TestServerSetupDoesNotDropItsServer:
         cfg_path.write_text(_GLOBAL_SERVERS.format(out=tmp_path / "out"))
         config = FraisierConfig(cfg_path)
 
-        setup = ServerSetup(config, _NullRunner(), server="printoptim-io")
+        setup = ServerSetup(config, _NullRunner(), server="acme-io")
 
-        assert setup._renderer.server == "printoptim-io"
+        assert setup._renderer.server == "acme-io"
 
     def test_the_plan_installs_the_unit_the_render_wrote(self, tmp_path):
         from fraisier.setup import ServerSetup
@@ -564,7 +562,7 @@ class TestServerSetupDoesNotDropItsServer:
         cfg_path.write_text(_GLOBAL_SERVERS.format(out=tmp_path / "out"))
         config = FraisierConfig(cfg_path)
 
-        setup = ServerSetup(config, _NullRunner(), server="printoptim-io")
+        setup = ServerSetup(config, _NullRunner(), server="acme-io")
         rendered = setup._renderer.render()
         (action,) = setup._plan_webhook_service()
         source = Path(action.command[-2])
@@ -572,7 +570,7 @@ class TestServerSetupDoesNotDropItsServer:
         assert source.name in rendered, (
             f"the plan copies {source.name} but the render wrote {rendered}"
         )
-        assert source.name == "fraisier-myproj-webhook-printoptim-io.service"
+        assert source.name == "fraisier-myproj-webhook-acme-io.service"
         assert (
             action.command[-1] == "/etc/systemd/system/fraisier-myproj-webhook.service"
         )
@@ -589,7 +587,7 @@ class TestStaleWebhookUnitsAreSweptFromTheTree:
 
     def test_unit_for_a_removed_server_is_deleted(self, tmp_path):
         _, out = _render(tmp_path, _GLOBAL_SERVERS)
-        orphan = out / "fraisier-myproj-webhook-printoptim-old.service"
+        orphan = out / "fraisier-myproj-webhook-acme-old.service"
         orphan.write_text("[Service]\n")
 
         _render(tmp_path, _GLOBAL_SERVERS)
@@ -608,10 +606,10 @@ class TestStaleWebhookUnitsAreSweptFromTheTree:
 
     def test_a_filtered_render_does_not_sweep_other_hosts_units(self, tmp_path):
         _, out = _render(tmp_path, _GLOBAL_SERVERS)
-        other = out / "fraisier-myproj-webhook-printoptim-dev.service"
+        other = out / "fraisier-myproj-webhook-acme-dev.service"
         assert other.exists()
 
-        _render(tmp_path, _GLOBAL_SERVERS, server="printoptim-io")
+        _render(tmp_path, _GLOBAL_SERVERS, server="acme-io")
 
         assert other.exists(), (
             "a --server render deleted another host's unit — the state dir "
@@ -619,11 +617,11 @@ class TestStaleWebhookUnitsAreSweptFromTheTree:
         )
 
     def test_slugged_leftovers_are_deleted_in_single_host_mode(self, tmp_path):
-        single_host = _GLOBAL_SERVERS.replace(
-            "    server: printoptim-dev\n", ""
-        ).replace("    server: printoptim-io\n", "")
+        single_host = _GLOBAL_SERVERS.replace("    server: acme-dev\n", "").replace(
+            "    server: acme-io\n", ""
+        )
         _, out = _render(tmp_path, single_host)
-        leftover = out / "fraisier-myproj-webhook-printoptim-dev.service"
+        leftover = out / "fraisier-myproj-webhook-acme-dev.service"
         leftover.write_text("[Service]\n")
 
         _render(tmp_path, single_host)
@@ -769,7 +767,7 @@ class TestDoctorReadsTheInstalledUnitAgainstTheHostedTrees:
     def _pretend_host_is(self, monkeypatch, machine: str):
         monkeypatch.setattr(
             "fraisier.doctor._resolve_local_server",
-            lambda _config: {"pdev": "printoptim-dev", "pio": "printoptim-io"}[machine],
+            lambda _config: {"pdev": "acme-dev", "pio": "acme-io"}[machine],
         )
 
     def test_registered(self):
@@ -903,7 +901,7 @@ class TestOptInActiveSandboxProbe:
 
         monkeypatch.setattr("fraisier.doctor.os.geteuid", lambda: 0)
         monkeypatch.setattr(
-            "fraisier.doctor._resolve_local_server", lambda _config: "printoptim-io"
+            "fraisier.doctor._resolve_local_server", lambda _config: "acme-io"
         )
         seen: list[list[str]] = []
         monkeypatch.setattr(
@@ -927,7 +925,7 @@ class TestOptInActiveSandboxProbe:
 
         monkeypatch.setattr("fraisier.doctor.os.geteuid", lambda: 0)
         monkeypatch.setattr(
-            "fraisier.doctor._resolve_local_server", lambda _config: "printoptim-io"
+            "fraisier.doctor._resolve_local_server", lambda _config: "acme-io"
         )
         monkeypatch.setattr(
             "fraisier.doctor._run_sandbox_probe",
@@ -1017,7 +1015,7 @@ class TestEveryEnvironmentResolvesToExactlyOneHost:
         with pytest.raises(ValueError) as exc:
             ScaffoldRenderer(config).render()
 
-        assert "printoptim-dev" in str(exc.value), str(exc.value)
+        assert "acme-dev" in str(exc.value), str(exc.value)
 
 
 class TestTheInvariantSweep:
@@ -1126,7 +1124,7 @@ class TestTheActualDeployPathChain:
             "the deploy path regenerated and the installer took nothing — "
             f"this is #325 verbatim. stdout: {install.stdout}"
         )
-        assert source.name == "fraisier-myproj-webhook-printoptim-io.service"
+        assert source.name == "fraisier-myproj-webhook-acme-io.service"
 
         paths = _rw_paths((state_dir / source.name).read_text())
         for tree in _PROD_TREES:
@@ -1142,7 +1140,7 @@ class TestTheActualDeployPathChain:
         assert install.returncode == 0, install.stderr
         source = _installed_webhook_source(install)
         assert source is not None
-        assert source.name == "fraisier-myproj-webhook-printoptim-dev.service"
+        assert source.name == "fraisier-myproj-webhook-acme-dev.service"
 
         paths = _rw_paths((state_dir / source.name).read_text())
         for tree in _DEV_TREES + _STAGING_TREES:

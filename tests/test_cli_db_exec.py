@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from fraisier.cli.main import main
 
-_DB_NAME = "printoptim_db_production"
+_DB_NAME = "acme_db_production"
 _ADMIN_URL = "postgresql://postgres@localhost/postgres"
 
 

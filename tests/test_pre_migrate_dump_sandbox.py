@@ -9,7 +9,7 @@ closed**.
 
 Invisible to preflight: the path is writable from a login shell, and only a
 write from inside the unit's sandbox reveals it. First signal was a failed
-production deploy (printoptim.io, 2026-08-01).
+production deploy (acme.io, 2026-08-01).
 
 Note the key is `output_dir`, not `dir` as the issue text says.
 """

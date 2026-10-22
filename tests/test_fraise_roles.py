@@ -8,6 +8,7 @@ rendered a uvicorn unit on port 8000 for fraises that serve nothing (#432).
 from __future__ import annotations
 
 import itertools
+import os
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,13 @@ from fraisier.fraise_roles import fraise_migrates, fraise_serves
 from fraisier.runners import LocalRunner
 
 _REPO = Path(__file__).resolve().parent.parent
-_PRINTOPTIM = Path.home() / "code" / "printoptim_backend" / "fraises.yaml"
+
+
+def _extra_configs() -> list[Path]:
+    """Real downstream configs to check too, listed in ``FRAISIER_EXTRA_CONFIGS``."""
+    raw = os.environ.get("FRAISIER_EXTRA_CONFIGS", "")
+    return [Path(p) for p in raw.split(os.pathsep) if p]
+
 
 _DATABASE = {"name": "db", "strategy": "migrate"}
 _SERVICE = {"exec": "bin/serve"}
@@ -91,8 +98,7 @@ def test_an_empty_service_block_does_not_serve() -> None:
 
 def _config_paths() -> list[Path]:
     paths = [_REPO / "fraises.yaml"]
-    if _PRINTOPTIM.is_file():
-        paths.append(_PRINTOPTIM)
+    paths.extend(_extra_configs())
     return [p for p in paths if p.is_file()]
 
 

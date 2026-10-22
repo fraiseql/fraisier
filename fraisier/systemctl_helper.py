@@ -9,7 +9,7 @@ Protocol
 --------
 Request (one JSON line + newline)::
 
-    {"action": "stop", "service": "api.printoptim.dev.service"}
+    {"action": "stop", "service": "api.acme.dev.service"}
 
 Actions: ``start``, ``stop``, ``restart``, ``enable``, ``is-active`` — each
 takes a ``service`` that must appear in the allowlist — plus ``daemon-reload``,
@@ -218,7 +218,7 @@ def main() -> None:
 
     Allowed services are passed as positional arguments::
 
-        fraisier-systemctl-helper api.printoptim.dev.service api.printoptim.st.service
+        fraisier-systemctl-helper api.acme.dev.service api.acme.st.service
 
     The socket file descriptor is provided by systemd via ``LISTEN_FDS``
     (fd 3 = first socket, ``Accept=no``).

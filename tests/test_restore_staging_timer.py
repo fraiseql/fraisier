@@ -5,7 +5,7 @@ string is assigned, so two non-empty assignments give two triggers. The template
 carried both `OnCalendar=daily` (00:00) and `OnCalendar=*-*-* 02:00:00` under a
 comment promising 2 AM, so it fired twice a day.
 
-That was not merely redundant. On printoptim.dev (2026-07-30) the undocumented
+That was not merely redundant. On acme.dev (2026-07-30) the undocumented
 midnight fire landed on an in-flight deploy and killed it — the other half of
 that collision is the missing deployment lock (#310).
 """

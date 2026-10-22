@@ -12,6 +12,7 @@ shape, so a new shape cannot slip past.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,13 @@ from fraisier.runners import LocalRunner
 from fraisier.scaffold.renderer import ScaffoldRenderer
 
 _REPO = Path(__file__).resolve().parent.parent
-_PRINTOPTIM = Path.home() / "code" / "printoptim_backend" / "fraises.yaml"
+
+
+def _extra_configs() -> list[Path]:
+    """Real downstream configs to check too, listed in ``FRAISIER_EXTRA_CONFIGS``."""
+    raw = os.environ.get("FRAISIER_EXTRA_CONFIGS", "")
+    return [Path(p) for p in raw.split(os.pathsep) if p]
+
 
 # Every way a scheduled/backup fraise can name a timer: env level (the flat
 # shape) and per job, for both types.
@@ -100,8 +107,7 @@ def _real_configs() -> list[Path]:
         _REPO / "fraises.example.yaml",
         *sorted((_REPO / "examples").glob("*/fraises.yaml")),
     ]
-    if _PRINTOPTIM.is_file():
-        paths.append(_PRINTOPTIM)
+    paths.extend(_extra_configs())
     return [p for p in paths if p.is_file()]
 
 
