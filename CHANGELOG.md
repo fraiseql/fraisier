@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `file_copy` (default) or `wal_log`; `wal_log` runs the old `createdb -T`. Below
   PostgreSQL 15 the strategy is omitted, decided on the connection that copies. See
   "Template copies" in `docs/deployment-guide.md`.
+- **ruff 0.17.1** in both the pre-commit hook and `uv.lock`
+  ([#478](https://github.com/fraiseql/fraisier/pull/478) moved only the hook, which
+  `tests/test_ruff_pin.py` refuses). No code change: both ruff gates are clean.
 
 ### Upgrade note
 
