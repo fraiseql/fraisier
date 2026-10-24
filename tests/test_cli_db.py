@@ -723,6 +723,43 @@ class TestDbRestore:
         assert result.exit_code == 0, result.output
         assert mock_init.call_args[0][0].template_strategy == expected
 
+    @pytest.mark.parametrize(
+        ("restore_extra", "expected"),
+        [({"create_template": True}, "auto"), ({"template": "always"}, "always")],
+    )
+    def test_db_restore_passes_the_template_mode(
+        self, runner, restore_config, restore_extra, expected
+    ):
+        """#481: restore.template reaches RestoreConfig."""
+        db_cfg = restore_config.get_fraise_environment.return_value["database"]
+        db_cfg["restore"].update(restore_extra)
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=0,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+            schema_floor=None,
+            unchecked_schemas=(),
+            template=None,
+        )
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.__init__",
+                return_value=None,
+            ) as mock_init,
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch("fraisier.systemd.SystemdServiceManager"),
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 0, result.output
+        assert mock_init.call_args[0][0].template_mode == expected
+
     def test_db_restore_skips_external_db(self, runner, restore_config):
         """db restore skips when external_db is true."""
         with patch("fraisier.dbops.guard.is_external_db", return_value=True):

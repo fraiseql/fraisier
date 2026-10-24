@@ -1,0 +1,55 @@
+{
+  "ok": true,
+  "window_safe": true,
+  "summary": {
+    "errors": 0,
+    "warnings": 1,
+    "info": 0,
+    "migrations_checked": 2
+  },
+  "issues": [
+    {
+      "severity": "warning",
+      "code": "PFLIGHT_NON_TRANSACTIONAL",
+      "message": "Migration 002 (idx) has non-transactional statement(s): CREATE INDEX CONCURRENTLY: t_id.",
+      "migration": "002",
+      "file": "002_idx.up.sql",
+      "line": null,
+      "actionable": "Run with --allow-non-transactional to apply it in autocommit, or split the statement out of the transactional migration.",
+      "details": {
+        "statements": [
+          "CREATE INDEX CONCURRENTLY: t_id"
+        ]
+      }
+    }
+  ],
+  "change_set": {
+    "contract_version": 1,
+    "changes": [
+      {
+        "kind": "create_table",
+        "object": "public.t",
+        "migration": "001",
+        "tier": "additive",
+        "detail": "CREATE TABLE"
+      },
+      {
+        "kind": "create_index",
+        "object": "public.t.t_id",
+        "migration": "002",
+        "tier": "additive",
+        "detail": "CREATE INDEX CONCURRENTLY"
+      }
+    ]
+  },
+  "scope": "pending",
+  "ledger": {
+    "table": "tb_confiture",
+    "exists": false
+  },
+  "command": "migrate preflight",
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  }
+}

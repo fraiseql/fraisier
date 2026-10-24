@@ -13,6 +13,12 @@ from typing import TYPE_CHECKING, Any
 from fraisier.config.schema import PreflightConfig
 from fraisier.dbops.confiture import migrate_down, migrate_up
 from fraisier.dbops.operations import DEFAULT_TEMPLATE_STRATEGY
+from fraisier.dbops.template_rule import (
+    TemplateDecision,
+    TemplateMode,
+    decide_template,
+    read_pending_preflight,
+)
 
 from ._base import Strategy, StrategyResult
 from ._restore_sources import DumpSource, PgBackRestSource
@@ -36,6 +42,9 @@ class RestoreConfig:
     max_age_hours: float = 48.0
     target_owner: str | None = None
     create_template: bool = False
+    #: ``restore.template`` (#481): ``auto``, ``always`` or ``never``. ``None``
+    #: derives it from ``create_template`` — see :attr:`template_mode`.
+    template: TemplateMode | None = None
     template_name: str | None = None
     #: ``restore.template_strategy`` (#479): how step 8 and the template
     #: rollback copy, ``file_copy`` or ``wal_log``.
@@ -54,6 +63,17 @@ class RestoreConfig:
     #: The root helper's socket, derived from the project, fraise and environment
     #: (:func:`fraisier.naming.pgbackrest_helper_socket_path`).
     pgbackrest_socket: str | None = None
+
+    @property
+    def template_mode(self) -> TemplateMode:
+        """``restore.template``, or ``auto`` for ``create_template: true``.
+
+        Without either key there is no template, as there never was: ``auto``
+        never gives a host a database copy it did not ask for.
+        """
+        if self.template is not None:
+            return self.template
+        return "auto" if self.create_template else "never"
 
 
 class RestoreMigrateStrategy(Strategy):
@@ -345,8 +365,11 @@ class RestoreMigrateStrategy(Strategy):
         restore_secs = restored.restore_secs
         derived = restored.schema_floor
 
-        # Step 8: Create rollback template
-        if cfg.create_template:
+        # Step 8: Create rollback template, when this run needs one (#481).
+        template = self._decide_template(
+            confiture_config, migrations_dir, database_url=database_url
+        )
+        if template.take:
             template_name = self._resolved_template_name
             # Drop existing template if any, disconnect from source, create.
             # clear_template_flag: Postgres refuses to drop a database with
@@ -490,7 +513,28 @@ class RestoreMigrateStrategy(Strategy):
             schema_floor=derived,
             unchecked_schemas=restored.unchecked_schemas,
             actuation=actuation,
+            template=template,
         )
+
+    def _decide_template(
+        self,
+        confiture_config: Path,
+        migrations_dir: Path,
+        *,
+        database_url: str | None,
+    ) -> TemplateDecision:
+        """Step 8's decision, read off the restored database's pending set."""
+        payload = None
+        if self._config.template_mode == "auto":
+            payload, error = read_pending_preflight(
+                confiture_config,
+                migrations_dir,
+                database_url=database_url,
+                project_dir=self._project_dir,
+            )
+            if error:
+                log.warning("%s", error)
+        return decide_template(self._config.template_mode, payload)
 
     def rollback(
         self,

@@ -1,0 +1,53 @@
+{
+  "ok": true,
+  "window_safe": true,
+  "summary": {
+    "errors": 0,
+    "warnings": 1,
+    "info": 0,
+    "migrations_checked": 2
+  },
+  "issues": [
+    {
+      "severity": "warning",
+      "code": "PFLIGHT_DESTRUCTIVE_GATED",
+      "message": "Migration 002 (add_w) is gated as destructive: data is lost when it applies.",
+      "migration": "002",
+      "file": "002_add_w.up.sql",
+      "line": null,
+      "actionable": "Review the migration, then run migrate up --allow-destructive to apply it.",
+      "details": {
+        "irreversible": []
+      }
+    }
+  ],
+  "change_set": {
+    "contract_version": 1,
+    "changes": [
+      {
+        "kind": "create_table",
+        "object": "public.t",
+        "migration": "001",
+        "tier": "additive",
+        "detail": "CREATE TABLE"
+      },
+      {
+        "kind": "add_column",
+        "object": "public.t.w",
+        "migration": "002",
+        "tier": "additive",
+        "detail": "ADD COLUMN w NULL"
+      }
+    ]
+  },
+  "scope": "pending",
+  "ledger": {
+    "table": "tb_confiture",
+    "exists": false
+  },
+  "command": "migrate preflight",
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  }
+}

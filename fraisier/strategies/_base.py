@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from fraisier.dbops.receipt import ActuationCheck
+    from fraisier.dbops.template_rule import TemplateDecision
 
 
 @dataclass
@@ -44,6 +45,9 @@ class StrategyResult:
     ``ACTUATED`` is proof, and it is never a reason to fail a restore: the
     receipt is bookkeeping written after every real check has already passed.
     """
+
+    template: TemplateDecision | None = None
+    """Whether step 8 took a rollback template, and why (#481)."""
 
 
 @dataclass
