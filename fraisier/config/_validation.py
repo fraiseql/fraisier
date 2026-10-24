@@ -28,6 +28,7 @@ from fraisier.config.schema import (
 )
 from fraisier.dbops._strategies import ADMIN_STRATEGIES
 from fraisier.dbops.operations import TEMPLATE_STRATEGIES
+from fraisier.dbops.template_rule import TEMPLATE_MODES
 from fraisier.errors import ConfigurationError, ValidationError
 
 _GIT_URL_RE = re.compile(
@@ -488,6 +489,7 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
         errors.extend(
             _template_strategy_errors(fraise_name, "restore.template_strategy", restore)
         )
+        errors.extend(_restore_template_errors(fraise_name, restore))
         pref = restore.get("preferred_compression")
         if pref is not None and not isinstance(pref, LazyEnv):
             valid_algos = {"zstd", "lz4", "gzip", "none"}
@@ -508,6 +510,37 @@ def _template_strategy_errors(fraise_name: str, key: str, block: dict) -> list[s
         f"{fraise_name}: {key} must be one of {', '.join(TEMPLATE_STRATEGIES)}, "
         f"got {value!r}"
     ]
+
+
+def _restore_template_errors(fraise_name: str, restore: dict) -> list[str]:
+    """``restore.template`` (#481), and refusing a ``create_template`` it contradicts.
+
+    ``create_template: false`` has always meant no template, and ``true`` a
+    template; a ``template`` that says otherwise is refused rather than resolved,
+    so neither key silently loses.
+    """
+    value = restore.get("template")
+    if value is None:
+        return []
+    if value not in TEMPLATE_MODES:
+        return [
+            f"{fraise_name}: restore.template must be one of "
+            f"{', '.join(TEMPLATE_MODES)}, got {value!r}"
+        ]
+    create = restore.get("create_template")
+    if create is False and value != "never":
+        return [
+            f"{fraise_name}: restore.template is {value!r} but "
+            "restore.create_template: false forbids a template. Remove "
+            "create_template, or set template: never"
+        ]
+    if create is True and value == "never":
+        return [
+            f"{fraise_name}: restore.template is 'never' but "
+            "restore.create_template: true asks for one. Remove create_template, "
+            "or set template: auto or always"
+        ]
+    return []
 
 
 def _validate_pgbackrest_source(fraise_name: str, restore: dict) -> list[str]:

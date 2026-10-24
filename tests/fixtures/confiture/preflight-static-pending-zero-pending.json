@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "window_safe": true,
+  "summary": {
+    "errors": 0,
+    "warnings": 0,
+    "info": 0,
+    "migrations_checked": 0
+  },
+  "issues": [],
+  "change_set": {
+    "contract_version": 1,
+    "changes": []
+  },
+  "scope": "pending",
+  "ledger": {
+    "table": "tb_confiture",
+    "exists": true
+  },
+  "command": "migrate preflight",
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  }
+}

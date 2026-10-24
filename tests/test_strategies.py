@@ -1074,7 +1074,7 @@ class TestRestoreMigrateStrategy:
         mock_restore.return_value = RestoreResult(success=True)
         mock_up.return_value = MigrationResult(success=True, steps_applied=0)
 
-        strategy = _make_strategy(create_template=True, template_name="tpl_staging")
+        strategy = _make_strategy(template="always", template_name="tpl_staging")
         strategy.execute(CONFIG, migrations_dir=MDIR)
 
         template_drop_calls = [
@@ -1116,7 +1116,7 @@ class TestRestoreMigrateStrategy:
         mock_up.return_value = MigrationResult(success=True, steps_applied=0)
 
         strategy = _make_strategy(
-            create_template=True, template_name="tpl_staging", **overrides
+            template="always", template_name="tpl_staging", **overrides
         )
         strategy.execute(CONFIG, migrations_dir=MDIR)
 
@@ -1160,7 +1160,7 @@ class TestRestoreMigrateStrategy:
 
         mock_drop.side_effect = drop_side_effect
 
-        strategy = _make_strategy(create_template=True, template_name="tpl_staging")
+        strategy = _make_strategy(template="always", template_name="tpl_staging")
         with pytest.raises(DatabaseError, match="Failed to drop template"):
             strategy.execute(CONFIG, migrations_dir=MDIR)
 
@@ -1313,6 +1313,25 @@ class TestGetStrategy:
             restore_config={**_SAMPLE_RESTORE_CONFIG, **restore_extra},
         )
         assert s._config.template_strategy == expected  # ty: ignore[unresolved-attribute]
+
+    @pytest.mark.parametrize(
+        ("restore_extra", "expected"),
+        [
+            ({}, "never"),
+            ({"create_template": True}, "auto"),
+            ({"create_template": True, "template": "always"}, "always"),
+            ({"template": "never"}, "never"),
+        ],
+    )
+    def test_restore_migrate_reads_the_template_mode(self, restore_extra, expected):
+        """#481: ``restore.template``, else ``auto`` for ``create_template: true``."""
+        s = get_strategy(
+            "restore_migrate",
+            db_name="staging_db",
+            admin_url=_ADMIN_URL,
+            restore_config={**_SAMPLE_RESTORE_CONFIG, **restore_extra},
+        )
+        assert s._config.template_mode == expected  # ty: ignore[unresolved-attribute]
 
     def test_rebuild_with_template_name(self):
         s = get_strategy("rebuild", create_template=True, template_name="snap_myapp")

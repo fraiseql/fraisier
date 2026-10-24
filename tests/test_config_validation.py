@@ -532,6 +532,67 @@ class TestTemplateStrategyValidation:
             eager_load(config_file)
 
 
+_RESTORE_TEMPLATE_ENV = """
+fraises:
+  my_api:
+    type: api
+    environments:
+      staging:
+        app_path: /srv/myapi
+        database:
+          name: mydb
+          strategy: restore_migrate
+          admin_url: "postgresql:///postgres?host=/var/run/postgresql"
+          database_url: "postgresql:///mydb?host=/var/run/postgresql"
+          restore:
+            backup_dir: /var/backups
+{extra}
+"""
+
+
+class TestRestoreTemplateValidation:
+    """#481: ``restore.template`` and how it sits beside ``create_template``."""
+
+    @staticmethod
+    def _load(tmp_path, *lines: str):
+        extra = "\n".join(f"            {line}" for line in lines)
+        eager_load(_write_config(tmp_path, _RESTORE_TEMPLATE_ENV.format(extra=extra)))
+
+    @pytest.mark.parametrize("value", ["auto", "always", "never"])
+    def test_accepts_each_mode(self, tmp_path, value):
+        self._load(tmp_path, f"template: {value}")
+
+    @pytest.mark.parametrize("value", ["AUTO", "true", "sometimes"])
+    def test_rejects_anything_else(self, tmp_path, value):
+        with pytest.raises(
+            ValidationError,
+            match=r"restore\.template must be one of auto, always, never",
+        ):
+            self._load(tmp_path, f"template: {value}")
+
+    @pytest.mark.parametrize("value", ["auto", "always"])
+    def test_refuses_a_template_that_create_template_false_forbids(
+        self, tmp_path, value
+    ):
+        with pytest.raises(ValidationError, match=r"create_template: false"):
+            self._load(tmp_path, "create_template: false", f"template: {value}")
+
+    def test_refuses_never_beside_create_template_true(self, tmp_path):
+        with pytest.raises(ValidationError, match=r"create_template: true"):
+            self._load(tmp_path, "create_template: true", "template: never")
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ("create_template: false", "template: never"),
+            ("create_template: true", "template: auto"),
+            ("create_template: true", "template: always"),
+        ],
+    )
+    def test_accepts_agreeing_pairs(self, tmp_path, lines):
+        self._load(tmp_path, *lines)
+
+
 class TestPostMigrateValidation:
     """`database.post_migrate` schema validation (#204 PR A)."""
 

@@ -764,6 +764,7 @@ def db_restore(
                     max_age_hours=float(restore_cfg.get("max_age_hours", 48.0)),
                     target_owner=restore_cfg.get("target_owner"),
                     create_template=bool(restore_cfg.get("create_template", False)),
+                    template=restore_cfg.get("template"),
                     template_name=restore_cfg.get("template_name"),
                     template_strategy=restore_cfg.get(
                         "template_strategy", DEFAULT_TEMPLATE_STRATEGY

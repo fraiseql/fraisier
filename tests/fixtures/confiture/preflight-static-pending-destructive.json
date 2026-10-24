@@ -1,0 +1,67 @@
+{
+  "ok": true,
+  "window_safe": false,
+  "summary": {
+    "errors": 0,
+    "warnings": 2,
+    "info": 0,
+    "migrations_checked": 2
+  },
+  "issues": [
+    {
+      "severity": "warning",
+      "code": "PFLIGHT_DESTRUCTIVE_GATED",
+      "message": "Migration 002 (drop_v) is gated as destructive: data is lost when it applies.",
+      "migration": "002",
+      "file": "002_drop_v.up.sql",
+      "line": null,
+      "actionable": "Review the migration, then run migrate up --allow-destructive to apply it.",
+      "details": {
+        "irreversible": [
+          "the values in t.v are lost"
+        ]
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "PFLIGHT_REPLICA_DROP_COLUMN",
+      "message": "readers on the old schema still SELECT the column Multi-step fix: deprecate (stop using) \u2192 wait one release \u2192 drop the column.",
+      "migration": "t",
+      "file": "002_drop_v.up.sql",
+      "line": null,
+      "actionable": "deprecate (stop using) \u2192 wait one release \u2192 drop the column",
+      "details": {
+        "operation": "DropColumn"
+      }
+    }
+  ],
+  "change_set": {
+    "contract_version": 1,
+    "changes": [
+      {
+        "kind": "create_table",
+        "object": "public.t",
+        "migration": "001",
+        "tier": "additive",
+        "detail": "CREATE TABLE"
+      },
+      {
+        "kind": "drop_column",
+        "object": "public.t.v",
+        "migration": "002",
+        "tier": "irreversible",
+        "detail": "DROP COLUMN v"
+      }
+    ]
+  },
+  "scope": "pending",
+  "ledger": {
+    "table": "tb_confiture",
+    "exists": false
+  },
+  "command": "migrate preflight",
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  }
+}

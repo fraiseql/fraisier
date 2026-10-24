@@ -1,0 +1,62 @@
+{
+  "ok": false,
+  "window_safe": false,
+  "summary": {
+    "errors": 1,
+    "warnings": 1,
+    "info": 0,
+    "migrations_checked": 2
+  },
+  "issues": [
+    {
+      "severity": "error",
+      "code": "PFLIGHT_UNPARSEABLE",
+      "message": "Migration 002 (broken) could not be parsed: syntax error at or near \"TABLEX\", at index 6",
+      "migration": "002",
+      "file": "002_broken.up.sql",
+      "line": 1,
+      "actionable": "Fix the SQL syntax: confiture cannot analyse a migration PostgreSQL's parser rejects, and cannot certify it window-safe.",
+      "details": {}
+    },
+    {
+      "severity": "warning",
+      "code": "PFLIGHT_REPLICA_UNCLASSIFIED",
+      "message": "002_broken.up.sql: pglast could not parse the migration, so its replica forward-compatibility cannot be classified",
+      "migration": null,
+      "file": "002_broken.up.sql",
+      "line": null,
+      "actionable": "fix the SQL syntax so the classifier can read the migration",
+      "details": {
+        "operation": "Unparseable"
+      }
+    }
+  ],
+  "change_set": {
+    "contract_version": 1,
+    "changes": [
+      {
+        "kind": "create_table",
+        "object": "public.t",
+        "migration": "001",
+        "tier": "additive",
+        "detail": "CREATE TABLE"
+      },
+      {
+        "kind": "unparseable",
+        "object": "002_broken.up.sql",
+        "migration": "002",
+        "detail": "pglast could not parse 002_broken.up.sql: syntax error at or near \"TABLEX\", at index 6"
+      }
+    ]
+  },
+  "scope": "pending",
+  "ledger": {
+    "table": "tb_confiture",
+    "exists": false
+  },
+  "command": "migrate preflight",
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  }
+}
