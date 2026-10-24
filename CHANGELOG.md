@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restore receipt (`template_taken`, `template_reason`, shown by `fraisier db
   receipt`) say whether the copy was taken and which migration forced it. See
   "When a restore takes its rollback template" in `docs/deployment-guide.md`.
+- **ruff 0.17.2** in both the pre-commit hook and `uv.lock`. No code change:
+  both ruff gates are clean.
 
 ### Fixed
 
