@@ -94,7 +94,8 @@ fraises:
             max_age_hours: 48                 # reject backups older than this
             max_actuation_age_hours: 26       # `db receipt`: how recently a restore must have run
             target_owner: myapp_user          # fix ownership after restore
-            create_template: true             # create rollback template before migrating
+            create_template: true             # a rollback template when a migration needs one
+            # template: auto                  # auto (default with create_template) | always | never
             template_name: myapp_staging_template
             min_tables: 300                   # post-restore validation
             jobs: 4                           # parallel pg_restore jobs (default: 1)

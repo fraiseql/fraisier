@@ -164,6 +164,38 @@ def test_a_receipt_recording_no_schema_reads_back_as_none(receipt_db):
         assert stored.fetchone()[0] is None
 
 
+def test_the_template_decision_survives_the_round_trip(receipt_db):
+    """#481: taken or not, and the sentence saying which migration forced it."""
+    from dataclasses import replace
+
+    from fraisier.dbops.receipt import verify_actuation, write_receipt
+
+    url = receipt_db.dsn("postgres")
+    receipt = replace(
+        _receipt("run-one"),
+        template_taken=True,
+        template_reason="002 is unclassified (python_migration)",
+    )
+    assert write_receipt(_DB, connection_url=url, receipt=receipt) is None
+
+    check = verify_actuation(_DB, connection_url=url, expected_run_id="run-one")
+    assert check.receipt is not None
+    assert check.receipt.template_taken is True
+    assert check.receipt.template_reason == "002 is unclassified (python_migration)"
+
+
+def test_a_receipt_without_a_decision_reads_back_as_none(receipt_db):
+    from fraisier.dbops.receipt import verify_actuation, write_receipt
+
+    url = receipt_db.dsn("postgres")
+    write_receipt(_DB, connection_url=url, receipt=_receipt("run-one"))
+
+    check = verify_actuation(_DB, connection_url=url, expected_run_id="run-one")
+    assert check.receipt is not None
+    assert check.receipt.template_taken is None
+    assert check.receipt.template_reason is None
+
+
 def test_a_receipt_predating_the_column_is_still_readable(receipt_db):
     """``CREATE TABLE IF NOT EXISTS`` never migrates, so the read must not care.
 

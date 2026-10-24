@@ -197,6 +197,14 @@ class TestTheRunLeavesAReceipt:
 
         assert writer.call_args.kwargs["receipt"].floor_schema is None
 
+    def test_the_receipt_records_whether_a_template_was_taken(self):
+        """#481: the run's own record of the step-8 decision, and why."""
+        writer, _, _ = _execute()
+
+        receipt = writer.call_args.kwargs["receipt"]
+        assert receipt.template_taken is False
+        assert receipt.template_reason == "restore.template is never"
+
     def test_the_result_carries_the_verified_receipt(self):
         _, _, result = _execute(verify_result=_actuated("tok-9"))
 

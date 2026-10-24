@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+from rich.markup import escape
 from rich.table import Table
 
 from . import _json
@@ -877,6 +878,18 @@ def db_restore(
             # alike to someone skimming a nightly log.
             _report_actuation(getattr(result, "actuation", None))
 
+            # Whether a failure after the migrations could be put back onto a
+            # copy, or only by `migrate down` (#481), and which migration said so.
+            from fraisier.dbops.template_rule import TemplateDecision
+
+            template = getattr(result, "template", None)
+            if isinstance(template, TemplateDecision):
+                console.print(
+                    f"  Rollback template: "
+                    f"{'taken' if template.take else 'not taken'} — "
+                    f"{escape(template.reason)}"
+                )
+
             if result.total_duration_seconds > 0:
                 console.print(
                     f"  Restore: {result.restore_duration_seconds:.1f}s"
@@ -1083,6 +1096,8 @@ def db_receipt(
                     "restored_at": receipt.restored_at.isoformat() if receipt else None,
                     "age_hours": receipt.age_hours if receipt else None,
                     "floor_schema": receipt.floor_schema if receipt else None,
+                    "template_taken": receipt.template_taken if receipt else None,
+                    "template_reason": receipt.template_reason if receipt else None,
                     # The schema is reported alongside the verdict because it is
                     # resolved rather than given: an operator reading
                     # UNVERIFIABLE needs to see which schema was looked in.
@@ -1105,6 +1120,12 @@ def db_receipt(
             f"{receipt.age_hours:.1f}h ago by run {receipt.run_id}"
         )
         console.print(f"  From backup: {receipt.backup_path}")
+        if receipt.template_taken is not None:
+            console.print(
+                f"  Rollback template: "
+                f"{'taken' if receipt.template_taken else 'not taken'} — "
+                f"{escape(receipt.template_reason or 'no reason recorded')}"
+            )
     elif check.verdict is ActuationVerdict.STALE:
         console.print(f"[red]Stale:[/red] {check.detail}")
         if receipt:

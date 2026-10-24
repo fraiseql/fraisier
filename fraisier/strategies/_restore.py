@@ -87,12 +87,12 @@ class RestoreMigrateStrategy(Strategy):
     5. DROP DATABASE IF EXISTS + CREATE DATABASE
     6. pg_restore --no-owner --no-acl
     7. REASSIGN OWNED to target_owner (if configured)
-    8. CREATE DATABASE template (if create_template=true)
+    8. CREATE DATABASE template, when ``restore.template`` asks for one (#481)
     9. confiture migrate up
     10. Validate table count >= min_tables (if configured)
     11. Start service (if service_name configured)
 
-    Rollback: template-based (instant) or migrate_down.
+    Rollback: onto the template when step 8 took one, else ``migrate down``.
     """
 
     def __init__(
@@ -263,6 +263,7 @@ class RestoreMigrateStrategy(Strategy):
         backup_bytes: int,
         run_id: str,
         floor_schema: str | None = None,
+        template: TemplateDecision | None = None,
     ) -> ActuationCheck:
         """Leave *run_id* in the restored database, then read it back.
 
@@ -305,6 +306,8 @@ class RestoreMigrateStrategy(Strategy):
             restored_at=datetime.now(UTC),
             age_seconds=0.0,
             floor_schema=floor_schema,
+            template_taken=template.take if template else None,
+            template_reason=template.reason if template else None,
         )
         failure = write_receipt(
             self._config.db_name,
@@ -371,6 +374,11 @@ class RestoreMigrateStrategy(Strategy):
         template = self._decide_template(
             confiture_config, migrations_dir, database_url=database_url
         )
+        log.info(
+            "Rollback template: %s — %s",
+            "taken" if template.take else "not taken",
+            template.reason,
+        )
         if template.take:
             template_name = self._resolved_template_name
             # Drop existing template if any, disconnect from source, create.
@@ -427,7 +435,7 @@ class RestoreMigrateStrategy(Strategy):
         # how many migrations applied, or the deployer rolls nothing back:
         # neither the template nor `migrate down` (#481).
         try:
-            actuation = self._check_and_start(prepared, run_id, derived)
+            actuation = self._check_and_start(prepared, run_id, derived, template)
         except DatabaseError as exc:
             if exc.steps_applied is None:
                 exc.steps_applied = result.steps_applied
@@ -467,6 +475,7 @@ class RestoreMigrateStrategy(Strategy):
         prepared: PreparedSource,
         run_id: str,
         derived: tuple[str, int] | None,
+        template: TemplateDecision,
     ) -> ActuationCheck:
         """Steps 10-11: the checks after ``migrate up``, the receipt, the start."""
         from fraisier.dbops.restore import validate_table_count
@@ -531,6 +540,7 @@ class RestoreMigrateStrategy(Strategy):
             prepared.backup_bytes,
             run_id,
             derived[0] if derived else None,
+            template,
         )
 
         # Step 11: Start service
