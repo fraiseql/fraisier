@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fraisier.errors import DeploymentError, HealthCheckError, MigrationError
+from fraisier.errors import (
+    DatabaseError,
+    DeploymentError,
+    HealthCheckError,
+)
 
 if TYPE_CHECKING:
     from fraisier.runners import CommandRunner
@@ -98,6 +102,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         self.git_repo = config.get("git_repo")
         self._bind_deploy_settings(config)
         self._migrations_applied: int = 0
+        #: The strategy that ran this deploy's migrations, which is the one that
+        #: knows how to undo them: whether a restore took a template is decided
+        #: per run (#481), not by the configuration.
+        self._executed_strategy: Any | None = None
         # The config snapshot the migration actually ran against, set by
         # `_run_strategy` and read by the drift gate (#395/#376).
         self._migrated_config: Path = Path()
@@ -1311,6 +1319,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         app_dir = Path(self.app_path) if self.app_path else None
         if app_dir and app_dir.is_dir():
             os.chdir(app_dir)
+        self._executed_strategy = strategy
         try:
             result = strategy.execute(
                 confiture_config,
@@ -1321,11 +1330,12 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 database_url=database_url,
                 hooks_config=hooks_config,
             )
-        except MigrationError as exc:
+        except DatabaseError as exc:
             # A batch that fails part-way has still applied — and committed —
             # everything before the failure. Record that count before the
             # exception escapes, or `_restore_previous_state` sees 0 and skips
-            # the DB rollback, leaving the schema half-migrated (#272).
+            # the DB rollback, leaving the schema half-migrated (#272). A restore
+            # that fails after its migrations committed says so too (#481).
             # `steps_applied is None` means the count is unknown; stay at 0 and
             # skip, rather than rolling back a guessed number of migrations.
             if exc.steps_applied:
@@ -1541,6 +1551,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             confiture_config, migrations_dir
         )
         hooks_config = self.database_config.get("hooks")
+        strategy = self._executed_strategy or strategy
         db_result = strategy.rollback(
             confiture_config,
             migrations_dir=migrations_dir,

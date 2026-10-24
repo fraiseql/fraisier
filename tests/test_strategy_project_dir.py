@@ -154,6 +154,7 @@ class TestTheDeployerNamesTheApp:
         deployer.database_config = {"strategy": strategy, "name": "acme"}
         deployer.app_path = app_path
         deployer.systemd_service = None
+        deployer._executed_strategy = None
         return deployer
 
     @pytest.mark.parametrize("strategy_name", ["apply", "migrate"])
@@ -172,10 +173,10 @@ class TestTheDeployerNamesTheApp:
         assert strategy._project_dir is None
 
     def test_the_rollback_path_builds_the_same_strategy(self):
-        """``_rollback_database`` re-resolves the strategy; it must match.
+        """With no strategy run yet, ``_rollback_database`` builds one; it must match.
 
-        It builds its own instance rather than reusing the one ``_run_strategy``
-        used, so "the deployer chdir'd earlier" was never going to cover it.
+        It builds its own instance when ``_run_strategy`` left none (#481 reuses
+        the one that ran), so "the deployer chdir'd earlier" never covers it.
         """
         deployer = self._deployer("/opt/acme/app")
         deployer._migrations_applied = 1

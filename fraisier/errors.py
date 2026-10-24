@@ -232,6 +232,12 @@ class DatabaseError(FrameworkError):
         "Run 'confiture migrate status' to inspect migration state."
     )
 
+    #: How many migrations this run had applied when it failed; ``None`` is
+    #: unknown, which callers treat as "do not attempt a DB rollback". Set by a
+    #: failure that comes after ``migrate up`` committed (#481), and by
+    #: :class:`MigrationError` for a batch that failed part-way (#272).
+    steps_applied: int | None = None
+
 
 class RestoreFailedClosed(DatabaseError):
     """A physical restore failed after the cluster had been stopped (#424).
