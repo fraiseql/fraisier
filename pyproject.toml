@@ -689,7 +689,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.14"
-version = "0.90.0"
+version = "0.91.0"
 
 [project.optional-dependencies]
 all-databases = [
