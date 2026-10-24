@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-10-24
+
 ### Changed
 
 - **A restore takes its rollback template only when a migration needs it**
@@ -24,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "When a restore takes its rollback template" in `docs/deployment-guide.md`.
 - **ruff 0.17.2** in both the pre-commit hook and `uv.lock`. No code change:
   both ruff gates are clean.
+- **CI's test service runs PostgreSQL 18.** GitHub's `ubuntu-latest` moved to
+  26.04, whose stock `pg_dump` is 18. Against the old `postgres:16` service every
+  dump carried `SET transaction_timeout`, which 16 refuses. Server and client are
+  a matched pair again in all three workflows.
 
 ### Fixed
 
