@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from fraisier.config.restore_source import PgBackRestSpec
     from fraisier.dbops.receipt import ActuationCheck
 
-    from ._restore_sources import RestoreSource
+    from ._restore_sources import PreparedSource, RestoreSource
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +124,9 @@ class RestoreMigrateStrategy(Strategy):
         self._source: RestoreSource = source or (
             PgBackRestSource(config) if config.pgbackrest else DumpSource(config)
         )
+        #: Whether step 8 of the last :meth:`execute` copied a template; ``None``
+        #: before any run, when only ``restore.template: always`` implies one.
+        self._template_taken: bool | None = None
 
     @property
     def _resolved_template_name(self) -> str:
@@ -338,7 +341,6 @@ class RestoreMigrateStrategy(Strategy):
             drop_db,
             terminate_backends,
         )
-        from fraisier.dbops.restore import validate_table_count
         from fraisier.errors import DatabaseError
 
         cfg = self._config
@@ -396,6 +398,9 @@ class RestoreMigrateStrategy(Strategy):
                     f"Failed to create template {template_name}: {stderr.strip()}",
                 )
             log.info("Created rollback template %s", template_name)
+        # What `rollback` consults: under `auto` the configuration no longer
+        # says whether this run has a template to roll back onto.
+        self._template_taken = template.take
 
         # Step 9: Migrate up
         t_migrate = time.monotonic()
@@ -417,6 +422,57 @@ class RestoreMigrateStrategy(Strategy):
             result.steps_applied,
             int(migration_secs * 1000),
         )
+
+        # Steps 10-11 run after `migrate up` committed. A failure there must say
+        # how many migrations applied, or the deployer rolls nothing back:
+        # neither the template nor `migrate down` (#481).
+        try:
+            actuation = self._check_and_start(prepared, run_id, derived)
+        except DatabaseError as exc:
+            if exc.steps_applied is None:
+                exc.steps_applied = result.steps_applied
+            raise
+
+        total_secs = time.monotonic() - t_total
+        log.info("Restore pipeline total: %dms", int(total_secs * 1000))
+
+        # Record Prometheus metrics
+        from fraisier.metrics import DeploymentMetrics
+
+        for phase, seconds in restored.phases.items():
+            DeploymentMetrics.restore_duration_seconds.labels(phase=phase).observe(
+                seconds
+            )
+        DeploymentMetrics.restore_duration_seconds.labels(phase="migration").observe(
+            migration_secs
+        )
+        DeploymentMetrics.restore_duration_seconds.labels(phase="total").observe(
+            total_secs
+        )
+
+        return StrategyResult(
+            success=True,
+            migrations_applied=result.steps_applied,
+            restore_duration_seconds=restore_secs,
+            migration_duration_seconds=migration_secs,
+            total_duration_seconds=total_secs,
+            schema_floor=derived,
+            unchecked_schemas=restored.unchecked_schemas,
+            actuation=actuation,
+            template=template,
+        )
+
+    def _check_and_start(
+        self,
+        prepared: PreparedSource,
+        run_id: str,
+        derived: tuple[str, int] | None,
+    ) -> ActuationCheck:
+        """Steps 10-11: the checks after ``migrate up``, the receipt, the start."""
+        from fraisier.dbops.restore import validate_table_count
+        from fraisier.errors import DatabaseError
+
+        cfg = self._config
 
         # Step 10: Validate table count
         if cfg.min_tables > 0:
@@ -487,34 +543,7 @@ class RestoreMigrateStrategy(Strategy):
                 ) from exc
             log.info("Started service %s", self._service_name)
 
-        total_secs = time.monotonic() - t_total
-        log.info("Restore pipeline total: %dms", int(total_secs * 1000))
-
-        # Record Prometheus metrics
-        from fraisier.metrics import DeploymentMetrics
-
-        for phase, seconds in restored.phases.items():
-            DeploymentMetrics.restore_duration_seconds.labels(phase=phase).observe(
-                seconds
-            )
-        DeploymentMetrics.restore_duration_seconds.labels(phase="migration").observe(
-            migration_secs
-        )
-        DeploymentMetrics.restore_duration_seconds.labels(phase="total").observe(
-            total_secs
-        )
-
-        return StrategyResult(
-            success=True,
-            migrations_applied=result.steps_applied,
-            restore_duration_seconds=restore_secs,
-            migration_duration_seconds=migration_secs,
-            total_duration_seconds=total_secs,
-            schema_floor=derived,
-            unchecked_schemas=restored.unchecked_schemas,
-            actuation=actuation,
-            template=template,
-        )
+        return actuation
 
     def _decide_template(
         self,
@@ -545,7 +574,10 @@ class RestoreMigrateStrategy(Strategy):
         database_url: str | None = None,
         hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
-        if self._config.create_template:
+        taken = self._template_taken
+        if taken is None:
+            taken = self._config.template_mode == "always"
+        if taken:
             from fraisier.dbops.templates import reset_from_template
 
             template_name = self._resolved_template_name

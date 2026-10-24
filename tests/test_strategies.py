@@ -1201,7 +1201,7 @@ class TestRestoreMigrateStrategy:
         self, mock_term, mock_drop, mock_create
     ):
         mock_drop.return_value = (0, "", "")
-        strategy = _make_strategy(create_template=True, template_name="staging_tmpl")
+        strategy = _make_strategy(template="always", template_name="staging_tmpl")
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
 
         assert result.success
@@ -1220,7 +1220,7 @@ class TestRestoreMigrateStrategy:
         self, mock_term, mock_drop, mock_create
     ):
         strategy = _make_strategy(
-            create_template=True,
+            template="always",
             template_name="staging_tmpl",
             template_strategy="wal_log",
         )
@@ -1228,12 +1228,24 @@ class TestRestoreMigrateStrategy:
 
         assert mock_create.call_args.kwargs["strategy"] == "wal_log"
 
+    @patch("fraisier.strategies._restore.migrate_down")
+    def test_a_strategy_that_never_ran_rolls_back_auto_with_migrate_down(
+        self, mock_down
+    ):
+        """#481: only ``always`` implies a template before step 8 has decided."""
+        mock_down.return_value = MigrationResult(success=True, steps_applied=2)
+        strategy = _make_strategy(create_template=True)
+        result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
+
+        assert result.success
+        assert mock_down.call_args.kwargs["steps"] == 2
+
     @patch("fraisier.dbops.templates.reset_from_template")
     def test_rollback_with_default_template_name(self, mock_reset):
         mock_reset.return_value = TemplateResult(
             success=True, template_name="template_staging_db"
         )
-        strategy = _make_strategy(create_template=True)
+        strategy = _make_strategy(template="always")
         result = strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
 
         assert result.success
@@ -1251,7 +1263,7 @@ class TestRestoreMigrateStrategy:
         mock_reset.return_value = TemplateResult(
             success=True, template_name="template_staging_db"
         )
-        strategy = _make_strategy(create_template=True, template_strategy="wal_log")
+        strategy = _make_strategy(template="always", template_strategy="wal_log")
         strategy.rollback(CONFIG, migrations_dir=MDIR, steps=2)
 
         assert mock_reset.call_args.kwargs["strategy"] == "wal_log"
