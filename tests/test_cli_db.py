@@ -760,6 +760,40 @@ class TestDbRestore:
         assert result.exit_code == 0, result.output
         assert mock_init.call_args[0][0].template_mode == expected
 
+    def test_db_restore_says_whether_it_took_a_template(self, runner, restore_config):
+        """#481: the console line a nightly log keeps."""
+        from fraisier.dbops.template_rule import TemplateDecision
+
+        result_mock = MagicMock(
+            success=True,
+            migrations_applied=1,
+            total_duration_seconds=0.0,
+            restore_duration_seconds=0.0,
+            migration_duration_seconds=0.0,
+            schema_floor=None,
+            unchecked_schemas=(),
+            actuation=None,
+            template=TemplateDecision(
+                take=True, reason="002 has no down", forced_by=("002",)
+            ),
+        )
+        with (
+            patch("fraisier.dbops.guard.is_external_db", return_value=False),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.__init__",
+                return_value=None,
+            ),
+            patch(
+                "fraisier.strategies.RestoreMigrateStrategy.execute",
+                return_value=result_mock,
+            ),
+            patch("fraisier.systemd.SystemdServiceManager"),
+        ):
+            result = runner.invoke(main, ["db", "restore", "my_api", "staging"])
+
+        assert result.exit_code == 0, result.output
+        assert "Rollback template: taken — 002 has no down" in result.output
+
     def test_db_restore_skips_external_db(self, runner, restore_config):
         """db restore skips when external_db is true."""
         with patch("fraisier.dbops.guard.is_external_db", return_value=True):

@@ -242,10 +242,14 @@ class TestStep8:
     @pytest.fixture(autouse=True)
     def _payload(self):
         self.payload: dict | None = _captured("zero-pending")
-        with patch(
-            "fraisier.strategies._restore.read_pending_preflight",
-            side_effect=lambda *_a, **_kw: (self.payload, None),
-        ) as reader:
+        with (
+            patch(
+                "fraisier.strategies._restore.read_pending_preflight",
+                side_effect=lambda *_a, **_kw: (self.payload, None),
+            ) as reader,
+            # Step 10.5 writes into the restored database; none exists here.
+            patch.object(RestoreMigrateStrategy, "_record_actuation_of"),
+        ):
             self.reader = reader
             yield
 
@@ -271,6 +275,30 @@ class TestStep8:
         _strategy(create_template=True).execute(CONFIG, migrations_dir=MDIR)
 
         assert self._template_copies(mock_create) == []
+
+    def test_step_8_logs_the_decision_and_why(
+        self, mock_find, _age, _term, _drop, _create, mock_restore, mock_up, caplog
+    ):
+        self._arrange(mock_find, mock_restore, mock_up)
+        self.payload = _captured("python")
+
+        with caplog.at_level("INFO", logger="fraisier.strategies._restore"):
+            _strategy(create_template=True).execute(CONFIG, migrations_dir=MDIR)
+
+        assert (
+            "Rollback template: taken — 002 is unclassified (python_migration)"
+            in caplog.text
+        )
+
+    def test_a_skip_is_logged_too(
+        self, mock_find, _age, _term, _drop, _create, mock_restore, mock_up, caplog
+    ):
+        self._arrange(mock_find, mock_restore, mock_up)
+
+        with caplog.at_level("INFO", logger="fraisier.strategies._restore"):
+            _strategy(create_template=True).execute(CONFIG, migrations_dir=MDIR)
+
+        assert "Rollback template: not taken — no pending migration" in caplog.text
 
     def test_the_result_carries_the_decision(
         self, mock_find, _age, _term, _drop, _create, mock_restore, mock_up

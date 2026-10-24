@@ -716,6 +716,72 @@ service still stopped.
 small templates many times, where `FILE_COPY` measured slower (62–83 ms against
 49–62 ms for 8 MB).
 
+### When a restore takes its rollback template: `restore.template` (#481)
+
+Step 8 of `restore_migrate` copies the whole restored database, so a failure
+later in the run can put it back: a failing migration, the table-count floor
+(step 10), the empty-TVIEW check (step 10.4), a service that does not start
+(step 11). On a large database that copy is most of the run. It is only needed
+when `confiture migrate down` cannot undo what the run is about to apply.
+
+```yaml
+database:
+  strategy: restore_migrate
+  restore:
+    create_template: true
+    template: auto        # the default with create_template; or always, never
+```
+
+| `template` | step 8 | rollback after a failure |
+|---|---|---|
+| `auto` | copies only when a pending migration needs it | onto the template if taken, else `migrate down` |
+| `always` | copies every run (before 0.91.0, `create_template: true`) | onto the template |
+| `never` | never copies | `migrate down` |
+
+With neither key set there is no template, as before. `create_template: true`
+means `auto`. A `template` that contradicts `create_template` is refused at load:
+`create_template: false` with `auto` or `always`, or `create_template: true` with
+`never`.
+
+**How `auto` decides.** Right after the restore, fraisier runs confiture's static
+`migrate preflight --format json --scope pending` against the restored database.
+The pending set it judges is exactly what `migrate up` will apply. Step 8 is
+skipped when nothing is pending, or when every pending migration:
+
+- has a `.down.sql` (no `PFLIGHT_MISSING_DOWN`);
+- is transactional (no `PFLIGHT_NON_TRANSACTIONAL`), so it cannot stop half
+  applied, where its own down does not fit;
+- is not gated as destructive (no `PFLIGHT_DESTRUCTIVE_GATED`);
+- has only changes whose `change_set` tier is `additive`, `reversible` or
+  `lock_risky`. A `destructive` or `irreversible` tier, such as a dropped
+  column, loses data its down cannot bring back. An absent tier means
+  confiture could not classify the change: a `.py` migration, whose down
+  confiture assumes rather than checks, or a file it could not parse.
+
+Anything else takes the template, and so does every doubt: a preflight that
+cannot run or returns no JSON, or a payload not scoped to `pending`. confiture
+does not report a `-- confiture:irreversible` marker on its own
+([fraiseql/confiture#754](https://github.com/fraiseql/confiture/issues/754)),
+so `auto` sees one only when the file is also `-- confiture:destructive`, or its
+DDL classifies as destructive.
+
+**Without a template, the rollback is `migrate down`** over exactly the
+migrations this run applied. Down scripts are untested code where a template is
+an exact copy. If one fails, the deploy reports `rollback_failed` and leaves the
+service as it is. On staging the worst case is a broken database until the next
+restore. Choose `always` to keep the copy on every run.
+
+The rollback runs on the deploy path, a `restore_migrate` deploy. `fraisier db
+restore` and the timer that runs it have never rolled back: a failed run there
+restarts the service and leaves the database for the next restore, template or
+not.
+
+**Where the decision is recorded.** The log says `Rollback template: taken — 002
+has no down` or `Rollback template: not taken — no pending migration`. `fraisier
+db restore` prints the same line. The restore receipt keeps it too
+(`template_taken`, `template_reason`), so `fraisier db receipt` (and `--json`)
+can say the next morning whether last night's run had a copy to fall back on.
+
 ### Rebuild strategy: template version stamp
 
 When `database.strategy: rebuild` and `database.create_template: true`, fraisier

@@ -77,15 +77,21 @@ CREATE TABLE IF NOT EXISTS {RECEIPT_TABLE} (
     backup_path  text        NOT NULL,
     backup_bytes bigint      NOT NULL,
     restored_at  timestamptz NOT NULL DEFAULT now(),
-    floor_schema text
+    floor_schema text,
+    template_taken  boolean,
+    template_reason text
 );
 DELETE FROM {RECEIPT_TABLE};
-INSERT INTO {RECEIPT_TABLE} (run_id, backup_path, backup_bytes, floor_schema)
+INSERT INTO {RECEIPT_TABLE} (
+    run_id, backup_path, backup_bytes, floor_schema, template_taken, template_reason
+)
 VALUES (
     :'run_id',
     :'backup_path',
     :'backup_bytes'::bigint,
-    NULLIF(:'floor_schema', '')
+    NULLIF(:'floor_schema', ''),
+    NULLIF(:'template_taken', '')::boolean,
+    NULLIF(:'template_reason', '')
 );
 """
 
@@ -190,6 +196,12 @@ class RestoreReceipt:
     cases a reader falls back rather than believing ``public``.
     """
 
+    template_taken: bool | None = None
+    """Whether step 8 copied a rollback template (#481); ``None`` is unrecorded."""
+
+    template_reason: str | None = None
+    """Why, naming the pending migration that forced the copy when one did."""
+
     @property
     def age_hours(self) -> float:
         return self.age_seconds / _SECONDS_PER_HOUR
@@ -291,6 +303,12 @@ def write_receipt(
                 # Bound like every other value: a schema name is data here, not
                 # an identifier position, and NULLIF turns "" back into NULL.
                 "floor_schema": receipt.floor_schema or "",
+                "template_taken": (
+                    ""
+                    if receipt.template_taken is None
+                    else str(receipt.template_taken).lower()
+                ),
+                "template_reason": receipt.template_reason or "",
             },
             single_transaction=True,
         )
@@ -316,6 +334,8 @@ def _parse_receipt(payload: str) -> RestoreReceipt | None:
     try:
         row = json.loads(payload)
         floor_schema = row.get("floor_schema")
+        template_taken = row.get("template_taken")
+        template_reason = row.get("template_reason")
         return RestoreReceipt(
             run_id=str(row["run_id"]),
             backup_path=str(row["backup_path"]),
@@ -323,6 +343,8 @@ def _parse_receipt(payload: str) -> RestoreReceipt | None:
             restored_at=datetime.fromisoformat(row["restored_at"]),
             age_seconds=float(row["age_seconds"]),
             floor_schema=str(floor_schema) if floor_schema else None,
+            template_taken=template_taken if isinstance(template_taken, bool) else None,
+            template_reason=str(template_reason) if template_reason else None,
         )
     except ValueError, TypeError, KeyError:
         return None

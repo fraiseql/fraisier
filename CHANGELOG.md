@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A restore takes its rollback template only when a migration needs it**
+  ([#481](https://github.com/fraiseql/fraisier/issues/481)). New key
+  `restore.template: auto | always | never`. Under `auto`, the default with
+  `create_template: true`, step 8 runs confiture's static `migrate preflight
+  --scope pending` against the restored database. It skips the full-database copy
+  when nothing is pending, or when every pending migration has a down, is
+  transactional, is not destructive-gated and has only additive, reversible or
+  lock-risky changes. A `.py` migration, an unparseable file, a dropped column or
+  any doubt takes the copy. Without a template, the rollback is `migrate down`
+  over the migrations the run applied. The log, `fraisier db restore` and the
+  restore receipt (`template_taken`, `template_reason`, shown by `fraisier db
+  receipt`) say whether the copy was taken and which migration forced it. See
+  "When a restore takes its rollback template" in `docs/deployment-guide.md`.
+
+### Fixed
+
+- **A restore that failed after its migrations committed rolled nothing back.**
+  The table-count floor (step 10), the empty-TVIEW check (step 10.4) and the
+  service start (step 11) raised without the number of migrations applied. The
+  deployer saw zero and skipped the database rollback, with or without a
+  template, then restarted the previous code on the migrated schema. Those
+  failures now carry the count, and the rollback runs (#481).
+
+### Upgrade note
+
+**⚠️ `create_template: true` now means `restore.template: auto`.** A run whose
+pending migrations can all be undone by their downs no longer copies the
+database, and a failure rolls back with `migrate down`. To keep the copy on every
+run, set `restore.template: always`. Configurations without `create_template`
+are unchanged: no template.
+
+**⚠️ A failure at steps 10–11 now rolls the database back.** It used to leave the
+migrations applied and restart the previous code on them. Now the run rolls back
+onto the template or with `migrate down`. A down that fails reports
+`rollback_failed`.
+
 ## [0.90.0] - 2026-10-22
 
 ### Changed

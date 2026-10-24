@@ -206,6 +206,31 @@ class TestWhatItPrints:
         assert payload["backup_bytes"] == 987654
         assert payload["age_hours"] == pytest.approx(1.5)
 
+    def test_it_says_whether_the_run_took_a_template(self):
+        """#481."""
+        from dataclasses import replace
+
+        receipt = replace(
+            _receipt(), template_taken=False, template_reason="no pending migration"
+        )
+        check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", receipt)
+        result, _ = _invoke(check)
+
+        assert "Rollback template: not taken — no pending migration" in result.output
+
+    def test_json_carries_the_template_decision(self):
+        from dataclasses import replace
+
+        receipt = replace(
+            _receipt(), template_taken=True, template_reason="002 has no down"
+        )
+        check = ActuationCheck(ActuationVerdict.ACTUATED, "ok", receipt)
+        result, _ = _invoke(check, "--json")
+
+        payload = json.loads(result.output)
+        assert payload["template_taken"] is True
+        assert payload["template_reason"] == "002 has no down"
+
     def test_json_without_a_receipt_is_still_valid_json(self):
         result, _ = _invoke(ActuationCheck(ActuationVerdict.MISSING, "none"), "--json")
 
