@@ -394,16 +394,29 @@ sudo fraisier setup
 
 1. Creates `deploy_user` (e.g. `fraisier`) and any application users defined under
    `service.user` in each environment
-2. Creates system directories:
+2. Creates system directories, all owned by the deploy user except `/etc/fraisier/`:
+   - `/var/lib/fraisier/` — fraisier's state root
    - `/var/lib/fraisier/repos/` — bare git repositories
    - `/var/lib/fraisier/status/` — deployment status files
+   - `/var/lib/fraisier/<project>/scaffold/` — the server-side scaffold tree
+     (`scaffold.state_dir`)
    - `/run/fraisier/` — lock files
-3. Sets ownership and permissions on `app_path` so the deploy user can write to the
+   - `/etc/fraisier/` — root-owned configuration
+3. Copies the rendered scaffold tree into `scaffold.state_dir` and gives it to the
+   deploy user — see [Two trees: `output_dir` and `state_dir`](#two-trees-output_dir-and-state_dir)
+4. Sets ownership and permissions on `app_path` so the deploy user can write to the
    worktree while the application user owns the running code
-4. Configures `git config --global safe.directory` for the app paths
-5. Installs the sudoers fragment (`/etc/sudoers.d/<project>`)
-6. Installs the webhook systemd unit and application service units
-7. Reloads systemd: `systemctl daemon-reload`
+5. Configures `git config --global safe.directory` for the app paths
+6. Links each environment's `git_repo` as
+   `/var/lib/fraisier/repos/<project>_<fraise>_<environment>.git`
+7. Installs the sudoers fragment (`/etc/sudoers.d/<project>`, mode `0440`)
+8. Installs the application service units and the webhook unit into
+   `/etc/systemd/system/`
+9. Installs the webhook env file to `/etc/fraisier/<project>.webhook.env`, mode `0640`
+10. Installs and enables the nginx gateway and per-environment vhosts
+11. Reloads systemd (`systemctl daemon-reload`) and enables the webhook and
+    application services
+12. Validates the result: `nginx -t`, and every `git_repo` exists
 
 Filter to a specific environment or server:
 
@@ -411,6 +424,36 @@ Filter to a specific environment or server:
 sudo fraisier setup --environment production
 sudo fraisier setup --server prod.myserver.com
 ```
+
+### Two trees: `output_dir` and `state_dir`
+
+The two provisioning flows render the same files but keep them in different places,
+and the difference matters when you debug either one.
+
+| | `scaffold.output_dir` | `scaffold.state_dir` |
+|---|---|---|
+| Default | `scripts/generated` (relative to CWD) | `/var/lib/fraisier/<project>/scaffold` |
+| Purpose | what **you** render and review before installing | what the **machine** reads at deploy time |
+| Written by | `fraisier scaffold`, `fraisier setup` | `fraisier bootstrap`, `fraisier setup`, every config-changing deploy |
+| Read by | `fraisier setup` (its install sources) | the root scaffold-install helper, the unit staleness check |
+
+`fraisier setup` installs from `output_dir` on purpose: that is what makes the manual
+flow reviewable. You render into a directory, read the diff, and install exactly what
+you read. It *also* copies that tree into `state_dir` and gives it to the deploy user,
+because the deploy path never looks at `output_dir`. A config-changing deploy
+re-renders into `state_dir` as the deploy user, and the root scaffold-install helper
+reads that render from the `state_dir` named in the root policy
+(`/etc/fraisier/<project>/root-policy.json`, written by
+`sudo fraisier scaffold-install`). The copy gives the helper and the staleness check
+a tree to read before the first config-changing deploy writes one.
+
+The webhook env file is the one rendered file **not** copied into `state_dir`. It
+holds `FRAISIER_WEBHOOK_SECRET` and belongs only at
+`/etc/fraisier/<project>.webhook.env`, installed mode `0640`.
+
+`fraisier bootstrap` skips `output_dir` entirely. It renders into a temporary
+directory locally and uploads straight into `state_dir` on the server. There is nothing
+to review on the server, because you are not working on the machine being provisioned.
 
 ---
 
