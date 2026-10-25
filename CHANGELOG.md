@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.93.0] - 2026-10-25
+
+### Fixed
+
+- **A deploy that cannot reach the scaffold-install helper now fails at once
+  and names the fix** ([#486](https://github.com/fraiseql/fraisier/issues/486)).
+  It used to fall back to `fraisier scaffold-install --output-dir <state_dir>` in
+  a subprocess. Since #433, `scaffold-install` refuses `--output-dir` and refuses
+  a non-root caller, so that fallback always failed, and the deploy reported the
+  subprocess's refusal instead of the cause. The deploy now says whether the
+  helper socket is missing or present but not answering, and tells the operator
+  to run `sudo fraisier scaffold-install` once. The saved config hash is dropped
+  too, so the next deploy asks again instead of reading "config unchanged".
+- **An irreversible-migration refusal names `allow_irreversible: true`**
+  ([#487](https://github.com/fraiseql/fraisier/issues/487)). confiture's
+  refusal said "Use require_reversible=False", a library argument an operator
+  cannot set, and fraisier's own preflight pointed at `--no-rollback`, which
+  only turns off the health-check rollback. Both now name the environment
+  setting.
+- **fraisier's migrate preflight reads confiture's reversibility verdict**
+  (#487). It used to look only for a `.down.sql` beside each pending
+  `*.up.sql`, so a `.py` migration whose `down()` does nothing passed it and was
+  refused later by `migrate up`, after the pre-migrate dump had run. It is now
+  refused at preflight, with every irreversible pending migration named.
+- `docs/deployment-guide.md` no longer presents `--no-rollback` as the way to
+  deploy an irreversible migration.
+
 ## [0.92.0] - 2026-10-25
 
 ### Changed
