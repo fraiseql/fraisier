@@ -125,7 +125,7 @@ fraisier deploy my_etl production --job nightly_sync
 # Deploy only if there are new commits
 fraisier deploy my_api production --if-changed
 
-# Deploy an irreversible migration (no auto-rollback on failure)
+# Deploy without rolling back after a failed health check
 fraisier deploy my_api production --no-rollback
 ```
 

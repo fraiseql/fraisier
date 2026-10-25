@@ -552,18 +552,6 @@ Fraisier handles framework-specific migration commands automatically.
 
 ### Irreversible migrations
 
-If a migration cannot be rolled back (e.g. a destructive schema change), use:
-
-```bash
-fraisier deploy my_api production --no-rollback
-```
-
-This disables the automatic rollback-on-health-check-failure. Combined with `--skip-health`:
-
-```bash
-fraisier deploy my_api production --no-rollback --skip-health
-```
-
 A `migrate` deploy refuses a pending migration that `migrate down` cannot undo,
 before anything applies, unless the environment says otherwise:
 
@@ -580,6 +568,11 @@ migration whose `down()` does nothing — absent, `pass`, `...`, a docstring, a
 bare `return` or `raise NotImplementedError`. Before, such a migration applied,
 and a later `migrate down` deleted its ledger row while leaving its changes in
 place. Give it a real `down()`, or set `allow_irreversible: true`.
+
+The refusal is confiture's verdict, read by fraisier's preflight before the
+pre-migrate dump runs, so a `.py` migration and a `.sql` one are judged alike.
+`--no-rollback` does not lift it: that flag only turns off the rollback after a
+failed health check.
 
 ### Refreshing staging from pgBackRest (`restore.source: pgbackrest`) (#424)
 

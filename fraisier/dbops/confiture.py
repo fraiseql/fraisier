@@ -50,6 +50,15 @@ log = logging.getLogger(__name__)
 #: ValidationError, so this is a precise key rather than a catch-all.
 _DESTRUCTIVE_REFUSED = "VALID_002"
 
+#: confiture's ``require_reversible`` refusal names that library argument;
+#: the operator's setting for it is ``allow_irreversible`` (#487). The refusal
+#: is a failed result with no error code, so its text is the only handle.
+_REQUIRE_REVERSIBLE_ADVICE = "Use require_reversible=False, or give each one a down."
+_ALLOW_IRREVERSIBLE_HINT = (
+    "Set `allow_irreversible: true` on this environment to apply them anyway, "
+    "or give each one a down."
+)
+
 MAX_LOCK_RETRIES = 3
 
 #: Serialises the ``os.chdir`` window below. Reentrant because
@@ -124,7 +133,7 @@ class MigrationResult:
 
 
 class IrreversibleMigrationError(Exception):
-    """Raised when pending migrations lack down files."""
+    """Raised when a pending migration has no down that does something."""
 
 
 class MigrationIntegrityError(Exception):
@@ -271,30 +280,25 @@ def preflight(
     """Run pre-deploy checks.  Raises on policy violations.
 
     Checks:
-    - No duplicate migration versions
-    - All pending migrations have down files (unless *allow_irreversible*)
+    - Every pending migration has a down that does something (unless
+      *allow_irreversible*), by confiture's own verdict, so a ``.py``
+      migration is judged the same way ``migrate up`` will judge it (#487)
     """
+    if allow_irreversible:
+        return
+
     mdir = Path(migrations_dir)
     config = _resolve_config(config_path, database_url)
 
+    # Inside the session, confiture judges the pending migrations only.
     with Migrator.from_config(config, migrations_dir=mdir) as m:
-        status = m.status()
+        irreversible = [info.version for info in m.preflight().irreversible]
 
-    if not status.has_pending:
-        return
-
-    # Check for irreversible pending migrations by scanning for down files
-    if not allow_irreversible:
-        pending_versions = set(status.pending)
-        for up_file in mdir.glob("*.up.sql"):
-            version = up_file.name.split("_", 1)[0]
-            if version in pending_versions:
-                down_file = up_file.with_suffix("").with_suffix(".down.sql")
-                if not down_file.exists():
-                    raise IrreversibleMigrationError(
-                        f"Irreversible migration: {version} (no down file). "
-                        "Use --no-rollback to deploy without automatic rollback."
-                    )
+    if irreversible:
+        raise IrreversibleMigrationError(
+            f"Irreversible migrations (no .down.sql, or a down() that does "
+            f"nothing): {', '.join(irreversible)}. {_ALLOW_IRREVERSIBLE_HINT}"
+        )
 
 
 def _incomplete_reason(result: object) -> str | None:
@@ -528,6 +532,7 @@ def migrate_up(
 
     reason = _incomplete_reason(result)
     if reason is not None:
+        reason = reason.replace(_REQUIRE_REVERSIBLE_ADVICE, _ALLOW_IRREVERSIBLE_HINT)
         # Carry how many migrations DID apply. Confiture commits each migration
         # as it goes, so a batch that fails part-way leaves the earlier ones
         # applied and tracked. Dropping this count made the deployer believe
