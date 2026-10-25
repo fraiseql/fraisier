@@ -589,6 +589,19 @@ Provision the server: create system users, directories, permissions, sudoers rul
 install systemd units. Run once per server, or again after significant config changes.
 Requires sudo / root.
 
+This is the **manual, on-the-box** provisioning flow: it installs from
+`scaffold.output_dir`, the CWD-relative tree you rendered with `fraisier scaffold` and
+reviewed. For a fresh server, prefer [`fraisier bootstrap`](#fraisier-bootstrap), which
+does the same provisioning end-to-end over SSH.
+
+`setup` installs from `output_dir` but *also* copies that tree into
+`scaffold.state_dir` (default `/var/lib/fraisier/<project>/scaffold`), which is where
+deploys re-render the scaffold and where the root scaffold-install helper reads it. The
+webhook env file is excluded from that copy. It carries `FRAISIER_WEBHOOK_SECRET` and
+is installed only to `/etc/fraisier/<project>.webhook.env` at mode `0640`. See
+[Two trees](deployment-guide.md#two-trees-output_dir-and-state_dir) for why the two
+flows differ.
+
 ```bash
 fraisier setup [OPTIONS]
 ```
