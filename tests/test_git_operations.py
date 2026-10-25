@@ -340,6 +340,29 @@ class TestVerifyWorktreeAtSha:
             git_deploy_env.sha_v2,
         )
 
+    def test_force_repopulate_preserves_untracked_files(
+        self, git_deploy_env: DeployEnv
+    ):
+        """The heal rewrites tracked files only. Generated files, a virtualenv
+        and the worktree's own ``.git`` pointer are untracked and must survive
+        it, or a self-heal would wipe what the deploy built."""
+        worktree = git_deploy_env.worktree
+        untracked = {
+            worktree / "version.json": '{"version": "frozen"}\n',
+            worktree / ".venv" / "bin" / "python": "#!/bin/sh\n",
+            worktree / ".git": (worktree / ".git").read_text(),
+        }
+        for path, content in untracked.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+        force_repopulate_worktree(
+            git_deploy_env.bare_repo, worktree, git_deploy_env.sha_v2
+        )
+
+        assert {p: p.read_text() for p in untracked if p.exists()} == untracked
+        assert 'VERSION = "v2"' in (worktree / "app.py").read_text()
+
 
 class TestShouldEscalate:
     """The bounded-recovery decision: re-mismatch within N deploys → fail hard."""
