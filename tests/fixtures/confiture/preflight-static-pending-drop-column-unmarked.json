@@ -1,6 +1,7 @@
 {
   "ok": true,
   "window_safe": false,
+  "reversible": false,
   "summary": {
     "errors": 0,
     "warnings": 1,
@@ -12,12 +13,13 @@
       "severity": "warning",
       "code": "PFLIGHT_REPLICA_DROP_COLUMN",
       "message": "readers on the old schema still SELECT the column Multi-step fix: deprecate (stop using) \u2192 wait one release \u2192 drop the column.",
-      "migration": "t",
+      "migration": "002",
       "file": "002_drop_v.up.sql",
       "line": null,
       "actionable": "deprecate (stop using) \u2192 wait one release \u2192 drop the column",
       "details": {
-        "operation": "DropColumn"
+        "operation": "DropColumn",
+        "table": "t"
       }
     }
   ],

@@ -1,18 +1,29 @@
 {
   "ok": true,
   "window_safe": false,
+  "reversible": false,
   "summary": {
     "errors": 0,
-    "warnings": 1,
+    "warnings": 2,
     "info": 0,
     "migrations_checked": 2
   },
   "issues": [
     {
       "severity": "warning",
+      "code": "PFLIGHT_DOWN_EMPTY",
+      "message": "Migration 002 (add_u) has a down() that does nothing: migrate down would record a rollback and undo nothing.",
+      "migration": "002",
+      "file": "002_add_u.py",
+      "line": null,
+      "actionable": "Write the down() that undoes the migration: migrate down, migrate down-to and migrate up --require-reversible refuse one that does nothing.",
+      "details": {}
+    },
+    {
+      "severity": "warning",
       "code": "PFLIGHT_REPLICA_UNCLASSIFIED",
       "message": "non-SQL (.py) migration: the replica forward-compatibility classifier cannot inspect it, so window-safety cannot be certified automatically; review manually",
-      "migration": null,
+      "migration": "002",
       "file": "002_add_u.py",
       "line": null,
       "actionable": "review the migration's DDL by hand for replica forward-compatibility, or express the schema change as a .up.sql so it can be classified",

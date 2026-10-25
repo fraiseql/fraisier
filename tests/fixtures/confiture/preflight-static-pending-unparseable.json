@@ -1,6 +1,7 @@
 {
   "ok": false,
   "window_safe": false,
+  "reversible": false,
   "summary": {
     "errors": 1,
     "warnings": 1,
@@ -22,7 +23,7 @@
       "severity": "warning",
       "code": "PFLIGHT_REPLICA_UNCLASSIFIED",
       "message": "002_broken.up.sql: pglast could not parse the migration, so its replica forward-compatibility cannot be classified",
-      "migration": null,
+      "migration": "002",
       "file": "002_broken.up.sql",
       "line": null,
       "actionable": "fix the SQL syntax so the classifier can read the migration",

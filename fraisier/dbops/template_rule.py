@@ -15,6 +15,11 @@ The decision is a function of one payload: confiture's static
 ``migrate preflight --format json --scope pending``, read against the restored
 database, so the pending set is exactly what ``migrate up`` will apply. Nothing
 else is consulted, so the same rule ports to any consumer of that seam.
+
+Since confiture 1.40 that payload answers the question itself, in
+``reversible`` (#484). The rule takes the template unless the verdict is
+``true`` and no pending migration is a known blocker; the per-migration walk
+also names, in the reason, which migration forced it.
 """
 
 from __future__ import annotations
@@ -36,15 +41,22 @@ TemplateMode = Literal["auto", "always", "never"]
 TEMPLATE_MODES: tuple[TemplateMode, ...] = ("auto", "always", "never")
 
 
-#: Issues that mean ``migrate down`` cannot undo the migration they name.
+#: Issues that mean ``migrate down`` cannot undo the migration they name: the
+#: set confiture 1.40 builds ``reversible`` from.
 #:
-#: A missing down has nothing to run; a non-transactional migration can stop
-#: half-applied, where its own down does not fit; a destructive gate loses data
-#: that no down brings back.
+#: A missing or empty down has nothing to run, and since 1.40 ``migrate down``
+#: refuses one outright; a ``.py`` down confiture cannot read may do anything;
+#: a non-transactional migration can stop half-applied, where its own down does
+#: not fit; a destructive gate or an irreversible marker loses data that no down
+#: brings back; an unparseable file cannot be judged at all.
 _BLOCKING_ISSUES = {
     "PFLIGHT_MISSING_DOWN": "has no down",
+    "PFLIGHT_DOWN_EMPTY": "has an empty down",
+    "PFLIGHT_DOWN_UNVERIFIED": "has a down confiture cannot verify",
     "PFLIGHT_NON_TRANSACTIONAL": "is not transactional",
     "PFLIGHT_DESTRUCTIVE_GATED": "is gated as destructive",
+    "PFLIGHT_IRREVERSIBLE": "is marked irreversible",
+    "PFLIGHT_UNPARSEABLE": "could not be parsed",
 }
 
 #: ``change_set`` tiers a down can undo. Anything else — ``destructive``,
@@ -110,6 +122,16 @@ def _decide_auto(payload: dict[str, Any]) -> TemplateDecision:
                 f"is {label} ({change['kind']})"
             )
 
+    verdict = payload.get("reversible")
+    if verdict is not True and not why:
+        return TemplateDecision(
+            take=True,
+            reason=(
+                "the preflight gives no `reversible` verdict (confiture < 1.40)"
+                if verdict is None
+                else "the preflight says `migrate down` cannot undo the pending set"
+            ),
+        )
     if not why:
         return TemplateDecision(
             take=False,

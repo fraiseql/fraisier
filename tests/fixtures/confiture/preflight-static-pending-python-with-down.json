@@ -1,0 +1,65 @@
+{
+  "ok": true,
+  "window_safe": false,
+  "reversible": false,
+  "summary": {
+    "errors": 0,
+    "warnings": 1,
+    "info": 1,
+    "migrations_checked": 2
+  },
+  "issues": [
+    {
+      "severity": "info",
+      "code": "PFLIGHT_DOWN_UNVERIFIED",
+      "message": "Migration 002 (add_u) is Python: confiture does not read what its down() does, so whether migrate down undoes it is not checked.",
+      "migration": "002",
+      "file": "002_add_u.py",
+      "line": null,
+      "actionable": "Review the Python migration's down() by hand, or express the change as .up.sql + .down.sql so confiture can read both.",
+      "details": {
+        "down": "present"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "PFLIGHT_REPLICA_UNCLASSIFIED",
+      "message": "non-SQL (.py) migration: the replica forward-compatibility classifier cannot inspect it, so window-safety cannot be certified automatically; review manually",
+      "migration": "002",
+      "file": "002_add_u.py",
+      "line": null,
+      "actionable": "review the migration's DDL by hand for replica forward-compatibility, or express the schema change as a .up.sql so it can be classified",
+      "details": {
+        "operation": "NonSqlMigration"
+      }
+    }
+  ],
+  "change_set": {
+    "contract_version": 1,
+    "changes": [
+      {
+        "kind": "create_table",
+        "object": "public.t",
+        "migration": "001",
+        "tier": "additive",
+        "detail": "CREATE TABLE"
+      },
+      {
+        "kind": "python_migration",
+        "object": "002_add_u.py",
+        "migration": "002",
+        "detail": "non-SQL migration: confiture cannot read its DDL, so its changes are unclassified \u2014 review by hand"
+      }
+    ]
+  },
+  "scope": "pending",
+  "ledger": {
+    "table": "tb_confiture",
+    "exists": false
+  },
+  "command": "migrate preflight",
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  }
+}

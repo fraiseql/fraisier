@@ -1,13 +1,29 @@
 {
   "ok": true,
   "window_safe": true,
+  "reversible": false,
   "summary": {
     "errors": 0,
     "warnings": 0,
-    "info": 0,
+    "info": 1,
     "migrations_checked": 2
   },
-  "issues": [],
+  "issues": [
+    {
+      "severity": "info",
+      "code": "PFLIGHT_IRREVERSIBLE",
+      "message": "Migration 002 (backfill) declares that migrate down does not undo it: overwrites t.v.",
+      "migration": "002",
+      "file": "002_backfill.up.sql",
+      "line": null,
+      "actionable": "Plan the recovery without migrate down: the migration's -- confiture:irreversible reasons say what its down does not restore.",
+      "details": {
+        "irreversible": [
+          "overwrites t.v"
+        ]
+      }
+    }
+  ],
   "change_set": {
     "contract_version": 1,
     "changes": [

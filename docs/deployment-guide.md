@@ -564,6 +564,23 @@ This disables the automatic rollback-on-health-check-failure. Combined with `--s
 fraisier deploy my_api production --no-rollback --skip-health
 ```
 
+A `migrate` deploy refuses a pending migration that `migrate down` cannot undo,
+before anything applies, unless the environment says otherwise:
+
+```yaml
+fraises:
+  my_api:
+    environments:
+      production:
+        allow_irreversible: true    # default: false
+```
+
+From confiture 1.40 (fraisier 0.92.0) that refusal also covers a `.py`
+migration whose `down()` does nothing — absent, `pass`, `...`, a docstring, a
+bare `return` or `raise NotImplementedError`. Before, such a migration applied,
+and a later `migrate down` deleted its ledger row while leaving its changes in
+place. Give it a real `down()`, or set `allow_irreversible: true`.
+
 ### Refreshing staging from pgBackRest (`restore.source: pgbackrest`) (#424)
 
 A `restore_migrate` environment refreshes from a `pg_dump` archive by default. If
@@ -788,25 +805,29 @@ means `auto`. A `template` that contradicts `create_template` is refused at load
 
 **How `auto` decides.** Right after the restore, fraisier runs confiture's static
 `migrate preflight --format json --scope pending` against the restored database.
-The pending set it judges is exactly what `migrate up` will apply. Step 8 is
-skipped when nothing is pending, or when every pending migration:
+The pending set it judges is exactly what `migrate up` will apply, and the
+payload's `reversible` verdict says whether `migrate down` can undo all of it.
+Step 8 is skipped when nothing is pending, or when `reversible` is `true` and no
+pending migration:
 
-- has a `.down.sql` (no `PFLIGHT_MISSING_DOWN`);
-- is transactional (no `PFLIGHT_NON_TRANSACTIONAL`), so it cannot stop half
+- lacks a `.down.sql` (`PFLIGHT_MISSING_DOWN`), or is a `.py` migration whose
+  `down()` does nothing (`PFLIGHT_DOWN_EMPTY`);
+- is a `.py` migration at all (`PFLIGHT_DOWN_UNVERIFIED`): confiture reads its
+  `down()` from the source but cannot know what the code does;
+- is not transactional (`PFLIGHT_NON_TRANSACTIONAL`), so it can stop half
   applied, where its own down does not fit;
-- is not gated as destructive (no `PFLIGHT_DESTRUCTIVE_GATED`);
-- has only changes whose `change_set` tier is `additive`, `reversible` or
-  `lock_risky`. A `destructive` or `irreversible` tier, such as a dropped
-  column, loses data its down cannot bring back. An absent tier means
-  confiture could not classify the change: a `.py` migration, whose down
-  confiture assumes rather than checks, or a file it could not parse.
+- is gated as destructive (`PFLIGHT_DESTRUCTIVE_GATED`) or declares
+  `-- confiture:irreversible` (`PFLIGHT_IRREVERSIBLE`);
+- could not be parsed (`PFLIGHT_UNPARSEABLE`);
+- has a change whose `change_set` tier is anything but `additive`, `reversible`
+  or `lock_risky`. A `destructive` or `irreversible` tier, such as a dropped
+  column, loses data its down cannot bring back; an absent tier means confiture
+  could not classify the change.
 
 Anything else takes the template, and so does every doubt: a preflight that
-cannot run or returns no JSON, or a payload not scoped to `pending`. confiture
-does not report a `-- confiture:irreversible` marker on its own
-([fraiseql/confiture#754](https://github.com/fraiseql/confiture/issues/754)),
-so `auto` sees one only when the file is also `-- confiture:destructive`, or its
-DDL classifies as destructive.
+cannot run or returns no JSON, a payload not scoped to `pending`, or one without
+a `reversible` verdict. The reason names each migration that forced the copy,
+for example `002 has an empty down, is unclassified (python_migration)`.
 
 **Without a template, the rollback is `migrate down`** over exactly the
 migrations this run applied. Down scripts are untested code where a template is

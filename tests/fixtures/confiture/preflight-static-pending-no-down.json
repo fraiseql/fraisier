@@ -1,6 +1,7 @@
 {
   "ok": false,
   "window_safe": true,
+  "reversible": false,
   "summary": {
     "errors": 1,
     "warnings": 0,
