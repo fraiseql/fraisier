@@ -174,20 +174,6 @@ class TestTheScaffoldInstallSocketIsBounded:
         assert elapsed < 5, f"blocked for {elapsed:.1f}s on a silent helper"
         assert "did not answer" in str(excinfo.value)
 
-    def test_a_missing_socket_still_falls_back_quietly(self, monkeypatch, tmp_path):
-        """A hang is not an absence. Only the hang is fatal: the helper
-        accepted the connection, so running the install a second time through
-        the subprocess fallback could install twice."""
-        deployer = _deployer()
-        monkeypatch.setattr(
-            "fraisier.deployers.base._get_scaffold_socket_path",
-            lambda _name: str(tmp_path / "absent.sock"),
-        )
-        config_path = tmp_path / "fraises.yaml"
-        config_path.write_text("project_name: proj\nfraises: {}\n")
-
-        assert deployer._try_scaffold_install_via_socket(config_path) is None
-
 
 class TestASocketCallCannotOutliveTheBudget:
     def test_the_bound_comes_from_the_remaining_budget(self):

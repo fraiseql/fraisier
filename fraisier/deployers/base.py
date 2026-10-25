@@ -670,32 +670,36 @@ class BaseDeployer(StatusRecordMixin, ABC):
 
     def _try_scaffold_install_via_socket(
         self, config_path: Path
-    ) -> types.SimpleNamespace | None:
-        """Attempt scaffold installation via the helper socket.
+    ) -> types.SimpleNamespace:
+        """Install scaffold files via the helper socket.
 
-        Returns a result namespace if the socket was reachable (success or failure),
-        or None if the socket is not available (caller should fall back to subprocess).
+        Returns the helper's result (success or failure). Raises when the
+        helper cannot be asked at all: the helper is the only install path a
+        deploy has, since ``scaffold-install`` refuses a non-root caller and
+        ``--output-dir`` (#433, #486).
         """
         from fraisier.config import get_config
+        from fraisier.config_watcher import ConfigWatcher
+        from fraisier.errors import DeploymentError
+        from fraisier.scaffold_install_helper import OPERATOR_STEP
 
         try:
             project_name = get_config(config_path).project_name
-        except Exception:
-            logger.debug(
-                "Could not parse config for socket path resolution, "
-                "falling back to subprocess",
-                exc_info=True,
-            )
-            return None
+        except Exception as exc:
+            # Nothing was asked, so nothing was installed: the next deploy
+            # must ask again, as after a refusal (#433).
+            ConfigWatcher(config_path.parent).forget_hash()
+            raise DeploymentError(
+                f"Cannot locate the scaffold-install helper: reading "
+                f"{config_path} failed ({exc}). To install the scaffold, "
+                + OPERATOR_STEP,
+                context={"config_path": str(config_path)},
+            ) from exc
 
         socket_path = _get_scaffold_socket_path(project_name)
-        # Distinguish "socket not deployed" (expected on pre-helper deploys →
-        # quiet) from "socket present but the daemon is broken" (#283). The
-        # latter silently drops onto the subprocess fallback, whose sudo path is
-        # neutered under NoNewPrivileges — so surface it loudly.
+        # "Not installed" and "installed but its daemon is broken" (#283) have
+        # the same fix, but an operator looks in different places for each.
         socket_present = Path(socket_path).exists()
-
-        from fraisier.errors import DeploymentError
 
         # Bounded by what is left of this deploy's budget (#384): a helper that
         # accepts and never answers used to block here forever, and `timeout:`
@@ -731,14 +735,11 @@ class BaseDeployer(StatusRecordMixin, ABC):
             )
         except TimeoutError as exc:
             # A hang is not an absence. The helper accepted the connection, so
-            # it may still be installing; falling through to the subprocess
-            # would install a second time. Fail, and name where to look (#384).
+            # it may still be installing. Fail, and name where to look (#384).
             raise DeploymentError(
                 f"The scaffold-install helper at {socket_path} did not answer "
-                f"within {timeout_s:.0f}s. The deploy is not falling back to "
-                "the subprocess install: the helper accepted the connection "
-                "and may still be running, and a second attempt would install "
-                "twice.\n"
+                f"within {timeout_s:.0f}s. It accepted the connection and may "
+                "still be running.\n"
                 "  Look at the helper's own journal: "
                 "journalctl -u 'fraisier-*-scaffold-install-helper.service'",
                 context={"socket_path": socket_path, "timeout_s": timeout_s},
@@ -751,22 +752,23 @@ class BaseDeployer(StatusRecordMixin, ABC):
             UnicodeDecodeError,
         ) as exc:
             if socket_present:
-                logger.warning(
-                    "Scaffold-install-helper socket %s is present but "
-                    "unreachable (%s). The helper likely failed to start. "
-                    "Falling back to the subprocess install, which only an "
-                    "operator running as root can complete; run `sudo fraisier "
-                    "scaffold-install` to repair the socket.",
-                    socket_path,
-                    exc,
+                cause = (
+                    f"The scaffold-install helper socket {socket_path} is "
+                    f"present but did not answer ({exc}); the helper likely "
+                    "failed to start. Look at its journal: journalctl -u "
+                    "'fraisier-*-scaffold-install-helper.service'. To repair it, "
                 )
             else:
-                logger.debug(
-                    "Scaffold-install-helper socket %s not present; "
-                    "falling back to subprocess.",
-                    socket_path,
+                cause = (
+                    f"The scaffold-install helper socket {socket_path} does "
+                    "not exist, so this host has no helper to install the "
+                    "scaffold. To install it, "
                 )
-            return None
+            ConfigWatcher(config_path.parent).forget_hash()
+            raise DeploymentError(
+                cause + OPERATOR_STEP,
+                context={"socket_path": socket_path},
+            ) from exc
 
     def _record_deferred_restarts(self, config_path: Path, units: list[str]) -> None:
         """Put what the root helper deferred on this deploy's ledger (#349, #433)."""
@@ -778,98 +780,45 @@ class BaseDeployer(StatusRecordMixin, ABC):
         lock_dir = get_config(config_path).deployment.lock_dir
         record_deferred_restarts(Path(lock_dir), list(units))
 
-    def _install_scaffold(self, config_path: Path | None = None) -> None:
-        """Install updated scaffold files to system locations.
+    def _install_scaffold(self, config_path: Path) -> None:
+        """Install updated scaffold files through the scaffold-install helper.
 
-        Tries the scaffold-install-helper Unix socket first (compatible with
-        ``NoNewPrivileges=true``), then falls back to a subprocess call for
-        deployments that have not yet reinstalled the scaffold.
+        The root helper behind a Unix socket is the only install path: it
+        works under ``NoNewPrivileges=true``, and ``scaffold-install`` itself
+        refuses a non-root caller (#433). A host without a working helper
+        needs the operator's one-time step, and the deploy says so (#486).
 
         Args:
-            config_path: Path to fraises.yaml; when provided, the subprocess
-                fallback installs from the server-side scaffold ``state_dir``
-                resolved from that config (#283).
+            config_path: Path to fraises.yaml, which names the project whose
+                helper socket is asked.
 
         Raises:
-            DeploymentError: If scaffold installation fails
+            DeploymentError: If the helper is unreachable or the install fails
         """
+        from fraisier.config_watcher import ConfigWatcher
         from fraisier.errors import DeploymentError
 
         logger.info("Installing updated scaffold files")
+        config_path = Path(config_path)
 
-        # The subprocess fallback runs install.sh as a child of this process, so
-        # an unguarded `systemctl restart <webhook>` in it kills this deploy with
-        # the rest of the cgroup — the socket path is not the only one that needs
-        # the declaration (#349). Merged onto os.environ because LocalRunner
-        # hands `env` straight to subprocess.run, which replaces rather than
-        # extends the environment.
-        install_env = {**os.environ, "FRAISIER_DEPLOY_IN_FLIGHT": "1"}
-
-        if config_path:
-            config_path = Path(config_path)
-
-            # Try socket helper first (compatible with NoNewPrivileges=true)
-            socket_result = self._try_scaffold_install_via_socket(config_path)
-            if socket_result is not None:
-                self._record_deferred_restarts(
-                    config_path, getattr(socket_result, "deferred_restarts", [])
-                )
-                if socket_result.returncode != 0:
-                    # The next deploy must ask again: the hash was saved before
-                    # this install, and "config unchanged" would otherwise skip
-                    # the very step that has to stop it (#433).
-                    from fraisier.config_watcher import ConfigWatcher
-
-                    ConfigWatcher(config_path.parent).forget_hash()
-                    # The helper's stderr was captured on the socket and then
-                    # dropped from the message — "command not allowed" is the
-                    # line an operator needs, and it is never on stdout (#381).
-                    raise DeploymentError(
-                        f"Failed to install scaffold files via socket helper: "
-                        f"{self._combine_output(socket_result)}",
-                        context={
-                            "pending": getattr(socket_result, "pending", []),
-                            "refused": getattr(socket_result, "refused", {}),
-                        },
-                    )
-                logger.info("✓ Scaffold files installed via helper socket")
-                return
-
-            # Fall back to subprocess (pre-helper deployments)
-            logger.debug(
-                "Scaffold-install-helper socket not available;"
-                " falling back to subprocess"
-            )
-            state_dir = self._scaffold_state_dir(config_path)
-            fraisier_exe = self._get_fraisier_executable()
-            result = self.runner.run(
-                [
-                    fraisier_exe,
-                    "-c",
-                    str(config_path),
-                    "scaffold-install",
-                    "--output-dir",
-                    str(state_dir),
-                    "--yes",
-                ],
-                cwd=str(config_path.parent),
-                env=install_env,
-                check=False,
-            )
-        else:
-            logger.warning(
-                "No config_path provided to _install_scaffold(); CWD may be wrong"
-            )
-            fraisier_exe = self._get_fraisier_executable()
-            result = self.runner.run(
-                [fraisier_exe, "scaffold-install", "--yes"],
-                env=install_env,
-                check=False,
-            )
-
-        if result.returncode != 0:
+        socket_result = self._try_scaffold_install_via_socket(config_path)
+        self._record_deferred_restarts(
+            config_path, getattr(socket_result, "deferred_restarts", [])
+        )
+        if socket_result.returncode != 0:
+            # The next deploy must ask again: the hash was saved before
+            # this install, and "config unchanged" would otherwise skip
+            # the very step that has to stop it (#433).
+            ConfigWatcher(config_path.parent).forget_hash()
+            # The helper's stderr was captured on the socket and then
+            # dropped from the message — "command not allowed" is the
+            # line an operator needs, and it is never on stdout (#381).
             raise DeploymentError(
-                f"Failed to install scaffold files: {self._combine_output(result)}"
+                f"Failed to install scaffold files via socket helper: "
+                f"{self._combine_output(socket_result)}",
+                context={
+                    "pending": getattr(socket_result, "pending", []),
+                    "refused": getattr(socket_result, "refused", {}),
+                },
             )
-
-        logger.info("✓ Scaffold files installed")
+        logger.info("✓ Scaffold files installed via helper socket")

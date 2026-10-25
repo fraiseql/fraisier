@@ -100,24 +100,6 @@ class TestScaffoldRegeneration:
 
 
 class TestScaffoldInstall:
-    def test_the_subprocess_fallback_surfaces_its_stderr(self, tmp_path, config_path):
-        deployer = _deployer(tmp_path)
-        exe = _refusing_executable(tmp_path)
-
-        with (
-            patch.object(deployer, "_get_fraisier_executable", return_value=str(exe)),
-            patch.object(
-                deployer, "_scaffold_state_dir", return_value=tmp_path / "state"
-            ),
-            patch.object(
-                deployer, "_try_scaffold_install_via_socket", return_value=None
-            ),
-            pytest.raises(DeploymentError) as exc,
-        ):
-            deployer._install_scaffold(config_path=config_path)
-
-        assert STDERR_LINE in str(exc.value)
-
     def test_the_socket_helper_failure_quotes_its_stderr(self, tmp_path, config_path):
         """The helper's stderr was captured and then dropped from the message."""
         deployer = _deployer(tmp_path)
