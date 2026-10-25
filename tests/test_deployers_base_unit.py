@@ -141,40 +141,6 @@ class TestSyncFraisesYaml:
 class TestInstallScaffold:
     """_install_scaffold() must pass cwd and -c config_path to the runner."""
 
-    def test_install_scaffold_uses_cwd_and_config(self, tmp_path):
-        """With config_path, the fallback install targets the state_dir (#283)."""
-        config_path = tmp_path / "fraises.yaml"
-        config_path.write_text("name: myproj\nfraises: {}\n")
-
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
-
-        deployer = _make_deployer_with_runner(mock_runner)
-        deployer._install_scaffold(config_path=config_path)
-
-        mock_runner.run.assert_called_once()
-        cmd = mock_runner.run.call_args[0][0]
-        kwargs = mock_runner.run.call_args[1]
-        assert "-c" in cmd
-        assert str(config_path) in cmd
-        assert "scaffold-install" in cmd
-        assert "--output-dir" in cmd
-        assert "/var/lib/fraisier/myproj/scaffold" in cmd
-        assert kwargs.get("cwd") == str(tmp_path)
-
-    def test_install_scaffold_no_config_falls_back(self):
-        """Without config_path, original simple command is used."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
-
-        deployer = _make_deployer_with_runner(mock_runner)
-        deployer._install_scaffold(config_path=None)
-
-        mock_runner.run.assert_called_once()
-        cmd = mock_runner.run.call_args[0][0]
-        assert "scaffold-install" in " ".join(cmd)
-        assert "cd " not in " ".join(cmd)
-
 
 class TestInstallScaffoldDeclaresTheDeploy:
     """install.sh must know a deploy is in flight, on *both* install paths (#349).
@@ -184,43 +150,6 @@ class TestInstallScaffoldDeclaresTheDeploy:
     unguarded `systemctl restart <webhook>` kills the whole cgroup just the
     same. The caller is the only party that knows, so it declares on both.
     """
-
-    def test_subprocess_fallback_declares_the_deploy(self, tmp_path):
-        config_path = tmp_path / "fraises.yaml"
-        config_path.write_text("name: myproj\nfraises: {}\n")
-
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
-
-        deployer = _make_deployer_with_runner(mock_runner)
-        deployer._install_scaffold(config_path=config_path)
-
-        env = mock_runner.run.call_args[1]["env"]
-        assert env["FRAISIER_DEPLOY_IN_FLIGHT"] == "1"
-
-    def test_subprocess_fallback_keeps_the_ambient_environment(self, tmp_path):
-        """LocalRunner hands env straight to subprocess.run, which *replaces* it."""
-        config_path = tmp_path / "fraises.yaml"
-        config_path.write_text("name: myproj\nfraises: {}\n")
-
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
-
-        deployer = _make_deployer_with_runner(mock_runner)
-        deployer._install_scaffold(config_path=config_path)
-
-        env = mock_runner.run.call_args[1]["env"]
-        assert "PATH" in env
-
-    def test_configless_fallback_declares_the_deploy(self):
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
-
-        deployer = _make_deployer_with_runner(mock_runner)
-        deployer._install_scaffold(config_path=None)
-
-        env = mock_runner.run.call_args[1]["env"]
-        assert env["FRAISIER_DEPLOY_IN_FLIGHT"] == "1"
 
     def test_socket_request_declares_the_deploy(self, tmp_path, monkeypatch):
         """The helper does not inherit the deploy's environment, so the

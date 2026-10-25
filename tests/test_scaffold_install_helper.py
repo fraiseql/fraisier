@@ -481,7 +481,7 @@ fraises:
 
 
 class TestInstallScaffoldSocketClient:
-    """_install_scaffold() tries the socket helper first, falls back to subprocess."""
+    """_install_scaffold() installs through the socket helper alone (#486)."""
 
     def _make_deployer(self, tmp_path):
         from fraisier.deployers.api import APIDeployer
@@ -510,25 +510,6 @@ class TestInstallScaffoldSocketClient:
         assert not mock_runner.run.called, (
             "subprocess should not be called when socket succeeds"
         )
-
-    def test_falls_back_to_subprocess_when_no_socket(self, tmp_path):
-        """When no socket exists, falls back to subprocess."""
-        deployer, config_path = self._make_deployer(tmp_path)
-
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = MagicMock(returncode=0, stdout="")
-        deployer.runner = mock_runner
-
-        # Patch socket path to a non-existent file
-        with patch(
-            "fraisier.deployers.base._get_scaffold_socket_path",
-            return_value=str(tmp_path / "nonexistent.sock"),
-        ):
-            deployer._install_scaffold(config_path=config_path)
-
-        assert mock_runner.run.called, "subprocess should be called as fallback"
-        cmd = mock_runner.run.call_args[0][0]
-        assert "scaffold-install" in " ".join(cmd)
 
     def test_raises_deployment_error_when_socket_returns_failure(self, tmp_path):
         """Socket helper returning ok=False must raise DeploymentError, not fall back."""
