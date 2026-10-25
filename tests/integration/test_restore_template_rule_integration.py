@@ -58,6 +58,18 @@ _PENDING = {
             '        self.execute("DROP TABLE u")\n'
         ),
     },
+    "python-empty-down": {
+        "002_add_u.py": (
+            "from confiture.models.migration import Migration\n\n\n"
+            "class AddU(Migration):\n"
+            '    version = "002"\n'
+            '    name = "add_u"\n\n'
+            "    def up(self) -> None:\n"
+            '        self.execute("CREATE TABLE u (id int)")\n\n'
+            "    def down(self) -> None:\n"
+            "        pass\n"
+        ),
+    },
 }
 
 
@@ -256,3 +268,44 @@ def test_never_takes_no_template_for_a_python_migration(staging):
     _fail_at_step_10(strategy, config, migrations)
 
     assert not _database_exists(target, _TEMPLATE)
+
+
+def _table_u_exists(target: PgTarget) -> bool:
+    with psycopg.connect(target.dsn(_DST)) as conn:
+        return conn.execute("SELECT to_regclass('public.u')").fetchone()[0] is not None
+
+
+def test_auto_takes_the_template_for_an_empty_python_down(staging):
+    """confiture 1.40 reports it as PFLIGHT_DOWN_EMPTY, so `reversible` is false."""
+    target, build = staging
+    strategy, config, migrations = build(
+        "python-empty-down", create_template=True, min_tables=99
+    )
+
+    steps = _fail_at_step_10(strategy, config, migrations)
+
+    assert _database_exists(target, _TEMPLATE)
+    result = strategy.rollback(config, migrations_dir=migrations, steps=steps)
+    assert result.success, result.errors
+    assert not _table_u_exists(target)
+    assert _ledger(target) == ["001"]
+
+
+def test_never_refuses_to_roll_back_an_empty_python_down(staging):
+    """#484: confiture < 1.40 ran the no-op, deleted 002's ledger row and called
+    it success, leaving table u behind. 1.40 refuses before running anything,
+    so the deployer reports ROLLBACK_FAILED instead of a rollback that lied."""
+    from confiture.exceptions import RollbackError
+
+    target, build = staging
+    strategy, config, migrations = build(
+        "python-empty-down", template="never", min_tables=99
+    )
+    steps = _fail_at_step_10(strategy, config, migrations)
+
+    with pytest.raises(RollbackError, match="no usable down for 002") as exc:
+        strategy.rollback(config, migrations_dir=migrations, steps=steps)
+
+    assert exc.value.error_code == "ROLLBACK_600"
+    assert _ledger(target) == ["001", "002"]
+    assert _table_u_exists(target)

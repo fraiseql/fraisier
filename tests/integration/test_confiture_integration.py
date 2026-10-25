@@ -157,6 +157,70 @@ class TestConfitureIntegration:
             )
 
 
+_EMPTY_DOWN_PY = """from confiture.models.migration import Migration
+
+
+class AddU(Migration):
+    version = "001"
+    name = "add_u"
+
+    def up(self) -> None:
+        self.execute("CREATE TABLE empty_down_u (id int)")
+
+    def down(self) -> None:
+        pass
+"""
+
+
+class TestEmptyPythonDown:
+    """#484: confiture 1.40 counts a ``.py`` migration whose ``down()`` does
+    nothing as irreversible. A ``migrate`` deploy without
+    ``allow_irreversible`` passes ``require_reversible`` and is now refused
+    before anything runs; before 1.40 it applied."""
+
+    def _write(self, migrations_dir):
+        migrations_dir.mkdir(parents=True, exist_ok=True)
+        (migrations_dir / "001_add_u.py").write_text(_EMPTY_DOWN_PY)
+
+    def test_fraisiers_own_preflight_lets_it_through(self, migration_env):
+        """It scans for ``.down.sql`` files only, so the refusal is confiture's."""
+        from fraisier.dbops.confiture import preflight
+
+        config_path, migrations_dir = migration_env
+        self._write(migrations_dir)
+
+        preflight(config_path, migrations_dir=migrations_dir, allow_irreversible=False)
+
+    def test_require_reversible_refuses_it_and_applies_nothing(self, migration_env):
+        from fraisier.dbops.confiture import has_pending, migrate_up
+        from fraisier.errors import MigrationError
+
+        config_path, migrations_dir = migration_env
+        self._write(migrations_dir)
+
+        with pytest.raises(
+            MigrationError, match="a down\\(\\) that does nothing"
+        ) as exc:
+            migrate_up(
+                config_path, migrations_dir=migrations_dir, require_reversible=True
+            )
+
+        assert exc.value.steps_applied == 0
+        assert has_pending(config_path, migrations_dir=migrations_dir)
+
+    def test_allow_irreversible_applies_it(self, migration_env):
+        from fraisier.dbops.confiture import migrate_up
+
+        config_path, migrations_dir = migration_env
+        self._write(migrations_dir)
+
+        result = migrate_up(
+            config_path, migrations_dir=migrations_dir, require_reversible=False
+        )
+
+        assert result.steps_applied == 1
+
+
 class TestScaffoldArtifactValidation:
     """Validate that scaffold generates syntactically correct artifacts."""
 

@@ -665,9 +665,32 @@ dependencies = [
   # and run-specific paths and timings, `--exit-codes-json` is byte-identical, and
   # 1.37.0 on beta.32 reproduces its beta.30 record line for line. Every confiture
   # symbol fraisier and its tests import resolves on 1.39.0.
-  # The floor moves with the cap. 1.34.0 is the first confiture to publish the
-  # pg_tviews check that doctor calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.39.0,<1.40",
+  # **1.40.0 answers "can `migrate down` undo it?" itself** (confiture#754, filed
+  # from #481's probe). The preflight payload carries a top-level `reversible`, and
+  # `dbops/template_rule.py` now reads it, absent meaning deny (#484). That is why
+  # the floor moves to 1.40.0: below it every `auto` restore with a pending
+  # migration takes the template. Captured on the v1.40.0 tag's build with
+  # `.phases/2026-10-25-v0.92/capture/capture_484.py` (the #481 cases plus a `.py`
+  # with a real down), against 1.39.0's captures:
+  #   * On all thirteen shared cases `reversible` is false exactly where the #481
+  #     walk already took the template, so no captured verdict changes. New codes
+  #     name what the walk only saw as an untiered change: PFLIGHT_DOWN_EMPTY,
+  #     PFLIGHT_DOWN_UNVERIFIED, PFLIGHT_IRREVERSIBLE (now without the gate).
+  #   * Every PFLIGHT_REPLICA_* issue now carries the version in `migration` (1.39
+  #     wrote the table name, or null for a `.py`); `dbops/preflight.py` pass 2
+  #     keys on that field and is correct as it stands.
+  #   * ⚠️ `Migrator.down` refuses a `.py` migration whose `down()` is empty with
+  #     RollbackError ROLLBACK_600 and changes nothing; 1.39 ran the no-op, deleted
+  #     the ledger row and reported success (`probe_down_484.py`). A rollback by
+  #     `migrate down` that used to lie now reports rollback_failed.
+  #   * ⚠️ `migrate up --require-reversible` refuses the same migration, so a
+  #     `migrate` deploy without `allow_irreversible` stops before applying it.
+  #   * `--exit-codes-json` is byte-identical; no differ or drift module changed,
+  #     so driver15 was not re-run. The suite on 1.40.0 fails only the range check.
+  # The floor moves with the cap, and here the floor is also a capability floor.
+  # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
+  # calls. The Python floor is still 1.30.0's.
+  "fraiseql-confiture>=1.40.0,<1.41",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

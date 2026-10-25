@@ -1,10 +1,11 @@
 {
   "ok": true,
   "window_safe": false,
+  "reversible": false,
   "summary": {
     "errors": 0,
     "warnings": 2,
-    "info": 0,
+    "info": 1,
     "migrations_checked": 2
   },
   "issues": [
@@ -23,15 +24,30 @@
       }
     },
     {
+      "severity": "info",
+      "code": "PFLIGHT_IRREVERSIBLE",
+      "message": "Migration 002 (drop_v) declares that migrate down does not undo it: the values in t.v are lost.",
+      "migration": "002",
+      "file": "002_drop_v.up.sql",
+      "line": null,
+      "actionable": "Plan the recovery without migrate down: the migration's -- confiture:irreversible reasons say what its down does not restore.",
+      "details": {
+        "irreversible": [
+          "the values in t.v are lost"
+        ]
+      }
+    },
+    {
       "severity": "warning",
       "code": "PFLIGHT_REPLICA_DROP_COLUMN",
       "message": "readers on the old schema still SELECT the column Multi-step fix: deprecate (stop using) \u2192 wait one release \u2192 drop the column.",
-      "migration": "t",
+      "migration": "002",
       "file": "002_drop_v.up.sql",
       "line": null,
       "actionable": "deprecate (stop using) \u2192 wait one release \u2192 drop the column",
       "details": {
-        "operation": "DropColumn"
+        "operation": "DropColumn",
+        "table": "t"
       }
     }
   ],

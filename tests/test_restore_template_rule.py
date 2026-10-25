@@ -1,9 +1,11 @@
 """#481: take the rollback template only when a pending migration needs it.
 
-Every payload here was **captured**, never composed, from confiture 1.39.0's
+Every payload here was **captured**, never composed, from confiture 1.40.0's
 ``migrate preflight --format json --config … --database-url … --scope pending``
 against a throwaway database (``tests/fixtures/confiture/preflight-static-
-pending-*.json``). That static, pending-scoped run is what step 8 reads.
+pending-*.json``). That static, pending-scoped run is what step 8 reads. The
+one exception is named for its version: a 1.39.0 capture, which has no
+``reversible`` verdict (#484).
 """
 
 from __future__ import annotations
@@ -91,7 +93,9 @@ class TestTheRule:
 
         assert decision.take is True
         assert decision.forced_by == ("002",)
-        assert "002 is unclassified (python_migration)" in decision.reason
+        assert decision.reason == (
+            "002 has an empty down, is unclassified (python_migration)"
+        )
 
     def test_an_unparseable_migration_takes_the_template(self):
         decision = decide_template("auto", _captured("unparseable"))
@@ -120,7 +124,9 @@ class TestTheRule:
         decision = decide_template("auto", _captured("irreversible-marker"))
 
         assert decision.take is True
-        assert "002 is destructive (update)" in decision.reason
+        assert decision.reason == (
+            "002 is marked irreversible, is destructive (update)"
+        )
 
     def test_an_already_applied_python_migration_does_not_count(self):
         decision = decide_template("auto", _captured("applied-python-pending-sql"))
@@ -157,6 +163,66 @@ class TestTheRule:
 
 def _proc(returncode: int, stdout: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+
+
+_ALL_CAPTURES = sorted(
+    p.stem.removeprefix("preflight-static-pending-")
+    for p in FIXTURES.glob("preflight-static-pending-*.json")
+    if not p.stem.endswith("-confiture-1.39")
+)
+
+
+class TestTheVerdict:
+    """#484: confiture 1.40 answers "can `migrate down` undo the pending set?"
+    itself, in ``reversible``. The rule takes the template unless that verdict
+    is ``true`` *and* no pending migration is a known blocker."""
+
+    @pytest.mark.parametrize("case", _ALL_CAPTURES)
+    def test_premise_every_capture_carries_a_boolean_verdict(self, case):
+        assert isinstance(_captured(case)["reversible"], bool)
+
+    @pytest.mark.parametrize("case", [c for c in _ALL_CAPTURES if c != "zero-pending"])
+    def test_auto_takes_the_template_exactly_when_the_verdict_is_false(self, case):
+        payload = _captured(case)
+
+        assert decide_template("auto", payload).take is not payload["reversible"]
+
+    def test_premise_the_1_39_capture_has_no_verdict(self):
+        payload = _captured("reversible-confiture-1.39")
+
+        assert "reversible" not in payload
+        assert payload["summary"]["migrations_checked"] == 2
+        assert payload["issues"] == []
+
+    def test_a_payload_without_a_verdict_takes_the_template(self):
+        """Its walk finds nothing; the absent verdict alone is the deny."""
+        decision = decide_template("auto", _captured("reversible-confiture-1.39"))
+
+        assert decision.take is True
+        assert decision.forced_by == ()
+        assert "no `reversible` verdict" in decision.reason
+
+    def test_an_empty_python_down_is_named(self):
+        decision = decide_template("auto", _captured("python"))
+
+        assert "002 has an empty down" in decision.reason
+
+    def test_a_python_down_confiture_cannot_verify_takes_the_template(self):
+        decision = decide_template("auto", _captured("python-with-down"))
+
+        assert decision.take is True
+        assert decision.forced_by == ("002",)
+        assert "002 has a down confiture cannot verify" in decision.reason
+
+    def test_an_irreversible_marker_is_named(self):
+        decision = decide_template("auto", _captured("irreversible-marker"))
+
+        assert "002 is marked irreversible" in decision.reason
+
+    def test_an_unparseable_migration_is_named(self):
+        decision = decide_template("auto", _captured("unparseable"))
+
+        assert "002 could not be parsed" in decision.reason
 
 
 class TestReadPendingPreflight:
@@ -286,8 +352,8 @@ class TestStep8:
             _strategy(create_template=True).execute(CONFIG, migrations_dir=MDIR)
 
         assert (
-            "Rollback template: taken — 002 is unclassified (python_migration)"
-            in caplog.text
+            "Rollback template: taken — 002 has an empty down, "
+            "is unclassified (python_migration)" in caplog.text
         )
 
     def test_a_skip_is_logged_too(

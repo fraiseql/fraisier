@@ -5,7 +5,7 @@
 # and the tree `cargo pgrx package` writes is copied onto the official image of the
 # same Debian release. This is confiture's ci/pg-tviews build. The ref is the
 # commit of the signed v0.1.0-beta.32 tag (`git rev-parse v0.1.0-beta.32^{commit}`),
-# the newest release; fraisier and confiture 1.39 require beta.30 or later. It
+# the newest release; fraisier and confiture 1.40 require beta.30 or later. It
 # moves in the same change that moves the TVIEW tests to another release. Fetched by SHA so a build reproduces and the
 # layer cache never serves another tree under the same ref.
 FROM rust:1.91.1-slim-bookworm AS build
