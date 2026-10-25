@@ -1,9 +1,9 @@
 """The generated install.sh must not restart the unit running the deploy (#349).
 
 A deploy runs in-process inside either the webhook service or a deploy socket's
-``<stem>@N.service`` instance, and a changed ``fraises.yaml`` makes that deploy
-run ``install.sh``. Restarting either unit from there kills the deploy that
-asked for the install.
+``<stem>@N.service`` instance. An operator's ``sudo fraisier scaffold-install``
+runs ``install.sh``, and restarting either unit while a deploy holds its lock
+kills that deploy.
 
 The defect is *which* systemctl command runs, so these tests drive the rendered
 script with a recording ``sudo`` on ``PATH`` rather than mocking the restart —
@@ -12,6 +12,7 @@ a mock asserting "we invoked systemctl restart" passes against the broken code.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
 import shutil
@@ -78,18 +79,24 @@ class _Harness:
         sudo.write_text(_SUDO_STUB)
         sudo.chmod(0o755)
 
-    def run(self, snippet: str, *, env=None, with_flock: bool = True, expect_ok=True):
+    def run(
+        self,
+        snippet: str,
+        *,
+        args: str = "",
+        env=None,
+        with_flock: bool = True,
+        expect_ok=True,
+    ):
         script = self.tmp_path / "harness.sh"
         script.write_text(
-            f'. "{self.install_sh}"\n{textwrap.dedent(snippet)}\n',
+            f'. "{self.install_sh}" {args}\n{textwrap.dedent(snippet)}\n',
         )
         run_env = {
             **os.environ,
             "FRAISIER_TEST_SUDO_LOG": str(self.sudo_log),
             "PATH": f"{self.bin}:{os.environ['PATH']}",
         }
-        run_env.pop("FRAISIER_DEPLOY_IN_FLIGHT", None)
-        run_env.pop("FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER", None)
         if not with_flock:
             # A PATH with the stub dir and the coreutils dir but no flock(1).
             stripped = self.tmp_path / "noflock"
@@ -115,6 +122,15 @@ class _Harness:
                 f"harness snippet failed: {result.stderr}\n{result.stdout}"
             )
         return result
+
+    @contextlib.contextmanager
+    def deploy_holding_its_lock(self):
+        """What a running deploy looks like to the probe: an exclusive flock."""
+        lock = self.lock_dir / "api.lock"
+        lock.touch()
+        with lock.open("w") as fd:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
 
     def sudo_calls(self) -> list[str]:
         if not self.sudo_log.exists():
@@ -160,28 +176,8 @@ class TestRestartsWhenNoDeployIsInFlight:
 
 
 class TestDefersUnderALiveDeploy:
-    def test_caller_declaration_defers_the_restart(self, harness):
-        result = harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-        )
-        assert result.returncode == 0, result.stderr
-        assert harness.sudo_calls() == []
-
-    def test_helper_marker_defers_the_restart(self, harness):
-        """An older webhook over the socket sets only the legacy marker."""
-        harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}",
-            env={"FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER": "1"},
-        )
-        assert harness.sudo_calls() == []
-
     def test_a_held_deployment_lock_defers_the_restart(self, harness):
-        """The probe is the backstop for a caller that does not declare."""
-        lock = harness.lock_dir / "api.lock"
-        lock.touch()
-        with lock.open("w") as fd:
-            fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with harness.deploy_holding_its_lock():
             harness.run(f"_restart_deploy_host_unit {_WEBHOOK_UNIT}")
         assert harness.sudo_calls() == []
 
@@ -195,21 +191,50 @@ class TestDefersUnderALiveDeploy:
         )
 
     def test_deferral_names_the_unit_and_the_signal(self, harness):
-        result = harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-        )
+        with harness.deploy_holding_its_lock():
+            result = harness.run(f"_restart_deploy_host_unit {_WEBHOOK_UNIT}")
         assert "Deferring restart" in result.stdout
         assert _WEBHOOK_UNIT in result.stdout
-        assert "declared" in result.stdout
+        assert "a deployment lock is held" in result.stdout
 
     def test_deploy_socket_is_deferred_too(self, harness):
         """The deploy socket propagates a restart to the deploy-daemon instance."""
-        harness.run(
-            f"_restart_deploy_host_unit {_DEPLOY_SOCKET}",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-        )
+        with harness.deploy_holding_its_lock():
+            harness.run(f"_restart_deploy_host_unit {_DEPLOY_SOCKET}")
         assert harness.sudo_calls() == []
+
+
+class TestOnlyTheLockProbeDefers:
+    """install.sh's one caller is an operator's `sudo fraisier scaffold-install`
+    (#489). sudo strips the environment and no fraisier code passes a flag, so
+    a held deployment lock is the only evidence of a deploy. A variable left in
+    a root shell must not stand in for it."""
+
+    @pytest.mark.parametrize(
+        "variable",
+        ["FRAISIER_DEPLOY_IN_FLIGHT", "FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER"],
+    )
+    def test_a_stale_variable_does_not_defer_the_restart(self, harness, variable):
+        harness.run(f"_restart_deploy_host_unit {_WEBHOOK_UNIT}", env={variable: "1"})
+        assert any(
+            f"systemctl restart {_WEBHOOK_UNIT}" in call
+            for call in harness.sudo_calls()
+        ), harness.sudo_calls()
+
+    def test_the_removed_flag_is_refused(self, harness):
+        result = harness.run("true", args="--deploy-in-flight", expect_ok=False)
+        assert result.returncode != 0
+        assert "Unknown option '--deploy-in-flight'" in result.stderr
+
+    def test_help_does_not_offer_the_removed_flag(self, harness):
+        result = subprocess.run(
+            ["bash", str(harness.install_sh), "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "--help" in result.stdout
+        assert "--deploy-in-flight" not in result.stdout
 
 
 class TestLockProbeSideEffects:
@@ -229,16 +254,6 @@ class TestLockProbeSideEffects:
             for call in harness.sudo_calls()
         )
 
-    def test_missing_flock_does_not_override_a_declaring_caller(self, harness):
-        """The caller's declaration is authoritative and never needs the probe."""
-        result = harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-            with_flock=False,
-        )
-        assert harness.sudo_calls() == []
-        assert "could not probe" not in result.stderr
-
 
 # --------------------------------------------------------------------------
 # The debt is recorded, so nothing pays it silently or forgets it.
@@ -247,33 +262,33 @@ class TestLockProbeSideEffects:
 
 class TestDeferredRestartLedger:
     def test_deferred_unit_is_recorded(self, harness):
-        harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-        )
+        with harness.deploy_holding_its_lock():
+            harness.run(
+                f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts"
+            )
         assert harness.ledger() == [_WEBHOOK_UNIT]
 
     def test_ledger_merges_with_an_unpaid_entry_from_an_earlier_install(self, harness):
         (harness.lock_dir / ".deferred-restarts").write_text(f"{_DEPLOY_SOCKET}\n")
-        harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-        )
+        with harness.deploy_holding_its_lock():
+            harness.run(
+                f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts"
+            )
         assert sorted(harness.ledger()) == sorted([_WEBHOOK_UNIT, _DEPLOY_SOCKET])
 
     def test_ledger_does_not_duplicate_a_unit_already_pending(self, harness):
         (harness.lock_dir / ".deferred-restarts").write_text(f"{_WEBHOOK_UNIT}\n")
-        harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-        )
+        with harness.deploy_holding_its_lock():
+            harness.run(
+                f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts"
+            )
         assert harness.ledger() == [_WEBHOOK_UNIT]
 
     def test_summary_lists_what_is_still_running_its_old_unit(self, harness):
-        result = harness.run(
-            f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts",
-            env={"FRAISIER_DEPLOY_IN_FLIGHT": "1"},
-        )
+        with harness.deploy_holding_its_lock():
+            result = harness.run(
+                f"_restart_deploy_host_unit {_WEBHOOK_UNIT}\n_report_deferred_restarts"
+            )
         assert "Deferred restarts" in result.stdout
         assert _WEBHOOK_UNIT in result.stdout
 

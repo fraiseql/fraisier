@@ -776,9 +776,11 @@ entry is cleared only when its restart succeeded, and `fraisier doctor`'s
 Units are also only reinstalled and restarted when their bytes actually changed,
 so most `fraises.yaml` edits now restart nothing at all.
 
-Running this command by hand is unaffected: no deploy holds a lock, so every
-restart happens as before. `install.sh --deploy-in-flight` is how fraisier tells
-it otherwise across the `sudo` boundary; it is not a flag to pass yourself.
+Running this command by hand restarts units as before, unless a deploy holds
+its lock at that moment. install.sh then defers the restart of the unit hosting
+that deploy in the same way. A held lock is the only signal it reads. On a
+`lock_backend: database` host there is no lock file to probe, so a run there
+always restarts.
 
 **Examples:**
 
