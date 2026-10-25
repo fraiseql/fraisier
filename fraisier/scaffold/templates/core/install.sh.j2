@@ -29,11 +29,6 @@ VALIDATE_ONLY=false
 VERBOSE=false
 STANDALONE=false
 SCAFFOLD_DIR=""
-# Set by --deploy-in-flight. The env-var form cannot cross `sudo`, which resets
-# the environment, and the subprocess install path is
-# deployer -> `fraisier scaffold-install` -> `sudo install.sh`. See the deploy
-# host restart guard below.
-DEPLOY_IN_FLIGHT=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -58,10 +53,6 @@ while [[ $# -gt 0 ]]; do
       STANDALONE=true
       shift 2
       ;;
-    --deploy-in-flight)
-      DEPLOY_IN_FLIGHT=true
-      shift
-      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo ""
@@ -71,8 +62,6 @@ while [[ $# -gt 0 ]]; do
       echo "  --verbose, -v             Enable verbose output"
       echo "  --standalone              Run without requiring PROJECT_DIR to exist"
       echo "  --scaffold-dir <path>     Path to scaffold files (implies --standalone)"
-      echo "  --deploy-in-flight        A deploy is running; defer restarts of the"
-      echo "                            units that host it (set by fraisier, not you)"
       echo "  --help, -h                Show this help message"
       exit 0
       ;;
@@ -134,22 +123,21 @@ _run_strict() {
 }
 
 # ---------------------------------------------------------------------------
-# Nothing installed here may terminate the work that asked for it (#349).
+# Nothing installed here may terminate a deploy that is running (#349).
 #
 # A deploy runs *in process* inside one of two units: the webhook service,
 # which executes deploys as background tasks, and a deploy socket's
-# `<stem>@N.service` instance running `fraisier deploy-daemon`. A changed
-# fraises.yaml makes that deploy run this script — so restarting either unit
-# from here kills the deploy that asked for the install. The webhook will not
-# exit while a deploy is in flight, so systemd's stop timeout expires and the
-# process is SIGKILLed, taking the deploy with it and leaving no failure record
-# of its own; the caller sees only a timeout.
+# `<stem>@N.service` instance running `fraisier deploy-daemon`. This script's
+# one caller is an operator's `sudo fraisier scaffold-install` (a deploy
+# installs through the root helper, which never runs it), and nothing stops
+# that operator from running it while a deploy is in flight. Restarting either
+# unit then kills that deploy. The webhook will not exit while a deploy is in
+# flight, so systemd's stop timeout expires and the process is SIGKILLed,
+# taking the deploy with it and leaving no failure record of its own.
 #
 # The deploy socket is the same hazard one step removed: the generated deploy
 # service carries `Requires=<its socket>`, and systemd propagates an explicit
-# restart of a required unit to its dependents. That is the identical mechanism
-# behind the scaffold-install-helper self-restart race guarded further down —
-# that helper's .service also `Requires=` its socket.
+# restart of a required unit to its dependents.
 #
 # So every restart of a deploy-hosting unit goes through
 # `_restart_deploy_host_unit`, which defers under a live deploy, names what it
@@ -194,45 +182,17 @@ _deploy_locks_held() {
     return 1
 }
 
-# Is a deploy in flight? Four signals, OR'd, because each covers the others'
-# gaps:
-#
-#   --deploy-in-flight          the caller's declaration when it had to cross a
-#                               `sudo`, which resets the environment. This is
-#                               the subprocess install path:
-#                               deploy -> `fraisier scaffold-install` ->
-#                               `sudo install.sh`.
-#   FRAISIER_DEPLOY_IN_FLIGHT   the same declaration where the environment does
-#                               survive: the helper socket forwards it from the
-#                               request payload. Either form is the only signal
-#                               that works on `lock_backend=database` hosts,
-#                               where there is no *.lock file to probe.
-#   the lock probe              the backstop, so this script does not rest on a
-#                               claim it cannot check, and still protects a
-#                               deploy run by an older fraisier that does not
-#                               declare.
-#   FRAISIER_VIA_SCAFFOLD_...   an older webhook talking to a newer install.sh
-#                               over the helper socket sets only this one.
+# Is a deploy in flight? A held deployment lock is the only evidence. The
+# operator's `sudo` strips the environment, so no caller can declare one
+# (#489). A `lock_backend: database` host has no *.lock file to probe, so
+# there this always answers "no".
 #
 # An unevaluable probe resolves to "no deploy is running", with a warning —
 # deliberately the opposite of the rule this project applies elsewhere, and for
-# a stated reason: the authoritative signal for the dangerous path is the
-# caller's declaration, which is never unevaluable. The probe is a backstop, and
-# a backstop that cannot run must not block a manual `scaffold-install`, which
-# is the documented remedy for a unit that has gone stale.
+# a stated reason: a probe that cannot run must not block a manual
+# `scaffold-install`, which is the documented remedy for a unit that has gone
+# stale.
 _deploy_in_flight() {
-    if [[ "$DEPLOY_IN_FLIGHT" == "true" ]]; then
-        _FRAISIER_DEPLOY_SIGNAL="the caller declared a deploy in flight (--deploy-in-flight)"
-        return 0
-    fi
-    if [ -n "${FRAISIER_DEPLOY_IN_FLIGHT:-}" ]; then
-        _FRAISIER_DEPLOY_SIGNAL="the caller declared a deploy in flight"
-        return 0
-    fi
-    if [ -n "${FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER:-}" ]; then
-        _FRAISIER_DEPLOY_SIGNAL="invoked via the scaffold-install helper, which only a deploy does"
-        return 0
-    fi
     local rc=0
     _deploy_locks_held || rc=$?
     if [ "$rc" -eq 0 ]; then
@@ -805,18 +765,7 @@ if [ -f "${SCAFFOLD_INSTALL_HELPER_SVC}" ] && [ -f "${SCAFFOLD_INSTALL_HELPER_SO
        /etc/systemd/system/fraisier-{{ project_name }}-scaffold-install-helper.socket
     _run sudo systemctl daemon-reload
     _run sudo systemctl enable fraisier-{{ project_name }}-scaffold-install-helper.socket
-    # Do NOT restart our own socket when install.sh is being executed BY the
-    # scaffold-install-helper: restarting fraisier-*-scaffold-install-helper.socket
-    # SIGTERMs this very helper mid-request, so the webhook's socket call reads an
-    # empty reply and — under NoNewPrivileges, unable to fall back — the deploy
-    # aborts before the DB step (the scaffold-install-helper self-restart race).
-    # The freshly-copied unit above is loaded (daemon-reload) and takes effect on
-    # the next non-helper scaffold-install (manual re-bake / post-upgrade restart).
-    if [ -z "${FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER:-}" ]; then
-        _run sudo systemctl restart fraisier-{{ project_name }}-scaffold-install-helper.socket
-    else
-        echo "  (skipping scaffold-install-helper self-restart — invoked via the helper)"
-    fi
+    _run sudo systemctl restart fraisier-{{ project_name }}-scaffold-install-helper.socket
 fi
 
 # Install sudoers fragment

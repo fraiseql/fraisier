@@ -255,14 +255,7 @@ def _build_install_cmd(
     validate_only: bool,
     verbose: bool,
 ) -> list[str]:
-    """Build the ``sudo install.sh`` argv.
-
-    ``FRAISIER_DEPLOY_IN_FLIGHT`` is re-stated as ``--deploy-in-flight`` because
-    this is the one hop where the environment does not survive: a deploy sets
-    the variable, this process inherits it, and ``sudo`` resets it before
-    ``install.sh`` ever sees it. Without the flag, install.sh would restart the
-    webhook that is running the deploy invoking it (#349).
-    """
+    """Build the ``sudo install.sh`` argv."""
     cmd: list[str] = ["sudo", install_script]
     if dry_run:
         cmd.append("--dry-run")
@@ -270,8 +263,6 @@ def _build_install_cmd(
         cmd.append("--validate-only")
     if verbose:
         cmd.append("--verbose")
-    if os.environ.get("FRAISIER_DEPLOY_IN_FLIGHT"):
-        cmd.append("--deploy-in-flight")
     return cmd
 
 

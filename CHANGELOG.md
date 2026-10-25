@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **install.sh reads only the deployment lock to tell whether a deploy is in
+  flight** ([#489](https://github.com/fraiseql/fraisier/issues/489)). The
+  `--deploy-in-flight` option, the `FRAISIER_DEPLOY_IN_FLIGHT` and
+  `FRAISIER_VIA_SCAFFOLD_INSTALL_HELPER` variables, and `scaffold-install`'s
+  forwarding of the first variable as the flag are gone. Since #433 the root
+  helper applies units itself and never runs install.sh. Since #486 no deploy
+  runs `scaffold-install`. So install.sh's one caller is an operator's
+  `sudo fraisier scaffold-install`, and sudo strips the environment. What
+  changes: `install.sh --deploy-in-flight` now fails with "Unknown option"; a
+  variable left in a root shell no longer suppresses a restart; and the
+  scaffold-install-helper socket is always restarted. A webhook or deploy-socket
+  restart is still deferred while a deploy holds its lock.
+
 ## [0.93.0] - 2026-10-25
 
 ### Fixed

@@ -711,11 +711,9 @@ class BaseDeployer(StatusRecordMixin, ABC):
             ) as sock:
                 sock.settimeout(timeout_s)
                 sock.connect(socket_path)
-                # `deploy_in_flight` tells install.sh that restarting a
-                # deploy-hosting unit would terminate its own caller (#349).
-                # It travels in the payload because the helper runs as a
-                # separate root service and does not inherit this process's
-                # environment. An older helper ignores the extra key.
+                # `deploy_in_flight` tells the helper's apply that restarting
+                # a deploy-hosting unit would terminate its own caller (#349),
+                # so it defers that restart instead.
                 sock.sendall(
                     json.dumps({"action": "install", "deploy_in_flight": True}).encode()
                     + b"\n"
