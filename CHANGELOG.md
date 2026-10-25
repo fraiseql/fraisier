@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.92.0] - 2026-10-25
+
+### Changed
+
+- **confiture 1.40: the restore-template rule reads confiture's own
+  `reversible` verdict** ([#484](https://github.com/fraiseql/fraisier/issues/484)).
+  `fraiseql-confiture>=1.40.0,<1.41`. confiture's preflight now says itself
+  whether `migrate down` can undo the pending set (fraiseql/confiture#754).
+  `restore.template: auto` takes the copy unless that verdict is `true` and no
+  pending migration is a known blocker; a payload without it takes the copy. The
+  reason now names a `.py` migration whose `down()` is empty, one whose `down()`
+  confiture cannot verify, a `-- confiture:irreversible` marker on its own, and
+  an unparseable file. On every case captured from 1.39 and 1.40, the decision
+  itself is unchanged.
+
+### Fixed
+
+- **`docs/deployment-guide.md` now explains the two scaffold trees** (#284). The
+  v0.51.0 entry said "Two trees: `output_dir` and `state_dir`" had been written
+  down; it never reached `main`. It is there now, checked against the code
+  (since #433 the root helper reads a deploy's render from the `state_dir` its
+  root policy names). `fraisier setup`'s step list matches what setup does (it
+  had dropped half the steps), and a test ties each documented fact to the code.
+- A test now holds `force_repopulate_worktree` to its promise that untracked
+  files (generated files, a virtualenv, the worktree's `.git` pointer) survive a
+  forced repopulate.
+
+### Upgrade note
+
+**⚠️ A `.py` migration whose `down()` does nothing now stops a `migrate`
+deploy.** confiture 1.40 counts it as irreversible, so without
+`allow_irreversible: true` on the environment the deploy is refused before
+anything applies. Before, it applied, and a later `migrate down` deleted its
+ledger row while leaving its changes in place. Give it a real `down()`, or set
+`allow_irreversible: true`.
+
+**⚠️ A rollback by `migrate down` across such a migration now reports
+`rollback_failed`** (confiture `ROLLBACK_600`), with nothing changed, where it
+used to report success. Under `restore.template: auto` it is not reached: the
+rule takes the template for that migration first.
+
 ## [0.91.0] - 2026-10-24
 
 ### Changed
