@@ -149,12 +149,60 @@ class TestConfitureIntegration:
             "CREATE TABLE no_rollback (id SERIAL PRIMARY KEY);"
         )
 
-        with pytest.raises(IrreversibleMigrationError):
+        with pytest.raises(IrreversibleMigrationError) as exc:
             preflight(
                 config_path,
                 migrations_dir=migrations_dir,
                 allow_irreversible=False,
             )
+
+        assert "001" in str(exc.value)
+
+    def test_preflight_names_the_setting_that_lets_it_through(self, migration_env):
+        """#487: the refusal named `--no-rollback`, which turns off the
+        health-check rollback and leaves this refusal in place."""
+        from fraisier.dbops.confiture import (
+            IrreversibleMigrationError,
+            preflight,
+        )
+
+        config_path, migrations_dir = migration_env
+        migrations_dir.mkdir(parents=True, exist_ok=True)
+        (migrations_dir / "001_irreversible.up.sql").write_text(
+            "CREATE TABLE no_rollback (id SERIAL PRIMARY KEY);"
+        )
+
+        with pytest.raises(IrreversibleMigrationError) as exc:
+            preflight(config_path, migrations_dir=migrations_dir)
+
+        assert "`allow_irreversible: true`" in str(exc.value)
+        assert "--no-rollback" not in str(exc.value)
+
+    def test_preflight_passes_a_reversible_python_migration(self, migration_env):
+        from fraisier.dbops.confiture import preflight
+
+        config_path, migrations_dir = migration_env
+        migrations_dir.mkdir(parents=True, exist_ok=True)
+        (migrations_dir / "001_add_r.py").write_text(_REVERSIBLE_PY)
+
+        preflight(config_path, migrations_dir=migrations_dir)
+
+    def test_preflight_ignores_an_applied_irreversible_migration(self, migration_env):
+        """Only what this deploy would apply can block it."""
+        from fraisier.dbops.confiture import migrate_up, preflight
+
+        config_path, migrations_dir = migration_env
+        migrations_dir.mkdir(parents=True, exist_ok=True)
+        (migrations_dir / "001_add_u.py").write_text(_EMPTY_DOWN_PY)
+        migrate_up(config_path, migrations_dir=migrations_dir)
+        _write_migration(
+            migrations_dir,
+            "002",
+            "CREATE TABLE later (id int);",
+            "DROP TABLE later;",
+        )
+
+        preflight(config_path, migrations_dir=migrations_dir)
 
 
 _EMPTY_DOWN_PY = """from confiture.models.migration import Migration
@@ -172,6 +220,21 @@ class AddU(Migration):
 """
 
 
+_REVERSIBLE_PY = """from confiture.models.migration import Migration
+
+
+class AddR(Migration):
+    version = "001"
+    name = "add_r"
+
+    def up(self) -> None:
+        self.execute("CREATE TABLE reversible_r (id int)")
+
+    def down(self) -> None:
+        self.execute("DROP TABLE reversible_r")
+"""
+
+
 class TestEmptyPythonDown:
     """#484: confiture 1.40 counts a ``.py`` migration whose ``down()`` does
     nothing as irreversible. A ``migrate`` deploy without
@@ -182,14 +245,29 @@ class TestEmptyPythonDown:
         migrations_dir.mkdir(parents=True, exist_ok=True)
         (migrations_dir / "001_add_u.py").write_text(_EMPTY_DOWN_PY)
 
-    def test_fraisiers_own_preflight_lets_it_through(self, migration_env):
-        """It scans for ``.down.sql`` files only, so the refusal is confiture's."""
+    def test_fraisiers_own_preflight_refuses_it(self, migration_env):
+        """#487: preflight reads confiture's verdict, so it no longer misses a
+        ``.py`` migration by scanning for ``.down.sql`` files alone."""
+        from fraisier.dbops.confiture import IrreversibleMigrationError, preflight
+
+        config_path, migrations_dir = migration_env
+        self._write(migrations_dir)
+
+        with pytest.raises(IrreversibleMigrationError) as exc:
+            preflight(
+                config_path, migrations_dir=migrations_dir, allow_irreversible=False
+            )
+
+        assert "001" in str(exc.value)
+        assert "`allow_irreversible: true`" in str(exc.value)
+
+    def test_preflight_lets_it_through_with_allow_irreversible(self, migration_env):
         from fraisier.dbops.confiture import preflight
 
         config_path, migrations_dir = migration_env
         self._write(migrations_dir)
 
-        preflight(config_path, migrations_dir=migrations_dir, allow_irreversible=False)
+        preflight(config_path, migrations_dir=migrations_dir, allow_irreversible=True)
 
     def test_require_reversible_refuses_it_and_applies_nothing(self, migration_env):
         from fraisier.dbops.confiture import has_pending, migrate_up
@@ -207,6 +285,23 @@ class TestEmptyPythonDown:
 
         assert exc.value.steps_applied == 0
         assert has_pending(config_path, migrations_dir=migrations_dir)
+
+    def test_the_refusal_names_fraisiers_setting(self, migration_env):
+        """#487: confiture's text names its own library argument,
+        ``require_reversible``, which an operator cannot set."""
+        from fraisier.dbops.confiture import migrate_up
+        from fraisier.errors import MigrationError
+
+        config_path, migrations_dir = migration_env
+        self._write(migrations_dir)
+
+        with pytest.raises(MigrationError) as exc:
+            migrate_up(
+                config_path, migrations_dir=migrations_dir, require_reversible=True
+            )
+
+        assert "`allow_irreversible: true`" in str(exc.value)
+        assert "require_reversible" not in str(exc.value)
 
     def test_allow_irreversible_applies_it(self, migration_env):
         from fraisier.dbops.confiture import migrate_up
