@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import shlex
 import subprocess
 from pathlib import PurePosixPath
@@ -24,13 +25,44 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+#: Marks where the env payload starts on ``SSHRunner.run``'s stdin.
+_ENV_SENTINEL = "__FRAISIER_ENV__"
+
+#: Skips stdin up to the sentinel, then evals the rest. Skipping is what makes
+#: an unconsumed sudo password line harmless: it is read and dropped, never run.
+#: Exit 125 means stdin ended before the sentinel. No backslashes: fish, as a
+#: login shell, rewrites them inside single quotes.
+_ENV_READER = (
+    "while :; do IFS= read -r l || exit 125; "
+    f'[ "$l" = {_ENV_SENTINEL} ] && break; done; eval "$(cat)"; '
+)
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _env_payload(env: dict[str, str]) -> str:
+    """The sentinel line, then one ``export`` line per key, values quoted.
+
+    Keys are spliced in unquoted, so anything but a shell name is refused.
+    """
+    for key in env:
+        if not _ENV_NAME.fullmatch(key):
+            msg = f"not a valid environment variable name: {key!r}"
+            raise ValueError(msg)
+    exports = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in env.items())
+    return f"{_ENV_SENTINEL}\n{exports}"
+
+
 @runtime_checkable
 class CommandRunner(Protocol):
     """Protocol for executing shell commands.
 
     *env* holds only what the command needs on top of the runner's own
-    environment. An ``SSHRunner`` exports each key on the remote command line,
-    so a caller passes the few keys it means, never a copy of ``os.environ``.
+    environment. No runner puts a value on any argv: ``LocalRunner`` passes it
+    as the child's environment and ``SSHRunner`` sends it on the remote
+    command's stdin. A caller still passes only the few keys it means, never a
+    copy of ``os.environ``: on a remote host the operator's environment is
+    meaningless, and every key is shipped to it.
     """
 
     def run(
@@ -100,8 +132,9 @@ class SSHRunner:
         # Single shared SshTarget — every SSH invocation in this runner
         # routes through fraisier.ssh, which carries the full defensive
         # flag set (BatchMode, ConnectTimeout, AddressFamily,
-        # StrictHostKeyChecking, -n) by construction. This closes
-        # LB-1/LB-2/LB-3/LB-5 from the SSH hardening inventory.
+        # StrictHostKeyChecking) by construction. This closes
+        # LB-1/LB-3/LB-5 from the SSH hardening inventory; run() closes
+        # LB-2 by closing its stdin after the env payload instead of -n.
         self._target = ssh.SshTarget(
             host=host,
             user=user,
@@ -233,39 +266,33 @@ class SSHRunner:
         check: bool = True,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        # Build the remote command string; prepend env exports for SSH.
-        # Always inject a safe PATH so sbin directories are available in
+        # The command goes on argv; env values go on stdin, after a sentinel
+        # line, as `export` lines the remote shell evals (#492). Always
+        # inject a safe PATH so sbin directories are available in
         # non-interactive SSH sessions (see #87).
-        remote_cmd = shlex.join(cmd)
-        merged_env = {"PATH": self._SAFE_PATH}
-        if env:
-            merged_env.update(env)
-        exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in merged_env.items())
-        remote_cmd = f"{exports} {remote_cmd}"
-        if cwd:
-            remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
+        payload = _env_payload({"PATH": self._SAFE_PATH, **(env or {})})
+        script = _ENV_READER + (f"cd {shlex.quote(cwd)} && " if cwd else "")
+        script += f"exec {shlex.join(cmd)}"
+        # fraisier.ssh shlex.joins the argv it is given and sshd hands the
+        # result to the login shell, so the script goes in as `sh -c`'s one
+        # argument. A one-element argv was quoted into a single word, which
+        # the login shell read as a command name (#494).
+        remote_argv = ["sh", "-c", script]
         if self.use_sudo:
-            sudo_prefix = "sudo -S" if self.sudo_password else "sudo"
-            remote_cmd = f"{sudo_prefix} sh -c {shlex.quote(remote_cmd)}"
+            if self.sudo_password:
+                # `sudo -S` reads the first line; the reader discards it
+                # whenever sudo did not need it (NOPASSWD, a cached ticket).
+                remote_argv = ["sudo", "-S", *remote_argv]
+                payload = f"{self.sudo_password}\n{payload}"
+            else:
+                remote_argv = ["sudo", *remote_argv]
 
-        # fraisier.ssh shlex.joins the argv it is given, and sshd hands the
-        # result to the login shell, so the shell-string goes in as `sh -c`'s
-        # one argument. Passed as a one-element argv it was quoted into a
-        # single word, which the login shell read as a command name (#494).
-        remote_argv = ["sh", "-c", remote_cmd]
-        if self.sudo_password and self.use_sudo:
-            # `sudo -S` reads the password from stdin; ssh must therefore
-            # NOT pass -n. cmd_with_input is the short-cmd shape minus -n.
-            return ssh.cmd_with_input(
-                self._target,
-                remote_argv,
-                input=self.sudo_password + "\n",
-                timeout=timeout,
-                check=check,
-            )
-        return ssh.short_cmd(
+        # Without -n: the payload rides on stdin, and subprocess.run closes
+        # the pipe after it, so the command still reads EOF (LB-2).
+        return ssh.cmd_with_input(
             self._target,
             remote_argv,
+            input=payload,
             timeout=timeout,
             check=check,
         )

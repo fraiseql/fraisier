@@ -250,9 +250,11 @@ def cmd_with_input(
 
     Same shape as :func:`short_cmd` (text-mode capture, defensive flag
     set, exit-code semantics) except that the parent feeds ``input`` to
-    SSH's stdin via ``subprocess.run(input=...)``. The motivating use
-    case is ``sudo -S`` — SSHRunner needs to pipe the sudo password to
-    the remote sudo while still capturing stdout/stderr as text.
+    SSH's stdin via ``subprocess.run(input=...)``. ``SSHRunner.run`` uses
+    it for every command: the payload carries the command's env (and the
+    sudo password, when one is set), which must stay off argv (#492).
+    ``subprocess.run`` closes the pipe after the payload, so the remote
+    side reads EOF and ssh does not hang the way ``-n`` guards against.
 
     ``-n`` MUST be omitted here: ``-n`` redirects ssh's own stdin from
     /dev/null, so the password would never reach the remote process.

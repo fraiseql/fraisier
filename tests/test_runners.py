@@ -121,6 +121,51 @@ class TestSSHRunnerRunsTheCommand:
 
         assert result.stdout == "v a'l\n"
 
+    def test_env_value_reaches_the_command_but_not_the_local_argv(self, sshd_mirror):
+        result = SSHRunner(host="h", user="u").run(
+            ["printenv", "PGPASSWORD"], env={"PGPASSWORD": "unit-s3cr3t"}, timeout=10
+        )
+
+        assert result.stdout == "unit-s3cr3t\n"
+        assert "unit-s3cr3t" not in (sshd_mirror / "argv").read_text()
+
+    def test_safe_path_reaches_the_command(self, sshd_mirror):
+        result = SSHRunner(host="h", user="u").run(["printenv", "PATH"], timeout=10)
+
+        assert result.stdout == f"{SSHRunner._SAFE_PATH}\n"
+
+    def test_env_and_safe_path_both_reach_the_command(self, sshd_mirror):
+        result = SSHRunner(host="h", user="u").run(
+            ["sh", "-c", 'printf "%s|%s" "$FOO" "$PATH"'],
+            env={"FOO": "bar"},
+            timeout=10,
+        )
+
+        assert result.stdout == f"bar|{SSHRunner._SAFE_PATH}"
+
+    def test_env_path_overrides_the_safe_path(self, sshd_mirror):
+        result = SSHRunner(host="h", user="u").run(
+            ["printenv", "PATH"], env={"PATH": "/usr/bin:/bin:/custom"}, timeout=10
+        )
+
+        assert result.stdout == "/usr/bin:/bin:/custom\n"
+
+    def test_command_stdin_is_at_eof(self, sshd_mirror):
+        """LB-2's guarantee, kept without ``-n``.
+
+        ``-n`` stopped ssh from holding stdin open (da5c119). ``run()`` now
+        feeds the env payload on stdin, and ``subprocess.run(input=...)``
+        closes the pipe after it, so the command still reads EOF.
+        """
+        result = SSHRunner(host="h", user="u").run(["cat"], env={"K": "v"}, timeout=10)
+
+        assert result.stdout == ""
+
+    @pytest.mark.parametrize("key", ["A;B", "1A", "", "A B", "A=B", "A\nB"])
+    def test_env_key_that_is_not_a_shell_name_is_refused(self, key):
+        with pytest.raises(ValueError, match="environment variable name"):
+            SSHRunner(host="h", user="u").run(["true"], env={key: "x"})
+
     def test_upload_tree_writes_every_file(self, sshd_mirror, tmp_path):
         src = tmp_path / "src"
         (src / "sub").mkdir(parents=True)
@@ -160,46 +205,6 @@ class TestSSHRunner:
         assert "restart" in remote
         assert "api" in remote
 
-    def test_run_prepends_safe_path(self):
-        runner = SSHRunner(host="h", user="u")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="ok", stderr=""
-            )
-            runner.run(["usermod", "-aG", "www-data", "deploy"])
-
-        # The remote command is shell-quoted by ssh.short_cmd (single token);
-        # the remote sh -c strips those quotes. Assert content, not prefix.
-        remote = mock_run.call_args[0][0][-1]
-        assert "PATH=" in remote
-        assert "/usr/local/sbin" in remote
-        assert "/usr/sbin" in remote
-        assert "/sbin" in remote
-        assert "usermod" in remote
-
-    def test_run_with_env_merges_with_safe_path(self):
-        runner = SSHRunner(host="h", user="u")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            runner.run(["echo", "hi"], env={"FOO": "bar"})
-
-        remote = mock_run.call_args[0][0][-1]
-        assert "PATH=" in remote
-        assert "FOO=bar" in remote
-
-    def test_run_with_env_path_overrides_safe_default(self):
-        runner = SSHRunner(host="h", user="u")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            runner.run(["echo"], env={"PATH": "/custom/bin"})
-
-        remote = mock_run.call_args[0][0][-1]
-        assert "PATH=/custom/bin" in remote
-
     def test_run_with_cwd_prepends_cd(self):
         runner = SSHRunner(host="h", user="u")
         with patch("subprocess.run") as mock_run:
@@ -233,7 +238,8 @@ class TestSSHRunner:
     # .phases/2026-04-10-ssh-io-contract/latent-bugs.md. SSHRunner.run
     # routes through the fraisier.ssh entry points which carry the full
     # defensive flag set (BatchMode, ConnectTimeout, AddressFamily,
-    # StrictHostKeyChecking, -n) by construction.
+    # StrictHostKeyChecking) by construction. LB-2's -n is retired for run(),
+    # whose stdin carries the env payload: see test_command_stdin_is_at_eof.
 
     def test_run_includes_connect_timeout(self):
         """LB-1: SSHRunner.run was missing ConnectTimeout, leaving every
@@ -248,18 +254,6 @@ class TestSSHRunner:
         called_cmd = mock_run.call_args[0][0]
         assert "-o" in called_cmd
         assert "ConnectTimeout=30" in called_cmd
-
-    def test_run_includes_dash_n(self):
-        """LB-2: short-cmd pattern requires -n so ssh never allocates a
-        stdin channel."""
-        runner = SSHRunner(host="h", user="u")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            runner.run(["true"])
-        called_cmd = mock_run.call_args[0][0]
-        assert "-n" in called_cmd
 
     def test_run_honours_address_family(self):
         """LB-3: AddressFamily must be threaded through from config so
@@ -470,12 +464,8 @@ class TestSSHRunnerSudo:
             runner.run(["useradd", "--system", "deploy"])
 
         remote = mock_run.call_args[0][0][-1]
-        # ssh.short_cmd shell-quotes the remote command into a single
-        # token; the remote sh -c strips that outer quoting before
-        # executing. Assert content rather than exact prefix.
         assert "sudo sh -c " in remote
         assert "useradd" in remote
-        assert "PATH=" in remote
 
     def test_run_without_sudo_does_not_wrap(self):
         runner = SSHRunner(host="h", user="u", use_sudo=False)
@@ -595,7 +585,7 @@ class TestSSHRunnerSudoPassword:
             runner.run(["echo", "hi"])
 
         kwargs = mock_run.call_args[1]
-        assert kwargs["input"] == "secret\n"
+        assert kwargs["input"].startswith("secret\n__FRAISIER_ENV__\n")
         assert kwargs["capture_output"] is True
 
     def test_run_without_password_uses_plain_sudo(self):
@@ -628,7 +618,7 @@ class TestSSHRunnerSudoPassword:
         remote_cmd = mv_call[0][0][-1]
         assert "sudo -S sh -c" in remote_cmd
         kwargs = mv_call[1]
-        assert kwargs["input"] == "secret\n"
+        assert kwargs["input"].startswith("secret\n__FRAISIER_ENV__\n")
 
     def test_upload_tree_sudo_password_uses_two_step(self, tmp_path):
         runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
@@ -667,7 +657,7 @@ class TestSSHRunnerSudoPassword:
         second_remote = second_ssh[-1]
         assert "sudo -S sh -c" in second_remote
         second_kwargs = mock_run.call_args_list[1][1]
-        assert second_kwargs["input"] == "secret\n"
+        assert second_kwargs["input"].startswith("secret\n__FRAISIER_ENV__\n")
 
 
 class TestRunnerFromConfig:
