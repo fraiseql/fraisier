@@ -15,8 +15,9 @@ entry via :func:`resolve_db_url`; downstream signatures stay typed
 
 from __future__ import annotations
 
+import os
 from typing import Literal
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlsplit, urlunparse
 
 from fraisier.config._lazy_env import LazyEnv, to_str
 
@@ -37,6 +38,55 @@ def replace_db_name(url: str, db_name: str) -> str:
         replaced = replaced.replace(f"{parsed.scheme}:/", f"{parsed.scheme}:///", 1)
 
     return replaced
+
+
+def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
+    """Return *url* without its password, and the env that carries it instead.
+
+    A child's argv is readable by every local user (``ps``,
+    ``/proc/<pid>/cmdline``), so a URL handed to one must not carry a password.
+    libpq falls back to ``PGPASSWORD`` when the connection string has none.
+
+    The password may be in the userinfo or in a ``password=`` query parameter.
+    libpq reads the query second, so the query's value wins. Both are
+    percent-decoded the way libpq decodes them, which leaves ``+`` alone.
+    The URL is rebuilt by hand, because ``urlunsplit`` turns
+    ``postgresql:///db`` into ``postgresql:/db``. A key=value conninfo string
+    is returned unchanged.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("postgresql", "postgres"):
+        return url, {}
+
+    password: str | None = None
+    netloc = parts.netloc
+    userinfo, at, hostport = netloc.rpartition("@")
+    if at and ":" in userinfo:
+        user, _, raw = userinfo.partition(":")
+        password = unquote(raw)
+        netloc = f"{user}@{hostport}"
+
+    kept: list[str] = []
+    for param in parts.query.split("&") if parts.query else []:
+        key, _, value = param.partition("=")
+        if unquote(key) == "password":
+            password = unquote(value)
+        else:
+            kept.append(param)
+
+    if password is None:
+        return url, {}
+    rebuilt = f"{parts.scheme}://{netloc}{parts.path}"
+    if kept:
+        rebuilt += "?" + "&".join(kept)
+    if parts.fragment:
+        rebuilt += "#" + parts.fragment
+    return rebuilt, {"PGPASSWORD": password} if password else {}
+
+
+def child_env(extra: dict[str, str]) -> dict[str, str] | None:
+    """The environment for a child that also needs *extra*; ``None`` inherits ours."""
+    return {**os.environ, **extra} if extra else None
 
 
 def resolve_db_url(
