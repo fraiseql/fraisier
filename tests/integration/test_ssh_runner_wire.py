@@ -140,3 +140,36 @@ def test_upload_tree_writes_every_file(
     runner.upload_tree(_tree(tmp_path), remote_dir)
 
     assert _read_back(sshd, remote_dir) == "alpha\nbeta\n"
+
+
+@pytest.mark.parametrize(
+    ("user", "with_password"),
+    [("nopw", False), ("pw", True)],
+    ids=["sudo", "sudo-password"],
+)
+def test_upload_tree_under_sudo_is_owned_by_root(
+    sshd: SshdBox, tmp_path: Path, user: str, with_password: bool
+) -> None:
+    """Root owns the whole tree, however the upload got root.
+
+    Bootstrap runs the uploaded ``install.sh`` as root. Root's ``tar`` keeps
+    the archive's numeric owners (the operator's local uid), and ``cp -a``
+    keeps the SSH user's: either way a non-root account could rewrite a file
+    root then executes.
+    """
+    remote_dir = _remote_dir()
+    runner = _runner(
+        sshd,
+        user,
+        use_sudo=True,
+        sudo_password=sshd.password if with_password else None,
+    )
+
+    runner.upload_tree(_tree(tmp_path), remote_dir)
+
+    not_root = ssh.short_cmd(
+        sshd.target("nopw"),
+        ["sudo", "-n", "find", remote_dir, "!", "-uid", "0", "-printf", "%u %p\\n"],
+    )
+    assert _read_back(sshd, remote_dir) == "alpha\nbeta\n"
+    assert not_root.stdout == ""
