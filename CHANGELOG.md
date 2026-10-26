@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **No database password goes on a child process's command line**
+  ([#491](https://github.com/fraiseql/fraisier/issues/491)). Five calls handed
+  a full database URL to a child as an argument, where any local user can read
+  it through `ps` or `/proc/<pid>/cmdline`:
+  - the restore preflight's `confiture migrate preflight --against`
+    (the `database.admin_url` superuser password)
+  - the restore template decision's `--database-url`
+  - the migrate/rebuild strategies' `psql <url> -f`, which also receives the
+    admin URL
+  - the deploy recorder's database-size query
+  - each `post_migrate` step
+
+  Each now passes the URL without its password and puts the password in the
+  child's `PGPASSWORD`. That covers a password in the userinfo and one in a
+  `?password=` parameter. Only password URLs were exposed; the peer-auth socket
+  form carries none. When a fraise runs over `ssh:`, the remote command line
+  still carries the password, as an exported `PGPASSWORD` where it used to
+  carry the URL. `CommandRunner`'s local runner now adds a caller's `env` to
+  its own environment instead of replacing it.
+
 ### Removed
 
 - **install.sh reads only the deployment lock to tell whether a deploy is in

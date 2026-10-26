@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import shlex
 import subprocess
 from pathlib import PurePosixPath
@@ -25,7 +26,12 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class CommandRunner(Protocol):
-    """Protocol for executing shell commands."""
+    """Protocol for executing shell commands.
+
+    *env* holds only what the command needs on top of the runner's own
+    environment. An ``SSHRunner`` exports each key on the remote command line,
+    so a caller passes the few keys it means, never a copy of ``os.environ``.
+    """
 
     def run(
         self,
@@ -57,7 +63,7 @@ class LocalRunner:
             text=True,
             timeout=timeout,
             check=check,
-            env=env,
+            env={**os.environ, **env} if env else None,
         )
 
 
