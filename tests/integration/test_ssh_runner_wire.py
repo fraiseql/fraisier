@@ -173,3 +173,33 @@ def test_upload_tree_under_sudo_is_owned_by_root(
     )
     assert _read_back(sshd, remote_dir) == "alpha\nbeta\n"
     assert not_root.stdout == ""
+
+
+#: Prints the secret as the command's env holds it, then how many argv on the
+#: host contain it. The bracket keeps this pattern from matching itself.
+_SECRET = "wire-s3cr3t-value"
+_SEES_SECRET = [
+    "sh",
+    "-c",
+    'printenv PGPASSWORD; ps -eo args | grep -c "wire-s3cr3t-valu[e]" || true',
+]
+
+
+@pytest.mark.parametrize(
+    ("user", "use_sudo", "with_password"),
+    [("nopw", False, False), ("nopw", True, False), ("pw", True, True)],
+    ids=["plain", "sudo", "sudo-password"],
+)
+def test_env_value_reaches_the_command_and_no_remote_argv(
+    sshd: SshdBox, user: str, use_sudo: bool, with_password: bool
+) -> None:
+    runner = _runner(
+        sshd,
+        user,
+        use_sudo=use_sudo,
+        sudo_password=sshd.password if with_password else None,
+    )
+
+    result = runner.run(_SEES_SECRET, env={"PGPASSWORD": _SECRET}, timeout=WIRE_TIMEOUT)
+
+    assert result.stdout == f"{_SECRET}\n0\n"
