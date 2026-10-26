@@ -153,9 +153,11 @@ class SSHRunner:
         if self.use_sudo and self.sudo_password:
             return self._upload_tree_with_password(local_dir, remote_dir)
 
+        # --no-same-owner: root's tar otherwise keeps the archive's numeric
+        # owners, so the operator's local uid would own what root runs.
         remote_cmd = (
             f"mkdir -p {shlex.quote(remote_dir)}"
-            f" && tar xzf - -C {shlex.quote(remote_dir)}"
+            f" && tar xzf - --no-same-owner -C {shlex.quote(remote_dir)}"
         )
         if self.use_sudo:
             remote_cmd = f"sudo sh -c {shlex.quote(remote_cmd)}"
@@ -178,10 +180,12 @@ class SSHRunner:
             with contextlib.suppress(Exception):
                 self.run(["rm", "-rf", tmp_dir], check=False)
             raise
-        # Step 2: sudo -S mv into place via the regular run() path.
+        # Step 2: sudo -S copy into place via the regular run() path. `cp -R`,
+        # not `cp -a`: root then owns the copies, where -a would keep the SSH
+        # user as the owner of files root may later execute.
         move_cmd = (
             f"mkdir -p {shlex.quote(remote_dir)}"
-            f" && cp -a {shlex.quote(tmp_dir)}/. {shlex.quote(remote_dir)}/"
+            f" && cp -R {shlex.quote(tmp_dir)}/. {shlex.quote(remote_dir)}/"
             f" && rm -rf {shlex.quote(tmp_dir)}"
         )
         self.run(["sh", "-c", move_cmd])
