@@ -95,8 +95,8 @@ class _Runner:
 
 
 def _assert_runner_got_only_the_password(runner):
-    """An SSHRunner exports every env key on the remote command line, so a
-    runner is handed the password alone, never a copy of os.environ."""
+    """An SSHRunner ships every env key to the host, so a runner is handed
+    the password alone, never a copy of os.environ."""
     assert runner.calls, "the child was never started"
     for argv, env in runner.calls:
         assert not [a for a in argv if SECRET in a or DECODED in a], argv
