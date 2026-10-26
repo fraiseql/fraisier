@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.94.0] - 2026-10-26
+
 ### Security
 
 - **No database password goes on a child process's command line**
