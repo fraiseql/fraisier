@@ -57,6 +57,83 @@ class TestLocalRunner:
         )
 
 
+#: An ``ssh`` that does what sshd does with the words after ``user@host``:
+#: joins them with spaces and hands the line to the login shell's ``-c``.
+#: It never unquotes; a fake that did would hide #494 again.
+_SSHD_MIRROR = """#!/bin/sh
+printf '%s\\n' "$@" > "$(dirname "$0")/argv"
+while [ $# -gt 0 ]; do
+    case $1 in
+        -n) exec </dev/null; shift ;;
+        -o|-i|-p) shift 2 ;;
+        *) shift; break ;;
+    esac
+done
+exec sh -c "$*"
+"""
+
+
+@pytest.fixture
+def sshd_mirror(tmp_path, monkeypatch):
+    """Put :data:`_SSHD_MIRROR` first on ``PATH``; return its directory."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "ssh"
+    fake.write_text(_SSHD_MIRROR)
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    return bin_dir
+
+
+class TestSSHRunnerRunsTheCommand:
+    """The command reaches the remote shell as its words, not one quoted word.
+
+    Every ``SSHRunner`` call exited 127 from v0.8.0 to v0.94.0 (#494) while
+    the tests above, which read the command string, stayed green.
+    """
+
+    def test_run_runs_the_command(self, sshd_mirror):
+        result = SSHRunner(host="h", user="u").run(["echo", "hi"], timeout=10)
+
+        assert result.stdout == "hi\n"
+
+    def test_run_preserves_argument_boundaries(self, sshd_mirror):
+        words = ["a b", "c'd", '"e"', "$HOME", "f;g"]
+
+        result = SSHRunner(host="h", user="u").run(
+            ["printf", "%s|", *words], timeout=10
+        )
+
+        assert result.stdout == "".join(f"{w}|" for w in words)
+
+    def test_run_in_cwd(self, sshd_mirror, tmp_path):
+        cwd = tmp_path / "dir with space"
+        cwd.mkdir()
+
+        result = SSHRunner(host="h", user="u").run(["pwd"], cwd=str(cwd), timeout=10)
+
+        assert result.stdout == f"{cwd}\n"
+
+    def test_run_passes_env_to_the_command(self, sshd_mirror):
+        result = SSHRunner(host="h", user="u").run(
+            ["printenv", "FRAISIER_WIRE"], env={"FRAISIER_WIRE": "v a'l"}, timeout=10
+        )
+
+        assert result.stdout == "v a'l\n"
+
+    def test_upload_tree_writes_every_file(self, sshd_mirror, tmp_path):
+        src = tmp_path / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "a.txt").write_text("alpha")
+        (src / "sub" / "b.txt").write_text("beta")
+        dest = tmp_path / "dest with space"
+
+        SSHRunner(host="h", user="u").upload_tree(src, str(dest))
+
+        assert (dest / "a.txt").read_text() == "alpha"
+        assert (dest / "sub" / "b.txt").read_text() == "beta"
+
+
 class TestSSHRunner:
     """Tests for SSHRunner."""
 
