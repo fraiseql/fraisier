@@ -202,7 +202,7 @@ class SSHRunner:
         )
         ssh_result = ssh.data_pipe(
             self._target,
-            [remote_cmd],
+            ["sh", "-c", remote_cmd],
             stdin=tar.stdout,
         )
         if tar.stdout:
@@ -244,23 +244,24 @@ class SSHRunner:
             sudo_prefix = "sudo -S" if self.sudo_password else "sudo"
             remote_cmd = f"{sudo_prefix} sh -c {shlex.quote(remote_cmd)}"
 
-        # Pass the assembled remote shell-string as a single-element argv;
-        # ssh.short_cmd's shlex.join wraps it in quotes which the remote
-        # sh -c strips. The defensive flag set is applied by short_cmd
-        # itself — see fraisier/ssh.py.
+        # fraisier.ssh shlex.joins the argv it is given, and sshd hands the
+        # result to the login shell, so the shell-string goes in as `sh -c`'s
+        # one argument. Passed as a one-element argv it was quoted into a
+        # single word, which the login shell read as a command name (#494).
+        remote_argv = ["sh", "-c", remote_cmd]
         if self.sudo_password and self.use_sudo:
             # `sudo -S` reads the password from stdin; ssh must therefore
             # NOT pass -n. cmd_with_input is the short-cmd shape minus -n.
             return ssh.cmd_with_input(
                 self._target,
-                [remote_cmd],
+                remote_argv,
                 input=self.sudo_password + "\n",
                 timeout=timeout,
                 check=check,
             )
         return ssh.short_cmd(
             self._target,
-            [remote_cmd],
+            remote_argv,
             timeout=timeout,
             check=check,
         )
