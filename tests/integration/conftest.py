@@ -27,10 +27,12 @@ import hashlib
 import multiprocessing
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import quote, unquote, urlparse
 
@@ -38,10 +40,10 @@ import pytest
 
 from fraisier.dbops.tviews import CONTRACT
 from fraisier.locking import file_deployment_lock
+from fraisier.ssh import SshTarget
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-    from pathlib import Path
 
 #: Probed and created against, because that is what the tests do: every one of
 #: them connects here to ``CREATE``/``DROP`` its own database.
@@ -391,8 +393,16 @@ def mark_tview_tests(items: list[Any]) -> None:
             item.add_marker(pytest.mark.tviews)
 
 
+def mark_sshd_tests(items: list[Any]) -> None:
+    """Mark every test that needs the sshd container, for ``-m sshd``."""
+    for item in items:
+        if "sshd" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.sshd)
+
+
 def pytest_collection_modifyitems(items: list[Any]) -> None:
     mark_tview_tests(items)
+    mark_sshd_tests(items)
 
 
 @pytest.fixture
@@ -427,6 +437,155 @@ def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
     if contract is None or contract[0] != CONTRACT:
         _skip_no_tviews(f"pg_tviews here does not offer read contract {CONTRACT}")
     return pg_target
+
+
+#: The image the ``sshd`` fixture builds from ``tests/integration/sshd/``.
+SSHD_IMAGE = "fraisier-test-sshd:bookworm"
+
+#: Seconds to wait for a started sshd to accept the session key.
+SSHD_READY_SECONDS = 30
+
+
+@dataclass(frozen=True)
+class SshdBox:
+    """A running sshd container, and how to reach each of its users.
+
+    The users and their sudo policies are listed in
+    ``tests/integration/sshd/Dockerfile``. Every one has :attr:`password`.
+    """
+
+    host: str
+    port: int
+    key_path: str
+    #: Prepended to ``PATH`` by the ``sshd`` fixture. Its ``ssh`` reads no
+    #: config, uses no agent and writes a private ``known_hosts``.
+    wrapper_dir: str
+    password: str = "s3cr3t"
+
+    def target(self, user: str) -> SshTarget:
+        return SshTarget(
+            host=self.host,
+            user=user,
+            port=self.port,
+            key_path=self.key_path,
+            strict_host_key=False,
+            connect_timeout=10,
+        )
+
+
+def _skip_no_sshd(reason: str) -> NoReturn:
+    """Skip for *reason* — unless this run declared the sshd container mandatory.
+
+    ``FRAISIER_TEST_SSHD=1`` is CI saying Docker is here, and there a skip is
+    the harness missing what was provided, the silence #370 was.
+    """
+    if os.getenv("FRAISIER_TEST_SSHD") == "1":
+        loud = f"FRAISIER_TEST_SSHD=1 declares an sshd container, but {reason}"
+        pytest.fail(loud)  # ty: ignore[invalid-argument-type]
+    pytest.skip(reason)  # ty: ignore[too-many-positional-arguments]
+
+
+def _isolating_ssh_wrapper(real_ssh: str, workdir: Path) -> Path:
+    """Write an ``ssh`` that ignores the developer's config, agent and known_hosts.
+
+    A test answered by someone's ``~/.ssh/config`` or agent proves nothing
+    about the argv fraisier built, and a fresh container key on a reused port
+    must not land in their ``known_hosts``.
+    """
+    wrapper_dir = workdir / "bin"
+    wrapper_dir.mkdir()
+    wrapper = wrapper_dir / "ssh"
+    known_hosts = workdir / "known_hosts"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        "SSH_AUTH_SOCK= exec "
+        f"{shlex.quote(real_ssh)} -F /dev/null -o IdentitiesOnly=yes "
+        f"-o UserKnownHostsFile={shlex.quote(str(known_hosts))} -o LogLevel=ERROR "
+        '"$@"\n'
+    )
+    wrapper.chmod(0o755)
+    return wrapper_dir
+
+
+def _wait_for_login(box: SshdBox) -> bool:
+    argv = [
+        str(Path(box.wrapper_dir) / "ssh"),
+        *box.target("nopw")._ssh_argv(include_dash_n=True)[1:],
+        "true",
+    ]
+    deadline = time.monotonic() + SSHD_READY_SECONDS
+    while time.monotonic() < deadline:
+        if subprocess.run(argv, capture_output=True, check=False).returncode == 0:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+@pytest.fixture(scope="session")
+def _sshd_server(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[SshdBox | str]:
+    """The session's sshd container, or why there is none.
+
+    Yields the reason instead of skipping, so ``sshd`` stays the one place
+    that decides what "no container" means.
+    """
+    real_ssh, keygen = shutil.which("ssh"), shutil.which("ssh-keygen")
+    if real_ssh is None or keygen is None:
+        yield "no ssh client on this machine"
+        return
+    try:
+        from testcontainers.core.container import DockerContainer
+        from testcontainers.core.image import DockerImage
+    except ImportError:
+        yield "testcontainers is not installed"
+        return
+
+    workdir = tmp_path_factory.mktemp("sshd")
+    key = workdir / "id_ed25519"
+    subprocess.run(
+        [keygen, "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True
+    )
+    try:
+        # clean_up=False keeps the image, and with it Docker's layer cache.
+        DockerImage(
+            path=Path(__file__).parent / "sshd", tag=SSHD_IMAGE, clean_up=False
+        ).build()
+        container = (
+            DockerContainer(SSHD_IMAGE)
+            .with_env("AUTHORIZED_KEY", key.with_suffix(".pub").read_text().strip())
+            .with_exposed_ports(22)
+        )
+        container.start()
+    except Exception as exc:
+        yield f"the sshd container could not be started: {exc}"
+        return
+
+    try:
+        box = SshdBox(
+            host=container.get_container_host_ip(),
+            port=int(container.get_exposed_port(22)),
+            key_path=str(key),
+            wrapper_dir=str(_isolating_ssh_wrapper(real_ssh, workdir)),
+        )
+        yield box if _wait_for_login(box) else "the sshd container never let us in"
+    finally:
+        container.stop()
+
+
+@pytest.fixture
+def sshd(_sshd_server: SshdBox | str, monkeypatch: pytest.MonkeyPatch) -> SshdBox:
+    """A real sshd to run fraisier's SSH code against, or skip.
+
+    ``PATH`` starts with the box's isolating ``ssh`` for the test's duration,
+    so every ``ssh`` fraisier spawns reaches the container and nothing else.
+    """
+    if isinstance(_sshd_server, str):
+        _skip_no_sshd(_sshd_server)
+    monkeypatch.setenv(
+        "PATH", f"{_sshd_server.wrapper_dir}{os.pathsep}{os.environ['PATH']}"
+    )
+    return _sshd_server
 
 
 def _hold_flock(

@@ -64,6 +64,9 @@ jobs:
         # it into a failure rather than a silent skip (#370).
         FRAISIER_TEST_PG_URL: postgresql://fraisier:fraisier@localhost:5432/fraisier_test
         FRAISIER_INTEGRATION: '1'
+        # The runner has Docker, so the SSH tests' sshd container must start
+        # here; this turns a fixture that cannot start it into a failure.
+        FRAISIER_TEST_SSHD: '1'
       run: |
         uv run pytest tests/ \
           --cov=fraisier \
