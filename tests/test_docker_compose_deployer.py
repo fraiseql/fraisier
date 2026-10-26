@@ -118,6 +118,18 @@ class TestRollback:
         assert env is not None, "Expected env kwarg with IMAGE_TAG"
         assert env.get("IMAGE_TAG") == "v1.0.0"
 
+    def test_rollback_hands_the_runner_image_tag_alone(self, monkeypatch):
+        """Never a copy of ``os.environ``: an ``SSHRunner`` ships every key to
+        the host (#492), and ``LocalRunner`` already merges the environment."""
+        monkeypatch.setenv("FRAISIER_OPERATOR_SECRET", "not-for-the-host")
+        deployer, runner = _make_deployer()
+        deployer._previous_tag = "v1.0.0"
+
+        deployer.rollback()
+
+        up_call = next(c for c in runner.run.call_args_list if "up" in c[0][0])
+        assert up_call.kwargs["env"] == {"IMAGE_TAG": "v1.0.0"}
+
     def test_rollback_no_previous_tag(self):
         deployer, _runner = _make_deployer()
         deployer._previous_tag = None

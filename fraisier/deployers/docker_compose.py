@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shlex
 import subprocess
 import time
@@ -144,7 +143,7 @@ class DockerComposeDeployer(BaseDeployer):
                 up_args.append(self.service_name)
 
             logger.info(f"Rolling back to tag: {target}")
-            env = {**os.environ, "IMAGE_TAG": target}
+            env = {"IMAGE_TAG": target}
             self.runner.run(self._compose_cmd(*up_args), env=env)
 
             duration = time.time() - start_time

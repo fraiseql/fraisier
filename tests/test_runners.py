@@ -185,6 +185,25 @@ class TestSSHRunnerRunsTheCommand:
 
         assert result.stdout == ""
 
+    @pytest.mark.parametrize(
+        "password", [None, "secret"], ids=["no-password", "sudo-password"]
+    )
+    def test_stdin_without_the_sentinel_fails_loudly_and_runs_nothing(
+        self, sshd_mirror, password
+    ):
+        """The reader exits 125 at EOF rather than running with a partial env.
+
+        The payload is built by ``run()``, so this drives the remote script
+        directly with what a truncated stdin would leave of it.
+        """
+        runner = SSHRunner(
+            host="h", user="u", use_sudo=bool(password), sudo_password=password
+        )
+        with patch("fraisier.runners._env_payload", return_value="export K=v\n"):
+            result = runner.run(["echo", "ran"], check=False, timeout=10)
+
+        assert (result.returncode, result.stdout) == (125, "")
+
     @pytest.mark.parametrize("key", ["A;B", "1A", "", "A B", "A=B", "A\nB"])
     def test_env_key_that_is_not_a_shell_name_is_refused(self, key):
         with pytest.raises(ValueError, match="environment variable name"):
