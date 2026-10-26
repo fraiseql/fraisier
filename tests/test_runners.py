@@ -73,14 +73,38 @@ exec sh -c "$*"
 """
 
 
+#: A ``sudo`` that keeps real sudo's contract for the flags ``SSHRunner``
+#: uses: ``-S`` reads one line and refuses anything but ``secret`` (rc 1),
+#: ``-v`` leaves a ticket, ``-n`` without a ticket refuses. It runs the
+#: command as the caller and logs each invocation's flags.
+_SUDO_MIRROR = """#!/bin/sh
+here=$(dirname "$0")
+printf '%s\\n' "$*" >> "$here/sudo.log"
+while [ $# -gt 0 ]; do
+    case $1 in
+        -S) IFS= read -r pw
+            [ "$pw" = secret ] || { echo "1 incorrect password attempt" >&2; exit 1; }
+            : > "$here/ticket"; shift ;;
+        -p) shift 2 ;;
+        -n) [ -e "$here/ticket" ] || { echo "a password is required" >&2; exit 1; }
+            shift ;;
+        -v) exit 0 ;;
+        *) break ;;
+    esac
+done
+exec "$@"
+"""
+
+
 @pytest.fixture
 def sshd_mirror(tmp_path, monkeypatch):
-    """Put :data:`_SSHD_MIRROR` first on ``PATH``; return its directory."""
+    """Put :data:`_SSHD_MIRROR` and :data:`_SUDO_MIRROR` first on ``PATH``."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    fake = bin_dir / "ssh"
-    fake.write_text(_SSHD_MIRROR)
-    fake.chmod(0o755)
+    for name, script in (("ssh", _SSHD_MIRROR), ("sudo", _SUDO_MIRROR)):
+        fake = bin_dir / name
+        fake.write_text(script)
+        fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     return bin_dir
 
@@ -565,16 +589,22 @@ class TestSSHRunnerSudo:
 class TestSSHRunnerSudoPassword:
     """Tests for SSHRunner with sudo_password (sudo -S via stdin)."""
 
-    def test_run_uses_sudo_s_when_password_set(self):
+    def test_run_checks_the_password_then_runs_with_the_ticket(self, sshd_mirror):
         runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            runner.run(["useradd", "--system", "deploy"])
 
-        remote = mock_run.call_args[0][0][-1]
-        assert "sudo -S sh -c" in remote
+        result = runner.run(["printenv", "K"], env={"K": "v"}, timeout=10)
+
+        assert result.stdout == "v\n"
+        log = (sshd_mirror / "sudo.log").read_text().splitlines()
+        assert [line.split(" sh ")[0] for line in log] == ["-S -p  -v", "-n"]
+
+    def test_run_refuses_a_wrong_password_before_reading_env(self, sshd_mirror):
+        runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="nope")
+
+        result = runner.run(["printenv", "K"], env={"K": "v"}, check=False, timeout=10)
+
+        assert (result.returncode, result.stdout) == (124, "")
+        assert (sshd_mirror / "sudo.log").read_text().count("\n") == 1
 
     def test_run_pipes_password_via_stdin(self):
         runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
@@ -613,51 +643,25 @@ class TestSSHRunnerSudoPassword:
             )
             runner.upload(local_file, "/opt/fraisier/fraises.yaml")
 
-        # The mv call (second call) should use sudo -S and pipe password
+        # The mv call (second call) carries the password ahead of the env
         mv_call = mock_run.call_args_list[1]
-        remote_cmd = mv_call[0][0][-1]
-        assert "sudo -S sh -c" in remote_cmd
+        assert "/opt/fraisier/fraises.yaml" in mv_call[0][0][-1]
         kwargs = mv_call[1]
         assert kwargs["input"].startswith("secret\n__FRAISIER_ENV__\n")
 
-    def test_upload_tree_sudo_password_uses_two_step(self, tmp_path):
+    def test_upload_tree_sudo_password_uses_two_step(self, sshd_mirror, tmp_path):
         runner = SSHRunner(host="h", user="u", use_sudo=True, sudo_password="secret")
         src = tmp_path / "src"
         src.mkdir()
         (src / "file.txt").write_text("hello")
+        dest = tmp_path / "dest"
 
-        fake_ssh = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=b"", stderr=b""
-        )
-        fake_ssh_text = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        runner.upload_tree(src, str(dest))
 
-        with (
-            patch("subprocess.Popen") as mock_popen,
-            patch("subprocess.run") as mock_run,
-        ):
-            mock_proc = MagicMock()
-            mock_proc.stdout = MagicMock()
-            mock_proc.returncode = 0
-            mock_proc.communicate.return_value = (b"", b"")
-            mock_popen.return_value = mock_proc
-            mock_run.side_effect = [fake_ssh, fake_ssh_text]
-
-            runner.upload_tree(src, "/tmp/remote")
-
-        # First call: tar to temp dir (no sudo)
-        first_ssh = mock_run.call_args_list[0][0][0]
-        first_remote = first_ssh[-1]
-        assert "sudo" not in first_remote
-        assert "/tmp/.fraisier-upload-" in first_remote
-
-        # Second call: sudo -S mv into place
-        second_ssh = mock_run.call_args_list[1][0][0]
-        second_remote = second_ssh[-1]
-        assert "sudo -S sh -c" in second_remote
-        second_kwargs = mock_run.call_args_list[1][1]
-        assert second_kwargs["input"].startswith("secret\n__FRAISIER_ENV__\n")
+        assert (dest / "file.txt").read_text() == "hello"
+        # The tar leg ran without sudo; only the copy into place used it.
+        log = (sshd_mirror / "sudo.log").read_text().splitlines()
+        assert [line.split(" sh ")[0] for line in log] == ["-S -p  -v", "-n"]
 
 
 class TestRunnerFromConfig:

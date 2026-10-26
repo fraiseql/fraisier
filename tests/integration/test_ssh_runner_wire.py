@@ -177,11 +177,11 @@ def test_upload_tree_under_sudo_is_owned_by_root(
 
 #: Prints the secret as the command's env holds it, then how many argv on the
 #: host contain it. The bracket keeps this pattern from matching itself.
-_SECRET = "wire-s3cr3t-value"
+_SECRET = "wire-pgpass-value"
 _SEES_SECRET = [
     "sh",
     "-c",
-    'printenv PGPASSWORD; ps -eo args | grep -c "wire-s3cr3t-valu[e]" || true',
+    'printenv PGPASSWORD; ps -eo args | grep -c "wire-pgpass-valu[e]" || true',
 ]
 
 
@@ -203,3 +203,62 @@ def test_env_value_reaches_the_command_and_no_remote_argv(
     result = runner.run(_SEES_SECRET, env={"PGPASSWORD": _SECRET}, timeout=WIRE_TIMEOUT)
 
     assert result.stdout == f"{_SECRET}\n0\n"
+
+
+#: Prints a marker only if the command ran, and the env it got.
+_RAN = ["sh", "-c", "echo ran; printenv PGPASSWORD"]
+
+
+def test_wrong_sudo_password_costs_one_attempt_and_runs_nothing(
+    sshd: SshdBox,
+) -> None:
+    """The password is checked on its own one-line pipe first (D7).
+
+    A one-stage ``sudo -S`` retried with the sentinel and the ``export``
+    lines as further password attempts: three tries, one of them a secret.
+    """
+    runner = _runner(sshd, "pw", use_sudo=True, sudo_password="wrong")
+
+    result = runner.run(
+        _RAN, env={"PGPASSWORD": _SECRET}, timeout=WIRE_TIMEOUT, check=False
+    )
+
+    assert result.returncode == 124
+    assert result.stdout == ""
+    assert "1 incorrect password attempt" in result.stderr
+    assert result.stderr.count("Sorry, try again") == 1
+
+
+@pytest.mark.parametrize("user", ["pw", "zshu"])
+def test_right_sudo_password_never_reaches_output(sshd: SshdBox, user: str) -> None:
+    runner = _runner(sshd, user, use_sudo=True, sudo_password=sshd.password)
+
+    result = runner.run(_RAN, env={"PGPASSWORD": _SECRET}, timeout=WIRE_TIMEOUT)
+
+    assert result.stdout == f"ran\n{_SECRET}\n"
+    assert sshd.password not in result.stdout + result.stderr
+
+
+def test_unneeded_sudo_password_is_never_executed(sshd: SshdBox) -> None:
+    """NOPASSWD sudo leaves the password line unread; it must not run."""
+    runner = _runner(sshd, "nopw", use_sudo=True, sudo_password=sshd.password)
+
+    result = runner.run(_RAN, env={"PGPASSWORD": _SECRET}, timeout=WIRE_TIMEOUT)
+
+    assert result.stdout == f"ran\n{_SECRET}\n"
+    assert result.stderr == ""
+
+
+def test_no_sudo_ticket_fails_loudly_and_leaks_nothing(sshd: SshdBox) -> None:
+    """``timestamp_timeout=0`` keeps no ticket for the inner ``sudo -n``."""
+    runner = _runner(sshd, "nocache", use_sudo=True, sudo_password=sshd.password)
+
+    result = runner.run(
+        _RAN, env={"PGPASSWORD": _SECRET}, timeout=WIRE_TIMEOUT, check=False
+    )
+
+    assert result.returncode != 0
+    assert "a password is required" in result.stderr
+    assert result.stdout == ""
+    assert _SECRET not in result.stderr
+    assert sshd.password not in result.stderr

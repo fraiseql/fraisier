@@ -37,6 +37,15 @@ _ENV_READER = (
     f'[ "$l" = {_ENV_SENTINEL} ] && break; done; eval "$(cat)"; '
 )
 
+#: Reads the sudo password line and checks it with ``sudo -v``, which reads
+#: from a one-line pipe and so cannot retry into the env payload. Exit 124
+#: means sudo refused it, 125 that stdin ended first. The ``printf`` format
+#: ends in a literal newline, not a backslash escape (see ``_ENV_READER``).
+_SUDO_VALIDATE = (
+    "IFS= read -r p || exit 125; "
+    "printf '%s\n' \"$p\" | sudo -S -p '' -v || exit 124; p=; "
+)
+
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -278,14 +287,18 @@ class SSHRunner:
         # argument. A one-element argv was quoted into a single word, which
         # the login shell read as a command name (#494).
         remote_argv = ["sh", "-c", script]
-        if self.use_sudo:
-            if self.sudo_password:
-                # `sudo -S` reads the first line; the reader discards it
-                # whenever sudo did not need it (NOPASSWD, a cached ticket).
-                remote_argv = ["sudo", "-S", *remote_argv]
-                payload = f"{self.sudo_password}\n{payload}"
-            else:
-                remote_argv = ["sudo", *remote_argv]
+        if self.use_sudo and self.sudo_password:
+            # The password is the first line, checked on a pipe of its own
+            # before anything reads the env payload (D7). The inner sudo is
+            # not exec'd: its tty-less ticket belongs to this shell.
+            remote_argv = [
+                "sh",
+                "-c",
+                f"{_SUDO_VALIDATE}sudo -n {shlex.join(remote_argv)}",
+            ]
+            payload = f"{self.sudo_password}\n{payload}"
+        elif self.use_sudo:
+            remote_argv = ["sudo", *remote_argv]
 
         # Without -n: the payload rides on stdin, and subprocess.run closes
         # the pipe after it, so the command still reads EOF (LB-2).
