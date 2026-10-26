@@ -767,6 +767,7 @@ testpaths = ["tests"]
 markers = [
     "integration: marks tests requiring external services (deselect with '-m \"not integration\"')",
     "tviews: needs a pg_tviews server; set by tests/integration/conftest.py from the pg_tviews_target fixture",
+    "sshd: needs the sshd container; set by tests/integration/conftest.py from the sshd fixture",
     "e2e: marks end-to-end tests",
     "linux: marks tests that should run on Linux",
     "freebsd: marks tests that should run on FreeBSD",
