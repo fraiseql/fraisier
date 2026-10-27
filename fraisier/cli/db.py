@@ -129,8 +129,9 @@ def db_exec(
     """
     import subprocess
 
-    from fraisier import ssh
+    from fraisier.dbops._url import resolve_db_url, url_child, url_runner_child
     from fraisier.dbops.exec import build_psql_argv, is_readonly_sql
+    from fraisier.runners import runner_from_config
 
     if sql and sql_file:
         console.print("[red]Error:[/red] SQL arg and --file are mutually exclusive")
@@ -157,7 +158,22 @@ def db_exec(
         )
         raise SystemExit(1)
 
-    db_target = db_cfg.get("admin_url") or db_cfg.get("name") or fraise
+    ssh_config = env_config.get("ssh")
+    # The admin URL is read by PgConn: a URL libpq would read differently is
+    # refused before anything runs, and the password travels in the child's
+    # env, never on psql's argv or the remote command line (#491, #493).
+    pg_env: dict[str, str] | None = None
+    try:
+        admin_url = resolve_db_url(db_cfg.get("admin_url"), role="admin_url")
+        if admin_url:
+            db_target, pg_env = (
+                url_runner_child(admin_url) if ssh_config else url_child(admin_url)
+            )
+        else:
+            db_target = db_cfg.get("name") or fraise
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] database.{exc}")
+        raise SystemExit(1) from None
 
     if output_format == "json":
         actual_format = "json"
@@ -189,11 +205,14 @@ def db_exec(
         db_target, sql, timeout_ms=timeout_ms, output_format=actual_format
     )
 
-    ssh_config = env_config.get("ssh")
     if ssh_config:
-        target = ssh.SshTarget.from_config(ssh_config)
         try:
-            proc = ssh.short_cmd(target, argv, timeout=timeout + 10)
+            proc = runner_from_config(ssh_config).run(
+                argv,
+                timeout=timeout + 10,
+                env=pg_env,
+                scrub_pg=pg_env is not None,
+            )
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr or str(exc)
             console.print(f"[red]Error:[/red] {stderr}")
@@ -204,7 +223,9 @@ def db_exec(
             raise SystemExit(1) from exc
         console.print(proc.stdout, end="")
     else:
-        proc = subprocess.run(argv, check=False, capture_output=True, text=True)
+        proc = subprocess.run(
+            argv, check=False, capture_output=True, text=True, env=pg_env
+        )
         if proc.returncode != 0:
             console.print(f"[red]Error:[/red] {proc.stderr or proc.stdout}")
             raise SystemExit(proc.returncode)
