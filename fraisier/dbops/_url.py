@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import os
 from typing import Literal
-from urllib.parse import unquote, urlparse, urlsplit, urlunparse
+from urllib.parse import urlparse, urlsplit, urlunparse
 
 from fraisier.config._lazy_env import LazyEnv, to_str
+from fraisier.dbops._pgconn import decode, split_netloc, split_param
 
 
 def replace_db_name(url: str, db_name: str) -> str:
@@ -48,8 +49,10 @@ def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
     libpq falls back to ``PGPASSWORD`` when the connection string has none.
 
     The password may be in the userinfo or in a ``password=`` query parameter.
-    libpq reads the query second, so the query's value wins. Both are
-    percent-decoded the way libpq decodes them, which leaves ``+`` alone.
+    libpq reads the query second, so the query's value wins. Both are decoded
+    by :func:`fraisier.dbops._pgconn.decode`, libpq's rules: ``+`` stays ``+``,
+    and a malformed escape, ``%00``, a second unencoded ``@`` or a parameter
+    without ``=`` raise ``ValueError`` instead of reaching libpq mangled.
     The URL is rebuilt by hand, because ``urlunsplit`` turns
     ``postgresql:///db`` into ``postgresql:/db``. A key=value conninfo string
     is returned unchanged.
@@ -60,17 +63,17 @@ def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
 
     password: str | None = None
     netloc = parts.netloc
-    userinfo, at, hostport = netloc.rpartition("@")
-    if at and ":" in userinfo:
+    userinfo, hostport = split_netloc(netloc)
+    if ":" in userinfo:
         user, _, raw = userinfo.partition(":")
-        password = unquote(raw)
+        password = decode(raw)
         netloc = f"{user}@{hostport}"
 
     kept: list[str] = []
     for param in parts.query.split("&") if parts.query else []:
-        key, _, value = param.partition("=")
-        if unquote(key) == "password":
-            password = unquote(value)
+        key, value = split_param(param)
+        if decode(key) == "password":
+            password = decode(value)
         else:
             kept.append(param)
 
