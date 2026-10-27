@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from fraisier.cli.main import main
+from fraisier.dbops._pgconn import PgConn
 
 _DB_NAME = "acme_db_production"
 _ADMIN_URL = "postgresql://postgres@localhost/postgres"
@@ -238,6 +239,8 @@ class TestDbExecConnection:
         assert "PGSERVICE" not in env
 
     def test_remote_password_is_off_both_argvs(self, runner, remote_config):
+        """Only the URL's own ``PG*`` travel: ``os.environ`` would ship to
+        the host."""
         remote_config.get_fraise_environment.return_value["database"]["admin_url"] = (
             _SECRET_URL
         )
@@ -254,7 +257,7 @@ class TestDbExecConnection:
         short_cmd.assert_not_called()
         argv, kwargs = run.call_args.args[0], run.call_args.kwargs
         assert not any("s3cr3t" in arg for arg in argv)
-        assert kwargs["env"]["PGPASSWORD"] == "s3cr3t"
+        assert kwargs["env"] == PgConn.parse(_SECRET_URL).pg_env()
         assert kwargs["scrub_pg"] is True
 
     def test_a_refused_url_runs_nothing(self, runner, secret_url):

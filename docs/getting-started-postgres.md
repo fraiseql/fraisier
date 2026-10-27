@@ -136,6 +136,10 @@ postgresql://user:password@host:port/database?sslmode=require
 postgresql://user:password@primary:5432,replica:5432/database?target_session_attrs=primary
 ```
 
+The database is required, `?service=` is refused, and `PG*` variables in the
+environment do not change the target: see
+[What a database URL may hold](security.md#what-a-database-url-may-hold).
+
 ---
 
 ## Database Setup

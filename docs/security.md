@@ -156,6 +156,38 @@ database:
 
 This avoids granting the deploy user OS-level sudo access to the postgres account.
 
+### What a database URL may hold
+
+`database_url` and `admin_url` are parsed the way libpq parses them, and every
+`psql`, `pg_dump`, `pg_restore` and `confiture` that fraisier starts takes its
+connection from that one parse. That makes the URL the whole answer to "where
+does this connect, and as whom":
+
+- **The password never reaches argv.** It travels to the child as
+  `PGPASSWORD`, so it is not visible in `ps` or `/proc/<pid>/cmdline`.
+- **Ambient `PG*` variables are dropped.** A child gets the URL's own values
+  and only these operator defaults from the environment, none of which can
+  change the target or the session: `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`,
+  `PGSSLCRL`, `PGSSLCRLDIR`, `PGPASSFILE`, `PGREQUIREAUTH`,
+  `PGCONNECT_TIMEOUT`, `PGAPPNAME`. A `PGUSER`, `PGHOST`, `PGSERVICE` or
+  `PGOPTIONS` in the deploy user's shell, or in `/etc/environment` on a host
+  reached over SSH, no longer changes where or how those programs connect.
+- **These are refused** before a deploy has done anything, with a message
+  that names the field and never the password:
+  - a key=value conninfo string (`host=… dbname=…`): use the URL form;
+  - `?service=`: a service file outranks environment variables, so the URL's
+    other values would lose to it;
+  - a URL with no database (`postgresql://app@db`): add `/dbname`;
+  - a query parameter libpq does not know, or one with no environment
+    variable to carry it.
+- **A URL with no user is fine.** libpq connects as the OS account running
+  the deploy, which is what the peer-authenticated `admin_url` above relies on.
+
+To see who each URL actually connects as, run `fraisier doctor`: the
+`database_connected_as` check prints one line per role, `user to database on
+host`. Every deploy also logs that line at INFO for each URL it uses, and records it
+in the deployment status, which `fraisier status` shows without connecting.
+
 ## Host hardening
 
 ### No remote attach into a running interpreter (PEP 768)
