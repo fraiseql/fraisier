@@ -53,6 +53,19 @@ class TestReplaceDbName:
             replace_db_name(url, "new_db") == "postgresql://user@host/new_db#fragment"
         )
 
+    def test_a_dbname_parameter_is_dropped(self):
+        """libpq reads ``?dbname=`` after the path, so leaving it would undo
+        the replacement (#493)."""
+        url = "postgresql:///db?host=/run/postgresql&dbname=db&sslmode=require"
+        assert replace_db_name(url, "new_db") == (
+            "postgresql:///new_db?host=/run/postgresql&sslmode=require"
+        )
+
+    def test_an_encoded_dbname_parameter_is_dropped(self):
+        assert replace_db_name("postgresql://h/db?db%6Eame=db", "new") == (
+            "postgresql://h/new"
+        )
+
 
 class TestResolveDbUrlRefusesEarly:
     """A URL fraisier cannot carry is refused at strategy entry (#493).
