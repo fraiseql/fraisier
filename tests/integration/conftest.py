@@ -473,14 +473,14 @@ class SshdBox:
         )
 
 
-def _skip_no_sshd(reason: str) -> NoReturn:
-    """Skip for *reason* — unless this run declared the sshd container mandatory.
+def _skip_no_container(reason: str) -> NoReturn:
+    """Skip for *reason* — unless this run declared the test containers mandatory.
 
-    ``FRAISIER_TEST_SSHD=1`` is CI saying Docker is here, and there a skip is
-    the harness missing what was provided, the silence #370 was.
+    ``FRAISIER_TEST_DOCKER=1`` is CI saying Docker is here, and there a skip
+    is the harness missing what was provided, the silence #370 was.
     """
-    if os.getenv("FRAISIER_TEST_SSHD") == "1":
-        loud = f"FRAISIER_TEST_SSHD=1 declares an sshd container, but {reason}"
+    if os.getenv("FRAISIER_TEST_DOCKER") == "1":
+        loud = f"FRAISIER_TEST_DOCKER=1 declares the test containers, but {reason}"
         pytest.fail(loud)  # ty: ignore[invalid-argument-type]
     pytest.skip(reason)  # ty: ignore[too-many-positional-arguments]
 
@@ -581,11 +581,78 @@ def sshd(_sshd_server: SshdBox | str, monkeypatch: pytest.MonkeyPatch) -> SshdBo
     so every ``ssh`` fraisier spawns reaches the container and nothing else.
     """
     if isinstance(_sshd_server, str):
-        _skip_no_sshd(_sshd_server)
+        _skip_no_container(_sshd_server)
     monkeypatch.setenv(
         "PATH", f"{_sshd_server.wrapper_dir}{os.pathsep}{os.environ['PATH']}"
     )
     return _sshd_server
+
+
+#: A role on the password-checking server, and a password holding every
+#: character a URL has to percent-encode — ``@``, ``+`` and ``%`` (#493).
+PW_PROBE_ROLE = "acme_pw_probe"
+PW_PROBE_PASSWORD = "p@ss+w%rd"
+
+
+@pytest.fixture(scope="session")
+def _password_server() -> Iterator[PgTarget | str]:
+    """A PostgreSQL that checks passwords, or why there is none.
+
+    The suite's own server may trust local connections, and against a server
+    that accepts any password a test of how the password reaches libpq passes
+    whatever fraisier sends. The official image checks every TCP connection
+    with ``scram-sha-256``. Pinned to the host client's major version, like
+    :func:`_container_target`.
+    """
+    major = client_major_version()
+    if not _client_tools_present() or major is None:
+        yield "no PostgreSQL client tools on this machine"
+        return
+    try:
+        import psycopg
+        from testcontainers.postgres import PostgresContainer
+    except ImportError:
+        yield "testcontainers or psycopg is not installed"
+        return
+    try:
+        container = PostgresContainer(
+            f"postgres:{major}-alpine",
+            username="postgres",
+            password="admin-pw",
+            dbname="postgres",
+            driver=None,
+        )
+        container.start()
+    except Exception as exc:
+        yield f"the password-checking PostgreSQL could not be started: {exc}"
+        return
+
+    try:
+        admin = PgTarget(
+            host=container.get_container_host_ip(),
+            port=int(container.get_exposed_port(5432)),
+            user="postgres",
+            password="admin-pw",
+        )
+        with psycopg.connect(admin.dsn("postgres"), autocommit=True) as conn:
+            conn.execute(
+                f"CREATE ROLE {PW_PROBE_ROLE} LOGIN CREATEDB PASSWORD "
+                f"'{PW_PROBE_PASSWORD}'"
+            )
+        yield admin
+    finally:
+        container.stop()
+
+
+@pytest.fixture
+def password_pg(_password_server: PgTarget | str) -> PgTarget:
+    """The password-checking server, as its superuser, or skip.
+
+    :data:`PW_PROBE_ROLE` exists on it, with :data:`PW_PROBE_PASSWORD`.
+    """
+    if isinstance(_password_server, str):
+        _skip_no_container(_password_server)
+    return _password_server
 
 
 def _hold_flock(
