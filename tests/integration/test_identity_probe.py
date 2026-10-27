@@ -1,4 +1,4 @@
-"""The probe reports the identity a child gets, on a real server (D9).
+"""The probe reports the identity a child gets, on a real server.
 
 An ambient ``PGUSER`` or service file used to be able to change who a child
 connected as without the URL saying so. The probe connects as the children

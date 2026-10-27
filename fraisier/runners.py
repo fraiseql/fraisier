@@ -111,7 +111,7 @@ class CommandRunner(Protocol):
 
     *scrub_pg* is for a libpq child whose connection *env* names fully: every
     ``PG*`` in the environment it runs in, but the operator defaults, is
-    dropped before *env* is applied (D13).
+    dropped before *env* is applied.
     """
 
     def run(
@@ -342,7 +342,7 @@ class SSHRunner:
         remote_argv = ["sh", "-c", script]
         if self.use_sudo and self.sudo_password:
             # The password is the first line, checked on a pipe of its own
-            # before anything reads the env payload (D7). The inner sudo is
+            # before anything reads the env payload. The inner sudo is
             # not exec'd: its tty-less ticket belongs to this shell.
             remote_argv = [
                 "sh",

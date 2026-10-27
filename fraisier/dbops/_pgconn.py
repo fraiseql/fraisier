@@ -110,7 +110,7 @@ OPERATOR_DEFAULTS = frozenset(
 #: Variables that set transport security and nothing else. The allowlist
 #: drops them, because an ambient value could weaken a URL that does not pin
 #: them; but an operator who exported one meant a policy, so a TCP child they
-#: would have reached is refused instead of connecting without it (D15).
+#: would have reached is refused instead of connecting without it.
 TRANSPORT_POLICY = frozenset(
     {
         "PGSSLMODE",

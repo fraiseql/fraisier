@@ -1,4 +1,4 @@
-"""The children that still take a URL on argv read it through ``PgConn`` (D2).
+"""The children that still take a URL on argv read it through ``PgConn``.
 
 confiture's interface takes a URL, and so do these psql calls, so the URL
 stays on argv, password-free. What changes is everything around it: the URL
@@ -136,7 +136,7 @@ RUNNER_SITES: dict[str, Callable[[str, MagicMock], None]] = {
 @pytest.mark.parametrize("site", RUNNER_SITES)
 class TestEachRunnerUrlSite:
     """Through a ``CommandRunner``, which may be on another host: the env is
-    the URL's own ``PG*`` and nothing of ``os.environ`` (D13), and the runner
+    the URL's own ``PG*`` and nothing of ``os.environ``, and the runner
     scrubs whatever ``PG*`` the child's own environment holds."""
 
     @staticmethod

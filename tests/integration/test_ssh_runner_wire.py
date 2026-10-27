@@ -212,7 +212,7 @@ _RAN = ["sh", "-c", "echo ran; printenv PGPASSWORD"]
 def test_wrong_sudo_password_costs_one_attempt_and_runs_nothing(
     sshd: SshdBox,
 ) -> None:
-    """The password is checked on its own one-line pipe first (D7).
+    """The password is checked on its own one-line pipe first.
 
     A one-stage ``sudo -S`` retried with the sentinel and the ``export``
     lines as further password attempts: three tries, one of them a secret.

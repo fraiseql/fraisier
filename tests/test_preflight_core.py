@@ -615,7 +615,7 @@ class TestRestoreSchemaSurfacesStatementFailures:
         """The scan keys on the SQLSTATE, which the server never translates.
 
         It keyed on the word ``ERROR``, and kept it English with
-        ``-c lc_messages=C``, which only a superuser may set (D10).
+        ``-c lc_messages=C``, which only a superuser may set.
         """
         schema_path = tmp_path / "schema.sql"
         schema_path.write_text(
@@ -734,7 +734,7 @@ class TestRestoreSchemaSurfacesStatementFailures:
 
     def test_no_superuser_only_setting_is_requested(self, tmp_path):
         """``lc_messages`` is superuser-only: requesting it refused every
-        connection a CREATEDB-only role made (D10)."""
+        connection a CREATEDB-only role made."""
         schema_path = tmp_path / "schema.sql"
         schema_path.write_text("CREATE TABLE fine (id int);\n")
 

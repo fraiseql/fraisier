@@ -1,4 +1,4 @@
-"""No PostgreSQL client or confiture is launched outside ``PgConn`` (D2).
+"""No PostgreSQL client or confiture is launched outside ``PgConn``.
 
 A launch that builds its own URL or environment is how a password reached
 argv (#491) and how an ambient ``PGSERVICE`` redirected a child (#493). This

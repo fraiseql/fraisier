@@ -756,7 +756,7 @@ class TestDeployerUsesRunner:
 
 
 class TestScrubPg:
-    """``scrub_pg=True`` keeps ambient ``PG*`` away from a libpq child (D13).
+    """``scrub_pg=True`` keeps ambient ``PG*`` away from a libpq child.
 
     A runner child still sees the environment it runs in: ours for
     ``LocalRunner``, the remote login's for ``SSHRunner``. A connection URL
@@ -811,7 +811,7 @@ _TCP_PG_ENV = {"PGHOST": "db.acme.test", "PGDATABASE": "acme_db"}
 
 class TestScrubPgFailsClosedOnTransportPolicy:
     """An ambient TLS or GSS policy the scrub would drop refuses the command
-    instead (D15): the child would connect without what the operator meant.
+    instead: the child would connect without what the operator meant.
     The same rule as ``PgConn.child_env``, on the environment the child runs
     in: ours for ``LocalRunner``, the remote login's for ``SSHRunner``."""
 
