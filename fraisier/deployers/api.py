@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fraisier.dbops import identity
 from fraisier.errors import (
     DatabaseError,
     DeploymentError,
@@ -868,7 +869,15 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         )
 
     def execute(self) -> DeploymentResult:
-        """Execute API deployment."""
+        """Execute API deployment.
+
+        Inside :func:`identity.recording`, so each database URL the deploy
+        uses is probed once and every status write names who it connected as.
+        """
+        with identity.recording():
+            return self._execute()
+
+    def _execute(self) -> DeploymentResult:
         start_time = time.time()
         old_version = None
         self._write_status("deploying")
