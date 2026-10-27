@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops._url import child_env, move_password_to_env, resolve_db_url
 
 if TYPE_CHECKING:
@@ -437,7 +438,6 @@ class RebuildStrategy(Strategy):
         hooks_config: dict[str, Any] | None = None,
     ) -> StrategyResult:
         import tempfile
-        from urllib.parse import urlparse
 
         import yaml
         from confiture.config.environment import Environment
@@ -456,10 +456,10 @@ class RebuildStrategy(Strategy):
             raw["database_url"] = db_url
         env = Environment.model_validate(raw)
 
-        # Parse database name and owner from the connection URL.
-        parsed = urlparse(env.database_url)
-        db_name = parsed.path.lstrip("/")
-        db_owner = parsed.username
+        # The database and its owner, as libpq reads the connection URL.
+        conn = PgConn.parse(env.database_url)
+        db_name = conn.dbname
+        db_owner = conn.user
 
         # Admin URL for privileged operations (DROP/CREATE DATABASE).
         # Priority: explicit admin_url > derived from database_url.

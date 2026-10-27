@@ -151,6 +151,25 @@ class TestStatementTimeoutUrl:
         assert "%20" in url
         assert "+" not in url
 
+    @pytest.mark.parametrize(
+        "param",
+        ["password=a+b", "password=a%2Bb", "application_name=a%20b", "sslmode=require"],
+    )
+    def test_other_parameters_survive_byte_for_byte(self, param):
+        """libpq reads "+" as "+"; re-encoding through ``parse_qsl`` turned
+        ``a+b`` into ``a b`` (#493)."""
+        url = _bounded(f"postgresql:///mydb?{param}", 5)
+
+        assert url.startswith(f"postgresql:///mydb?{param}&options="), url
+
+    def test_it_merges_into_the_options_libpq_reads(self):
+        """libpq keeps the last of a repeated parameter."""
+        url = _bounded("postgresql:///db?options=-c%20a%3D1&options=-c%20b%3D2", 5)
+
+        assert url == (
+            "postgresql:///db?options=-c%20b%3D2%20-c%20statement_timeout%3D5000"
+        )
+
     def test_the_option_is_milliseconds(self):
         url = _bounded("postgresql://h/db", 1.5)
 

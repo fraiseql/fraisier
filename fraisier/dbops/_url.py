@@ -26,12 +26,20 @@ from fraisier.dbops._pgconn import PgConn, decode, split_netloc, split_param
 def replace_db_name(url: str, db_name: str) -> str:
     """Return *url* with the database name replaced by *db_name*.
 
+    A ``dbname=`` query parameter is dropped: libpq reads the query after the
+    path, so it would name the database instead.
+
     ``urllib.parse.urlunparse`` collapses ``scheme:///path`` (empty netloc)
     into ``scheme:/path``, which is invalid for PostgreSQL socket URLs.
     This function preserves the original ``://`` or ``:///`` prefix.
     """
     parsed = urlparse(url)
-    replaced = urlunparse(parsed._replace(path=f"/{db_name}"))
+    query = "&".join(
+        param
+        for param in parsed.query.split("&")
+        if param and decode(param.partition("=")[0]) != "dbname"
+    )
+    replaced = urlunparse(parsed._replace(path=f"/{db_name}", query=query))
 
     # urlunparse with an empty netloc produces "scheme:/path" instead of
     # "scheme:///path".  Detect and fix.

@@ -4,7 +4,7 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -56,7 +56,9 @@ def _mock_rebuild_deps():
         patch("confiture.core.migrator.Migrator.from_config") as mock_migrator,
         patch("fraisier.strategies._core.terminate_backends"),
         patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
-        patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
+        patch(
+            "fraisier.strategies._core.create_db", return_value=(0, "", "")
+        ) as mock_create_db,
         patch.object(RebuildStrategy, "_apply_sql") as mock_apply_sql,
         patch("tempfile.mkdtemp", return_value="/tmp/fraisier_rebuild_test"),
         patch("shutil.rmtree"),
@@ -70,6 +72,7 @@ def _mock_rebuild_deps():
             "builder_cls": mock_builder_cls,
             "apply_sql": mock_apply_sql,
             "validate": mock_validate,
+            "create_db": mock_create_db,
         }
 
 
@@ -210,6 +213,34 @@ class TestRebuildThreePhaseApply:
         assert mocks["apply_sql"].call_count == 2
         post_call = mocks["apply_sql"].call_args_list[1]
         assert post_call[0][0] == "postgresql://appuser@localhost/myapp"
+
+
+class TestRebuildReadsTheUrlAsLibpqDoes:
+    """The database and its owner come from the URL as libpq reads it (#493).
+
+    ``urlparse`` ignores the query and leaves ``%XX`` encoded, so a
+    ``?user=`` or an encoded user named an owner the connection never was.
+    """
+
+    @pytest.mark.parametrize(
+        ("url", "db_name", "owner"),
+        [
+            ("postgresql://u@localhost/myapp?user=other", "myapp", "other"),
+            ("postgresql://u%2Bx@localhost/myapp", "myapp", "u+x"),
+            ("postgresql://u@localhost/ignored?dbname=myapp", "myapp", "u"),
+        ],
+    )
+    def test_database_and_owner(self, _mock_rebuild_deps, url, db_name, owner):
+        mocks = _mock_rebuild_deps
+        mocks["env"].database_url = url
+        builder_instance = mocks["builder_cls"].return_value
+        builder_instance.build_split.return_value = FakeSplitResult()
+
+        RebuildStrategy().execute(Path("confiture.yaml"))
+
+        mocks["create_db"].assert_called_once_with(
+            db_name, owner=owner, connection_url=ANY
+        )
 
 
 class TestApplySqlLogsStderr:

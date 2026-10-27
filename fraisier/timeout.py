@@ -16,7 +16,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit
+from urllib.parse import quote, urlsplit
+
+from fraisier.dbops._pgconn import decode, split_param
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -133,17 +135,17 @@ def statement_timeout_url(database_url: str | None, *, seconds: float) -> str | 
         # `postgresql:///db?host=/run/postgresql` this project uses everywhere
         # would come back as `postgresql:/db` and fail to parse as a DSN.
         base, _, query_str = database_url.partition("?")
-        query = parse_qsl(query_str, keep_blank_values=True)
+        # The other parameters are kept byte for byte: `parse_qsl` decodes
+        # "+" as a space, which libpq does not (#493).
+        params = [split_param(p) for p in query_str.split("&")] if query_str else []
+        options = [v for k, v in params if decode(k) == "options"]
         setting = f"-c statement_timeout={int(seconds * 1000)}"
-        existing = next((v for k, v in query if k == "options"), None)
-        merged = f"{existing} {setting}" if existing else setting
-        query = [(k, v) for k, v in query if k != "options"]
-        query.append(("options", merged))
-        # `quote_via=quote`, not urlencode's default `quote_plus`: libpq
-        # percent-decodes a connection string but does *not* read "+" as a
-        # space, so the default encoding turns `-c statement_timeout=…` into
-        # `-c+statement_timeout=…` and the server rejects the parameter.
-        return f"{base}?{urlencode(query, quote_via=quote)}"
+        # libpq keeps the last `options`, so that is the one merged into.
+        merged = f"{decode(options[-1])} {setting}" if options else setting
+        kept = [f"{k}={v}" for k, v in params if decode(k) != "options"]
+        # `quote`, not `quote_plus`: libpq does not read "+" as a space, so
+        # `-c+statement_timeout=…` would reach the server as an unknown GUC.
+        return "?".join([base, "&".join([*kept, f"options={quote(merged, safe='')}"])])
     except Exception:
         logger.warning(
             "could not attach a statement_timeout to the database URL; "
