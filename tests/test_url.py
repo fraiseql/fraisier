@@ -1,5 +1,7 @@
 """Tests for fraisier.dbops._url — PostgreSQL URL rewriting."""
 
+import pytest
+
 from fraisier.dbops._url import replace_db_name
 
 
@@ -50,3 +52,74 @@ class TestReplaceDbName:
         assert (
             replace_db_name(url, "new_db") == "postgresql://user@host/new_db#fragment"
         )
+
+
+class TestResolveDbUrlRefusesEarly:
+    """A URL fraisier cannot carry is refused at strategy entry (#493).
+
+    Not at the first child: in the dump restore, the service is stopped
+    before the first ``_pg_cmd`` on ``admin_url``.
+    """
+
+    def test_an_envvar_url_libpq_would_read_differently_is_refused(self, monkeypatch):
+        from fraisier.config._lazy_env import LazyEnv
+        from fraisier.dbops._url import resolve_db_url
+
+        monkeypatch.setenv(
+            "FRAISIER_TEST_DB_URL", "postgresql://u:hunter2@h/db?keepalives=1"
+        )
+
+        with pytest.raises(ValueError, match=r"admin_url.*keepalives") as exc:
+            resolve_db_url(LazyEnv("FRAISIER_TEST_DB_URL"), role="admin_url")
+        assert "hunter2" not in str(exc.value)
+
+    def test_a_good_url_resolves_unchanged(self, monkeypatch):
+        from fraisier.config._lazy_env import LazyEnv
+        from fraisier.dbops._url import resolve_db_url
+
+        monkeypatch.setenv("FRAISIER_TEST_DB_URL", "postgresql://u:p%40ss@h/db")
+
+        assert resolve_db_url(LazyEnv("FRAISIER_TEST_DB_URL")) == (
+            "postgresql://u:p%40ss@h/db"
+        )
+
+
+class TestValidationReportsTheRefusal:
+    def test_a_literal_url_appears_in_validate_errors(self):
+        from fraisier.config._validation import validate_pg_url_string
+
+        errors = validate_pg_url_string(
+            "api", "database_url", "postgresql:///db?bogus=1"
+        )
+
+        assert len(errors) == 1
+        assert "api: database.database_url" in errors[0]
+        assert "bogus" in errors[0]
+
+    @pytest.mark.parametrize(
+        "url", ["mysql://u:hunter2@h/db", "postgresql://u:hunter2@h/db?bogus=1"]
+    )
+    def test_the_error_never_echoes_the_password(self, url):
+        from fraisier.config._validation import validate_pg_url_string
+
+        [error] = validate_pg_url_string("api", "database_url", url)
+
+        assert "hunter2" not in error
+
+
+def test_the_restore_strategy_refuses_a_bad_admin_url_before_anything_runs():
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from fraisier.strategies._restore import RestoreConfig, RestoreMigrateStrategy
+
+    service_manager = MagicMock()
+    with pytest.raises(ValueError, match="bogus"):
+        RestoreMigrateStrategy(
+            RestoreConfig(db_name="staging", backup_dir=Path("/b")),
+            admin_url="postgresql:///postgres?bogus=1",
+            service_manager=service_manager,
+            service_name="api",
+        )
+    service_manager.assert_not_called()
+    assert service_manager.method_calls == []

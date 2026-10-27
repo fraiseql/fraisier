@@ -365,17 +365,23 @@ def _validate_pg_url(fraise_name: str, field: str, value: Any) -> list[str]:
 
 
 def validate_pg_url_string(fraise_name: str, field: str, value: str) -> list[str]:
-    """Return scheme-check errors for a resolved PostgreSQL URL string.
+    """Return errors for a resolved PostgreSQL URL string.
+
+    The URL is read the way libpq reads it (:class:`PgConn`), so a scheme that
+    is not ``postgresql://`` and a URL that libpq would read differently from
+    fraisier (#493) are both reported, at ``fraisier validate`` time.
 
     Consumer-side helper: call after :func:`fraisier.config.to_str` if the
     YAML field was sourced from ``!envvar`` and the URL scheme needs
     enforcement (database connection time).
     """
-    if not value.startswith(("postgresql://", "postgres://")):
-        return [
-            f"{fraise_name}: database.{field} must be a PostgreSQL URL "
-            f"(starting with postgresql:// or postgres://), got: {value!r}"
-        ]
+    from fraisier.dbops._pgconn import PgConn
+
+    try:
+        PgConn.parse(value)
+    except ValueError as exc:
+        # Not echoed: the URL may carry a password.
+        return [f"{fraise_name}: database.{field}: {exc}"]
     return []
 
 

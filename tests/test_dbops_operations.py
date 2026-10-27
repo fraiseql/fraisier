@@ -32,20 +32,59 @@ class TestPgCmd:
         assert stdout == "ok\n"
         assert stderr == ""
         cmd = mock_run.call_args[0][0]
-        assert cmd == [
-            "psql",
-            "-h",
-            "localhost",
-            "-p",
-            "5432",
-            "-U",
-            "postgres",
-            "-d",
-            "mydb",
-            "-c",
-            "SELECT 1",
-        ]
-        assert "sudo" not in cmd
+        assert cmd == ["psql", "-d", "mydb", "-c", "SELECT 1"]
+
+    def test_pg_cmd_carries_the_connection_in_env(self):
+        """Only the database name is on argv (#493); libpq reads the rest."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(["psql", "-c", "SELECT 1"], connection_url=_TEST_URL)
+
+        env = mock_run.call_args.kwargs["env"]
+        assert {k: env[k] for k in env if k.startswith("PG")} == {
+            "PGUSER": "postgres",
+            "PGPASSWORD": "pass",
+            "PGHOST": "localhost",
+            "PGPORT": "5432",
+            "PGDATABASE": "mydb",
+        }
+
+    @pytest.mark.parametrize(
+        ("url", "password"),
+        [
+            ("postgresql://u:p%40ss@h/db", "p@ss"),
+            ("postgresql://u@h/db?password=pw", "pw"),
+            ("postgresql://u@h/db?password=a+b", "a+b"),
+        ],
+    )
+    def test_pg_cmd_password_is_decoded_as_libpq_decodes_it(self, url, password):
+        """#493's acceptance cases."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(["psql", "-c", "SELECT 1"], connection_url=url)
+
+        assert mock_run.call_args.kwargs["env"]["PGPASSWORD"] == password
+        assert not [a for a in mock_run.call_args[0][0] if password in a]
+
+    def test_pg_cmd_db_flag_follows_the_query_dbname(self):
+        """libpq's ``?dbname=`` beats the path; the argv flag must agree."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(
+                ["dropdb", "x"], connection_url="postgresql://h/postgres?dbname=admin"
+            )
+
+        assert mock_run.call_args[0][0] == ["dropdb", "--maintenance-db", "admin", "x"]
+
+    def test_pg_cmd_drops_ambient_pg_variables(self, monkeypatch):
+        for name in ("PGSERVICE", "PGPASSWORD", "PGOPTIONS"):
+            monkeypatch.setenv(name, "ambient")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _pg_cmd(["psql", "-c", "SELECT 1"], connection_url="postgresql:///db")
+
+        env = mock_run.call_args.kwargs["env"]
+        assert [k for k in env if env[k] == "ambient"] == []
 
     def test_pg_cmd_failure(self):
         with patch("subprocess.run") as mock_run:
@@ -103,15 +142,14 @@ class TestPgCmdDatabaseInjection:
         assert cmd.count("-d") == 1
         assert cmd[cmd.index("-d") + 1] == "mydb"
 
-    def test_no_db_injection_when_url_path_empty(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    def test_a_url_naming_no_database_is_refused(self):
+        """libpq would default the database to the user name (D6: refused)."""
+        with patch("subprocess.run") as mock_run, pytest.raises(ValueError):
             _pg_cmd(
                 ["psql", "-c", "SELECT 1"],
                 connection_url="postgresql://user@localhost/",
             )
-        cmd = mock_run.call_args[0][0]
-        assert "-d" not in cmd
+        mock_run.assert_not_called()
 
     def test_injects_db_from_socket_url(self):
         with patch("subprocess.run") as mock_run:

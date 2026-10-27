@@ -42,11 +42,14 @@ class TestResolveDbUrl:
             resolve_db_url(LazyEnv("DB_URL", "fraises.api.prod.database_url"))
 
     def test_role_is_informational_only(self, monkeypatch):
-        # role doesn't change resolution; it's there for grep
-        # traceability.
-        monkeypatch.setenv("DB_URL", "x")
-        assert resolve_db_url(LazyEnv("DB_URL", "p"), role="admin_url") == "x"
-        assert resolve_db_url(LazyEnv("DB_URL", "p"), role="database_url") == "x"
+        # role doesn't change resolution; it names the field in a refusal.
+        monkeypatch.setenv("DB_URL", "postgresql:///x")
+        assert resolve_db_url(LazyEnv("DB_URL", "p"), role="admin_url") == (
+            "postgresql:///x"
+        )
+        assert resolve_db_url(LazyEnv("DB_URL", "p"), role="database_url") == (
+            "postgresql:///x"
+        )
 
 
 class TestMigrateStrategyResolvesEntry:

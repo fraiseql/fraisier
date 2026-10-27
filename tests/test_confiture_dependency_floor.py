@@ -198,3 +198,27 @@ def test_installed_preflight_reads_scope_pending(tmp_path: Path) -> None:
         result.stdout + result.stderr
     )
     assert result.returncode == 5
+
+
+def test_restore_options_carry_the_password_off_argv() -> None:
+    """``restore_backup`` hands the password to ``RestoreOptions`` (D3).
+
+    That is safe only while confiture keeps it off ``pg_restore``'s argv and
+    takes ``host``/``port`` as the ``-h``/``-p`` it does put there.
+    """
+    import dataclasses
+
+    from confiture.core.restorer import DatabaseRestorer, RestoreOptions
+
+    assert "password" in {f.name for f in dataclasses.fields(RestoreOptions)}
+    options = RestoreOptions(
+        backup_path=Path("/b.dump"),
+        target_db="db",
+        host="h",
+        port=6543,
+        username="u",
+        password="sentinel-pw",
+    )
+    cmd = DatabaseRestorer()._build_command("data", options, parallel=False)
+    assert "sentinel-pw" not in " ".join(cmd)
+    assert cmd[cmd.index("-h") + 1 : cmd.index("-h") + 4] == ["h", "-p", "6543"]

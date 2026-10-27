@@ -19,12 +19,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, urlparse
 
 import psycopg
 from confiture.core.restorer import DatabaseRestorer, RestoreOptions
 from confiture.exceptions import RestoreError
 
+from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops._url import replace_db_name
 from fraisier.dbops._validation import validate_file_path, validate_pg_identifier
 from fraisier.dbops.backup import is_lean_dump
@@ -75,50 +75,50 @@ class RestoreResult:
     tviews_refilled_lean: bool = False
 
 
-def _connection_params(
-    connection_url: str,
-) -> tuple[str | None, int | None, str | None, dict[str, str]]:
-    """Split a PostgreSQL URL into ``(host, port, username, env)`` for confiture.
+#: What confiture takes as RestoreOptions fields (and passes as -h/-p/-U, the
+#: password through its children's env) or what fraisier passes as -d: none of
+#: these may also ride the process environment.
+_RESTORE_OPTION_KEYS = frozenset(
+    {"PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"}
+)
 
-    confiture's :class:`RestoreOptions` takes ``host`` / ``port`` / ``username``
-    as discrete fields and shells out with an explicit ``-h/-p/-U`` — it has no
-    connection-URL entry point.  The host may live in the netloc
-    (``postgresql://h:p/db``) or, for socket connections, in a ``?host=`` query
-    parameter (``postgresql:///db?host=/var/run/postgresql``); both are mapped,
-    mirroring :func:`operations._parse_connection_flags`.  A password rides back
-    in ``env`` as ``PGPASSWORD`` for confiture's inherited subprocess
-    environment to pick up.
+
+def _restore_connection(connection_url: str) -> tuple[PgConn, dict[str, str]]:
+    """The URL as libpq reads it, and the env keys RestoreOptions has no field for.
+
+    confiture's :class:`RestoreOptions` takes ``host`` / ``port`` /
+    ``username`` / ``password`` as discrete fields and has no connection-URL
+    entry point, so a URL with more than one host cannot be expressed (it
+    passes exactly one ``-h``/``-p``) and is refused. Whatever else the URL
+    sets (``PGSSLMODE`` and the like) is returned for :func:`_augmented_env`.
     """
-    parsed = urlparse(connection_url)
-    query = parse_qs(parsed.query)
-
-    def _q(key: str) -> str | None:
-        values = query.get(key)
-        return values[0] if values else None
-
-    host = parsed.hostname or _q("host")
-    port = parsed.port
-    if port is None:
-        raw_port = _q("port")
-        if raw_port:
-            with contextlib.suppress(ValueError):
-                port = int(raw_port)
-    username = parsed.username or _q("user")
-    env: dict[str, str] = {}
-    password = parsed.password or _q("password")
-    if password:
-        env["PGPASSWORD"] = password
-    return host, port, username, env
+    conn = PgConn.parse(connection_url)
+    if conn.host and "," in conn.host:
+        msg = "a URL naming more than one host cannot be restored into"
+        raise ValueError(msg)
+    extra = {
+        key: value
+        for key, value in conn.pg_env().items()
+        if key not in _RESTORE_OPTION_KEYS
+    }
+    return conn, extra
 
 
 @contextlib.contextmanager
 def _augmented_env(extra: dict[str, str]) -> Iterator[None]:
     """Temporarily overlay *extra* onto ``os.environ`` for the duration of a call.
 
-    confiture's restorer inherits ``os.environ`` (it never passes ``env=`` to
-    its subprocesses), so a password parsed from the connection URL is threaded
-    through the process environment as ``PGPASSWORD`` while the restore runs and
-    then restored to its prior value.
+    confiture's restorer builds its children's env from ``os.environ``, so the
+    URL's libpq keys that :class:`RestoreOptions` has no field for (``PGSSLMODE``
+    and the like) ride the process environment while the restore runs, and
+    are then put back. Never a secret: the password goes through
+    ``RestoreOptions.password``. In the common case *extra* is empty and this
+    does nothing.
+
+    Known gap: because confiture inherits ``os.environ``, ambient ``PG*``
+    variables (``PGSERVICE``, ``PGOPTIONS``…) still reach pg_restore, which
+    :meth:`PgConn.child_env` would drop. Once ``RestoreOptions`` takes an
+    explicit child environment, pass ``child_env()`` and delete this.
     """
     if not extra:
         yield
@@ -213,12 +213,13 @@ def restore_backup(
     if db_owner:
         validate_pg_identifier(db_owner, "database owner")
 
-    host, port, username, extra_env = _connection_params(connection_url)
+    conn, extra_env = _restore_connection(connection_url)
 
     options = RestoreOptions(
         backup_path=Path(backup_path),
         target_db=db_name,
-        username=username,
+        username=conn.user,
+        password=conn.password,
         jobs=jobs,
         no_owner=True,
         no_acl=True,
@@ -249,10 +250,10 @@ def restore_backup(
     # confiture emits an explicit -h/-p; only override its RestoreOptions
     # defaults for the parts the URL actually carries (a socket URL with no
     # host falls through to confiture's default socket directory).
-    if host is not None:
-        options = dataclasses.replace(options, host=host)
-    if port is not None:
-        options = dataclasses.replace(options, port=port)
+    if conn.host is not None:
+        options = dataclasses.replace(options, host=conn.host)
+    if conn.port is not None:
+        options = dataclasses.replace(options, port=conn.port)
 
     t0 = time.monotonic()
     try:

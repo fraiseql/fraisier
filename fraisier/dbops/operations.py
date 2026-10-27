@@ -1,8 +1,8 @@
 """Low-level PostgreSQL helpers.
 
 Every function shells out to psql/createdb/dropdb using a caller-supplied
-``connection_url``.  Host, port, user and password are extracted from the
-URL; no sudo wrapper and no peer-auth fallback.
+``connection_url``, which the child receives as libpq ``PG*`` environment
+variables; no sudo wrapper and no peer-auth fallback.
 
 The requirement that strategies provide an ``admin_url`` (and therefore a
 ``connection_url`` at this layer) is enforced at config-load time by
@@ -16,10 +16,9 @@ strategy boundary via :func:`fraisier.dbops._url.resolve_db_url`; the
 ``str()``-via-``urlparse`` at the wrong layer.
 """
 
-import os
 import subprocess
-from urllib.parse import urlparse
 
+from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops._validation import validate_pg_identifier
 
 # PostgreSQL CLI tools that accept a database/maintenance-db flag.
@@ -33,26 +32,6 @@ _DB_FLAG_FOR_TOOL: dict[str, str] = {
 }
 
 
-def _parse_connection_flags(connection_url: str) -> tuple[list[str], dict[str, str]]:
-    """Extract CLI flags and env vars from a PostgreSQL connection URL.
-
-    Returns (flags, env) where *flags* are ``-h host -p port -U user``
-    and *env* contains ``PGPASSWORD`` when the URL has a password.
-    """
-    parsed = urlparse(connection_url)
-    flags: list[str] = []
-    if parsed.hostname:
-        flags.extend(["-h", parsed.hostname])
-    if parsed.port:
-        flags.extend(["-p", str(parsed.port)])
-    if parsed.username:
-        flags.extend(["-U", parsed.username])
-    env: dict[str, str] = {}
-    if parsed.password:
-        env["PGPASSWORD"] = parsed.password
-    return flags, env
-
-
 def _pg_cmd(
     cmd: list[str],
     *,
@@ -61,12 +40,14 @@ def _pg_cmd(
 ) -> tuple[int, str, str]:
     """Run a PostgreSQL CLI command against *connection_url*.
 
-    Host, port, user and password are taken from the URL and injected
-    into the command (``-h -p -U``) and environment (``PGPASSWORD``).
+    The URL is read by :class:`~fraisier.dbops._pgconn.PgConn` and reaches
+    the child only as its environment (:meth:`PgConn.child_env`), so no
+    connection value but the database name is on argv (#493).
 
-    The database path from the URL is also forwarded when the caller has
-    not already specified one: ``-d`` for psql/pg_restore,
-    ``--maintenance-db`` for createdb/dropdb.
+    The database name is still forwarded on argv when the caller has not
+    already specified one: ``-d`` for psql/pg_restore, ``--maintenance-db``
+    for createdb/dropdb. ``PGDATABASE`` alone would not do: ``dropdb``
+    ignores it and opens ``postgres`` for its maintenance connection.
 
     *input_text* is written to the process's stdin. It exists for ``psql -f -``,
     which is the only way to get psql's ``:'var'`` binding: ``-c`` hands its
@@ -76,24 +57,17 @@ def _pg_cmd(
 
     Returns (exit_code, stdout, stderr).
     """
-    conn_flags, extra_env = _parse_connection_flags(connection_url)
+    conn = PgConn.parse(connection_url)
 
     db_flag = _DB_FLAG_FOR_TOOL.get(cmd[0])
-    if db_flag and db_flag not in cmd:
-        parsed = urlparse(connection_url)
-        db = parsed.path.lstrip("/")
-        if db:
-            conn_flags = [*conn_flags, db_flag, db]
-
-    full_cmd = [cmd[0], *conn_flags, *cmd[1:]]
-    run_env = {**os.environ, **extra_env} if extra_env else None
+    db_args = [db_flag, conn.dbname] if db_flag and db_flag not in cmd else []
 
     result = subprocess.run(
-        full_cmd,
+        [cmd[0], *db_args, *cmd[1:]],
         capture_output=True,
         text=True,
         check=False,
-        env=run_env,
+        env=conn.child_env(),
         input=input_text,
     )
     return result.returncode, result.stdout, result.stderr
