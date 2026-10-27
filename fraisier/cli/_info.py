@@ -247,13 +247,16 @@ def _compute_deployment_state(
     return "[yellow]out-of-date[/yellow]"
 
 
-def _connected_as_lines(status: DeploymentStatusFile | None) -> list[str]:
+def _connected_as_lines(
+    status: DeploymentStatusFile | None, environment: str
+) -> list[str]:
     """Who the last deploy's connections were, per role, as recorded.
 
     Read from the record, never by connecting: ``status`` must answer when the
-    database does not.
+    database does not. The record is per fraise, so one left by a deploy to
+    another environment says nothing about *environment*.
     """
-    if status is None or not status.connected_as:
+    if status is None or not status.connected_as or status.environment != environment:
         return []
     lines = ["[bold]Connected As:[/bold] (last deploy)"]
     for role, found in status.connected_as.items():
@@ -457,7 +460,7 @@ def _show_single_status(config: FraisierConfig, fraise: str, environment: str) -
                 fraise, current_version, latest_version
             )
             console.print(f"[bold]Status:[/bold] {deployment_status}")
-            for line in _connected_as_lines(read_status(fraise)):
+            for line in _connected_as_lines(read_status(fraise), environment):
                 console.print(line)
 
             # Show recent deployments

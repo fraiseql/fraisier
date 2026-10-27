@@ -172,6 +172,19 @@ does this connect, and as whom":
   `PGCONNECT_TIMEOUT`, `PGAPPNAME`. A `PGUSER`, `PGHOST`, `PGSERVICE` or
   `PGOPTIONS` in the deploy user's shell, or in `/etc/environment` on a host
   reached over SSH, no longer changes where or how those programs connect.
+- **A transport-security policy in the environment fails closed.** These
+  are dropped too, because an ambient value could weaken a URL that does not
+  set them: `PGSSLMODE`, `PGSSLCERTMODE`, `PGSSLNEGOTIATION`,
+  `PGSSLMINPROTOCOLVERSION`, `PGSSLMAXPROTOCOLVERSION`, `PGGSSENCMODE`,
+  `PGCHANNELBINDING`, `PGKRBSRVNAME`, `PGGSSLIB`. But an operator who exported
+  one meant a policy. So when one is set and a TCP URL does not set that
+  keyword itself, `fraisier validate` and the deploy refuse it, whatever the
+  value, before anything runs. The error names the fix, for example
+  `put it in the URL (?sslmode=verify-full)`. A child launched over `ssh:`
+  makes the same check against the remote login's environment and exits 123.
+  Unix-socket URLs (no host, or a path) are exempt, because libpq applies no
+  TLS or GSS encryption there. There is no override: pin the policy in the
+  URL.
 - **These are refused** before a deploy has done anything, with a message
   that names the field and never the password:
   - a key=value conninfo string (`host=… dbname=…`): use the URL form;
@@ -185,7 +198,8 @@ does this connect, and as whom":
 
 To see who each URL actually connects as, run `fraisier doctor`: the
 `database_connected_as` check prints one line per role, `user to database on
-host`. Every deploy also logs that line at INFO for each URL it uses, and records it
+host`, with the sslmode it connects with: `prefer (no certificate check)` when
+the URL does not pin one. Every deploy also logs that line at INFO for each URL it uses, and records it
 in the deployment status, which `fraisier status` shows without connecting.
 
 ## Host hardening

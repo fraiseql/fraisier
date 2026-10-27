@@ -18,7 +18,15 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from fraisier import ssh
 from fraisier.constants import DEFAULT_EXEC_TIMEOUT, SSH_CONNECT_TIMEOUT
-from fraisier.dbops._pgconn import OPERATOR_DEFAULTS, scrubbed
+from fraisier.dbops._pgconn import (
+    ENV_KEYWORD,
+    OPERATOR_DEFAULTS,
+    TRANSPORT_POLICY,
+    TRANSPORT_REFUSED,
+    is_socket,
+    scrubbed,
+    transport_refusal,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -47,6 +55,23 @@ _PG_SCRUB = (
     f"case $v in {'|'.join(sorted(OPERATOR_DEFAULTS))}) ;; "
     '*) unset "$v" ;; esac; done; '
 )
+
+
+def _transport_check(env: dict[str, str]) -> str:
+    """:func:`~fraisier.dbops._pgconn.transport_refusal`, in the remote shell.
+
+    Runs before :data:`_PG_SCRUB`, so it sees the login's own environment;
+    the message matches the local one's.
+    """
+    if is_socket(env):
+        return ""
+    return "".join(
+        f'if [ -n "${{{var}+x}}" ]; then echo "{var} is set in the environment, '
+        f"and fraisier no longer passes it to database clients: put it in the "
+        f'URL (?{ENV_KEYWORD[var]}=${var})" >&2; exit {TRANSPORT_REFUSED}; fi; '
+        for var in sorted(TRANSPORT_POLICY - env.keys())
+    )
+
 
 #: Reads the sudo password line and checks it with ``sudo -v``, which reads
 #: from a one-line pipe and so cannot retry into the env payload. Exit 124
@@ -114,6 +139,13 @@ class LocalRunner:
         env: dict[str, str] | None = None,
         scrub_pg: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        refusal = scrub_pg and transport_refusal(os.environ, env or {})
+        if refusal:
+            if check:
+                raise subprocess.CalledProcessError(
+                    TRANSPORT_REFUSED, cmd, output="", stderr=refusal
+                )
+            return subprocess.CompletedProcess(cmd, TRANSPORT_REFUSED, "", refusal)
         base = scrubbed(os.environ) if scrub_pg else os.environ
         return subprocess.run(
             cmd,
@@ -299,7 +331,8 @@ class SSHRunner:
         # inject a safe PATH so sbin directories are available in
         # non-interactive SSH sessions (see #87).
         payload = _env_payload({"PATH": self._SAFE_PATH, **(env or {})})
-        script = (_PG_SCRUB if scrub_pg else "") + _ENV_READER
+        scrub = _transport_check(env or {}) + _PG_SCRUB if scrub_pg else ""
+        script = scrub + _ENV_READER
         script += f"cd {shlex.quote(cwd)} && " if cwd else ""
         script += f"exec {shlex.join(cmd)}"
         # fraisier.ssh shlex.joins the argv it is given and sshd hands the

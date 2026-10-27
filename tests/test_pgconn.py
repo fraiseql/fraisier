@@ -330,3 +330,162 @@ def test_imports_first_in_a_fresh_process():
     subprocess.run(
         [sys.executable, "-I", "-c", "import fraisier.dbops._pgconn"], check=True
     )
+
+
+class TestLibpqQueryLeniency:
+    """What libpq accepts in a query, measured with psql 18."""
+
+    @pytest.mark.parametrize("query", ["", "sslmode=disable&"])
+    def test_an_empty_query_or_one_trailing_ampersand_is_accepted(self, query):
+        conn = PgConn.parse(f"postgresql://h/db?{query}")
+
+        assert conn.params["dbname"] == "db"
+
+    @pytest.mark.parametrize(
+        "query", ["&sslmode=disable", "sslmode=disable&&application_name=x"]
+    )
+    def test_an_empty_parameter_elsewhere_is_refused(self, query):
+        with pytest.raises(ValueError, match="separator"):
+            PgConn.parse(f"postgresql://h/db?{query}")
+
+    def test_ssl_true_is_sslmode_require(self):
+        assert PgConn.parse("postgresql://h/db?ssl=true").pg_env()["PGSSLMODE"] == (
+            "require"
+        )
+
+    def test_a_later_sslmode_wins_over_ssl_true(self):
+        conn = PgConn.parse("postgresql://h/db?ssl=true&sslmode=disable")
+
+        assert conn.params["sslmode"] == "disable"
+
+    def test_ssl_other_than_true_is_refused(self):
+        with pytest.raises(ValueError, match='"ssl"'):
+            PgConn.parse("postgresql://h/db?ssl=false")
+
+
+class TestOneSplitForArgvAndEnv:
+    """The argv URL is cut where PgConn cuts it, so no character can hide the
+    password from one reading and not the other."""
+
+    URL = "postgresql://app:se#cret@db.acme.test/prod"
+
+    def test_a_hash_is_part_of_the_password(self):
+        assert PgConn.parse(self.URL).params["password"] == "se#cret"
+
+    def test_a_password_with_a_hash_leaves_argv(self):
+        import fraisier.config  # _url's import cycle
+        from fraisier.dbops._url import url_child, url_runner_child
+
+        for child in (url_child, url_runner_child):
+            argv_url, env = child(self.URL)
+
+            assert "se#cret" not in argv_url
+            assert argv_url == "postgresql://app@db.acme.test/prod"
+            assert env["PGPASSWORD"] == "se#cret"
+
+    def test_a_hash_survives_a_database_rename(self):
+        import fraisier.config  # _url's import cycle
+        from fraisier.dbops._url import replace_db_name
+
+        renamed = replace_db_name(self.URL, "other")
+
+        assert renamed == "postgresql://app:se#cret@db.acme.test/other"
+        assert PgConn.parse(renamed).params["password"] == "se#cret"
+
+    def test_a_trailing_ampersand_survives_both(self):
+        import fraisier.config  # _url's import cycle
+        from fraisier.dbops._url import move_password_to_env, replace_db_name
+
+        url = "postgresql://app:pw@h/db?sslmode=require&"
+
+        assert move_password_to_env(url) == (
+            "postgresql://app@h/db?sslmode=require",
+            {"PGPASSWORD": "pw"},
+        )
+        assert replace_db_name(url, "x") == "postgresql://app:pw@h/x?sslmode=require"
+
+
+class TestTransportPolicyFailsClosed:
+    """D15: the allowlist drops ambient TLS/GSS policy, so a child it would
+    have reached is refused, naming the URL fix; never silently downgraded."""
+
+    TCP = "postgresql://acme@db.acme.test/acme_db"
+
+    @pytest.mark.parametrize(
+        ("var", "keyword"),
+        [
+            ("PGSSLMODE", "sslmode"),
+            ("PGSSLCERTMODE", "sslcertmode"),
+            ("PGSSLNEGOTIATION", "sslnegotiation"),
+            ("PGSSLMINPROTOCOLVERSION", "ssl_min_protocol_version"),
+            ("PGSSLMAXPROTOCOLVERSION", "ssl_max_protocol_version"),
+            ("PGGSSENCMODE", "gssencmode"),
+            ("PGCHANNELBINDING", "channel_binding"),
+            ("PGKRBSRVNAME", "krbsrvname"),
+            ("PGGSSLIB", "gsslib"),
+        ],
+    )
+    def test_each_dropped_policy_refuses_a_tcp_child(self, monkeypatch, var, keyword):
+        monkeypatch.setenv(var, "acme-value")
+
+        with pytest.raises(ValueError, match=f"{var}.*{keyword}=acme-value"):
+            PgConn.parse(self.TCP).child_env()
+
+    def test_even_the_libpq_default_refuses(self, monkeypatch):
+        monkeypatch.setenv("PGSSLMODE", "prefer")
+
+        with pytest.raises(ValueError, match="sslmode=prefer"):
+            PgConn.parse(self.TCP).child_env()
+
+    def test_a_url_that_pins_it_is_fine(self, monkeypatch):
+        monkeypatch.setenv("PGSSLMODE", "verify-full")
+
+        env = PgConn.parse(self.TCP + "?sslmode=disable").child_env()
+
+        assert env["PGSSLMODE"] == "disable"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "postgresql:///acme_db",
+            "postgresql:///acme_db?host=/run/postgresql",
+            "postgresql://%2Frun%2Fpostgresql/acme_db",
+            "postgresql:///acme_db?host=@acme",
+            "postgresql:///acme_db?host=/run/a,/run/b",
+        ],
+    )
+    def test_a_socket_url_is_exempt(self, monkeypatch, url):
+        monkeypatch.setenv("PGSSLMODE", "verify-full")
+
+        assert "PGSSLMODE" not in PgConn.parse(url).child_env()
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "postgresql:///acme_db?host=/run/postgresql&hostaddr=10.0.0.5",
+            "postgresql:///acme_db?host=/run/postgresql,db.acme.test",
+        ],
+    )
+    def test_any_tcp_host_is_checked(self, monkeypatch, url):
+        monkeypatch.setenv("PGSSLMODE", "verify-full")
+
+        with pytest.raises(ValueError, match="PGSSLMODE"):
+            PgConn.parse(url).child_env()
+
+    def test_check_environment_is_the_same_rule(self, monkeypatch):
+        monkeypatch.setenv("PGGSSENCMODE", "require")
+
+        with pytest.raises(ValueError, match="gssencmode=require"):
+            PgConn.parse(self.TCP).check_environment()
+
+    @pytest.mark.parametrize(
+        ("url", "shown"),
+        [
+            (TCP, "prefer (no certificate check)"),
+            (TCP + "?sslmode=verify-full", "verify-full"),
+            (TCP + "?ssl=true", "require"),
+            ("postgresql:///acme_db", "none (socket)"),
+        ],
+    )
+    def test_the_effective_sslmode(self, url, shown):
+        assert PgConn.parse(url).effective_sslmode() == shown

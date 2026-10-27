@@ -47,11 +47,10 @@ class TestReplaceDbName:
             == "postgresql://user@host/new_db?sslmode=require"
         )
 
-    def test_preserves_fragment(self):
+    def test_a_hash_is_part_of_the_name_it_replaces(self):
+        """libpq has no fragment: ``/db#x`` names the database ``db#x``."""
         url = "postgresql://user@host/db#fragment"
-        assert (
-            replace_db_name(url, "new_db") == "postgresql://user@host/new_db#fragment"
-        )
+        assert replace_db_name(url, "new_db") == "postgresql://user@host/new_db"
 
     def test_a_dbname_parameter_is_dropped(self):
         """libpq reads ``?dbname=`` after the path, so leaving it would undo
