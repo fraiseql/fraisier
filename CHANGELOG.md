@@ -7,6 +7,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.95.0] - 2026-10-27
+
+### Fixed
+
+- **`ssh:` runs commands again** ([#494](https://github.com/fraiseql/fraisier/issues/494)).
+  Since v0.8.0 every `SSHRunner` command, and every `upload_tree`, exited 127
+  on a real host. The command reached the remote shell as one quoted word,
+  which the shell looked up as a program name. `ssh:` deploys, `bootstrap`,
+  `validate-remote`, `repair-remote` and the MCP server's remote calls run
+  commands again. Now that uploads work, a tree `upload_tree` writes under
+  sudo is owned by root. Before, it kept the operator's local uid or the SSH
+  user, and bootstrap runs the uploaded `install.sh` as root.
+- **A database URL means what libpq says it means, on every path**
+  ([#493](https://github.com/fraiseql/fraisier/issues/493),
+  [#495](https://github.com/fraiseql/fraisier/issues/495)). A percent-encoded
+  password, a `?password=`, a `?dbname=` or a socket named only in `?host=`
+  now works on the psql, pg_dump, pg_restore, createdb and dropdb paths, in
+  restore and in the restore preflight, as it already did for confiture. A `+`
+  in a `?password=` is no longer read as a space, in restore or in the
+  deploy's `statement_timeout` URL.
+  A `#` is an ordinary character, as it is to libpq: a password containing
+  one is now taken off argv like any other, and a database rename no longer
+  splits the URL there. A trailing `&` and `?ssl=true` (libpq's
+  `sslmode=require`) are accepted, as libpq accepts them.
+- **A CREATEDB-only `admin_url` can run the restore preflight.** Since
+  v0.68.0 the preflight's psql asked for `lc_messages=C`, a superuser-only
+  setting, so the server refused every connection a non-superuser admin role
+  made. Statement failures are now told apart by their SQLSTATE, which the
+  server never translates.
+
+### Security
+
+- **`ssh:` no longer puts `env` values on a command line**
+  ([#492](https://github.com/fraiseql/fraisier/issues/492)). They used to
+  appear on the argv of the local `ssh` and of the remote shell, where any
+  user on either host can read them. That includes the database password that
+  v0.94.0 moved into `PGPASSWORD` for the deploy size query and the
+  `post_migrate` steps. They now travel on the command's stdin. With
+  `sudo_password`, a wrong password costs one sudo attempt, and the
+  environment never reaches sudo. A Docker Compose rollback hands the host
+  `IMAGE_TAG` alone, not the operator's whole environment.
+- **No database password on argv anywhere.** Two more launches put one there:
+  `fraisier db exec` (locally and over `ssh:`) and the `backup` hook's
+  `pg_dump`. A static check now fails the build when any `psql`, `pg_dump`,
+  `pg_restore`, `createdb`, `dropdb` or `confiture` launch builds its own URL
+  or environment.
+- **Ambient `PG*` variables no longer steer a deploy's children.** Every
+  libpq client and confiture that fraisier starts gets the URL's own `PG*`
+  values, plus only these from the environment: `PGSSLROOTCERT`, `PGSSLCERT`,
+  `PGSSLKEY`, `PGSSLCRL`, `PGSSLCRLDIR`, `PGPASSFILE`, `PGREQUIREAUTH`,
+  `PGCONNECT_TIMEOUT`, `PGAPPNAME`. A `PGSERVICE`, `PGUSER` or `PGOPTIONS` in
+  the deploy user's environment, or in `/etc/environment` on a host reached
+  over `ssh:`, used to override the URL or fill in what it left out. In-process
+  connections (pgBackRest checks, pg_tviews reads) still read the environment
+  for keys the URL omits: [#496](https://github.com/fraiseql/fraisier/issues/496).
+  Restore's own children are confiture's
+  ([fraiseql/confiture#792](https://github.com/fraiseql/confiture/issues/792)).
+- **An ambient TLS or GSS policy fails closed instead of being dropped.**
+  `PGSSLMODE`, `PGSSLCERTMODE`, `PGSSLNEGOTIATION`, `PGSSLMINPROTOCOLVERSION`,
+  `PGSSLMAXPROTOCOLVERSION`, `PGGSSENCMODE`, `PGCHANNELBINDING`,
+  `PGKRBSRVNAME` and `PGGSSLIB` no longer reach a child, so an exported
+  `PGSSLMODE=verify-full` would otherwise have become libpq's `prefer` without
+  a word. When one is set and a TCP URL does not set that keyword, the deploy,
+  `fraisier validate` and `fraisier doctor` refuse, whatever the value, and
+  name the fix (`?sslmode=verify-full`). Over `ssh:` the remote login's
+  environment is checked the same way (exit 123). Unix-socket URLs are exempt.
+- **Validation errors no longer echo a database URL**, which printed its
+  password.
+
+### Added
+
+- **Who each connection actually is.** A deploy asks the server
+  `current_user`, `current_database()` and its address once for each database
+  URL it uses, logs `connected as <user> to <db> on <host> (role: app)` at
+  INFO, and records it per role in the deployment status. `fraisier status`
+  shows it for the environment asked about, without connecting. `fraisier
+  doctor` gains `database_connected_as`, which connects and prints one line
+  per fraise, environment and role, with the sslmode it uses (`prefer (no
+  certificate check)` when the URL pins none), or the reason a deploy would
+  refuse the URL.
+
+### Changed
+
+> ⚠️ **Upgrade note.** Run `fraisier validate` on each host before
+> upgrading. It now refuses a database URL, naming the field, that a deploy
+> would refuse before it does anything.
+>
+> If a host exports any of `PGSSLMODE`, `PGSSLCERTMODE`, `PGSSLNEGOTIATION`,
+> `PGSSLMINPROTOCOLVERSION`, `PGSSLMAXPROTOCOLVERSION`, `PGGSSENCMODE`,
+> `PGCHANNELBINDING`, `PGKRBSRVNAME` or `PGGSSLIB` (in the deploy user's
+> environment, a unit's `Environment=`, or `/etc/environment` on an `ssh:`
+> host), move it into each TCP URL: `PGSSLMODE=verify-full` becomes
+> `…/dbname?sslmode=verify-full`.
+
+- A database URL is refused when it:
+  - is a key=value conninfo string (`host=… dbname=…`): use the URL form;
+  - has `?service=`: a service file outranks environment variables, so the
+    URL's other values would lose to it;
+  - names no database (`postgresql://app@db`): add `/dbname`. A URL with no
+    user is still fine and connects as the OS account;
+  - has a libpq keyword with no environment variable (`keepalives`,
+    `fallback_application_name`, `sslpassword`, …), which used to be dropped
+    silently, or a keyword libpq does not know;
+  - has a malformed `%` escape, a `%00`, a query parameter without `=`, or an
+    unencoded `@` in the password (encode it as `%40`).
+- Restore refuses a multi-host URL.
+- On a host whose libpq is older than 18, a newer keyword (`sslnegotiation`,
+  `min_protocol_version`, …) passes validation, but that libpq ignores its
+  environment variable.
+- Under `ssh:` with `sudo_password`, the remote host needs sudo's
+  `timestamp_timeout` above 0, which is sudo's default. With 0, commands fail
+  (exit 124 or 1) and leak nothing.
+- `CommandRunner.run` refuses an `env` key that is not a shell name, and
+  takes `scrub_pg=True` to drop ambient `PG*` from the child's environment,
+  locally and on the remote host.
+- `fraisier db exec` over `ssh:` runs through `SSHRunner`, like every other
+  remote command.
+- The `backup` hook fails with the URL's problem instead of running `pg_dump`
+  on a URL fraisier would refuse. That includes a bare database name in its
+  `database_url`, which `pg_dump` used to accept.
+- `restore_migrate` resolves its `admin_url` like every other strategy:
+  a refusal names `admin_url:`, and the deploy records the admin identity.
+
+Core parity: [fraiseql/fraisier-core#105](https://github.com/fraiseql/fraisier-core/issues/105).
+
 ## [0.94.0] - 2026-10-26
 
 ### Security
