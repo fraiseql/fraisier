@@ -70,6 +70,10 @@ class DeploymentStatusFile:
     ``owner_invocation_id`` is not used to decide liveness; it is recorded so an
     operator can pull the deploy's own journal back out afterwards with
     ``journalctl _SYSTEMD_INVOCATION_ID=<id>``.
+
+    ``connected_as`` is, per role (``app``, ``admin``, ``preflight``), who the
+    server said each connection was: ``user``/``database``/``host``, or
+    ``error`` (see :mod:`fraisier.dbops.identity`).
     """
 
     fraise_name: str
@@ -85,6 +89,7 @@ class DeploymentStatusFile:
     owner_pid: int | None = None
     owner_boot_id: str | None = None
     owner_invocation_id: str | None = None
+    connected_as: dict[str, dict[str, str]] | None = None
 
 
 def _read_boot_id() -> str | None:

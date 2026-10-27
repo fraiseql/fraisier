@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fraisier.constants import DEFAULT_EXEC_TIMEOUT
+from fraisier.dbops import identity
 from fraisier.errors import DeploymentError, FrameworkError
 from fraisier.git.operations import (
     clone_bare_repo,
@@ -103,6 +104,7 @@ class StatusRecordMixin:
             fraise_name=self.fraise_name,
             environment=self.environment,
             state=state,
+            connected_as=identity.recorded() or None,
             **current_owner(),
             **kwargs,
         )

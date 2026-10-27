@@ -37,7 +37,8 @@ def render_text(results: list[CheckResult]) -> None:
     name_width = max((len(r.name) for r in results), default=10) + 2
     for r in results:
         glyph = _STATUS_GLYPH[r.status]
-        console.print(f"  {glyph} {r.name:<{name_width}}{r.detail}")
+        detail = r.detail.replace("\n", "\n" + " " * (4 + name_width))
+        console.print(f"  {glyph} {r.name:<{name_width}}{detail}")
         if r.fix_hint:
             console.print(f"    [dim]fix: {r.fix_hint}[/dim]")
     summary = doctor.summarize(results)

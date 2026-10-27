@@ -122,6 +122,10 @@ def url_runner_child(url: str) -> tuple[str, dict[str, str]]:
     return argv_url, conn.pg_env()
 
 
+#: How a deploy's log and record name each URL's role.
+_ROLE_LABELS = {"database_url": "app", "admin_url": "admin"}
+
+
 def resolve_db_url(
     value: str | LazyEnv | None,
     *,
@@ -151,4 +155,7 @@ def resolve_db_url(
     except ValueError as exc:
         msg = f"{role}: {exc}"
         raise ValueError(msg) from None
+    from fraisier.dbops import identity
+
+    identity.note_connection(url, _ROLE_LABELS[role])
     return url

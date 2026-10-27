@@ -729,7 +729,7 @@ class TestDeployAbortsWhenItCannotWriteFromInsideTheSandbox:
 
         from fraisier.deployers.api import APIDeployer
 
-        body = inspect.getsource(APIDeployer.execute)
+        body = inspect.getsource(APIDeployer._execute)
         assert body.index("_validate_sandbox_writes") < body.index("_git_pull")
         assert body.index("_validate_wrapper_scripts") < body.index(
             "_validate_sandbox_writes"

@@ -23,6 +23,7 @@ from .main import main
 if TYPE_CHECKING:
     from fraisier.config.loader import FraisierConfig
     from fraisier.deployers.base import BaseDeployer
+    from fraisier.status import DeploymentStatusFile
 
 
 @main.command()
@@ -246,6 +247,26 @@ def _compute_deployment_state(
     return "[yellow]out-of-date[/yellow]"
 
 
+def _connected_as_lines(status: DeploymentStatusFile | None) -> list[str]:
+    """Who the last deploy's connections were, per role, as recorded.
+
+    Read from the record, never by connecting: ``status`` must answer when the
+    database does not.
+    """
+    if status is None or not status.connected_as:
+        return []
+    lines = ["[bold]Connected As:[/bold] (last deploy)"]
+    for role, found in status.connected_as.items():
+        if "error" in found:
+            lines.append(f"  {role}: [red]unknown[/red] ({found['error']})")
+        else:
+            lines.append(
+                f"  {role}: {found.get('user')} to {found.get('database')} "
+                f"on {found.get('host')}"
+            )
+    return lines
+
+
 def _compute_health_string(fraise_config: dict, deployer: BaseDeployer) -> str:
     """Compute health status string based on config and deployer health check."""
     health_check_cfg = fraise_config.get("health_check", {})
@@ -436,6 +457,8 @@ def _show_single_status(config: FraisierConfig, fraise: str, environment: str) -
                 fraise, current_version, latest_version
             )
             console.print(f"[bold]Status:[/bold] {deployment_status}")
+            for line in _connected_as_lines(read_status(fraise)):
+                console.print(line)
 
             # Show recent deployments
             from fraisier.database import get_db

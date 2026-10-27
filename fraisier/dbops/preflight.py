@@ -788,11 +788,13 @@ def _run_confiture_preflight(
     Raises:
         DatabaseError: If confiture exits with an unexpected error code.
     """
+    from fraisier.dbops import identity
     from fraisier.dbops._url import url_child
     from fraisier.errors import DatabaseError
 
     # `against_url` is the admin_url, superuser password and all (#491).
     against, env = url_child(against_url)
+    identity.note_connection(against_url, "preflight")
     cmd = [
         confiture_executable(),
         "migrate",

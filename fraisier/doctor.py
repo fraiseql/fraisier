@@ -1317,11 +1317,15 @@ def _check_pre_migrate_dump_writable(config: FraisierConfig | None) -> CheckResu
     )
 
 
-def _database_urls(config: FraisierConfig | None) -> dict[str, str]:
-    """Each configured ``database.database_url``, keyed ``fraise/env``.
+def _database_urls(
+    config: FraisierConfig | None,
+    role: Literal["database_url", "admin_url"] = "database_url",
+) -> dict[str, str]:
+    """Each configured ``database.<role>``, keyed ``fraise/env``.
 
-    An ``!envvar`` that is not set here is left out rather than raised: the
-    doctor's job is to report, and ``fraises_yaml_resolves`` already says so.
+    An ``!envvar`` that is not set here, or a URL ``PgConn`` refuses, is left
+    out rather than raised: the doctor's job is to report, and
+    ``fraises_yaml_resolves`` and validation already say so.
     """
     from fraisier.dbops._url import resolve_db_url
     from fraisier.errors import ConfigurationError
@@ -1334,14 +1338,50 @@ def _database_urls(config: FraisierConfig | None) -> dict[str, str]:
         for env_name, env_config in (fraise.get("environments") or {}).items():
             if not isinstance(env_config, dict):
                 continue
-            raw = (env_config.get("database") or {}).get("database_url")
+            raw = (env_config.get("database") or {}).get(role)
             try:
-                url = resolve_db_url(raw)
-            except ConfigurationError:
+                url = resolve_db_url(raw, role=role)
+            except ConfigurationError, ValueError:
                 continue
             if url:
                 urls[f"{fraise_name}/{env_name}"] = url
     return urls
+
+
+@register_check("database_connected_as", network=True)
+def _check_database_connected_as(config: FraisierConfig | None) -> CheckResult:
+    """Who each configured URL connects as, asked of the server.
+
+    The probe launches ``psql`` as every deploy child is launched, so the
+    answer is the identity a deploy gets, not the one the URL suggests: one
+    line per role, or the reason it could not connect.
+    """
+    from fraisier.dbops import identity
+
+    name = "database_connected_as"
+    by_role = {
+        "app": _database_urls(config, "database_url"),
+        "admin": _database_urls(config, "admin_url"),
+    }
+    targets = dict.fromkeys(t for urls in by_role.values() for t in urls)
+    lines: list[str] = []
+    failed = False
+    for target in targets:
+        for label, urls in by_role.items():
+            if target not in urls:
+                continue
+            found = identity.probe_identity(urls[target])
+            if found.error is not None:
+                failed = True
+                lines.append(f"{target} {label}: {found.error}")
+            else:
+                lines.append(
+                    f"{target} {label}: {found.user} to {found.database} "
+                    f"on {found.host}"
+                )
+    if not lines:
+        return CheckResult(name, "skip", "no database URL configured")
+    return CheckResult(name, "warn" if failed else "pass", "\n".join(lines))
 
 
 @register_check("pg_tviews_contract", network=True)
