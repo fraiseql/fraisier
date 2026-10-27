@@ -165,7 +165,7 @@ def _discover_target() -> PgTarget | None:
     ``FRAISIER_TEST_PG_URL`` is the server asked for — it is the one CI
     provides — and when it names one, that server or nothing: a run told to use
     TCP that quietly used a local socket would report a pass for a transport
-    it never exercised (D11). With no env URL, a local socket. A container is
+    it never exercised. With no env URL, a local socket. A container is
     not tried here; see :func:`_container_target`, which only runs once nothing
     already-running answered.
     """

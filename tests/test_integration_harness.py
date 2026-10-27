@@ -118,8 +118,7 @@ class TestDiscovery:
 
     def test_an_unusable_env_url_is_no_server(self, monkeypatch):
         """An FRAISIER_TEST_PG_URL that does not probe clean is not replaced by
-        the local socket: a run told to use TCP never silently uses a socket
-        (D11)."""
+        the local socket: a run told to use TCP never silently uses a socket."""
         monkeypatch.setenv("FRAISIER_TEST_PG_URL", "postgresql://nobody@127.0.0.1:1/db")
         monkeypatch.setattr(
             "tests.integration.conftest.shutil.which", lambda tool: tool
@@ -325,7 +324,7 @@ class TestTheContainerFallback:
             )
 
     def test_an_unusable_env_url_starts_no_container(self, monkeypatch):
-        """The env URL was the server asked for; a container is not it (D11)."""
+        """The env URL was the server asked for; a container is not it."""
         monkeypatch.setenv("FRAISIER_TEST_PG_URL", "postgresql://nobody@127.0.0.1:1/db")
         monkeypatch.setattr(conftest, "_discover_target", lambda: None)
         monkeypatch.setattr(

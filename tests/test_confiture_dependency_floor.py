@@ -201,7 +201,7 @@ def test_installed_preflight_reads_scope_pending(tmp_path: Path) -> None:
 
 
 def test_restore_options_carry_the_password_off_argv() -> None:
-    """``restore_backup`` hands the password to ``RestoreOptions`` (D3).
+    """``restore_backup`` hands the password to ``RestoreOptions``.
 
     That is safe only while confiture keeps it off ``pg_restore``'s argv and
     takes ``host``/``port`` as the ``-h``/``-p`` it does put there.

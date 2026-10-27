@@ -1,4 +1,4 @@
-"""Who each deploy connection actually connects as (D9).
+"""Who each deploy connection actually connects as.
 
 The probe runs ``psql`` the way every other child runs it, through
 ``_pg_cmd``, so it reports the identity the children get rather than the one
@@ -392,7 +392,7 @@ class TestDoctorShowsEachRole:
 
 class TestTransportPolicyAtTheFrontDoors:
     """``resolve_db_url``, ``fraisier validate`` and doctor ask PgConn's own
-    check, so a deploy is refused before it does anything (D15)."""
+    check, so a deploy is refused before it does anything."""
 
     def test_resolving_refuses_naming_the_field(self, monkeypatch):
         from fraisier.dbops._url import resolve_db_url

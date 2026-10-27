@@ -2,7 +2,7 @@
 
 That is all a preflight needs. Its schema restore requested
 ``-c lc_messages=C``, which only a superuser may set, so the server refused
-every connection such a role made (D10). CI's role is a superuser, so this
+every connection such a role made. CI's role is a superuser, so this
 needs a server holding one that is not.
 """
 

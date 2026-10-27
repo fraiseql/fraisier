@@ -97,7 +97,7 @@ class _Runner:
 def _assert_runner_got_only_the_urls_env(runner):
     """An SSHRunner ships every env key to the host, so a runner is handed
     the URL's own ``PG*`` (the password among them), never a copy of
-    os.environ (D13)."""
+    os.environ."""
     from fraisier.dbops._pgconn import PgConn
 
     assert runner.calls, "the child was never started"

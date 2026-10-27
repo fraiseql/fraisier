@@ -143,7 +143,7 @@ class TestPgCmdDatabaseInjection:
         assert cmd[cmd.index("-d") + 1] == "mydb"
 
     def test_a_url_naming_no_database_is_refused(self):
-        """libpq would default the database to the user name (D6: refused)."""
+        """libpq would default the database to the user name (refused)."""
         with patch("subprocess.run") as mock_run, pytest.raises(ValueError):
             _pg_cmd(
                 ["psql", "-c", "SELECT 1"],

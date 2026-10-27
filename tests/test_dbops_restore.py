@@ -121,7 +121,7 @@ class TestRestoreBackup:
         ],
     )
     def test_restore_password_goes_to_restore_options_decoded(self, url, password):
-        """#493: libpq's decoding (``+`` stays ``+``), through RestoreOptions (D3)."""
+        """#493: libpq's decoding (``+`` stays ``+``), through RestoreOptions."""
         with _mock_restorer() as restorer_cls:
             restore_backup(backup_path="/b.dump", db_name="staging", connection_url=url)
 
@@ -139,7 +139,7 @@ class TestRestoreBackup:
         assert _options_from(restorer_cls).host == "a"
 
     def test_os_environ_never_holds_the_password_during_restore(self, monkeypatch):
-        """D3: confiture hands RestoreOptions.password to its children itself."""
+        """Confiture hands RestoreOptions.password to its children itself."""
         monkeypatch.delenv("PGPASSWORD", raising=False)
         seen: list[str | None] = []
         with _mock_restorer() as restorer_cls:
@@ -171,7 +171,7 @@ class TestRestoreBackup:
         assert "PGSSLMODE" not in __import__("os").environ
 
     def test_augmented_env_is_a_no_op_for_host_port_user_password(self):
-        """D3: nothing in the common case touches the process environment."""
+        """Nothing in the common case touches the process environment."""
         with (
             _mock_restorer(),
             patch("fraisier.dbops.restore._augmented_env") as augmented,

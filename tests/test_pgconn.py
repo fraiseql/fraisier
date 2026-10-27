@@ -194,7 +194,7 @@ class TestDecode:
 
 
 class TestChildEnv:
-    """Every ambient ``PG*`` is dropped but a fixed operator allowlist (D6).
+    """Every ambient ``PG*`` is dropped but a fixed operator allowlist.
 
     The URL names the target fully. An ambient variable that could change the
     server, the user, the database or the session (``PGSERVICE`` outranks
@@ -280,7 +280,7 @@ class TestMovePasswordToEnvSharesTheDecoder:
     """``move_password_to_env`` decodes a URL as ``PgConn`` does.
 
     It applies no keyword refusals of its own: its callers, the sites that
-    keep a URL on argv (D2), parse with ``PgConn`` first
+    keep a URL on argv, parse with ``PgConn`` first
     (``url_child``/``url_runner_child``).
     """
 
@@ -406,7 +406,7 @@ class TestOneSplitForArgvAndEnv:
 
 
 class TestTransportPolicyFailsClosed:
-    """D15: the allowlist drops ambient TLS/GSS policy, so a child it would
+    """The allowlist drops ambient TLS/GSS policy, so a child it would
     have reached is refused, naming the URL fix; never silently downgraded."""
 
     TCP = "postgresql://acme@db.acme.test/acme_db"
