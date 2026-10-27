@@ -93,8 +93,12 @@ def _probe(dsn: str) -> str | None:
     """Is *dsn* usable for these tests, and where is that server's socket?
 
     Returns the server's first unix socket directory, or None when the DSN did
-    not connect or the role it connects as cannot create databases — both of
-    which make an end-to-end restore test inapplicable rather than failed.
+    not connect or the role it connects as cannot create databases and roles
+    (the tests do both) — which makes an end-to-end restore test inapplicable
+    rather than failed.
+    The directory is ``""`` when the role may not read it: that takes
+    ``pg_read_all_settings``, which a role with only ``CREATEDB`` lacks, and
+    such a role still serves a TCP target.
 
     The socket directory is returned because a socket candidate has to be
     re-addressed by the path the *server* reports rather than the one that
@@ -105,15 +109,16 @@ def _probe(dsn: str) -> str | None:
     try:
         with psycopg.connect(dsn, autocommit=True) as conn:
             socket_dirs, can_create = conn.execute(
-                "SELECT current_setting('unix_socket_directories'), "
-                "(SELECT rolcreatedb OR rolsuper FROM pg_roles "
-                " WHERE rolname = current_user)"
+                "SELECT CASE WHEN pg_has_role('pg_read_all_settings', 'USAGE') "
+                "  THEN current_setting('unix_socket_directories') END, "
+                "(SELECT rolsuper OR (rolcreatedb AND rolcreaterole) "
+                " FROM pg_roles WHERE rolname = current_user)"
             ).fetchone()
     except Exception:
         return None
     if not can_create:
         return None
-    return socket_dirs.split(",")[0].strip()
+    return (socket_dirs or "").split(",")[0].strip()
 
 
 def _env_target() -> PgTarget | None:
@@ -157,23 +162,25 @@ def client_major_version() -> int | None:
 def _discover_target() -> PgTarget | None:
     """Return a *running* server to use, or None if there is none.
 
-    ``FRAISIER_TEST_PG_URL`` is tried first — it is the server CI provides — and
-    a local socket second. An env URL that does not answer falls through rather
-    than deciding the question, so a stale variable cannot hide a working local
-    server. A container is not tried here; see :func:`_container_target`, which
-    only runs once nothing already-running answered.
+    ``FRAISIER_TEST_PG_URL`` is the server asked for — it is the one CI
+    provides — and when it names one, that server or nothing: a run told to use
+    TCP that quietly used a local socket would report a pass for a transport
+    it never exercised (D11). With no env URL, a local socket. A container is
+    not tried here; see :func:`_container_target`, which only runs once nothing
+    already-running answered.
     """
     pytest.importorskip("psycopg")
     if not _client_tools_present():
         return None
 
     from_env = _env_target()
-    if from_env is not None and _probe(from_env.dsn(_MAINTENANCE_DB)) is not None:
-        return from_env
+    if from_env is not None:
+        usable = _probe(from_env.dsn(_MAINTENANCE_DB)) is not None
+        return from_env if usable else None
 
     for dsn in _CANDIDATE_SOCKET_DSNS:
         socket_dir = _probe(dsn)
-        if socket_dir is not None:
+        if socket_dir:
             return PgTarget(host=socket_dir)
     return None
 
@@ -343,6 +350,13 @@ def _pg_server() -> Iterator[PgTarget | None]:
     an unrelated process on the same cluster saw no request for 10.3 seconds
     and tripped its own client timeout, while this suite was mid-build.
     """
+    with _session_target() as target:
+        yield target
+
+
+@contextlib.contextmanager
+def _session_target() -> Iterator[PgTarget | None]:
+    """:func:`_pg_server`'s body, callable without pytest."""
     already_running = _discover_target()
     if already_running is not None:
         # A container we start is private, so it cannot be contended and needs
@@ -353,6 +367,10 @@ def _pg_server() -> Iterator[PgTarget | None]:
         finally:
             if holder is not None:
                 holder.close()
+        return
+    if _env_target() is not None:
+        # The env URL named the server to use and it did not probe clean.
+        yield None
         return
     with _container_target() as started:
         yield started
@@ -366,9 +384,14 @@ def pg_target(_pg_server: PgTarget | None) -> PgTarget:
     create is theirs to drop (#386).
     """
     if _pg_server is None:
+        if _env_target() is not None:
+            unavailable(
+                "FRAISIER_TEST_PG_URL names a server that did not answer, or "
+                "whose role cannot create both databases and roles"
+            )
         unavailable(
-            "no PostgreSQL with createdb privilege is reachable, and no "
-            "container could be started"
+            "no PostgreSQL whose role can create databases and roles is "
+            "reachable, and no container could be started"
         )
     return _pg_server
 

@@ -116,8 +116,10 @@ class TestDiscovery:
         # shared with the runner.
         assert target.dsn("postgres").startswith("postgresql://fraisier:")
 
-    def test_an_unusable_env_url_falls_back_to_the_local_socket(self, monkeypatch):
-        """A stale FRAISIER_TEST_PG_URL must not hide a working local server."""
+    def test_an_unusable_env_url_is_no_server(self, monkeypatch):
+        """An FRAISIER_TEST_PG_URL that does not probe clean is not replaced by
+        the local socket: a run told to use TCP never silently uses a socket
+        (D11)."""
         monkeypatch.setenv("FRAISIER_TEST_PG_URL", "postgresql://nobody@127.0.0.1:1/db")
         monkeypatch.setattr(
             "tests.integration.conftest.shutil.which", lambda tool: tool
@@ -127,7 +129,7 @@ class TestDiscovery:
             lambda dsn: None if "127.0.0.1" in dsn else "/run/postgresql",
         )
 
-        assert _discover_target() == PgTarget(host="/run/postgresql")
+        assert _discover_target() is None
 
     def test_no_env_url_still_discovers_a_socket(self, monkeypatch):
         """The developer's path is unchanged."""
@@ -321,6 +323,17 @@ class TestTheContainerFallback:
                 "deciding 'no server' belongs to pg_target, which knows about "
                 "FRAISIER_INTEGRATION; a skip decided here would be silent"
             )
+
+    def test_an_unusable_env_url_starts_no_container(self, monkeypatch):
+        """The env URL was the server asked for; a container is not it (D11)."""
+        monkeypatch.setenv("FRAISIER_TEST_PG_URL", "postgresql://nobody@127.0.0.1:1/db")
+        monkeypatch.setattr(conftest, "_discover_target", lambda: None)
+        monkeypatch.setattr(
+            conftest, "_container_target", _never_called("_container_target")
+        )
+
+        with conftest._session_target() as target:
+            assert target is None
 
     def test_discovery_itself_never_starts_a_container(self, monkeypatch):
         """A running server always wins, and the unit tests stay database-free."""
