@@ -12,6 +12,7 @@ from fraisier.dbops.preflight import (
     MigrationCheck,
     MigrationPreflightResult,
     PreflightDatabase,
+    _consequential_restore_errors,
     _read_tracking_table,
     _write_preflight_config,
     extract_schema_only,
@@ -595,6 +596,40 @@ class TestRestoreSchemaSurfacesStatementFailures:
         assert "no_such_type" in message
         assert "--skip-preflight" in message
 
+    #: Captured from PostgreSQL 18 with ``lc_messages=fr_FR.utf8`` and psql's
+    #: own messages in C, as ``restore_schema`` runs it: a failed statement, a
+    #: notice and a warning. The severity is translated; the SQLSTATE is not.
+    FRENCH_SERVER_STDERR = (
+        "psql:schema.sql:2: ERREUR:  42P01: la relation « no_such_relation » "
+        "n'existe pas\n"
+        "LINE 1: SELECT * FROM no_such_relation;\n"
+        "                      ^\n"
+        "LOCATION:  parserOpenTable, parse_relation.c:1466\n"
+        "psql:schema.sql:3: NOTICE:  00000: hello\n"
+        "LOCATION:  exec_stmt_raise, pl_exec.c:3909\n"
+        "psql:schema.sql:3: ATTENTION:  01000: careful\n"
+        "LOCATION:  exec_stmt_raise, pl_exec.c:3909\n"
+    )
+
+    def test_an_error_in_the_servers_language_is_still_an_error(self, tmp_path):
+        """The scan keys on the SQLSTATE, which the server never translates.
+
+        It keyed on the word ``ERROR``, and kept it English with
+        ``-c lc_messages=C``, which only a superuser may set (D10).
+        """
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(
+            "CREATE TABLE ok_t (id int);\n"
+            "SELECT * FROM no_such_relation;\n"
+            "DO $$BEGIN RAISE NOTICE 'hello'; RAISE WARNING 'careful'; END$$;\n"
+        )
+
+        errors = _consequential_restore_errors(self.FRENCH_SERVER_STDERR, schema_path)
+
+        assert errors == [
+            "line 2: 42P01: la relation « no_such_relation » n'existe pas"
+        ]
+
     def test_inert_header_set_does_not_abort(self, tmp_path):
         """A dump-header ``SET`` that the server does not know is tolerated.
 
@@ -681,12 +716,8 @@ class TestRestoreSchemaSurfacesStatementFailures:
             db.restore_schema(schema_path)  # must not raise
 
     def test_psql_is_invoked_so_errors_are_machine_readable(self, tmp_path):
-        """Verbose gives every error a SQLSTATE; C messages keep the parse valid.
-
-        The severity prefix this parse keys on (``ERROR:``) is localised by the
-        server, so a non-English ``lc_messages`` would otherwise make every
-        failure invisible again — the exact bug, one layer down.
-        """
+        """Verbose gives every message the SQLSTATE the scan keys on; psql's
+        own messages are kept in C."""
         schema_path = tmp_path / "schema.sql"
         schema_path.write_text("CREATE TABLE fine (id int);\n")
 
@@ -700,4 +731,16 @@ class TestRestoreSchemaSurfacesStatementFailures:
         env = mock_run.call_args.kwargs["env"]
         assert env is not None
         assert env["LC_MESSAGES"] == "C"
-        assert "lc_messages=C" in env["PGOPTIONS"]
+
+    def test_no_superuser_only_setting_is_requested(self, tmp_path):
+        """``lc_messages`` is superuser-only: requesting it refused every
+        connection a CREATEDB-only role made (D10)."""
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text("CREATE TABLE fine (id int);\n")
+
+        db = self._make_db()
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=ok) as mock_run:
+            db.restore_schema(schema_path)
+
+        assert "PGOPTIONS" not in mock_run.call_args.kwargs["env"]

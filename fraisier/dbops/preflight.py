@@ -117,11 +117,19 @@ def _terminate_preflight_connections(admin_url: str, db_name: str) -> None:
     _run_admin_sql(admin_url, sql)
 
 
-# ``psql -f`` reports every statement error on stderr as
-# ``psql:<file>:<line>: ERROR:  <sqlstate>: <message>`` (the SQLSTATE is present
-# because the restore asks for ``VERBOSITY=verbose``). The line number is the
-# line the failing statement *ends* on, not the one it starts on.
-_PSQL_ERROR_LINE = re.compile(r"^psql:.+:(?P<line>\d+): ERROR:\s*(?P<detail>.*)$")
+# ``psql -f`` reports every server message on stderr as
+# ``psql:<file>:<line>: <severity>:  <sqlstate>: <message>`` (the SQLSTATE is
+# present because the restore asks for ``VERBOSITY=verbose``). The line number
+# is the line the failing statement *ends* on, not the one it starts on.
+#
+# The severity is in the server's ``lc_messages`` (``ERREUR`` on a French
+# server) and only a superuser may change that, so an error is told by its
+# SQLSTATE, which is never translated: classes 00, 01 and 02 are success,
+# warning and no-data; every other class is an error.
+_PSQL_MESSAGE_LINE = re.compile(
+    r"^psql:.+:(?P<line>\d+): [^:]+:\s+(?P<sqlstate>[0-9A-Z]{5}): (?P<message>.*)$"
+)
+_NOT_AN_ERROR = frozenset({"00", "01", "02"})
 
 # Statements whose failure provably cannot change the restored schema: session
 # GUCs from the dump header. ``pg_dump`` emits each on its own line, so a
@@ -173,13 +181,14 @@ def _consequential_restore_errors(stderr: str, schema_path: Path) -> list[str]:
     hits = [
         match
         for line in stderr.splitlines()
-        if (match := _PSQL_ERROR_LINE.match(line)) is not None
+        if (match := _PSQL_MESSAGE_LINE.match(line)) is not None
+        and match["sqlstate"][:2] not in _NOT_AN_ERROR
     ]
     if not hits:
         return []
     schema_lines = schema_path.read_text(errors="replace").splitlines()
     return [
-        f"line {m['line']}: {m['detail']}"
+        f"line {m['line']}: {m['sqlstate']}: {m['message']}"
         for m in hits
         if not _statement_is_inert(schema_lines, int(m["line"]))
     ]
@@ -270,12 +279,11 @@ class PreflightDatabase:
 
         conn_flags, run_env = self._conn_flags()
         env = {**run_env}
-        # The severity prefix the error scan keys on is emitted in the server's
-        # ``lc_messages``, and psql localises its own; pin both to C so a
-        # French-locale server cannot make every failure invisible again.
+        # psql's own messages in C. The server's stay in its ``lc_messages``,
+        # which only a superuser may set; the error scan keys on the SQLSTATE,
+        # which is never translated.
         env["LC_MESSAGES"] = "C"
         env["LANGUAGE"] = ""
-        env["PGOPTIONS"] = f"{env.get('PGOPTIONS', '')} -c lc_messages=C".strip()
 
         result = subprocess.run(
             ["psql", *conn_flags, "-v", "VERBOSITY=verbose", "-f", str(schema_path)],
