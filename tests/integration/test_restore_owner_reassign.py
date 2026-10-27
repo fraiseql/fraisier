@@ -62,6 +62,10 @@ def owned_database(pg_target) -> Iterator[tuple[str, str, str, str]]:
         conn.execute(f"CREATE ROLE {target} NOLOGIN")
         # REASSIGN requires the caller to hold privileges of the target role.
         conn.execute(f"GRANT {target} TO {source}")
+        # A CREATEROLE non-superuser gets only ADMIN on a role it creates
+        # (PostgreSQL 16+), and making the role own a database, or SET ROLE to
+        # it, needs SET as well. A plain GRANT carries SET on every version.
+        conn.execute(f"GRANT {source}, {target} TO CURRENT_USER")
         conn.execute(f"CREATE DATABASE {db_name} OWNER {source}")
 
     dsn = pg_target.dsn(db_name)
