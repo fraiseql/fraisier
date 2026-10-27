@@ -82,6 +82,16 @@ def owned_database(pg_target) -> Iterator[tuple[str, str, str, str]]:
                 conn.execute(f"DROP ROLE IF EXISTS {role}")
 
 
+def _as_role(dsn: str, role: str) -> str:
+    """*dsn* with ``options=-c role=<role>`` in its own query.
+
+    The URL is the channel: an ambient ``PGOPTIONS`` no longer reaches a
+    child (``PgConn.child_env``), and must not.
+    """
+    sep = "&" if "?" in dsn else "?"
+    return f"{dsn}{sep}options=-c%20role%3D{role}"
+
+
 def _table_owner(dsn: str) -> str:
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(dsn, autocommit=True) as conn:
@@ -92,13 +102,10 @@ def _table_owner(dsn: str) -> str:
     return row[0]
 
 
-def test_restore_backup_reassigns_ownership_for_real(
-    owned_database, tmp_path: Path, monkeypatch
-):
+def test_restore_backup_reassigns_ownership_for_real(owned_database, tmp_path: Path):
     dsn, db_name, source, target = owned_database
     assert _table_owner(dsn) == source
 
-    monkeypatch.setenv("PGOPTIONS", f"-c role={source}")
     dump = tmp_path / "backup.dump"
     dump.write_bytes(b"PGDMP")
 
@@ -106,7 +113,7 @@ def test_restore_backup_reassigns_ownership_for_real(
         result = restore_mod.restore_backup(
             backup_path=str(dump),
             db_name=db_name,
-            connection_url=dsn,
+            connection_url=_as_role(dsn, source),
             db_owner=target,
         )
 
@@ -114,12 +121,9 @@ def test_restore_backup_reassigns_ownership_for_real(
     assert _table_owner(dsn) == target
 
 
-def test_a_failed_reassignment_names_the_reassignment(
-    owned_database, tmp_path: Path, monkeypatch
-):
+def test_a_failed_reassignment_names_the_reassignment(owned_database, tmp_path: Path):
     """The error used to blame `pg_restore`, a step that had succeeded."""
     dsn, db_name, source, _target = owned_database
-    monkeypatch.setenv("PGOPTIONS", f"-c role={source}")
     dump = tmp_path / "backup.dump"
     dump.write_bytes(b"PGDMP")
 
@@ -127,7 +131,7 @@ def test_a_failed_reassignment_names_the_reassignment(
         result = restore_mod.restore_backup(
             backup_path=str(dump),
             db_name=db_name,
-            connection_url=dsn,
+            connection_url=_as_role(dsn, source),
             db_owner="no_such_role_here",
         )
 

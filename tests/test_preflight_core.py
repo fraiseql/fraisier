@@ -211,6 +211,55 @@ class TestPreflightDatabase:
         assert "psql" in cmd
         assert str(schema_path) in cmd
 
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            (
+                "postgresql://admin:p%40ss@h:6543/fraisier_preflight_abc",
+                {
+                    "PGUSER": "admin",
+                    "PGPASSWORD": "p@ss",
+                    "PGHOST": "h",
+                    "PGPORT": "6543",
+                },
+            ),
+            (
+                "postgresql:///fraisier_preflight_abc?host=/sock",
+                {"PGHOST": "/sock"},
+            ),
+        ],
+    )
+    def test_connection_reaches_children_as_env_only(self, monkeypatch, url, expected):
+        """#493: decoded, in env, and nothing but the db name on argv."""
+        monkeypatch.setenv("PGSERVICE", "ambient")
+        db = self._make_db()
+        db.url = url
+
+        ok = subprocess.CompletedProcess([], 0, "t\n", "")
+        with patch("subprocess.run", return_value=ok) as mock_run:
+            db.has_table("public.tb_x")
+
+        cmd = mock_run.call_args[0][0]
+        env = mock_run.call_args.kwargs["env"]
+        assert cmd[:3] == ["psql", "-d", "fraisier_preflight_abc"]
+        assert not {"-h", "-p", "-U"} & set(cmd)
+        assert {k: env[k] for k in expected} == expected
+        assert "PGSERVICE" not in env
+
+    def test_admin_sql_carries_the_connection_in_env(self, monkeypatch):
+        from fraisier.dbops.preflight import _run_admin_sql
+
+        monkeypatch.setenv("PGOPTIONS", "ambient")
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with patch("subprocess.run", return_value=ok) as mock_run:
+            _run_admin_sql("postgresql://admin:p%40ss@h/postgres", "SELECT 1")
+
+        cmd = mock_run.call_args[0][0]
+        env = mock_run.call_args.kwargs["env"]
+        assert cmd == ["psql", "-d", "postgres", "-c", "SELECT 1"]
+        assert env["PGPASSWORD"] == "p@ss"
+        assert "PGOPTIONS" not in env
+
     def test_restore_schema_raises_on_failure(self, tmp_path):
         schema_path = tmp_path / "schema.sql"
         schema_path.write_text("BAD SQL;")

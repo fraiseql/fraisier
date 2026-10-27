@@ -42,7 +42,7 @@ class TestValidatePgUrl:
         assert _validate_pg_url("api", "database_url", LazyEnv("DB", "p")) == []
 
     def test_validate_pg_url_string_helper_runs_scheme_check(self):
-        assert validate_pg_url_string("api", "database_url", "postgresql://x") == []
+        assert validate_pg_url_string("api", "database_url", "postgresql://x/db") == []
         errors = validate_pg_url_string("api", "database_url", "mysql://x")
         assert errors and "PostgreSQL URL" in errors[0]
 

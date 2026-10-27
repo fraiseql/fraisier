@@ -113,6 +113,85 @@ class TestRestoreBackup:
 
         assert _options_from(restorer_cls).host == "/var/run/postgresql"
 
+    @pytest.mark.parametrize(
+        ("url", "password"),
+        [
+            ("postgresql://u@localhost/postgres?password=a+b", "a+b"),
+            ("postgresql://u:p%40ss@localhost/postgres", "p@ss"),
+        ],
+    )
+    def test_restore_password_goes_to_restore_options_decoded(self, url, password):
+        """#493: libpq's decoding (``+`` stays ``+``), through RestoreOptions (D3)."""
+        with _mock_restorer() as restorer_cls:
+            restore_backup(backup_path="/b.dump", db_name="staging", connection_url=url)
+
+        assert _options_from(restorer_cls).password == password
+
+    def test_restore_query_host_beats_the_netloc(self):
+        """libpq reads the query after the netloc; this used to be URI-first."""
+        with _mock_restorer() as restorer_cls:
+            restore_backup(
+                backup_path="/b.dump",
+                db_name="staging",
+                connection_url="postgresql://b/postgres?host=a",
+            )
+
+        assert _options_from(restorer_cls).host == "a"
+
+    def test_os_environ_never_holds_the_password_during_restore(self, monkeypatch):
+        """D3: confiture hands RestoreOptions.password to its children itself."""
+        monkeypatch.delenv("PGPASSWORD", raising=False)
+        seen: list[str | None] = []
+        with _mock_restorer() as restorer_cls:
+            restorer_cls.return_value.restore.side_effect = lambda _o: (
+                seen.append(__import__("os").environ.get("PGPASSWORD"))
+                or _confiture_result()
+            )
+            restore_backup(
+                backup_path="/b.dump", db_name="staging", connection_url=_TEST_URL
+            )
+
+        assert seen == [None]
+
+    def test_other_libpq_keys_reach_os_environ_only_inside_the_call(self, monkeypatch):
+        monkeypatch.delenv("PGSSLMODE", raising=False)
+        seen: list[str | None] = []
+        with _mock_restorer() as restorer_cls:
+            restorer_cls.return_value.restore.side_effect = lambda _o: (
+                seen.append(__import__("os").environ.get("PGSSLMODE"))
+                or _confiture_result()
+            )
+            restore_backup(
+                backup_path="/b.dump",
+                db_name="staging",
+                connection_url=_TEST_URL + "?sslmode=require",
+            )
+
+        assert seen == ["require"]
+        assert "PGSSLMODE" not in __import__("os").environ
+
+    def test_augmented_env_is_a_no_op_for_host_port_user_password(self):
+        """D3: nothing in the common case touches the process environment."""
+        with (
+            _mock_restorer(),
+            patch("fraisier.dbops.restore._augmented_env") as augmented,
+        ):
+            augmented.return_value = contextlib.nullcontext()
+            restore_backup(
+                backup_path="/b.dump", db_name="staging", connection_url=_TEST_URL
+            )
+
+        augmented.assert_called_once_with({})
+
+    def test_restore_refuses_a_multi_host_url(self):
+        """confiture passes exactly one -h/-p."""
+        with _mock_restorer(), pytest.raises(ValueError, match="host"):
+            restore_backup(
+                backup_path="/b.dump",
+                db_name="staging",
+                connection_url="postgresql://h1,h2/postgres",
+            )
+
     def test_restore_requires_connection_url(self):
         with pytest.raises(TypeError):
             restore_backup(  # ty: ignore[missing-argument]

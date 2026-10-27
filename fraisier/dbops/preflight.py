@@ -14,15 +14,14 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import re
 import subprocess
 import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
 
+from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops.confiture_contract import (
     classify_confiture_failure,
     envelope_error_actionable,
@@ -92,9 +91,8 @@ def extract_schema_only(
 def _run_admin_sql(admin_url: str, sql: str) -> subprocess.CompletedProcess[str]:
     """Run a SQL statement against the admin database URL.
 
-    Extracts host/port/user/password from *admin_url* and passes them as CLI
-    flags / ``PGPASSWORD`` environment variable so no password appears in the
-    process table.
+    Through :func:`~fraisier.dbops.operations._pg_cmd`, so the connection
+    reaches psql as its environment and no password is on argv.
 
     Args:
         admin_url: PostgreSQL connection URL for the admin/maintenance database.
@@ -103,22 +101,11 @@ def _run_admin_sql(admin_url: str, sql: str) -> subprocess.CompletedProcess[str]
     Returns:
         CompletedProcess with returncode, stdout, stderr.
     """
-    from fraisier.dbops.operations import _parse_connection_flags
+    from fraisier.dbops.operations import _pg_cmd
 
-    conn_flags, extra_env = _parse_connection_flags(admin_url)
-    parsed = urlparse(admin_url)
-    db = parsed.path.lstrip("/")
-    if db:
-        conn_flags = [*conn_flags, "-d", db]
-
-    run_env = {**os.environ, **extra_env} if extra_env else None
-    return subprocess.run(
-        ["psql", *conn_flags, "-c", sql],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=run_env,
-    )
+    cmd = ["psql", "-c", sql]
+    code, out, err = _pg_cmd(cmd, connection_url=admin_url)
+    return subprocess.CompletedProcess(cmd, code, out, err)
 
 
 def _terminate_preflight_connections(admin_url: str, db_name: str) -> None:
@@ -282,7 +269,7 @@ class PreflightDatabase:
         from fraisier.errors import DatabaseError
 
         conn_flags, run_env = self._conn_flags()
-        env = {**(run_env or os.environ)}
+        env = {**run_env}
         # The severity prefix the error scan keys on is emitted in the server's
         # ``lc_messages``, and psql localises its own; pin both to C so a
         # French-locale server cannot make every failure invisible again.
@@ -316,17 +303,13 @@ class PreflightDatabase:
                 f"{_RESTORE_SKIP_HINT}"
             )
 
-    def _conn_flags(self) -> tuple[list[str], dict[str, str] | None]:
-        """Build psql/pg_restore connection flags + env for this DB."""
-        from fraisier.dbops.operations import _parse_connection_flags
+    def _conn_flags(self) -> tuple[list[str], dict[str, str]]:
+        """The ``-d`` flag and the child env for psql/pg_restore on this DB.
 
-        conn_flags, extra_env = _parse_connection_flags(self.url)
-        parsed = urlparse(self.url)
-        db = parsed.path.lstrip("/")
-        if db:
-            conn_flags = [*conn_flags, "-d", db]
-        run_env = {**os.environ, **extra_env} if extra_env else None
-        return conn_flags, run_env
+        Everything but the database name travels as libpq ``PG*`` variables.
+        """
+        conn = PgConn.parse(self.url)
+        return ["-d", conn.dbname], conn.child_env()
 
     def restore_tracking_data(self, backup_path: Path, tracking_table: str) -> None:
         """Load the backup's migration-tracking rows into this preflight DB.

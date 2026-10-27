@@ -105,9 +105,13 @@ class RestoreMigrateStrategy(Strategy):
         project_dir: Path | None = None,
         source: RestoreSource | None = None,
     ) -> None:
+        from fraisier.dbops._pgconn import PgConn
         from fraisier.dbops._validation import validate_pg_identifier
 
         validate_pg_identifier(config.db_name, "database name")
+        # Before anything runs: the dump source stops the service before the
+        # first child connects with this URL.
+        PgConn.parse(admin_url)
         if config.target_owner:
             validate_pg_identifier(config.target_owner, "target owner")
         if config.template_name:

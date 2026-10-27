@@ -20,7 +20,7 @@ from typing import Literal
 from urllib.parse import urlparse, urlsplit, urlunparse
 
 from fraisier.config._lazy_env import LazyEnv, to_str
-from fraisier.dbops._pgconn import decode, split_netloc, split_param
+from fraisier.dbops._pgconn import PgConn, decode, split_netloc, split_param
 
 
 def replace_db_name(url: str, db_name: str) -> str:
@@ -105,11 +105,20 @@ def resolve_db_url(
     no ``str | LazyEnv`` union creeps through the ~70 propagation
     sites in dbops/strategies.
 
-    *role* shows up in the searchable trace when a future audit asks
-    "where do we resolve admin_url vs database_url?" but doesn't change
-    the resolution itself.
+    The resolved URL is parsed by :class:`~fraisier.dbops._pgconn.PgConn`, so
+    one libpq would read differently is refused here, before the strategy has
+    done anything (a dump restore stops the service before its first child).
+    *role* names the field in that refusal.
+
+    Raises:
+        ValueError: naming *role* and what is wrong, never the password.
     """
-    del role  # informational; kept for grep traceability
     if value is None:
         return None
-    return to_str(value)
+    url = to_str(value)
+    try:
+        PgConn.parse(url)
+    except ValueError as exc:
+        msg = f"{role}: {exc}"
+        raise ValueError(msg) from None
+    return url
