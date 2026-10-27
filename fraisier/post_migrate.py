@@ -92,9 +92,9 @@ def _run_one(
     database_url: str,
     runner: CommandRunner,
 ) -> None:
-    from fraisier.dbops._url import move_password_to_env
+    from fraisier.dbops._url import url_runner_child
 
-    url, password_env = move_password_to_env(database_url)
+    url, env = url_runner_child(database_url)
     cmd = [
         "psql",
         url,
@@ -103,7 +103,7 @@ def _run_one(
         "-f",
         str(sql_file),
     ]
-    runner.run(cmd, env=password_env or None)
+    runner.run(cmd, env=env, scrub_pg=True)
 
 
 def run_post_migrate_steps(

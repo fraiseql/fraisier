@@ -15,7 +15,6 @@ entry via :func:`resolve_db_url`; downstream signatures stay typed
 
 from __future__ import annotations
 
-import os
 from typing import Literal
 from urllib.parse import urlparse, urlsplit, urlunparse
 
@@ -95,9 +94,32 @@ def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
     return rebuilt, {"PGPASSWORD": password} if password else {}
 
 
-def child_env(extra: dict[str, str]) -> dict[str, str] | None:
-    """The environment for a child that also needs *extra*; ``None`` inherits ours."""
-    return {**os.environ, **extra} if extra else None
+def url_child(url: str) -> tuple[str, dict[str, str]]:
+    """``(argv_url, env)`` for a child that takes its connection URL on argv.
+
+    confiture's interface, and some psql calls, take a URL, so it stays on
+    argv: *url* itself, password removed, byte for byte otherwise. It is first
+    parsed by :class:`~fraisier.dbops._pgconn.PgConn`, so a URL libpq would
+    read differently is refused here, and the child's environment is
+    :meth:`PgConn.child_env` — the password, and no ambient ``PG*`` beyond the
+    operator defaults.
+    """
+    conn = PgConn.parse(url)
+    argv_url, _ = move_password_to_env(url)
+    return argv_url, conn.child_env()
+
+
+def url_runner_child(url: str) -> tuple[str, dict[str, str]]:
+    """:func:`url_child` for a child launched through a ``CommandRunner``.
+
+    The env is the URL's own ``PG*`` (:meth:`PgConn.pg_env`) and nothing of
+    ``os.environ``, which a remote runner would ship to its host. Launch it
+    with ``scrub_pg=True``, so the runner drops whatever ambient ``PG*`` the
+    child's own environment holds.
+    """
+    conn = PgConn.parse(url)
+    argv_url, _ = move_password_to_env(url)
+    return argv_url, conn.pg_env()
 
 
 def resolve_db_url(

@@ -94,13 +94,17 @@ class _Runner:
         raise _Captured
 
 
-def _assert_runner_got_only_the_password(runner):
+def _assert_runner_got_only_the_urls_env(runner):
     """An SSHRunner ships every env key to the host, so a runner is handed
-    the password alone, never a copy of os.environ."""
+    the URL's own ``PG*`` (the password among them), never a copy of
+    os.environ (D13)."""
+    from fraisier.dbops._pgconn import PgConn
+
     assert runner.calls, "the child was never started"
     for argv, env in runner.calls:
         assert not [a for a in argv if SECRET in a or DECODED in a], argv
-        assert env == {"PGPASSWORD": DECODED}
+        assert env["PGPASSWORD"] == DECODED
+        assert env == PgConn.parse(URL).pg_env()
 
 
 def test_local_runner_extends_the_environment(monkeypatch):
@@ -153,7 +157,7 @@ def test_database_size_query():
     runner = _Runner()
     with pytest.raises(_Captured):
         query_database_size_mb(URL, runner=runner)
-    _assert_runner_got_only_the_password(runner)
+    _assert_runner_got_only_the_urls_env(runner)
 
 
 def test_post_migrate_step():
@@ -162,7 +166,7 @@ def test_post_migrate_step():
     runner = _Runner()
     with pytest.raises(_Captured):
         _run_one(Path("step.sql"), database_url=URL, runner=runner)
-    _assert_runner_got_only_the_password(runner)
+    _assert_runner_got_only_the_urls_env(runner)
 
 
 def test_the_fake_child_sees_what_subprocess_would():

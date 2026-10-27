@@ -39,6 +39,7 @@ class FakeRunner:
         timeout: int = 300,
         check: bool = True,
         env: dict[str, str] | None = None,
+        scrub_pg: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")

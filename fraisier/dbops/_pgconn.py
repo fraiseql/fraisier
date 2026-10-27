@@ -92,7 +92,7 @@ _NO_ENV = frozenset(
 #: (certificates, the password file, auth policy, timeouts, a label) that
 #: cannot change which server, user, database or session the URL names.
 #: Every other ``PG*`` is dropped, including ones libpq adds later.
-_OPERATOR_DEFAULTS = frozenset(
+OPERATOR_DEFAULTS = frozenset(
     {
         "PGSSLROOTCERT",
         "PGSSLCERT",
@@ -193,6 +193,15 @@ def _check_keyword(key: str) -> None:
         raise ValueError(msg)
 
 
+def scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
+    """*environ* minus every ``PG*`` variable but :data:`OPERATOR_DEFAULTS`."""
+    return {
+        key: value
+        for key, value in environ.items()
+        if not key.startswith("PG") or key in OPERATOR_DEFAULTS
+    }
+
+
 @dataclass(frozen=True)
 class PgConn:
     """A PostgreSQL URL as libpq reads it: keyword → decoded value."""
@@ -252,15 +261,10 @@ class PgConn:
     def child_env(self) -> dict[str, str]:
         """The environment for a child connecting with this URL.
 
-        Ours, minus every ``PG*`` variable but :data:`_OPERATOR_DEFAULTS`,
-        plus :meth:`pg_env`, which outranks those defaults.
+        :func:`scrubbed` ``os.environ``, plus :meth:`pg_env`, which outranks
+        the operator defaults it keeps.
         """
-        kept = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith("PG") or key in _OPERATOR_DEFAULTS
-        }
-        return {**kept, **self.pg_env()}
+        return {**scrubbed(os.environ), **self.pg_env()}
 
     @property
     def host(self) -> str | None:

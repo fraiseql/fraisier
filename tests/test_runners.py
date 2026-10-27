@@ -753,3 +753,54 @@ class TestDeployerUsesRunner:
 
         deployer = APIDeployer({"app_path": "/var/www/api"})
         assert isinstance(deployer.runner, LocalRunner)
+
+
+class TestScrubPg:
+    """``scrub_pg=True`` keeps ambient ``PG*`` away from a libpq child (D13).
+
+    A runner child still sees the environment it runs in: ours for
+    ``LocalRunner``, the remote login's for ``SSHRunner``. A connection URL
+    names its target fully, so every ambient ``PG*`` but the operator defaults
+    is dropped there, before *env* is applied.
+    """
+
+    @pytest.fixture(params=["local", "ssh"])
+    def runner(self, request, monkeypatch):
+        monkeypatch.setenv("PGSERVICE", "acme")
+        monkeypatch.setenv("PGOPTIONS", "-c acme.x=1")
+        monkeypatch.setenv("PGSSLROOTCERT", "/etc/acme/root.crt")
+        if request.param == "local":
+            return LocalRunner()
+        request.getfixturevalue("sshd_mirror")
+        return SSHRunner(host="h", user="u")
+
+    @staticmethod
+    def _env(runner, **kwargs) -> dict[str, str]:
+        out = runner.run(["env"], timeout=10, **kwargs).stdout
+        return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+    def test_ambient_pg_variables_are_dropped(self, runner):
+        env = self._env(runner, scrub_pg=True)
+
+        assert "PGSERVICE" not in env
+        assert "PGOPTIONS" not in env
+
+    def test_an_operator_default_is_kept(self, runner):
+        assert self._env(runner, scrub_pg=True)["PGSSLROOTCERT"] == "/etc/acme/root.crt"
+
+    def test_env_is_applied_after_the_scrub(self, runner):
+        env = self._env(
+            runner,
+            scrub_pg=True,
+            env={"PGPASSWORD": "pw", "PGSSLROOTCERT": "/etc/acme/url.crt"},
+        )
+
+        assert (env["PGPASSWORD"], env["PGSSLROOTCERT"]) == ("pw", "/etc/acme/url.crt")
+
+    def test_other_variables_are_untouched(self, runner, monkeypatch):
+        monkeypatch.setenv("FRAISIER_KEPT", "yes")
+
+        assert self._env(runner, scrub_pg=True)["FRAISIER_KEPT"] == "yes"
+
+    def test_without_it_the_environment_is_as_before(self, runner):
+        assert self._env(runner)["PGSERVICE"] == "acme"

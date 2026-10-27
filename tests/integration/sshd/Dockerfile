@@ -7,6 +7,9 @@
 #   pw       sudo with a password
 #   nocache  sudo with a password and timestamp_timeout=0 (no ticket survives)
 #   zshu     sudo with a password, zsh login shell
+#
+# Every login gets an ambient PGSERVICE and PGSSLROOTCERT from
+# /etc/environment (pam_env), for the runner's scrub_pg.
 FROM debian:bookworm-slim
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends openssh-server sudo procps zsh >/dev/null \
@@ -20,7 +23,8 @@ RUN apt-get update -qq \
  && echo 'nopw ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/nopw \
  && echo 'pw ALL=(ALL) ALL' > /etc/sudoers.d/pw \
  && printf 'nocache ALL=(ALL) ALL\nDefaults:nocache timestamp_timeout=0\n' > /etc/sudoers.d/nocache \
- && echo 'zshu ALL=(ALL) ALL' > /etc/sudoers.d/zshu
+ && echo 'zshu ALL=(ALL) ALL' > /etc/sudoers.d/zshu \
+ && printf 'PGSERVICE=acme\nPGSSLROOTCERT=/etc/acme/root.crt\n' >> /etc/environment
 COPY entrypoint.sh /entrypoint.sh
 EXPOSE 22
 ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]

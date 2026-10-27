@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from fraisier import ssh
 from fraisier.constants import DEFAULT_EXEC_TIMEOUT, SSH_CONNECT_TIMEOUT
+from fraisier.dbops._pgconn import OPERATOR_DEFAULTS, scrubbed
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -35,6 +36,16 @@ _ENV_SENTINEL = "__FRAISIER_ENV__"
 _ENV_READER = (
     "while :; do IFS= read -r l || exit 125; "
     f'[ "$l" = {_ENV_SENTINEL} ] && break; done; eval "$(cat)"; '
+)
+
+#: Unsets every ``PG*`` in the remote shell but the operator defaults, for
+#: ``scrub_pg``. Runs before the payload is applied, so the payload's own
+#: ``PG*`` stay. The names are filtered to shell names first: ``unset`` is a
+#: special built-in, and an invalid name would end the shell.
+_PG_SCRUB = (
+    "for v in $(env | cut -d= -f1 | grep -E '^PG[A-Za-z0-9_]*$'); do "
+    f"case $v in {'|'.join(sorted(OPERATOR_DEFAULTS))}) ;; "
+    '*) unset "$v" ;; esac; done; '
 )
 
 #: Reads the sudo password line and checks it with ``sudo -v``, which reads
@@ -72,6 +83,10 @@ class CommandRunner(Protocol):
     command's stdin. A caller still passes only the few keys it means, never a
     copy of ``os.environ``: on a remote host the operator's environment is
     meaningless, and every key is shipped to it.
+
+    *scrub_pg* is for a libpq child whose connection *env* names fully: every
+    ``PG*`` in the environment it runs in, but the operator defaults, is
+    dropped before *env* is applied (D13).
     """
 
     def run(
@@ -82,6 +97,7 @@ class CommandRunner(Protocol):
         timeout: int = DEFAULT_EXEC_TIMEOUT,
         check: bool = True,
         env: dict[str, str] | None = None,
+        scrub_pg: bool = False,
     ) -> subprocess.CompletedProcess[str]: ...
 
 
@@ -96,7 +112,9 @@ class LocalRunner:
         timeout: int = DEFAULT_EXEC_TIMEOUT,
         check: bool = True,
         env: dict[str, str] | None = None,
+        scrub_pg: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        base = scrubbed(os.environ) if scrub_pg else os.environ
         return subprocess.run(
             cmd,
             cwd=cwd,
@@ -104,7 +122,7 @@ class LocalRunner:
             text=True,
             timeout=timeout,
             check=check,
-            env={**os.environ, **env} if env else None,
+            env={**base, **(env or {})} if env or scrub_pg else None,
         )
 
 
@@ -274,13 +292,15 @@ class SSHRunner:
         timeout: int = DEFAULT_EXEC_TIMEOUT,
         check: bool = True,
         env: dict[str, str] | None = None,
+        scrub_pg: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         # The command goes on argv; env values go on stdin, after a sentinel
         # line, as `export` lines the remote shell evals (#492). Always
         # inject a safe PATH so sbin directories are available in
         # non-interactive SSH sessions (see #87).
         payload = _env_payload({"PATH": self._SAFE_PATH, **(env or {})})
-        script = _ENV_READER + (f"cd {shlex.quote(cwd)} && " if cwd else "")
+        script = (_PG_SCRUB if scrub_pg else "") + _ENV_READER
+        script += f"cd {shlex.quote(cwd)} && " if cwd else ""
         script += f"exec {shlex.join(cmd)}"
         # fraisier.ssh shlex.joins the argv it is given and sshd hands the
         # result to the login shell, so the script goes in as `sh -c`'s one

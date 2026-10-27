@@ -69,6 +69,7 @@ class FakeRunner:
         timeout: int = 300,
         check: bool = True,
         env: dict[str, str] | None = None,
+        scrub_pg: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append(cmd)
         if tuple(cmd) in self._failing:
