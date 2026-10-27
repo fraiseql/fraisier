@@ -277,10 +277,11 @@ class TestChildEnv:
 
 
 class TestMovePasswordToEnvSharesTheDecoder:
-    """The URL sites that keep a URL (D2) decode it as ``PgConn`` does.
+    """``move_password_to_env`` decodes a URL as ``PgConn`` does.
 
-    They do not apply ``PgConn``'s keyword refusals: their URL still goes to
-    libpq, which honours ``keepalives=`` and its kin.
+    It applies no keyword refusals of its own: its callers, the sites that
+    keep a URL on argv (D2), parse with ``PgConn`` first
+    (``url_child``/``url_runner_child``).
     """
 
     @pytest.mark.parametrize(

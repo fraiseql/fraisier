@@ -788,11 +788,11 @@ def _run_confiture_preflight(
     Raises:
         DatabaseError: If confiture exits with an unexpected error code.
     """
-    from fraisier.dbops._url import child_env, move_password_to_env
+    from fraisier.dbops._url import url_child
     from fraisier.errors import DatabaseError
 
     # `against_url` is the admin_url, superuser password and all (#491).
-    against, password_env = move_password_to_env(against_url)
+    against, env = url_child(against_url)
     cmd = [
         confiture_executable(),
         "migrate",
@@ -814,7 +814,7 @@ def _run_confiture_preflight(
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
-        env=child_env(password_env),
+        env=env,
     )
 
     # With --against, confiture exits 0 = all replays passed, 7 = one or more

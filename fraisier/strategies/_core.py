@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fraisier.dbops._pgconn import PgConn
-from fraisier.dbops._url import child_env, move_password_to_env, resolve_db_url
+from fraisier.dbops._url import resolve_db_url, url_child
 
 if TYPE_CHECKING:
     from fraisier.config._lazy_env import LazyEnv
@@ -359,7 +359,7 @@ class RebuildStrategy(Strategy):
     @staticmethod
     def _apply_sql(connection_url: str, sql_path: Path) -> None:
         """Apply a SQL file via psql with ON_ERROR_STOP."""
-        url, password_env = move_password_to_env(connection_url)
+        url, env = url_child(connection_url)
         psql_cmd = [
             "psql",
             "-v",
@@ -373,7 +373,7 @@ class RebuildStrategy(Strategy):
             capture_output=True,
             text=True,
             check=False,
-            env=child_env(password_env),
+            env=env,
         )
         if result.returncode != 0:
             log.error("psql failed on %s:\n%s", sql_path, result.stderr)

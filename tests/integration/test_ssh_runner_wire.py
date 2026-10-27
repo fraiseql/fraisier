@@ -262,3 +262,39 @@ def test_no_sudo_ticket_fails_loudly_and_leaks_nothing(sshd: SshdBox) -> None:
     assert result.stdout == ""
     assert _SECRET not in result.stderr
     assert sshd.password not in result.stderr
+
+
+def _remote_env(
+    runner: SSHRunner,
+    *,
+    scrub_pg: bool = False,
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    out = runner.run(["env"], timeout=WIRE_TIMEOUT, scrub_pg=scrub_pg, env=env).stdout
+    return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def test_the_remote_login_has_ambient_pg_variables(sshd: SshdBox) -> None:
+    """The control: without ``scrub_pg`` the host's own ``PG*`` reach the
+    command (the box sets them in ``/etc/environment``)."""
+    assert _remote_env(_runner(sshd, "nopw"))["PGSERVICE"] == "acme"
+
+
+@pytest.mark.parametrize("user", ["nopw", "zshu"])
+def test_scrub_pg_drops_the_hosts_pg_but_the_operator_defaults(
+    sshd: SshdBox, user: str
+) -> None:
+    env = _remote_env(_runner(sshd, user), scrub_pg=True, env={"PGPASSWORD": "pw"})
+
+    assert "PGSERVICE" not in env
+    assert env["PGSSLROOTCERT"] == "/etc/acme/root.crt"
+    assert env["PGPASSWORD"] == "pw"
+
+
+def test_scrub_pg_under_sudo_with_password(sshd: SshdBox) -> None:
+    runner = _runner(sshd, "pw", use_sudo=True, sudo_password=sshd.password)
+
+    env = _remote_env(runner, scrub_pg=True, env={"PGPASSWORD": "pw"})
+
+    assert "PGSERVICE" not in env
+    assert env["PGPASSWORD"] == "pw"

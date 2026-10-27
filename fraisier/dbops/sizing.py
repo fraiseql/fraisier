@@ -54,9 +54,13 @@ def query_database_size_mb(
     of *database_url* so the misconfig is diagnosable without leaking
     credentials.
     """
-    from fraisier.dbops._url import move_password_to_env
+    from fraisier.dbops._url import url_runner_child
 
-    url, password_env = move_password_to_env(database_url)
+    try:
+        url, env = url_runner_child(database_url)
+    except ValueError as exc:
+        logger.debug("query_database_size_mb: %s", exc)
+        return None
     cmd = [
         "psql",
         url,
@@ -64,7 +68,7 @@ def query_database_size_mb(
         "SELECT pg_database_size(current_database())",
     ]
     try:
-        result = runner.run(cmd, env=password_env or None)
+        result = runner.run(cmd, env=env, scrub_pg=True)
     except (subprocess.CalledProcessError, OSError) as exc:
         logger.debug(
             "query_database_size_mb: psql failed for %s: %s",

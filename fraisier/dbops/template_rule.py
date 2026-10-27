@@ -29,7 +29,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from fraisier.dbops._url import child_env, move_password_to_env
+from fraisier.dbops._url import url_child
 from fraisier.dbops.confiture_executable import confiture_executable
 
 if TYPE_CHECKING:
@@ -176,9 +176,11 @@ def read_pending_preflight(
         "--scope",
         "pending",
     ]
-    password_env: dict[str, str] = {}
+    # Without a URL confiture resolves its own from the config: fraisier names
+    # no target, so the child inherits our environment as it is.
+    env: dict[str, str] | None = None
     if database_url:
-        url, password_env = move_password_to_env(database_url)
+        url, env = url_child(database_url)
         cmd += ["--database-url", url]
     try:
         proc = subprocess.run(
@@ -188,7 +190,7 @@ def read_pending_preflight(
             text=True,
             timeout=timeout_seconds,
             cwd=project_dir,
-            env=child_env(password_env),
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"confiture preflight did not run: {exc}"
