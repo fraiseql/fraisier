@@ -82,13 +82,18 @@ def truncated_dumps(pg_target, tmp_path):
         _exec(
             _SRC_DB,
             pg_target,
-            "CREATE TABLE t (id int PRIMARY KEY, label text)",
+            "CREATE TABLE t (id int PRIMARY KEY, label text)"
+            " WITH (autovacuum_enabled = off)",
             f"INSERT INTO t SELECT g, repeat('x', 200) || g "
             f"FROM generate_series(1, {_ROWS}) g",
-            "CREATE TABLE t2 (id int PRIMARY KEY, label text)",
+            "CREATE TABLE t2 (id int PRIMARY KEY, label text)"
+            " WITH (autovacuum_enabled = off)",
             f"INSERT INTO t2 SELECT g, repeat('y', 200) || g "
             f"FROM generate_series(1, {_ROWS}) g",
         )
+        # Autovacuum is off on both tables: the inserts would start an
+        # auto-analyze worker on the database, and a non-superuser harness
+        # role cannot terminate it, so `DROP DATABASE ... WITH (FORCE)` failed.
         # Custom format: confiture's three-phase restore rejects a plain SQL
         # dump, and only -Fc/-Fd carry the table of contents this is about.
         # The whole DSN goes in as -d, which addresses either transport and
