@@ -166,22 +166,27 @@ def remote_config():
 
 class TestDbExecRemote:
     def test_select_routes_through_ssh(self, runner, remote_config):
+        """Through an SSHRunner, the one SSH channel that carries an env off
+        argv (#492): ``ssh.short_cmd`` put the admin URL on the remote
+        command line."""
         mock_proc = MagicMock(stdout="1\n", returncode=0)
-        with patch("fraisier.ssh.short_cmd", return_value=mock_proc) as mock_ssh:
+        with patch(
+            "fraisier.runners.SSHRunner.run", autospec=True, return_value=mock_proc
+        ) as run:
             result = runner.invoke(
                 main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
             )
         assert result.exit_code == 0
-        mock_ssh.assert_called_once()
-        target, argv = mock_ssh.call_args[0]
-        assert target.host == "prod.example.com"
-        assert target.user == "deploy"
+        run.assert_called_once()
+        ssh_runner, argv = run.call_args.args
+        assert ssh_runner.host == "prod.example.com"
+        assert ssh_runner.user == "deploy"
         assert argv[0] == "psql"
 
-    def test_subprocess_run_not_called_for_remote(self, runner, remote_config):
+    def test_no_local_psql_for_remote(self, runner, remote_config):
         mock_proc = MagicMock(stdout="1\n", returncode=0)
         with (
-            patch("fraisier.ssh.short_cmd", return_value=mock_proc),
+            patch("fraisier.runners.SSHRunner.run", return_value=mock_proc),
             patch("subprocess.run") as mock_local,
         ):
             runner.invoke(main, ["db", "exec", "api", "-e", "staging", "SELECT 1"])
@@ -191,7 +196,7 @@ class TestDbExecRemote:
         import subprocess
 
         with patch(
-            "fraisier.ssh.short_cmd",
+            "fraisier.runners.SSHRunner.run",
             side_effect=subprocess.CalledProcessError(
                 1, "psql", stderr="connection refused"
             ),
@@ -201,6 +206,69 @@ class TestDbExecRemote:
             )
         assert result.exit_code != 0
         assert "Error" in result.output
+
+
+_SECRET_URL = "postgresql://postgres:s3cr3t@localhost/postgres"
+
+
+class TestDbExecConnection:
+    """psql reads the admin URL through ``PgConn`` (#493): the password off
+    argv on both ends (#491), no ambient ``PG*`` but the operator defaults."""
+
+    @pytest.fixture
+    def secret_url(self, local_config):
+        local_config.get_fraise_environment.return_value = {
+            "type": "api",
+            "database": {"name": _DB_NAME, "admin_url": _SECRET_URL},
+        }
+        return local_config
+
+    def test_local_password_is_off_argv(self, runner, secret_url, monkeypatch):
+        monkeypatch.setenv("PGSERVICE", "acme")
+        mock_result = MagicMock(stdout="1\n", returncode=0)
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            result = runner.invoke(
+                main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
+            )
+
+        assert result.exit_code == 0, result.output
+        argv, env = mock_run.call_args.args[0], mock_run.call_args.kwargs["env"]
+        assert not any("s3cr3t" in arg for arg in argv)
+        assert env["PGPASSWORD"] == "s3cr3t"
+        assert "PGSERVICE" not in env
+
+    def test_remote_password_is_off_both_argvs(self, runner, remote_config):
+        remote_config.get_fraise_environment.return_value["database"]["admin_url"] = (
+            _SECRET_URL
+        )
+        done = MagicMock(stdout="1\n", returncode=0)
+        with (
+            patch("fraisier.runners.SSHRunner.run", return_value=done) as run,
+            patch("fraisier.ssh.short_cmd") as short_cmd,
+        ):
+            result = runner.invoke(
+                main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
+            )
+
+        assert result.exit_code == 0, result.output
+        short_cmd.assert_not_called()
+        argv, kwargs = run.call_args.args[0], run.call_args.kwargs
+        assert not any("s3cr3t" in arg for arg in argv)
+        assert kwargs["env"]["PGPASSWORD"] == "s3cr3t"
+        assert kwargs["scrub_pg"] is True
+
+    def test_a_refused_url_runs_nothing(self, runner, secret_url):
+        secret_url.get_fraise_environment.return_value["database"]["admin_url"] = (
+            "postgresql://postgres@localhost/postgres?service=acme"
+        )
+        with patch("subprocess.run") as mock_run:
+            result = runner.invoke(
+                main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
+            )
+
+        assert result.exit_code == 1
+        assert "service" in result.output
+        mock_run.assert_not_called()
 
 
 class TestDbExecProductionGate:

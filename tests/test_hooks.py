@@ -139,6 +139,46 @@ class TestHookRunner:
         assert results == []
 
 
+class TestBackupHookConnection:
+    """``pg_dump`` reads the URL through ``PgConn`` (#493): the password off
+    argv (#491), no ambient ``PG*`` but the operator defaults."""
+
+    URL = "postgresql://acme:s3cr3t@localhost/mydb"
+
+    @patch("fraisier.hooks.backup.subprocess.run")
+    def test_the_password_is_off_argv(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(stdout=b"", returncode=0)
+
+        BackupHook(backup_dir=tmp_path, database_url=self.URL).execute(_context())
+
+        argv = mock_run.call_args.args[0]
+        assert not any("s3cr3t" in arg for arg in argv)
+        assert mock_run.call_args.kwargs["env"]["PGPASSWORD"] == "s3cr3t"
+
+    @patch("fraisier.hooks.backup.subprocess.run")
+    def test_an_ambient_service_does_not_reach_pg_dump(
+        self, mock_run, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PGSERVICE", "acme")
+        mock_run.return_value = MagicMock(stdout=b"", returncode=0)
+
+        BackupHook(backup_dir=tmp_path, database_url=self.URL).execute(_context())
+
+        assert "PGSERVICE" not in mock_run.call_args.kwargs["env"]
+
+    @patch("fraisier.hooks.backup.subprocess.run")
+    def test_a_refused_url_fails_the_hook_and_runs_nothing(self, mock_run, tmp_path):
+        hook = BackupHook(
+            backup_dir=tmp_path, database_url="postgresql://localhost/db?service=x"
+        )
+
+        result = hook.execute(_context())
+
+        assert not result.success
+        assert "service" in (result.error or "")
+        mock_run.assert_not_called()
+
+
 class TestBackupHook:
     @patch("fraisier.hooks.backup.subprocess.run")
     def test_creates_compressed_backup(self, mock_run, tmp_path):

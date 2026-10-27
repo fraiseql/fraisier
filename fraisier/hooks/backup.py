@@ -47,11 +47,23 @@ class BackupHook:
 
         backup_path = self.backup_dir / filename
 
+        from fraisier.dbops._url import url_child
+
+        try:
+            url, env = url_child(self.database_url)
+        except ValueError as exc:
+            return HookResult(
+                success=False,
+                hook_name=self.name,
+                error=f"database_url: {exc}",
+            )
+
         try:
             result = subprocess.run(
-                ["pg_dump", self.database_url],
+                ["pg_dump", url],
                 capture_output=True,
                 check=True,
+                env=env,
             )
             if self.compress:
                 backup_path.write_bytes(gzip.compress(result.stdout))
