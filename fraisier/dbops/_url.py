@@ -16,36 +16,36 @@ entry via :func:`resolve_db_url`; downstream signatures stay typed
 from __future__ import annotations
 
 from typing import Literal
-from urllib.parse import urlparse, urlsplit, urlunparse
 
 from fraisier.config._lazy_env import LazyEnv, to_str
-from fraisier.dbops._pgconn import PgConn, decode, split_netloc, split_param
+from fraisier.dbops._pgconn import (
+    PgConn,
+    decode,
+    query_params,
+    split_netloc,
+    split_param,
+    split_url,
+)
 
 
 def replace_db_name(url: str, db_name: str) -> str:
     """Return *url* with the database name replaced by *db_name*.
 
     A ``dbname=`` query parameter is dropped: libpq reads the query after the
-    path, so it would name the database instead.
-
-    ``urllib.parse.urlunparse`` collapses ``scheme:///path`` (empty netloc)
-    into ``scheme:/path``, which is invalid for PostgreSQL socket URLs.
-    This function preserves the original ``://`` or ``:///`` prefix.
+    path, so it would name the database instead. The URL is cut where
+    :class:`~fraisier.dbops._pgconn.PgConn` cuts it, and everything else is
+    kept byte for byte, so ``postgresql:///db`` stays a socket URL.
     """
-    parsed = urlparse(url)
-    query = "&".join(
+    parts = split_url(url)
+    if parts is None:
+        return url
+    scheme, netloc, _, query = parts
+    kept = [
         param
-        for param in parsed.query.split("&")
-        if param and decode(param.partition("=")[0]) != "dbname"
-    )
-    replaced = urlunparse(parsed._replace(path=f"/{db_name}", query=query))
-
-    # urlunparse with an empty netloc produces "scheme:/path" instead of
-    # "scheme:///path".  Detect and fix.
-    if parsed.netloc == "" and f"{parsed.scheme}:///" in url:
-        replaced = replaced.replace(f"{parsed.scheme}:/", f"{parsed.scheme}:///", 1)
-
-    return replaced
+        for param in query_params(query)
+        if decode(param.partition("=")[0]) != "dbname"
+    ]
+    return _join(scheme, netloc, db_name, kept)
 
 
 def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
@@ -56,20 +56,20 @@ def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
     libpq falls back to ``PGPASSWORD`` when the connection string has none.
 
     The password may be in the userinfo or in a ``password=`` query parameter.
-    libpq reads the query second, so the query's value wins. Both are decoded
-    by :func:`fraisier.dbops._pgconn.decode`, libpq's rules: ``+`` stays ``+``,
-    and a malformed escape, ``%00``, a second unencoded ``@`` or a parameter
-    without ``=`` raise ``ValueError`` instead of reaching libpq mangled.
-    The URL is rebuilt by hand, because ``urlunsplit`` turns
-    ``postgresql:///db`` into ``postgresql:/db``. A key=value conninfo string
-    is returned unchanged.
+    libpq reads the query second, so the query's value wins. The URL is cut
+    where :class:`~fraisier.dbops._pgconn.PgConn` cuts it and decoded by the
+    same :func:`~fraisier.dbops._pgconn.decode`, so no character (a ``#``, a
+    ``+``) can hide the password from one reading and not the other; a
+    malformed escape, ``%00``, a second unencoded ``@`` or a parameter without
+    ``=`` raise ``ValueError``. A key=value conninfo string is returned
+    unchanged.
     """
-    parts = urlsplit(url)
-    if parts.scheme not in ("postgresql", "postgres"):
+    parts = split_url(url)
+    if parts is None:
         return url, {}
+    scheme, netloc, path, query = parts
 
     password: str | None = None
-    netloc = parts.netloc
     userinfo, hostport = split_netloc(netloc)
     if ":" in userinfo:
         user, _, raw = userinfo.partition(":")
@@ -77,7 +77,7 @@ def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
         netloc = f"{user}@{hostport}"
 
     kept: list[str] = []
-    for param in parts.query.split("&") if parts.query else []:
+    for param in query_params(query):
         key, value = split_param(param)
         if decode(key) == "password":
             password = decode(value)
@@ -86,12 +86,14 @@ def move_password_to_env(url: str) -> tuple[str, dict[str, str]]:
 
     if password is None:
         return url, {}
-    rebuilt = f"{parts.scheme}://{netloc}{parts.path}"
-    if kept:
-        rebuilt += "?" + "&".join(kept)
-    if parts.fragment:
-        rebuilt += "#" + parts.fragment
-    return rebuilt, {"PGPASSWORD": password} if password else {}
+    return _join(scheme, netloc, path, kept), {
+        "PGPASSWORD": password
+    } if password else {}
+
+
+def _join(scheme: str, netloc: str, path: str, params: list[str]) -> str:
+    joined = f"{scheme}{netloc}/{path}"
+    return f"{joined}?{'&'.join(params)}" if params else joined
 
 
 def url_child(url: str) -> tuple[str, dict[str, str]]:
@@ -151,7 +153,7 @@ def resolve_db_url(
         return None
     url = to_str(value)
     try:
-        PgConn.parse(url)
+        PgConn.parse(url).check_environment()
     except ValueError as exc:
         msg = f"{role}: {exc}"
         raise ValueError(msg) from None

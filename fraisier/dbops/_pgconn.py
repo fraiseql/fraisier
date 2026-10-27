@@ -65,6 +65,7 @@ _KEYWORD_ENV: dict[str, str] = {
     "target_session_attrs": "PGTARGETSESSIONATTRS",
     "load_balance_hosts": "PGLOADBALANCEHOSTS",
 }
+ENV_KEYWORD = {var: key for key, var in _KEYWORD_ENV.items()}
 
 #: Keywords libpq 18 accepts that have no environment variable. A child could
 #: only be given one on argv, so ``parse`` refuses them.
@@ -105,6 +106,27 @@ OPERATOR_DEFAULTS = frozenset(
         "PGAPPNAME",
     }
 )
+
+#: Variables that set transport security and nothing else. The allowlist
+#: drops them, because an ambient value could weaken a URL that does not pin
+#: them; but an operator who exported one meant a policy, so a TCP child they
+#: would have reached is refused instead of connecting without it (D15).
+TRANSPORT_POLICY = frozenset(
+    {
+        "PGSSLMODE",
+        "PGSSLCERTMODE",
+        "PGSSLNEGOTIATION",
+        "PGSSLMINPROTOCOLVERSION",
+        "PGSSLMAXPROTOCOLVERSION",
+        "PGGSSENCMODE",
+        "PGCHANNELBINDING",
+        "PGKRBSRVNAME",
+        "PGGSSLIB",
+    }
+)
+
+#: Exit status of a runner command refused by :func:`transport_refusal`.
+TRANSPORT_REFUSED = 123
 
 _SCHEMES = ("postgresql://", "postgres://")
 
@@ -149,6 +171,28 @@ def split_netloc(netloc: str) -> tuple[str, str]:
         msg = "a second '@' in the URL's netloc: percent-encode '@' as %40"
         raise ValueError(msg)
     return userinfo, hostport
+
+
+def split_url(url: str) -> tuple[str, str, str, str] | None:
+    """``(scheme, netloc, path, query)`` of *url*, cut where libpq cuts it.
+
+    Only ``?`` and the first ``/`` delimit; a ``#`` is an ordinary character,
+    as it is to libpq. ``None`` for anything but a PostgreSQL URL.
+    """
+    scheme = next((s for s in _SCHEMES if url.startswith(s)), None)
+    if scheme is None:
+        return None
+    rest, _, query = url[len(scheme) :].partition("?")
+    netloc, _, path = rest.partition("/")
+    return scheme, netloc, path, query
+
+
+def query_params(query: str) -> list[str]:
+    """The ``&``-separated parameters of *query*; libpq ignores one trailing ``&``."""
+    params = query.split("&") if query else []
+    if len(params) > 1 and not params[-1]:
+        params.pop()
+    return params
 
 
 def split_param(param: str) -> tuple[str, str]:
@@ -202,6 +246,40 @@ def scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def is_socket(pg_env: Mapping[str, str]) -> bool:
+    """Whether a child with this connection env reaches only unix sockets.
+
+    libpq applies no TLS or GSS encryption there. A host is a socket when it
+    is empty (libpq's default socket) or a path (``/…``, or ``@…`` for an
+    abstract one); a ``hostaddr`` always means TCP.
+    """
+    if pg_env.get("PGHOSTADDR"):
+        return False
+    hosts = pg_env.get("PGHOST", "").split(",")
+    return all(not host or host.startswith(("/", "@")) for host in hosts)
+
+
+def transport_refusal(
+    environ: Mapping[str, str], pg_env: Mapping[str, str]
+) -> str | None:
+    """Why a child with connection env *pg_env* may not run in *environ*.
+
+    ``None`` unless the child uses TCP and *environ* sets a
+    :data:`TRANSPORT_POLICY` variable *pg_env* does not, whatever its value:
+    the child would connect without it. The message names the URL fix.
+    """
+    if is_socket(pg_env):
+        return None
+    dropped = sorted(v for v in TRANSPORT_POLICY if v in environ and v not in pg_env)
+    if not dropped:
+        return None
+    fix = "&".join(f"{ENV_KEYWORD[v]}={environ[v]}" for v in dropped)
+    return (
+        f"{', '.join(dropped)} is set in the environment, and fraisier no longer "
+        f"passes it to database clients: put it in the URL (?{fix})"
+    )
+
+
 @dataclass(frozen=True)
 class PgConn:
     """A PostgreSQL URL as libpq reads it: keyword → decoded value."""
@@ -216,15 +294,14 @@ class PgConn:
             ValueError: naming what libpq would refuse or read differently.
                 The message never contains the password.
         """
-        scheme = next((s for s in _SCHEMES if url.startswith(s)), None)
-        if scheme is None:
+        parts = split_url(url)
+        if parts is None:
             msg = (
                 "not a PostgreSQL URL: expected postgresql://[user[:password]@]"
                 "[host][:port]/dbname[?param=value&...]"
             )
             raise ValueError(msg)
-        rest, _, query = url[len(scheme) :].partition("?")
-        netloc, _, path = rest.partition("/")
+        _, netloc, path, query = parts
 
         params: dict[str, str] = {}
         userinfo, hostport = split_netloc(netloc)
@@ -243,11 +320,13 @@ class PgConn:
         if path:
             params["dbname"] = decode(path)
 
-        for param in query.split("&") if query else ():
+        for param in query_params(query):
             raw_key, raw_value = split_param(param)
-            key = decode(raw_key)
+            key, value = decode(raw_key), decode(raw_value)
+            if key == "ssl" and value == "true":
+                key, value = "sslmode", "require"  # libpq's JDBC compatibility
             _check_keyword(key)
-            params[key] = decode(raw_value)
+            params[key] = value
 
         if not params.get("dbname"):
             msg = "the URL names no database: add it as the path (…/dbname)"
@@ -258,13 +337,33 @@ class PgConn:
         """Each parameter as the ``PG*`` variable libpq reads it from."""
         return {_KEYWORD_ENV[key]: value for key, value in self.params.items()}
 
+    def check_environment(self, environ: Mapping[str, str] = os.environ) -> None:
+        """Refuse a TCP URL that *environ* sets a transport policy for.
+
+        Raises:
+            ValueError: see :func:`transport_refusal`.
+        """
+        refusal = transport_refusal(environ, self.pg_env())
+        if refusal:
+            raise ValueError(refusal)
+
     def child_env(self) -> dict[str, str]:
         """The environment for a child connecting with this URL.
 
         :func:`scrubbed` ``os.environ``, plus :meth:`pg_env`, which outranks
         the operator defaults it keeps.
+
+        Raises:
+            ValueError: :meth:`check_environment` refused it.
         """
+        self.check_environment()
         return {**scrubbed(os.environ), **self.pg_env()}
+
+    def effective_sslmode(self) -> str:
+        """The sslmode a child connects with, for an operator to read."""
+        if is_socket(self.pg_env()):
+            return "none (socket)"
+        return self.params.get("sslmode", "prefer (no certificate check)")
 
     @property
     def host(self) -> str | None:

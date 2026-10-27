@@ -804,3 +804,50 @@ class TestScrubPg:
 
     def test_without_it_the_environment_is_as_before(self, runner):
         assert self._env(runner)["PGSERVICE"] == "acme"
+
+
+_TCP_PG_ENV = {"PGHOST": "db.acme.test", "PGDATABASE": "acme_db"}
+
+
+class TestScrubPgFailsClosedOnTransportPolicy:
+    """An ambient TLS or GSS policy the scrub would drop refuses the command
+    instead (D15): the child would connect without what the operator meant.
+    The same rule as ``PgConn.child_env``, on the environment the child runs
+    in: ours for ``LocalRunner``, the remote login's for ``SSHRunner``."""
+
+    @pytest.fixture(params=["local", "ssh"])
+    def runner(self, request, monkeypatch):
+        monkeypatch.setenv("PGSSLMODE", "verify-full")
+        if request.param == "local":
+            return LocalRunner()
+        request.getfixturevalue("sshd_mirror")
+        return SSHRunner(host="h", user="u")
+
+    def test_a_tcp_child_without_the_policy_is_refused(self, runner):
+        with pytest.raises(subprocess.CalledProcessError) as caught:
+            runner.run(["true"], timeout=10, env=_TCP_PG_ENV, scrub_pg=True)
+
+        assert caught.value.returncode == 123
+        assert "PGSSLMODE" in caught.value.stderr
+        assert "sslmode=verify-full" in caught.value.stderr
+
+    def test_unchecked_it_returns_the_refusal(self, runner):
+        result = runner.run(
+            ["true"], timeout=10, env=_TCP_PG_ENV, scrub_pg=True, check=False
+        )
+
+        assert result.returncode == 123
+
+    def test_a_url_that_pins_it_runs(self, runner):
+        env = {**_TCP_PG_ENV, "PGSSLMODE": "disable"}
+
+        assert runner.run(["true"], timeout=10, env=env, scrub_pg=True).returncode == 0
+
+    @pytest.mark.parametrize("host", [None, "/run/postgresql", "@acme"])
+    def test_a_socket_child_runs(self, runner, host):
+        env = {"PGDATABASE": "acme_db"} | ({"PGHOST": host} if host else {})
+
+        assert runner.run(["true"], timeout=10, env=env, scrub_pg=True).returncode == 0
+
+    def test_without_scrub_nothing_is_checked(self, runner):
+        assert runner.run(["true"], timeout=10, env=_TCP_PG_ENV).returncode == 0

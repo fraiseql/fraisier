@@ -37,6 +37,7 @@ def _pg_cmd(
     *,
     connection_url: str,
     input_text: str | None = None,
+    timeout: float | None = None,
 ) -> tuple[int, str, str]:
     """Run a PostgreSQL CLI command against *connection_url*.
 
@@ -56,6 +57,9 @@ def _pg_cmd(
     quoting into it.
 
     Returns (exit_code, stdout, stderr).
+
+    Raises:
+        subprocess.TimeoutExpired: the command outlived *timeout* seconds.
     """
     conn = PgConn.parse(connection_url)
 
@@ -69,6 +73,7 @@ def _pg_cmd(
         check=False,
         env=conn.child_env(),
         input=input_text,
+        timeout=timeout,
     )
     return result.returncode, result.stdout, result.stderr
 

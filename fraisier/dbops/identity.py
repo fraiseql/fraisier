@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import subprocess
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
@@ -30,6 +31,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("fraisier")
 
 _SQL = "SELECT current_user, current_database(), inet_server_addr()"
+
+#: Seconds a probe may take: an unreachable server must not hold a deploy for
+#: the kernel's TCP timeout before its first real child meets the same wait.
+PROBE_TIMEOUT = 15.0
 
 
 @dataclass(frozen=True)
@@ -53,7 +58,11 @@ def probe_identity(url: str) -> ConnectedAs:
     directory, or libpq's default one, is named instead.
     """
     try:
-        code, out, err = _pg_cmd(["psql", "-XtA", "-c", _SQL], connection_url=url)
+        code, out, err = _pg_cmd(
+            ["psql", "-XtA", "-c", _SQL], connection_url=url, timeout=PROBE_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        return ConnectedAs(error=f"no answer within {PROBE_TIMEOUT:g}s")
     except (OSError, ValueError) as exc:
         return ConnectedAs(error=str(exc))
     if code != 0:
@@ -66,7 +75,7 @@ def probe_identity(url: str) -> ConnectedAs:
 @dataclass
 class _Recorder:
     by_role: dict[str, ConnectedAs] = field(default_factory=dict)
-    probed: set[str] = field(default_factory=set)
+    by_url: dict[str, ConnectedAs] = field(default_factory=dict)
 
 
 _ACTIVE: ContextVar[_Recorder | None] = ContextVar("fraisier_identities", default=None)
@@ -85,23 +94,27 @@ def recording() -> Iterator[None]:
 def note_connection(url: str, role: str) -> None:
     """A deploy is about to use *url* as *role*: probe it, the first time.
 
-    The first URL noted for a role is the one recorded for it.
+    A URL is probed once however many roles use it. The first URL noted for a
+    role is the one recorded for it.
     """
     recorder = _ACTIVE.get()
-    if recorder is None or url in recorder.probed:
+    if recorder is None:
         return
-    recorder.probed.add(url)
-    found = probe_identity(url)
-    if found.error is None:
-        logger.info(
-            "connected as %s to %s on %s (role: %s)",
-            found.user,
-            found.database,
-            found.host,
-            role,
-        )
-    else:
-        logger.warning("could not tell who role %s connects as: %s", role, found.error)
+    found = recorder.by_url.get(url)
+    if found is None:
+        found = recorder.by_url[url] = probe_identity(url)
+        if found.error is None:
+            logger.info(
+                "connected as %s to %s on %s (role: %s)",
+                found.user,
+                found.database,
+                found.host,
+                role,
+            )
+        else:
+            logger.warning(
+                "could not tell who role %s connects as: %s", role, found.error
+            )
     recorder.by_role.setdefault(role, found)
 
 
