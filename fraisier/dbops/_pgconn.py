@@ -18,6 +18,7 @@ import cycle.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 from dataclasses import dataclass, field
@@ -125,8 +126,16 @@ TRANSPORT_POLICY = frozenset(
     }
 )
 
-#: Exit status of a runner command refused by :func:`transport_refusal`.
+#: Exit status of a runner command refused by :func:`environment_refusal`.
 TRANSPORT_REFUSED = 123
+
+#: Keywords with no compiled default whose ``''`` libpq refuses: the value a
+#: clean environment resolves each to, measured on libpq 18.
+_UNSET_DEFAULTS = {
+    "sslcertmode": "allow",
+    "min_protocol_version": "3.0",
+    "max_protocol_version": "3.0",
+}
 
 _SCHEMES = ("postgresql://", "postgres://")
 
@@ -280,6 +289,49 @@ def transport_refusal(
     )
 
 
+def environment_refusal(
+    environ: Mapping[str, str], pg_env: Mapping[str, str]
+) -> str | None:
+    """Why a connection with env *pg_env* may not be made from *environ*.
+
+    An ambient ``PGSERVICE``, whatever its value and whatever the URL: libpq
+    reads it in process, where it cannot be dropped, and ``service=''`` names a
+    service called ``""``. Otherwise :func:`transport_refusal`.
+    """
+    if "PGSERVICE" in environ:
+        return (
+            "PGSERVICE is set in the environment, and fraisier does not read "
+            "service files: unset it, and put the connection in the URL"
+        )
+    return transport_refusal(environ, pg_env)
+
+
+@functools.cache
+def _pinned() -> dict[str, str]:
+    """keyword → the value libpq uses when nothing sets it.
+
+    One for every keyword the installed libpq reads from an environment
+    variable, but ``service`` and :data:`OPERATOR_DEFAULTS`: ``''`` reads as
+    unset, a compiled default is given as itself.
+    """
+    from psycopg import pq
+
+    pinned = {}
+    for option in pq.Conninfo.get_defaults():
+        if not option.envvar:
+            continue
+        keyword = option.keyword.decode()
+        if keyword == "service" or option.envvar.decode() in OPERATOR_DEFAULTS:
+            continue
+        compiled = option.compiled
+        pinned[keyword] = (
+            compiled.decode()
+            if compiled is not None
+            else _UNSET_DEFAULTS.get(keyword, "")
+        )
+    return pinned
+
+
 @dataclass(frozen=True)
 class PgConn:
     """A PostgreSQL URL as libpq reads it: keyword → decoded value."""
@@ -338,12 +390,12 @@ class PgConn:
         return {_KEYWORD_ENV[key]: value for key, value in self.params.items()}
 
     def check_environment(self, environ: Mapping[str, str] = os.environ) -> None:
-        """Refuse a TCP URL that *environ* sets a transport policy for.
+        """Refuse what :func:`environment_refusal` refuses.
 
         Raises:
-            ValueError: see :func:`transport_refusal`.
+            ValueError: naming the variable and the fix.
         """
-        refusal = transport_refusal(environ, self.pg_env())
+        refusal = environment_refusal(environ, self.pg_env())
         if refusal:
             raise ValueError(refusal)
 
@@ -358,6 +410,31 @@ class PgConn:
         """
         self.check_environment()
         return {**scrubbed(os.environ), **self.pg_env()}
+
+    def connect_kwargs(self) -> dict[str, str]:
+        """Keyword arguments for an in-process ``psycopg`` connection.
+
+        libpq fills every keyword a conninfo leaves out from ``os.environ``, so
+        each one a child would not inherit is pinned (:func:`_pinned`) and the
+        connection is the one a child given :meth:`child_env` makes.
+
+        Raises:
+            ValueError: :meth:`check_environment` refused it.
+        """
+        self.check_environment()
+        return {**_pinned(), **self.params}
+
+    def conninfo(self) -> str:
+        """:meth:`connect_kwargs` as one libpq conninfo string.
+
+        Keyword arguments given to ``psycopg.connect`` beside it override it.
+
+        Raises:
+            ValueError: :meth:`check_environment` refused it.
+        """
+        from psycopg.conninfo import make_conninfo
+
+        return make_conninfo("", **self.connect_kwargs())
 
     def effective_sslmode(self) -> str:
         """The sslmode a child connects with, for an operator to read."""

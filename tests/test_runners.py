@@ -766,7 +766,7 @@ class TestScrubPg:
 
     @pytest.fixture(params=["local", "ssh"])
     def runner(self, request, monkeypatch):
-        monkeypatch.setenv("PGSERVICE", "acme")
+        monkeypatch.setenv("PGUSER", "acme")
         monkeypatch.setenv("PGOPTIONS", "-c acme.x=1")
         monkeypatch.setenv("PGSSLROOTCERT", "/etc/acme/root.crt")
         if request.param == "local":
@@ -782,7 +782,7 @@ class TestScrubPg:
     def test_ambient_pg_variables_are_dropped(self, runner):
         env = self._env(runner, scrub_pg=True)
 
-        assert "PGSERVICE" not in env
+        assert "PGUSER" not in env
         assert "PGOPTIONS" not in env
 
     def test_an_operator_default_is_kept(self, runner):
@@ -803,7 +803,17 @@ class TestScrubPg:
         assert self._env(runner, scrub_pg=True)["FRAISIER_KEPT"] == "yes"
 
     def test_without_it_the_environment_is_as_before(self, runner):
-        assert self._env(runner)["PGSERVICE"] == "acme"
+        assert self._env(runner)["PGUSER"] == "acme"
+
+    def test_an_ambient_service_refuses_a_local_child(self, monkeypatch):
+        """``PgConn.check_environment``'s rule; the remote login's ``PGSERVICE``
+        is the remote host's, and the remote scrub drops it."""
+        monkeypatch.setenv("PGSERVICE", "acme")
+
+        done = LocalRunner().run(["env"], check=False, scrub_pg=True)
+
+        assert done.returncode == 123
+        assert "PGSERVICE is set in the environment" in done.stderr
 
 
 _TCP_PG_ENV = {"PGHOST": "db.acme.test", "PGDATABASE": "acme_db"}

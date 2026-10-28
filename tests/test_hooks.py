@@ -156,15 +156,18 @@ class TestBackupHookConnection:
         assert mock_run.call_args.kwargs["env"]["PGPASSWORD"] == "s3cr3t"
 
     @patch("fraisier.hooks.backup.subprocess.run")
-    def test_an_ambient_service_does_not_reach_pg_dump(
+    def test_an_ambient_service_fails_the_hook_and_runs_nothing(
         self, mock_run, tmp_path, monkeypatch
     ):
         monkeypatch.setenv("PGSERVICE", "acme")
-        mock_run.return_value = MagicMock(stdout=b"", returncode=0)
 
-        BackupHook(backup_dir=tmp_path, database_url=self.URL).execute(_context())
+        result = BackupHook(backup_dir=tmp_path, database_url=self.URL).execute(
+            _context()
+        )
 
-        assert "PGSERVICE" not in mock_run.call_args.kwargs["env"]
+        assert not result.success
+        assert "PGSERVICE" in (result.error or "")
+        mock_run.assert_not_called()
 
     @patch("fraisier.hooks.backup.subprocess.run")
     def test_a_refused_url_fails_the_hook_and_runs_nothing(self, mock_run, tmp_path):

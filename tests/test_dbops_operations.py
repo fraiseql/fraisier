@@ -77,7 +77,7 @@ class TestPgCmd:
         assert mock_run.call_args[0][0] == ["dropdb", "--maintenance-db", "admin", "x"]
 
     def test_pg_cmd_drops_ambient_pg_variables(self, monkeypatch):
-        for name in ("PGSERVICE", "PGPASSWORD", "PGOPTIONS"):
+        for name in ("PGUSER", "PGPASSWORD", "PGOPTIONS"):
             monkeypatch.setenv(name, "ambient")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")

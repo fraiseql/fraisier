@@ -23,9 +23,9 @@ from fraisier.dbops._pgconn import (
     OPERATOR_DEFAULTS,
     TRANSPORT_POLICY,
     TRANSPORT_REFUSED,
+    environment_refusal,
     is_socket,
     scrubbed,
-    transport_refusal,
 )
 
 if TYPE_CHECKING:
@@ -139,7 +139,7 @@ class LocalRunner:
         env: dict[str, str] | None = None,
         scrub_pg: bool = False,
     ) -> subprocess.CompletedProcess[str]:
-        refusal = scrub_pg and transport_refusal(os.environ, env or {})
+        refusal = scrub_pg and environment_refusal(os.environ, env or {})
         if refusal:
             if check:
                 raise subprocess.CalledProcessError(
