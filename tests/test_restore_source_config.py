@@ -16,6 +16,7 @@ import pytest
 
 from fraisier.config._validation import (
     ValidationError,
+    _endpoint,
     validate_one_fraise_environment,
     validate_restore_clusters,
 )
@@ -236,3 +237,53 @@ class TestAClusterIsNotShared:
         env = staging()
         env["database"]["admin_url"] = LazyEnv("ADMIN_URL")
         validate_restore_clusters(fraises(api__staging=env))
+
+
+class TestEndpointsAreReadAsLibpqReadsThem:
+    """``_endpoint`` reads a URL with ``PgConn`` (#496): a query ``port`` or
+    ``host`` beats the netloc's, an escape is decoded, and a URL fraisier
+    refuses proves nothing, since validation reports it."""
+
+    @pytest.mark.parametrize(
+        ("url", "endpoint"),
+        [
+            (
+                "postgresql://postgres@localhost:5434/postgres?port=5433",
+                ("localhost", 5433),
+            ),
+            (
+                "postgresql://postgres@elsewhere:5433/postgres?host=localhost",
+                ("localhost", 5433),
+            ),
+            ("postgresql://postgres@%6Cocalhost:5433/postgres", ("localhost", 5433)),
+            ("postgresql:///postgres?host=/run/postgresql", ("/run/postgresql", 5432)),
+            ("postgresql://postgres@localhost/postgres", ("localhost", 5432)),
+        ],
+    )
+    def test_the_endpoint(self, url, endpoint) -> None:
+        assert _endpoint(url) == endpoint
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "postgresql:///postgres",
+            "postgresql://postgres@localhost:5433/postgres?keepalives=1",
+            "postgresql://postgres@localhost:5433",
+            "postgresql://postgres@a,b/postgres",
+        ],
+    )
+    def test_cannot_be_known(self, url) -> None:
+        assert _endpoint(url) is None
+
+    def test_a_query_port_collision_is_found(self) -> None:
+        other = {
+            "database": {
+                "strategy": "apply",
+                "name": "worker",
+                "admin_url": "postgresql://postgres@localhost:9999/postgres?port=5433",
+            }
+        }
+        with pytest.raises(ValidationError, match="worker"):
+            validate_restore_clusters(
+                fraises(api__staging=staging(), worker__staging=other)
+            )

@@ -60,8 +60,8 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlsplit
 
+from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops.confiture_contract import (
     envelope_error_actionable,
     envelope_error_code,
@@ -374,17 +374,16 @@ def _routine_schemas(expected: Path) -> tuple[str, ...]:
 
 
 def _connection_target(url: str) -> tuple[str, str, str]:
-    """``(host, port, dbname)`` for *url*, for comparison only.
+    """``(host, port, dbname)`` *url* connects to, as libpq reads it.
 
-    PostgreSQL socket URLs carry the host in the query
-    (``postgresql:///app?host=/run/postgresql``) rather than in the netloc, so
-    both places are consulted before deciding two URLs disagree.
+    An omitted host is libpq's default socket (``""``), an omitted port 5432:
+    no child fraisier starts sees ``PGHOST`` or ``PGPORT``.
+
+    Raises:
+        ValueError: ``PgConn`` refuses *url*.
     """
-    parts = urlsplit(url)
-    query = parse_qs(parts.query)
-    host = parts.hostname or (query.get("host") or [""])[0]
-    port = str(parts.port or (query.get("port") or [""])[0])
-    return host, port, parts.path.lstrip("/")
+    conn = PgConn.parse(url)
+    return conn.host or "", conn.params.get("port", "5432"), conn.dbname
 
 
 def _declares_scratch_url(confiture_config: Path) -> bool:
@@ -434,11 +433,19 @@ def _check_urls_agree(confiture_config: Path, database_url: str | None) -> None:
             f"confiture config, or disable the gate."
         )
         raise ValueError(msg)
-    if _connection_target(configured) != _connection_target(database_url):
+    try:
+        configured_target = _connection_target(configured)
+    except ValueError as exc:
+        msg = (
+            f"post_migrate_check cannot tell which database {confiture_config} "
+            f"names: its database_url is refused ({exc})"
+        )
+        raise ValueError(msg) from None
+    if configured_target != _connection_target(database_url):
         msg = (
             f"post_migrate_check would inspect a different database than this "
             f"deploy migrated: {confiture_config} names "
-            f"{_connection_target(configured)}, the deploy used "
+            f"{configured_target}, the deploy used "
             f"{_connection_target(database_url)}. Refusing rather than "
             f"reporting another database's schema as this one's."
         )

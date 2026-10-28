@@ -30,6 +30,7 @@ from fraisier.dbops.drift import (
     CHECK_FLAGS,
     ESCALATABLE_KINDS,
     DriftResult,
+    _check_urls_agree,
     check_schema_drift,
 )
 
@@ -1171,6 +1172,57 @@ class TestGuardsAgainstCheckingSomethingElse:
             )
 
         assert result.passed
+
+
+class TestUrlsAreComparedAsLibpqReadsThem:
+    """Two URLs name one database when libpq connects both to the same place
+    (#496): decoded, the last repeated parameter winning, ``?dbname=`` over
+    the path, the query over the netloc, an omitted port being 5432."""
+
+    @pytest.mark.parametrize(
+        ("configured", "deployed"),
+        [
+            (
+                "postgresql://%2Frun%2Fpostgresql/app",
+                "postgresql:///app?host=/run/postgresql",
+            ),
+            ("postgresql:///app?host=/a&host=/run", "postgresql:///app?host=/run"),
+            ("postgresql:///other?dbname=app", "postgresql:///app"),
+            ("postgresql://h/%61pp", "postgresql://h/app"),
+            ("postgresql://h/app", "postgresql://h:5432/app"),
+        ],
+    )
+    def test_the_same_database(self, project: Path, configured, deployed) -> None:
+        config = project / "db/environments/production.yaml"
+        config.write_text(f"name: production\ndatabase_url: {configured}\n")
+
+        _check_urls_agree(config, deployed)
+
+    @pytest.mark.parametrize(
+        ("configured", "deployed"),
+        [
+            ("postgresql://h:6543/app?port=5432", "postgresql://h:6543/app"),
+            ("postgresql://h/app?host=elsewhere", "postgresql://h/app"),
+            ("postgresql:///app?host=/a&host=/b", "postgresql:///app?host=/a"),
+        ],
+    )
+    def test_a_different_database(self, project: Path, configured, deployed) -> None:
+        config = project / "db/environments/production.yaml"
+        config.write_text(f"name: production\ndatabase_url: {configured}\n")
+
+        with pytest.raises(ValueError, match="different database"):
+            _check_urls_agree(config, deployed)
+
+    def test_a_configured_url_fraisier_refuses_cannot_be_compared(
+        self, project: Path
+    ) -> None:
+        config = project / "db/environments/production.yaml"
+        config.write_text(
+            "name: production\ndatabase_url: postgresql:///app?keepalives=1\n"
+        )
+
+        with pytest.raises(ValueError, match=r"production\.yaml.*keepalives"):
+            _check_urls_agree(config, "postgresql:///app")
 
 
 def test_the_temporary_schema_file_never_outlives_the_check(
