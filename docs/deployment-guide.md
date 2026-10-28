@@ -574,6 +574,22 @@ pre-migrate dump runs, so a `.py` migration and a `.sql` one are judged alike.
 `--no-rollback` does not lift it: that flag only turns off the rollback after a
 failed health check.
 
+### Unfinished backfill placeholders
+
+From confiture 1.42, `confiture migrate diff --generate` writes a change that
+existing rows could refuse (a `NOT NULL` column nothing fills, `SET NOT NULL`,
+an added UNIQUE, primary key or CHECK, a narrowing type change) around a
+placeholder for the author to finish:
+
+```sql
+-- confiture:backfill tb_user.email
+```
+
+A deploy refuses a pending migration that still carries one, before anything
+applies. Replace the placeholder with the statements that fix the rows it
+names, or with `-- confiture:backfill none` when no row needs it. No setting
+overrides this, `allow_destructive` included: the file is unfinished.
+
 ### Refreshing staging from pgBackRest (`restore.source: pgbackrest`) (#424)
 
 A `restore_migrate` environment refreshes from a `pg_dump` archive by default. If

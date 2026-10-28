@@ -687,10 +687,33 @@ dependencies = [
   #     `migrate` deploy without `allow_irreversible` stops before applying it.
   #   * `--exit-codes-json` is byte-identical; no differ or drift module changed,
   #     so driver15 was not re-run. The suite on 1.40.0 fails only the range check.
-  # The floor moves with the cap, and here the floor is also a capability floor.
+  # **1.42.0 (with 1.41.0) moves change-set tiers, and the template rule reads them.**
+  # Measured on the published wheels, 1.40.0 vs 1.42.0, through this fraisier, in
+  # `.phases/2026-10-28-v0.96/confiture-probe/`:
+  #   * driver16 = driver15's forty-four drift scenarios on pg_tviews beta.32: every
+  #     verdict and exit code is identical (35 pass, 8 exit 1, 2 exit 5), every wire
+  #     pair is identical once timings and tmp paths are removed, and 1.40.0
+  #     reproduces the v0.90.0 1.39.0 record line for line.
+  #   * `--exit-codes-json` adds `DIFFER_411` (exit 0, `migrate diff` only) and
+  #     `VALID_010` (exit 5); nothing moved.
+  #   * ⚠️ `preflight_probe.py`, one pending migration through fraisier's own
+  #     readers: a materialized view or view dropped and created again, and a
+  #     CHECK dropped and added again under one name, were `destructive` and are
+  #     now `lock_risky`/`reversible` with `reversible: true`. So restore's `auto`
+  #     template rule no longer takes the template for them: `migrate down` is
+  #     the rollback. A new table's index is `additive` and `window_safe`; a
+  #     volatile `ADD COLUMN` default is `lock_risky`.
+  #   * ⚠️ `migrate up` refuses an unedited `-- confiture:backfill` placeholder with
+  #     `VALID_010` before applying anything (1.40 failed mid-file on its SQL);
+  #     dbops/confiture.py converts it like VALID_002. `--against` preflight
+  #     reports it as the migration's failure (`PFLIGHT_BACKFILL_PENDING`).
+  #   * The suite on 1.42.0 fails only the range check. confiture#792 (the
+  #     restorer inherits `os.environ`) is still open, so restore keeps
+  #     `_augmented_env`.
+  # The floor moves with the cap: 1.40 and 1.42 give different template verdicts.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.40.0,<1.41",
+  "fraiseql-confiture>=1.42.0,<1.43",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",
