@@ -339,7 +339,7 @@ wheels = [
 
 [[package]]
 name = "fraiseql-confiture"
-version = "1.42.0"
+version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pglast" },
@@ -350,11 +350,11 @@ dependencies = [
     { name = "sqlglot" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f2/3b/61f9e8eeb0413707cbb049cc77fe33f8e607cf7f9b9d4d0b11c3459f40e8/fraiseql_confiture-1.42.0.tar.gz", hash = "sha256:e1ef48cb44b2dedb58eb162aa2c968e2e7559e149c674b8121895148f9aa5d79", size = 4295940, upload-time = "2026-10-27T09:35:54.855Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/27/7585d504842e5978ed76d4cb7b6fb13e558aa97526f6ac79412b7eb171a4/fraiseql_confiture-1.43.0.tar.gz", hash = "sha256:794b801b91b5ba5805d194450fdb75f001b645b88f57acc59371bb7c973daaa9", size = 4302637, upload-time = "2026-10-29T07:33:14.088Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/2b/acc6de07b51686da87845cf1cdc3bdca00b73357abac0f2d5956fdb9fb39/fraiseql_confiture-1.42.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:cc315ca0d97f81732280c3c818fe0deebca4455ee3fb8e903c10945c35ce6777", size = 1758147, upload-time = "2026-10-27T09:35:49.511Z" },
-    { url = "https://files.pythonhosted.org/packages/75/db/29046049fb0a155c7459b55b3824a0bc2e8ecb4523cd66ebebf9480b9c48/fraiseql_confiture-1.42.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:25608215ae1e085b16692fd11c45279d1be5643800a903a5de468be1ff5f2eef", size = 1784907, upload-time = "2026-10-27T09:35:51.37Z" },
-    { url = "https://files.pythonhosted.org/packages/2b/43/eb7a3bb122258cb2a4382825526e6e0a84be175ec634ebd929ba1df60ce5/fraiseql_confiture-1.42.0-cp314-cp314-win_amd64.whl", hash = "sha256:e0b09e10abc174cba5b0f55a4c488f89c5095ac1df22edf794116fc03b61e55f", size = 1703829, upload-time = "2026-10-27T09:35:53.265Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/19/3c8dab66c9129613918e6e1d05f201ecea7a3809c3dc8629f1105ad03cf4/fraiseql_confiture-1.43.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:14b382fe6b2c59bcb5aafa43409578610fbdd06752cd32649aaa354ebc1203cf", size = 1759760, upload-time = "2026-10-29T07:33:08.421Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/a2/b923705c9c2f96e87cd0de0396833008f8e4529fc6e6a797c5e9b1176eb4/fraiseql_confiture-1.43.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:9c62bc924b6e6681012b42f4bf07d31bd4ed4a5713f41f52a81f753ebd2834d4", size = 1786528, upload-time = "2026-10-29T07:33:10.707Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/75/f42c875c51b47e33a13e40871934056a046377223f8860aee3eb36ed890e/fraiseql_confiture-1.43.0-cp314-cp314-win_amd64.whl", hash = "sha256:159abc3e5e6599064dcda1b07073f5b375aa117e09d673dff3212ef25ff277c6", size = 1705453, upload-time = "2026-10-29T07:33:12.283Z" },
 ]
 
 [[package]]
@@ -418,7 +418,7 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'all-databases'", specifier = ">=0.19.0,<1.0" },
     { name = "click", specifier = ">=8.1.0,<9.0" },
     { name = "fastapi", specifier = ">=0.109.0,<1.0" },
-    { name = "fraiseql-confiture", specifier = ">=1.42.0,<1.43" },
+    { name = "fraiseql-confiture", specifier = ">=1.43.0,<1.44" },
     { name = "httpx", specifier = ">=0.27.0,<1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0,<1.0" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0" },

@@ -1,6 +1,7 @@
 """Tests for fraisier.dbops.restore module."""
 
 import contextlib
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -8,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from confiture.exceptions import RestoreError
 
+from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops.archive import ArchiveCheck, ArchiveVerdict, _read_toc
 from fraisier.dbops.restore import (
     find_latest_backup,
@@ -153,13 +155,37 @@ class TestRestoreBackup:
 
         assert seen == [None]
 
-    def test_other_libpq_keys_reach_os_environ_only_inside_the_call(self, monkeypatch):
+    def _restored_env(self, url=_TEST_URL):
+        """The ``RestoreOptions.env`` a restore of *url* hands confiture."""
+        with _mock_restorer() as restorer_cls:
+            restore_backup(backup_path="/b.dump", db_name="staging", connection_url=url)
+        return _options_from(restorer_cls).env
+
+    def test_restore_children_get_the_child_environment(self):
+        """Every restore child runs in what any other fraisier child runs in."""
+        url = _TEST_URL + "?sslmode=require"
+        assert self._restored_env(url) == PgConn.parse(url).child_env()
+
+    def test_an_ambient_libpq_variable_never_reaches_a_restore_child(self, monkeypatch):
+        monkeypatch.setenv("PGOPTIONS", "-c search_path=acme")
+        assert "PGOPTIONS" not in self._restored_env()
+
+    def test_the_urls_other_libpq_keys_reach_the_restore_children(self):
+        env = self._restored_env(_TEST_URL + "?sslmode=require")
+        assert env["PGSSLMODE"] == "require"
+
+    def test_the_restore_children_keep_path(self, monkeypatch):
+        """confiture looks pg_restore up on the PATH of the env it is given."""
+        monkeypatch.setenv("PATH", "/opt/acme/bin")
+        assert self._restored_env()["PATH"] == "/opt/acme/bin"
+
+    def test_os_environ_is_untouched_during_the_restore(self, monkeypatch):
         monkeypatch.delenv("PGSSLMODE", raising=False)
-        seen: list[str | None] = []
+        before = dict(os.environ)
+        seen: list[dict[str, str]] = []
         with _mock_restorer() as restorer_cls:
             restorer_cls.return_value.restore.side_effect = lambda _o: (
-                seen.append(__import__("os").environ.get("PGSSLMODE"))
-                or _confiture_result()
+                seen.append(dict(os.environ)) or _confiture_result()
             )
             restore_backup(
                 backup_path="/b.dump",
@@ -167,21 +193,27 @@ class TestRestoreBackup:
                 connection_url=_TEST_URL + "?sslmode=require",
             )
 
-        assert seen == ["require"]
-        assert "PGSSLMODE" not in __import__("os").environ
+        assert seen == [before]
 
-    def test_augmented_env_is_a_no_op_for_host_port_user_password(self):
-        """Nothing in the common case touches the process environment."""
-        with (
-            _mock_restorer(),
-            patch("fraisier.dbops.restore._augmented_env") as augmented,
-        ):
-            augmented.return_value = contextlib.nullcontext()
+    def test_an_ambient_pgservice_refuses_the_restore_before_it_starts(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("PGSERVICE", "acme")
+        with _mock_restorer() as restorer_cls:
+            with pytest.raises(ValueError, match="PGSERVICE"):
+                restore_backup(
+                    backup_path="/b.dump", db_name="staging", connection_url=_TEST_URL
+                )
+            restorer_cls.return_value.restore.assert_not_called()
+
+    def test_restore_never_runs_as_a_superuser(self):
+        """confiture refuses ``env`` beside ``superuser`` (sudo resets the env)."""
+        with _mock_restorer() as restorer_cls:
             restore_backup(
                 backup_path="/b.dump", db_name="staging", connection_url=_TEST_URL
             )
 
-        augmented.assert_called_once_with({})
+        assert _options_from(restorer_cls).superuser is None
 
     def test_restore_refuses_a_multi_host_url(self):
         """confiture passes exactly one -h/-p."""

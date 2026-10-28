@@ -222,3 +222,22 @@ def test_restore_options_carry_the_password_off_argv() -> None:
     cmd = DatabaseRestorer()._build_command("data", options, parallel=False)
     assert "sentinel-pw" not in " ".join(cmd)
     assert cmd[cmd.index("-h") + 1 : cmd.index("-h") + 4] == ["h", "-p", "6543"]
+
+
+def test_restore_options_env_is_the_whole_child_environment(tmp_path: Path) -> None:
+    """``restore_backup`` hands ``RestoreOptions.env`` the child env it built.
+
+    That keeps ambient ``PG*`` out of pg_restore only while confiture runs its
+    children in that env alone: here ``pg_restore`` is looked up on the
+    ``PATH`` it names, not the test's.
+    """
+    from confiture.core.restorer import DatabaseRestorer, RestoreOptions
+    from confiture.exceptions import RestoreError
+
+    archive = tmp_path / "a.dump"
+    archive.write_bytes(b"PGDMP" + bytes(100))
+    options = RestoreOptions(
+        backup_path=archive, target_db="db", env={"PATH": str(tmp_path)}
+    )
+    with pytest.raises(RestoreError, match=r"PATH of RestoreOptions\.env"):
+        DatabaseRestorer().restore(options)
