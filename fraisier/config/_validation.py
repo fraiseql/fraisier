@@ -943,21 +943,22 @@ def _validate_post_migrate_check(fraise_name: str, db: dict) -> list[str]:
 def _endpoint(url: Any) -> tuple[str, int] | None:
     """``(host, port)`` a database URL reaches, or ``None`` if it cannot be known.
 
-    A ``!envvar`` is not resolved here — this runs at load, before secrets are
-    necessarily present — so it cannot prove a collision.  Never guesses.
+    Read as libpq reads it (:class:`PgConn`). A ``!envvar`` is not resolved
+    here — this runs at load, before secrets are necessarily present — so it
+    cannot prove a collision; nor can a URL ``PgConn`` refuses, which
+    validation reports, or one naming several hosts.  Never guesses.
     """
     if isinstance(url, LazyEnv) or not url:
         return None
-    from urllib.parse import parse_qs, urlsplit
+    from fraisier.dbops._pgconn import PgConn
 
-    parts = urlsplit(str(url))
-    query = parse_qs(parts.query)
-    host = parts.hostname or (query.get("host") or [""])[0]
-    if not host:
+    try:
+        conn = PgConn.parse(str(url))
+    except ValueError:
         return None
-    port_text = (query.get("port") or [""])[0]
-    port = parts.port or (int(port_text) if port_text.isdigit() else 5432)
-    return host, port
+    if not conn.host or "," in conn.host:
+        return None
+    return conn.host, conn.port or 5432
 
 
 def validate_restore_clusters(fraises: dict) -> None:
