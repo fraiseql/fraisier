@@ -707,13 +707,21 @@ dependencies = [
   #     `VALID_010` before applying anything (1.40 failed mid-file on its SQL);
   #     dbops/confiture.py converts it like VALID_002. `--against` preflight
   #     reports it as the migration's failure (`PFLIGHT_BACKFILL_PENDING`).
-  #   * The suite on 1.42.0 fails only the range check. confiture#792 (the
-  #     restorer inherits `os.environ`) is still open, so restore keeps
-  #     `_augmented_env`.
-  # The floor moves with the cap: 1.40 and 1.42 give different template verdicts.
+  #   * The suite on 1.42.0 failed only the range check.
+  # **1.43.0 adds `RestoreOptions.env` (confiture#792), and restore passes it.** It
+  # is the whole environment of every restore child, the `pg_restore -l` listing
+  # included, and what the in-process `--min-tables` connection reads its unset
+  # keys from; `PGPASSWORD` from `password` goes on top. restore passes
+  # `PgConn.child_env()`, so its children drop ambient `PG*` like every other
+  # fraisier child, and the `os.environ` overlay is gone. `env` beside `superuser`
+  # is a `RestoreError`; fraisier never sets `superuser`. v1.42.0..v1.43.0 touches
+  # only `core/restorer.py` and `url_redaction.py` (a `base=` for `libpq_env`,
+  # which fraisier does not import), so no drift verdict or exit code can move,
+  # and the restorer never set a `PGOPTIONS` of its own for `env` to drop.
+  # The floor moves with the cap: restore passes `env`, which 1.42 rejects.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.42.0,<1.43",
+  "fraiseql-confiture>=1.43.0,<1.44",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

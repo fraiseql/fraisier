@@ -12,9 +12,7 @@ a downstream incident).  Ownership is reassigned afterwards and the caller
 validates the restore by checking the table count against a minimum threshold.
 """
 
-import contextlib
 import dataclasses
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,8 +37,6 @@ from fraisier.dbops.tviews import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from fraisier.dbops.archive import ArchiveCheck
 
 
@@ -75,64 +71,20 @@ class RestoreResult:
     tviews_refilled_lean: bool = False
 
 
-#: What confiture takes as RestoreOptions fields (and passes as -h/-p/-U, the
-#: password through its children's env) or what fraisier passes as -d: none of
-#: these may also ride the process environment.
-_RESTORE_OPTION_KEYS = frozenset(
-    {"PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"}
-)
+def _restore_connection(connection_url: str) -> PgConn:
+    """The URL as libpq reads it, if confiture's :class:`RestoreOptions` can say it.
 
-
-def _restore_connection(connection_url: str) -> tuple[PgConn, dict[str, str]]:
-    """The URL as libpq reads it, and the env keys RestoreOptions has no field for.
-
-    confiture's :class:`RestoreOptions` takes ``host`` / ``port`` /
-    ``username`` / ``password`` as discrete fields and has no connection-URL
-    entry point, so a URL with more than one host cannot be expressed (it
-    passes exactly one ``-h``/``-p``) and is refused. Whatever else the URL
-    sets (``PGSSLMODE`` and the like) is returned for :func:`_augmented_env`.
+    ``RestoreOptions`` takes ``host`` / ``port`` / ``username`` / ``password``
+    as discrete fields and has no connection-URL entry point, so a URL with
+    more than one host cannot be expressed (it passes exactly one
+    ``-h``/``-p``) and is refused. Whatever else the URL sets (``PGSSLMODE``
+    and the like) reaches the restore through :meth:`PgConn.child_env`.
     """
     conn = PgConn.parse(connection_url)
     if conn.host and "," in conn.host:
         msg = "a URL naming more than one host cannot be restored into"
         raise ValueError(msg)
-    extra = {
-        key: value
-        for key, value in conn.pg_env().items()
-        if key not in _RESTORE_OPTION_KEYS
-    }
-    return conn, extra
-
-
-@contextlib.contextmanager
-def _augmented_env(extra: dict[str, str]) -> Iterator[None]:
-    """Temporarily overlay *extra* onto ``os.environ`` for the duration of a call.
-
-    confiture's restorer builds its children's env from ``os.environ``, so the
-    URL's libpq keys that :class:`RestoreOptions` has no field for (``PGSSLMODE``
-    and the like) ride the process environment while the restore runs, and
-    are then put back. Never a secret: the password goes through
-    ``RestoreOptions.password``. In the common case *extra* is empty and this
-    does nothing.
-
-    Known gap: because confiture inherits ``os.environ``, ambient ``PG*``
-    variables (``PGSERVICE``, ``PGOPTIONS``…) still reach pg_restore, which
-    :meth:`PgConn.child_env` would drop. Once ``RestoreOptions`` takes an
-    explicit child environment, pass ``child_env()`` and delete this.
-    """
-    if not extra:
-        yield
-        return
-    saved = {key: os.environ.get(key) for key in extra}
-    os.environ.update(extra)
-    try:
-        yield
-    finally:
-        for key, previous in saved.items():
-            if previous is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = previous
+    return conn
 
 
 def _reassign_owner(
@@ -213,7 +165,7 @@ def restore_backup(
     if db_owner:
         validate_pg_identifier(db_owner, "database owner")
 
-    conn, extra_env = _restore_connection(connection_url)
+    conn = _restore_connection(connection_url)
 
     options = RestoreOptions(
         backup_path=Path(backup_path),
@@ -246,6 +198,11 @@ def restore_backup(
         # `tenant`, so a floor derived from one schema and asserted against
         # another is a guaranteed false failure on a perfectly good restore.
         min_tables_schema=min_tables_schema,
+        # The whole environment of every child the restore starts, and what
+        # its in-process --min-tables connection reads its unset keys from:
+        # the one any fraisier child gets, never the ambient libpq variables.
+        # confiture refuses it beside ``superuser``, which fraisier never sets.
+        env=conn.child_env(),
     )
     # confiture emits an explicit -h/-p; only override its RestoreOptions
     # defaults for the parts the URL actually carries (a socket URL with no
@@ -257,8 +214,7 @@ def restore_backup(
 
     t0 = time.monotonic()
     try:
-        with _augmented_env(extra_env):
-            result = DatabaseRestorer().restore(options)
+        result = DatabaseRestorer().restore(options)
     except RestoreError as exc:
         return RestoreResult(
             success=False,
