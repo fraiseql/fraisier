@@ -232,7 +232,7 @@ class TestPreflightDatabase:
     )
     def test_connection_reaches_children_as_env_only(self, monkeypatch, url, expected):
         """#493: decoded, in env, and nothing but the db name on argv."""
-        monkeypatch.setenv("PGSERVICE", "ambient")
+        monkeypatch.setenv("PGOPTIONS", "ambient")
         db = self._make_db()
         db.url = url
 
@@ -245,7 +245,7 @@ class TestPreflightDatabase:
         assert cmd[:3] == ["psql", "-d", "fraisier_preflight_abc"]
         assert not {"-h", "-p", "-U"} & set(cmd)
         assert {k: env[k] for k in expected} == expected
-        assert "PGSERVICE" not in env
+        assert "PGOPTIONS" not in env
 
     def test_admin_sql_carries_the_connection_in_env(self, monkeypatch):
         from fraisier.dbops.preflight import _run_admin_sql

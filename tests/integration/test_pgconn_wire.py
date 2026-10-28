@@ -114,7 +114,8 @@ class TestAPasswordNeedingEveryEscape:
 
 class TestAnAmbientServiceFile:
     """A service file outranks every ``PG*`` variable, so ``PGSERVICE`` in
-    fraisier's environment would send a child to the service's server."""
+    fraisier's environment would send a child to the service's server. It is
+    refused before a child starts."""
 
     @pytest.fixture
     def ambient_service(self, tmp_path: Path, monkeypatch) -> None:
@@ -124,8 +125,9 @@ class TestAnAmbientServiceFile:
         monkeypatch.setenv("PGSERVICE", "acme")
 
     @pytest.mark.usefixtures("ambient_service")
-    def test_does_not_redirect_the_child(self, password_pg):
-        assert _connected_as(_probe_url(password_pg, "postgres")) == PW_PROBE_ROLE
+    def test_is_refused_before_a_child_starts(self, password_pg):
+        with pytest.raises(ValueError, match="PGSERVICE is set in the environment"):
+            _pg_cmd(_WHOAMI, connection_url=_probe_url(password_pg, "postgres"))
 
     @pytest.mark.usefixtures("ambient_service")
     def test_would_redirect_a_child_that_kept_it(self, password_pg):

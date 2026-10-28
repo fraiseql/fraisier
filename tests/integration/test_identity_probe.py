@@ -38,18 +38,26 @@ def test_reports_the_user_and_database_the_server_saw(probe_url):
     assert found.host
 
 
-def test_an_ambient_pguser_and_service_change_nothing(
+def test_an_ambient_pguser_changes_nothing(probe_url, monkeypatch):
+    monkeypatch.setenv("PGUSER", "postgres")
+
+    found = probe_identity(probe_url)
+
+    assert (found.user, found.database) == (PW_PROBE_ROLE, "postgres")
+
+
+def test_an_ambient_service_is_reported_not_followed(
     probe_url, tmp_path: Path, monkeypatch
 ):
     service_file = tmp_path / "pg_service.conf"
     service_file.write_text("[acme]\nuser=postgres\ndbname=acme_elsewhere\n")
     monkeypatch.setenv("PGSERVICEFILE", str(service_file))
     monkeypatch.setenv("PGSERVICE", "acme")
-    monkeypatch.setenv("PGUSER", "postgres")
 
     found = probe_identity(probe_url)
 
-    assert (found.user, found.database) == (PW_PROBE_ROLE, "postgres")
+    assert found.user is None
+    assert "PGSERVICE is set in the environment" in (found.error or "")
 
 
 def test_a_wrong_password_is_reported_not_raised(password_pg):

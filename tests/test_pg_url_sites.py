@@ -3,9 +3,9 @@
 confiture's interface takes a URL, and so do these psql calls, so the URL
 stays on argv, password-free. What changes is everything around it: the URL
 is refused when libpq would read it differently, and the child's environment
-is :meth:`PgConn.child_env` — no ambient ``PGSERVICE`` (a service file
-outranks every variable), ``PGPASSWORD`` (sent to whatever host the URL
-names) or ``PGOPTIONS``.
+is :meth:`PgConn.child_env` — no ambient ``PGUSER``, ``PGPASSWORD`` (sent to
+whatever host the URL names) or ``PGOPTIONS``, and an ambient ``PGSERVICE`` (a
+service file outranks every variable) refuses the launch.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 URL = "postgresql://u:pw@h:5432/db"
 
-_AMBIENT = {"PGSERVICE": "acme", "PGPASSWORD": "ambient", "PGOPTIONS": "-c x=1"}
+_AMBIENT = {"PGUSER": "acme", "PGPASSWORD": "ambient", "PGOPTIONS": "-c x=1"}
 
 
 def _apply_sql(url: str, tmp_path: Path) -> None:
@@ -85,6 +85,13 @@ class TestEachUrlSite:
         target, call = SITES[site]
         with patch(target) as run, pytest.raises(ValueError):
             call(url, tmp_path)
+        run.assert_not_called()
+
+    def test_an_ambient_service_refuses_the_launch(self, site, tmp_path, monkeypatch):
+        monkeypatch.setenv("PGSERVICE", "acme")
+        target, call = SITES[site]
+        with patch(target) as run, pytest.raises(ValueError, match="PGSERVICE"):
+            call(URL, tmp_path)
         run.assert_not_called()
 
     def test_the_password_is_off_argv(self, site, tmp_path):

@@ -225,7 +225,7 @@ class TestDbExecConnection:
         return local_config
 
     def test_local_password_is_off_argv(self, runner, secret_url, monkeypatch):
-        monkeypatch.setenv("PGSERVICE", "acme")
+        monkeypatch.setenv("PGOPTIONS", "-c acme.x=1")
         mock_result = MagicMock(stdout="1\n", returncode=0)
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             result = runner.invoke(
@@ -236,7 +236,7 @@ class TestDbExecConnection:
         argv, env = mock_run.call_args.args[0], mock_run.call_args.kwargs["env"]
         assert not any("s3cr3t" in arg for arg in argv)
         assert env["PGPASSWORD"] == "s3cr3t"
-        assert "PGSERVICE" not in env
+        assert "PGOPTIONS" not in env
 
     def test_remote_password_is_off_both_argvs(self, runner, remote_config):
         """Only the URL's own ``PG*`` travel: ``os.environ`` would ship to

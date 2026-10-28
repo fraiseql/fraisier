@@ -8,7 +8,14 @@ from __future__ import annotations
 
 import pytest
 
-from fraisier.dbops._pgconn import PgConn, decode
+from fraisier.dbops._pgconn import (
+    _KEYWORD_ENV,
+    ENV_KEYWORD,
+    OPERATOR_DEFAULTS,
+    PgConn,
+    decode,
+    environment_refusal,
+)
 
 
 def env(url: str) -> dict[str, str]:
@@ -197,9 +204,9 @@ class TestChildEnv:
     """Every ambient ``PG*`` is dropped but a fixed operator allowlist.
 
     The URL names the target fully. An ambient variable that could change the
-    server, the user, the database or the session (``PGSERVICE`` outranks
-    every other variable; ``PGPASSWORD`` would go to whatever host the URL
-    names) must not reach the child.
+    server, the user, the database or the session (``PGPASSWORD`` would go
+    to whatever host the URL names) must not reach the child. ``PGSERVICE`` is
+    refused instead (``TestAmbientServiceIsRefused``).
     """
 
     URL = "postgresql://u:pw@h:6543/db"
@@ -207,7 +214,6 @@ class TestChildEnv:
     @pytest.mark.parametrize(
         "name",
         [
-            "PGSERVICE",
             "PGSERVICEFILE",
             "PGSYSCONFDIR",
             "PGPASSWORD",
@@ -489,3 +495,126 @@ class TestTransportPolicyFailsClosed:
     )
     def test_the_effective_sslmode(self, url, shown):
         assert PgConn.parse(url).effective_sslmode() == shown
+
+
+class TestAmbientServiceIsRefused:
+    """An in-process connect cannot ignore ``PGSERVICE``: libpq reads it from
+    the process environment, ``service=''`` names a service called ``""``,
+    and a service fills every keyword left unpinned (measured:
+    ``.phases/2026-10-28-v0.96/probes/service_and_resolved.out``). So it is
+    refused wherever fraisier connects, children included, whatever its value.
+    """
+
+    @pytest.mark.parametrize("value", ["acme", ""])
+    @pytest.mark.parametrize(
+        "door", ["check_environment", "child_env", "connect_kwargs", "conninfo"]
+    )
+    def test_refused(self, monkeypatch, door, value):
+        monkeypatch.setenv("PGSERVICE", value)
+
+        with pytest.raises(ValueError, match="PGSERVICE is set in the environment"):
+            getattr(PgConn.parse("postgresql:///acme_db"), door)()
+
+    def test_the_runner_rule_is_the_same(self):
+        refusal = environment_refusal({"PGSERVICE": "acme"}, {"PGDATABASE": "db"})
+
+        assert refusal is not None
+        assert "unset it" in refusal
+
+    def test_a_service_file_alone_is_not(self, monkeypatch):
+        """libpq reads a service file only for a named service."""
+        monkeypatch.setenv("PGSERVICEFILE", "/etc/acme/pg_service.conf")
+
+        PgConn.parse("postgresql:///acme_db").check_environment()
+
+
+def _env_backed_keywords() -> dict[str, str | None]:
+    """keyword → compiled default, for each keyword the installed libpq reads
+    from an environment variable."""
+    from psycopg import pq
+
+    return {
+        o.keyword.decode(): None if o.compiled is None else o.compiled.decode()
+        for o in pq.Conninfo.get_defaults()
+        if o.envvar
+    }
+
+
+class TestConnectKwargs:
+    """In process there is no child environment to scrub: libpq fills every
+    keyword the conninfo leaves out from ``os.environ``. So every env-backed
+    keyword but the operator defaults is pinned, and the connection gets what
+    a child given ``child_env()`` gets. Measured on libpq 18:
+    ``.phases/2026-10-28-v0.96/probes/pin_every_keyword.out``.
+    """
+
+    URL = "postgresql://u:p%40w@h:6543/acme_db?sslmode=verify-full"
+
+    def test_the_urls_keywords_are_passed_decoded(self):
+        kwargs = PgConn.parse(self.URL).connect_kwargs()
+
+        assert {k: kwargs[k] for k in ("user", "password", "host", "port")} == {
+            "user": "u",
+            "password": "p@w",
+            "host": "h",
+            "port": "6543",
+        }
+        assert (kwargs["dbname"], kwargs["sslmode"]) == ("acme_db", "verify-full")
+
+    def test_every_other_env_backed_keyword_is_pinned(self):
+        kwargs = PgConn.parse("postgresql:///acme_db").connect_kwargs()
+        allowed = {k for k, v in _KEYWORD_ENV.items() if v in OPERATOR_DEFAULTS}
+        expected = set(_env_backed_keywords()) - allowed - {"service"}
+
+        assert set(kwargs) == expected
+
+    @pytest.mark.parametrize(
+        ("keyword", "pin"),
+        [
+            ("user", ""),
+            ("options", ""),
+            ("host", ""),
+            ("hostaddr", ""),
+            ("password", ""),
+            ("client_encoding", ""),
+            ("sslmode", "prefer"),
+            ("port", "5432"),
+            ("target_session_attrs", "any"),
+            ("sslcertmode", "allow"),
+            ("min_protocol_version", "3.0"),
+            ("max_protocol_version", "3.0"),
+        ],
+    )
+    def test_a_keyword_the_url_leaves_out_gets_libpqs_default(self, keyword, pin):
+        """``''`` reads as unset; the three that refuse ``''`` get the value a
+        clean environment resolves to."""
+        assert PgConn.parse("postgresql:///acme_db").connect_kwargs()[keyword] == pin
+
+    def test_service_is_never_passed(self):
+        assert "service" not in PgConn.parse("postgresql:///acme_db").connect_kwargs()
+
+    @pytest.mark.parametrize("var", sorted(OPERATOR_DEFAULTS))
+    def test_an_operator_default_is_left_to_libpq(self, var):
+        kwargs = PgConn.parse("postgresql:///acme_db").connect_kwargs()
+
+        assert ENV_KEYWORD[var] not in kwargs
+
+    def test_ambient_variables_change_nothing(self, monkeypatch):
+        clean = PgConn.parse("postgresql:///acme_db").connect_kwargs()
+        for var in ("PGUSER", "PGOPTIONS", "PGHOST", "PGPORT", "PGDATABASE"):
+            monkeypatch.setenv(var, "ambient")
+
+        assert PgConn.parse("postgresql:///acme_db").connect_kwargs() == clean
+
+    def test_conninfo_is_the_same_keywords(self):
+        from psycopg.conninfo import conninfo_to_dict
+
+        conn = PgConn.parse("postgresql://u:a%20'b@h/acme_db?options=-c%20x%3D1")
+
+        assert conninfo_to_dict(conn.conninfo()) == conn.connect_kwargs()
+
+    def test_the_transport_policy_applies(self, monkeypatch):
+        monkeypatch.setenv("PGSSLMODE", "verify-full")
+
+        with pytest.raises(ValueError, match="sslmode=verify-full"):
+            PgConn.parse("postgresql://u@db.acme.test/acme_db").connect_kwargs()
