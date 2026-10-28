@@ -9,6 +9,10 @@ A door is where the URL is parsed by ``PgConn`` and the child's environment
 is built from it: ``_pg_cmd`` (env only), ``url_child`` / ``url_runner_child``
 (a password-free URL on argv), ``PreflightDatabase._conn_flags``, or
 ``PgConn.child_env()`` itself.
+
+An in-process connection has no child environment to build: libpq reads
+``os.environ`` for every keyword its conninfo leaves out (#496). Its one door
+is ``PgConn.conninfo()``, which pins them, passed as the conninfo itself.
 """
 
 from __future__ import annotations
@@ -36,6 +40,19 @@ LAUNCHERS = frozenset(
 
 DOORS = frozenset(
     {"_pg_cmd", "url_child", "url_runner_child", "_conn_flags", "child_env"}
+)
+
+#: ``module.connect`` calls that open a libpq connection in process.
+CONNECT_MODULES = frozenset({"psycopg", "psycopg2", "Connection", "AsyncConnection"})
+
+#: Pools that open them.
+POOLS = frozenset(
+    {
+        "ConnectionPool",
+        "AsyncConnectionPool",
+        "NullConnectionPool",
+        "AsyncNullConnectionPool",
+    }
 )
 
 #: ``module:function`` → why it launches without a door.
@@ -146,6 +163,90 @@ def _violation(func: ast.AST, launchers: frozenset[str] = LAUNCHERS) -> str | No
     if not called & DOORS:
         return "launches without a PgConn door"
     return None
+
+
+def _opens_a_connection(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr == "connect":
+        return _name(func.value) in CONNECT_MODULES
+    return _name(func) in POOLS
+
+
+def _is_door(node: ast.expr) -> bool:
+    return isinstance(node, ast.Call) and _name(node.func) == "conninfo"
+
+
+def _in_process_violation(func: ast.AST) -> str | None:
+    nodes = _own_nodes(func)
+    opens = [n for n in nodes if _opens_a_connection(n)]
+    if not opens:
+        return None
+    from_door = {
+        target.id
+        for n in nodes
+        if isinstance(n, ast.Assign) and _is_door(n.value)
+        for target in n.targets
+        if isinstance(target, ast.Name)
+    }
+    for call in opens:
+        assert isinstance(call, ast.Call)
+        given = [
+            *call.args[:1],
+            *(k.value for k in call.keywords if k.arg == "conninfo"),
+        ]
+        if not any(
+            _is_door(arg) or (isinstance(arg, ast.Name) and arg.id in from_door)
+            for arg in given
+        ):
+            return "connects in process without PgConn.conninfo()"
+    return None
+
+
+def test_every_in_process_connect_goes_through_conninfo():
+    offenders = {
+        where: why
+        for where, func in _functions()
+        if (why := _in_process_violation(func)) is not None
+    }
+
+    assert offenders == {}
+
+
+@pytest.mark.parametrize(
+    ("source", "flagged"),
+    [
+        ("def f(u):\n    psycopg.connect(u, autocommit=True)\n", True),
+        ("def f(u):\n    psycopg2.connect(u)\n", True),
+        ("async def f(u):\n    await psycopg.AsyncConnection.connect(u)\n", True),
+        ("def f(u):\n    AsyncConnectionPool(u, kwargs={})\n", True),
+        ("def f(u):\n    ConnectionPool(conninfo=u)\n", True),
+        ("def f(u):\n    psycopg.connect(**PgConn.parse(u).connect_kwargs())\n", True),
+        (
+            "def f(u):\n    c = PgConn.parse(u).conninfo()\n"
+            "    psycopg.connect(u, application_name=c)\n",
+            True,
+        ),
+        ("def f(u):\n    psycopg.connect(PgConn.parse(u).conninfo())\n", False),
+        (
+            "def f(u):\n    c = PgConn.parse(u).conninfo()\n"
+            "    AsyncConnectionPool(c, kwargs={})\n",
+            False,
+        ),
+        (
+            "def f(u):\n    c = PgConn.parse(u).conninfo()\n"
+            "    ConnectionPool(conninfo=c)\n",
+            False,
+        ),
+        ("def f(p):\n    sock.connect(p)\n", False),
+        ("async def f(self):\n    await self.adapter.connect()\n", False),
+    ],
+)
+def test_the_check_tells_an_in_process_door_from_a_bypass(source, flagged):
+    func = ast.parse(source).body[0]
+
+    assert (_in_process_violation(func) is not None) is flagged
 
 
 def test_every_pg_launch_goes_through_pgconn():

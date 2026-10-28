@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from fraisier.dbops._pgconn import PgConn
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -256,7 +258,8 @@ _MUST_BE_EMPTY = ("restore_command", "primary_conninfo")
 def _connect(admin_url: str):
     import psycopg
 
-    return psycopg.connect(admin_url, autocommit=True, connect_timeout=10)
+    conninfo = PgConn.parse(admin_url).conninfo()
+    return psycopg.connect(conninfo, autocommit=True, connect_timeout=10)
 
 
 def read_setting(admin_url: str, name: str) -> str:

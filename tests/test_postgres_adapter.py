@@ -6,6 +6,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from fraisier.db.postgres_adapter import PostgresAdapter
+from fraisier.dbops._pgconn import PgConn
 
 
 class TestPoolCreation:
@@ -30,6 +31,9 @@ class TestPoolCreation:
             assert call_kwargs.kwargs.get("kwargs") == {
                 "row_factory": dict_row,
             }
+            assert call_kwargs.args == (
+                PgConn.parse("postgresql://localhost/test").conninfo(),
+            )
 
 
 class TestPoolMetrics:

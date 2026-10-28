@@ -429,8 +429,8 @@ class TestTestDatabase:
             assert result.exit_code == 1
             assert "No database configuration" in result.output
 
-    def test_database_psycopg2_not_installed(self, runner):
-        """Test test-database when psycopg2 is not available."""
+    def test_database_refused_url_connects_nothing(self, runner):
+        """A URL ``PgConn`` refuses is reported before anything connects."""
         with (
             runner.isolated_filesystem(),
             patch("fraisier.cli.test_components.require_config") as mock_req,
@@ -444,10 +444,11 @@ class TestTestDatabase:
             deployer.database_config = {"database_url": "postgresql://..."}
             mock_get.return_value = deployer
 
-            with patch.dict("sys.modules", {"psycopg2": None}):
+            with patch("psycopg.connect") as connect:
                 result = runner.invoke(cmd_database, ["api", "development"])
-                assert result.exit_code == 1
-                assert "psycopg2 not installed" in result.output
+            assert result.exit_code == 1
+            assert "database_url: the URL names no database" in result.output
+            connect.assert_not_called()
 
 
 class TestCheckRemoteConnectivity:
