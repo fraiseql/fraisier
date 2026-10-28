@@ -13,6 +13,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from fraisier.dbops._pgconn import PgConn
+
 from .adapter import DatabaseType, FraiserDatabaseAdapter, PoolMetrics
 
 
@@ -59,11 +61,13 @@ class PostgresAdapter(FraiserDatabaseAdapter):
         """Create and open connection pool.
 
         Raises:
+            ValueError: ``PgConn`` refuses the URL or the environment
             ConnectionError: If pool cannot be created or opened
         """
+        conninfo = PgConn.parse(self.connection_string).conninfo()
         try:
             self._pool = AsyncConnectionPool(
-                self.connection_string,
+                conninfo,
                 min_size=self.pool_min_size,
                 max_size=self.pool_max_size,
                 kwargs={"row_factory": dict_row},

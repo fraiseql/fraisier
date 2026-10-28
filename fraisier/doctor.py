@@ -1420,21 +1420,24 @@ def _check_pg_tviews_contract(config: FraisierConfig | None) -> CheckResult:
     import psycopg
     from confiture.exceptions import ConfigurationError
 
+    from fraisier.dbops._pgconn import PgConn
     from fraisier.dbops.tviews import read_support
 
     name = "pg_tviews_contract"
     minimum = confiture.platform.MINIMUM_PG_TVIEWS
-    urls = _database_urls(config)
-    if not urls:
+    not_used: dict[str, str] = {}
+    urls = _database_urls(config, refused=not_used)
+    if not urls and not not_used:
         return CheckResult(name, "skip", "no database.database_url configured")
 
     refused: list[str] = []
     hints: list[str] = []
     seen = 0
-    unreachable: list[str] = []
+    unreachable = [f"{target}: {why}" for target, why in not_used.items()]
     for target, url in urls.items():
         try:
-            with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
+            conninfo = PgConn.parse(url).conninfo()
+            with psycopg.connect(conninfo, autocommit=True, connect_timeout=5) as conn:
                 if read_support(conn).state == "absent":
                     continue
                 seen += 1

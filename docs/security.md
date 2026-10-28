@@ -158,10 +158,12 @@ This avoids granting the deploy user OS-level sudo access to the postgres accoun
 
 ### What a database URL may hold
 
-`database_url` and `admin_url` are parsed the way libpq parses them, and every
+`database_url` and `admin_url` are parsed the way libpq parses them. Every
 `psql`, `pg_dump`, `pg_restore` and `confiture` that fraisier starts takes its
-connection from that one parse. That makes the URL the whole answer to "where
-does this connect, and as whom":
+connection from that one parse. So does every connection fraisier opens
+itself: the pgBackRest refresh checks, the pg_tviews reads, `doctor`, the
+history database and `fraisier test-database`. That makes the URL the whole
+answer to "where does this connect, and as whom":
 
 - **The password never reaches argv.** It travels to the child as
   `PGPASSWORD`, so it is not visible in `ps` or `/proc/<pid>/cmdline`.
@@ -169,9 +171,17 @@ does this connect, and as whom":
   and only these operator defaults from the environment, none of which can
   change the target or the session: `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`,
   `PGSSLCRL`, `PGSSLCRLDIR`, `PGPASSFILE`, `PGREQUIREAUTH`,
-  `PGCONNECT_TIMEOUT`, `PGAPPNAME`. A `PGUSER`, `PGHOST`, `PGSERVICE` or
-  `PGOPTIONS` in the deploy user's shell, or in `/etc/environment` on a host
-  reached over SSH, no longer changes where or how those programs connect.
+  `PGCONNECT_TIMEOUT`, `PGAPPNAME`. A `PGUSER`, `PGHOST` or `PGOPTIONS` in
+  the deploy user's shell, or in `/etc/environment` on a host reached over
+  SSH, no longer changes where or how fraisier connects. A connection
+  fraisier opens itself can't drop a variable, so it passes every keyword
+  the URL leaves out explicitly, as libpq's default.
+- **An ambient `PGSERVICE` is refused**, whatever its value. libpq reads it
+  even when every other keyword is given, and a service file fills whatever
+  is left. `fraisier validate`, `doctor` and the deploy name it before
+  anything runs: unset it, and put the connection in the URL. A
+  `PGSERVICE` in the remote login's environment on a host reached over `ssh:`
+  is still dropped there.
 - **A transport-security policy in the environment fails closed.** These
   are dropped too, because an ambient value could weaken a URL that does not
   set them: `PGSSLMODE`, `PGSSLCERTMODE`, `PGSSLNEGOTIATION`,

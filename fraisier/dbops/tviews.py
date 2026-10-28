@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import psycopg
 from psycopg import sql
 
+from fraisier.dbops._pgconn import PgConn
+
 if TYPE_CHECKING:
     from psycopg import Connection
 
@@ -122,7 +124,9 @@ def read_support(conn: _Executes) -> TviewsSupport:
 
 def _connect(url: str) -> Connection:
     return psycopg.connect(
-        url, autocommit=True, connect_timeout=_CONNECT_TIMEOUT_SECONDS
+        PgConn.parse(url).conninfo(),
+        autocommit=True,
+        connect_timeout=_CONNECT_TIMEOUT_SECONDS,
     )
 
 

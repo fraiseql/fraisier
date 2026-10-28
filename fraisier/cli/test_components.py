@@ -10,6 +10,9 @@ from pathlib import Path
 import click
 from rich.table import Table
 
+from fraisier.config._lazy_env import to_str
+from fraisier.dbops._pgconn import PgConn
+
 from ._helpers import _get_deployer, console, require_config
 from .main import main
 
@@ -515,10 +518,16 @@ def test_database(ctx: click.Context, fraise: str, environment: str) -> None:
         console.print("[red]Error:[/red] No database_url configured")
         raise SystemExit(1)
 
-    # Mask the password in display
-    display_url = database_url.replace(
-        database_url.split("@")[0] if "@" in database_url else database_url,
-        "***masked***",
+    try:
+        conn_url = PgConn.parse(to_str(database_url))
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] database_url: {e}")
+        raise SystemExit(1) from e
+    # Never the URL itself: a password may sit in its query.
+    port = conn_url.params.get("port")
+    display_url = (
+        f"{conn_url.user or '(OS account)'}@{conn_url.host or 'local socket'}"
+        f"{f':{port}' if port else ''}/{conn_url.dbname}"
     )
 
     console.print(f"[bold]Testing database connection:[/bold] {fraise} / {environment}")
@@ -530,28 +539,16 @@ def test_database(ctx: click.Context, fraise: str, environment: str) -> None:
 
     start_time = time.time()
     try:
-        import psycopg2  # ty: ignore[unresolved-import]
+        import psycopg
 
-        # Attempt connection
-        conn = psycopg2.connect(database_url)
-        cursor = conn.cursor()
-
-        # Run simple query
-        cursor.execute("SELECT 1")
-        result = cursor.fetchone()
-        cursor.close()
-        conn.close()
+        with psycopg.connect(conn_url.conninfo()) as conn:
+            result = conn.execute("SELECT 1").fetchone()
 
         duration = time.time() - start_time
 
         console.print(f"[bold]Connection time:[/bold] {duration * 1000:.1f}ms")
         console.print(f"[bold]Query result:[/bold] {result}")
         console.print("[green]✓ Database connection successful[/green]")
-
-    except ImportError as e:
-        console.print("[red]Error:[/red] psycopg2 not installed")
-        console.print("[yellow]Install with:[/yellow] uv add psycopg2-binary")
-        raise SystemExit(1) from e
 
     except Exception as e:
         duration = time.time() - start_time
