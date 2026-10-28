@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.96.0] - 2026-10-28
+
+### Fixed
+
+- **`fraisier test-database` connects**
+  ([#498](https://github.com/fraiseql/fraisier/issues/498)). It imported
+  `psycopg2`, which fraisier does not ship, so since it was added every run
+  printed "psycopg2 not installed". It now uses `psycopg` and the same
+  connection as a deploy. It shows `user@host[:port]/dbname`; the masked URL
+  it showed before could still print a `?password=`.
+- **Two URLs name one database when libpq connects both to the same place**
+  ([#496](https://github.com/fraiseql/fraisier/issues/496)). The drift gate's
+  "same database" check and the pgBackRest cluster-collision check parsed URLs
+  their own way. They now read them as libpq does: escapes decoded, the last
+  repeated parameter winning, `?dbname=` over the path, `?host=`/`?port=`
+  over the netloc, an omitted port being 5432. Each used to give a false
+  "same" or "different". A confiture config `database_url` that fraisier
+  refuses makes `post_migrate_check` refuse instead of guessing.
+
+### Security
+
+- **Connections fraisier opens itself ignore ambient `PG*` too**
+  ([#496](https://github.com/fraiseql/fraisier/issues/496)). The pgBackRest
+  refresh checks, the pg_tviews reads, `doctor`'s `pg_tviews_contract`, the
+  history database and `fraisier test-database` connected with the bare URL,
+  so libpq filled everything it left out from the environment. A user-less
+  `admin_url` connected as `PGUSER`, not the OS account its children used,
+  and `PGOPTIONS` reached the session. They now pass every keyword the URL
+  leaves out explicitly, as libpq's default, so they connect exactly as the
+  children do: the URL's values plus the same operator defaults. A static
+  check fails the build on an in-process connection that doesn't.
+- **An ambient `PGSERVICE` is refused**, whatever its value. A connection
+  fraisier opens itself cannot drop it: libpq reads it even when every other
+  keyword is given, a service file fills whatever is left, and an empty
+  `service=` names a service called `""`. `fraisier validate`, `doctor` and
+  the deploy refuse it before anything runs, and name the fix: unset it, and
+  put the connection in the URL. A `PGSERVICE` in the remote login's
+  environment on an `ssh:` host is still dropped there.
+- **Restore's own children drop ambient `PG*` too.** pg_restore, its
+  `pg_restore -l` listing, the post-load `ANALYZE` and the deferred matview
+  refresh, all started by confiture, inherited fraisier's environment, so a
+  `PGOPTIONS`, `PGUSER` or `PGSSLMODE` in the deploy user's shell reached
+  them. They now get the same environment as every other child fraisier
+  starts: the URL's own values plus the operator defaults. confiture's
+  `--min-tables` check reads its unset keys from it too. fraisier no longer
+  writes the URL's other libpq keys into its own `os.environ` for the
+  duration of a restore.
+
+### Changed
+
+> ⚠️ **Upgrade note.** If the deploy user's environment, a unit's
+> `Environment=`, or the shell running `fraisier` exports `PGSERVICE`, unset
+> it: v0.95.0 ignored it, and v0.96.0 refuses to run. Run `fraisier validate`
+> to check.
+
+- **confiture 1.43** (`fraiseql-confiture>=1.43.0,<1.44`). 1.43 adds
+  `RestoreOptions.env`
+  ([fraiseql/confiture#792](https://github.com/fraiseql/confiture/issues/792)),
+  which restore now passes. The drift gate gives the same verdicts as on 1.40.
+  Two changes from 1.42 reach a deploy:
+  - ⚠️ A materialized view or view dropped and created again in one
+    migration, and a CHECK dropped and added again under the same name, are
+    no longer `destructive`. confiture rates them `lock_risky`/`reversible`
+    and the migration reversible. So a `restore_migrate` deploy with
+    `restore.template: auto` no longer copies the database first for them:
+    `migrate down` is the rollback. A new table's index is `additive` and
+    window-safe; a volatile `ADD COLUMN` default is `lock_risky`.
+  - A pending migration that still carries a `-- confiture:backfill`
+    placeholder, written by 1.42's `migrate diff --generate`, is refused
+    before anything applies. Fill it in, or write `-- confiture:backfill
+    none`. No setting overrides it. See "Unfinished backfill placeholders" in
+    the deployment guide.
+
 ## [0.95.0] - 2026-10-27
 
 ### Fixed
