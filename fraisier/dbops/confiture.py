@@ -45,10 +45,27 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger(__name__)
 
-#: Confiture's code for "this migration loses data" (1.2+, exit 5). The
-#: destructive gate is the only thing in its `_migrator` package that raises
-#: ValidationError, so this is a precise key rather than a catch-all.
+#: Confiture's code for "this migration loses data" (1.2+, exit 5). With
+#: :data:`_BACKFILL_PENDING`, the only ValidationErrors its `_migrator` package
+#: raises, so each is a precise key rather than a catch-all.
 _DESTRUCTIVE_REFUSED = "VALID_002"
+
+#: Confiture's code for "a pending migration still carries the generator's
+#: ``-- confiture:backfill`` placeholder" (1.42+, exit 5). No flag overrides it.
+_BACKFILL_PENDING = "VALID_010"
+
+#: The advice each refusal gets in fraisier's terms: confiture's own names a
+#: CLI fraisier never runs.
+_REFUSAL_ADVICE = {
+    _DESTRUCTIVE_REFUSED: (
+        "Set `allow_destructive: true` on this environment to apply it anyway."
+    ),
+    _BACKFILL_PENDING: (
+        "Replace each placeholder with the statements that fix the rows it "
+        "names, or with `-- confiture:backfill none` when no row needs it; no "
+        "setting overrides this."
+    ),
+}
 
 #: confiture's ``require_reversible`` refusal names that library argument;
 #: the operator's setting for it is ``allow_irreversible`` (#487). The refusal
@@ -491,26 +508,25 @@ def migrate_up(
                 )
                 break
             except ValidationError as exc:
-                # Confiture 1.2+ refuses a migration marked destructive. This
-                # is the *only* `raise ValidationError` in its whole `_migrator`
-                # package, and it carries VALID_002 — so keying on that code
-                # catches the destructive gate and nothing else, and every
-                # other confiture exception keeps behaving as it did.
+                # Confiture 1.2+ refuses a migration marked destructive
+                # (VALID_002), and 1.42+ one still carrying a backfill
+                # placeholder (VALID_010). These are the only `raise
+                # ValidationError`s in its whole `_migrator` package, so keying
+                # on the code catches those two gates and nothing else, and
+                # every other confiture exception keeps behaving as it did.
                 #
                 # Re-raised as a fraisier MigrationError for two reasons: the
                 # deployer's `except MigrationError` is what records how many
                 # migrations applied before re-raising (#272), and a raw
-                # upstream error tells the operator to run
-                # `migrate up --allow-destructive` — a CLI fraisier never
-                # invokes. `steps_applied=0` is exact, not defensive: the gate
-                # runs before the first migration, so nothing has been applied.
-                if getattr(exc, "error_code", None) != _DESTRUCTIVE_REFUSED:
+                # upstream error tells the operator to run `migrate up` — a CLI
+                # fraisier never invokes. `steps_applied=0` is exact, not
+                # defensive: both gates run before the first migration, so
+                # nothing has been applied.
+                advice = _REFUSAL_ADVICE.get(getattr(exc, "error_code", None) or "")
+                if advice is None:
                     raise
                 raise FraisierMigrationError(
-                    message=(
-                        f"{exc}. Set `allow_destructive: true` on this "
-                        f"environment to apply it anyway."
-                    ),
+                    message=f"{exc}. {advice}",
                     direction="up",
                     db_error=str(exc),
                     rollback_attempted=False,

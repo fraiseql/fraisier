@@ -87,9 +87,9 @@ class TestTheConversionIsNarrow:
     `migrate_up` turns confiture's refusal into a fraisier `MigrationError`
     whose remediation is "set `allow_destructive: true`". That advice is right
     for `VALID_002` and wrong for anything else, so the conversion keys on the
-    code rather than on the exception class. Today the destructive gate is the
-    only `raise ValidationError` in confiture's `_migrator` package, so nothing
-    real distinguishes the two — this constructs the difference directly.
+    code rather than on the exception class. confiture 1.42's backfill gate
+    (`VALID_010`) is the only other `raise ValidationError` in its `_migrator`
+    package, and gets its own advice; anything else passes through.
     """
 
     def _migrate_raising(self, exc: BaseException):
@@ -121,6 +121,27 @@ class TestTheConversionIsNarrow:
             )
 
         assert "allow_destructive" in str(excinfo.value)
+
+    def test_the_backfill_refusal_is_converted_with_its_own_advice(self) -> None:
+        """No setting overrides it: the file is unfinished."""
+        from confiture.exceptions import ValidationError
+
+        from fraisier.errors import MigrationError
+
+        with pytest.raises(MigrationError) as excinfo:
+            self._migrate_raising(
+                ValidationError(
+                    "Migration refused: a backfill step is still the generator's "
+                    "placeholder: 002_x.up.sql (t.c)",
+                    error_code="VALID_010",
+                )
+            )
+
+        message = str(excinfo.value)
+        assert "002_x.up.sql (t.c)" in message
+        assert "-- confiture:backfill none" in message
+        assert "allow_destructive" not in message
+        assert excinfo.value.steps_applied == 0
 
     def test_any_other_validation_error_passes_through_unchanged(self) -> None:
         """Relabelling this one would send the operator after the wrong knob."""
