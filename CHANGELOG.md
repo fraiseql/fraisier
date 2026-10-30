@@ -66,9 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fraisier registers them from `database.hooks`, and passed their
   `database_url` unread. An enabled hook's URL is now checked before the
   migration, and the deploy refuses one `PgConn` refuses, naming the hook
-  but never the URL. `audit` connects with the pinned conninfo. Every
-  `!envvar` in an enabled hook's block is resolved (it never was), and one
-  that is unset stops the deploy too, where registration would skip the hook.
+  but never the URL. `audit` opens its connection through the pinned
+  conninfo (confiture 1.44's `AuditConfig.connection_factory`), and
+  `backup` runs `pg_dump` in the environment every fraisier child gets
+  (`BackupConfig.env`,
+  [fraiseql/confiture#799](https://github.com/fraiseql/confiture/issues/799)):
+  neither reads an ambient `PG*` variable any more. Every `!envvar` in an
+  enabled hook's block is resolved (it never was), and one that is unset
+  stops the deploy too, where registration would skip the hook.
 - **`fraisier db exec` with no `admin_url` names its target.** It runs psql
   on `database.name` in the operator's own environment, on purpose, and now
   first prints to stderr the host or socket, port, user and database libpq
@@ -83,11 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PGHOSTADDR`, `PGPORT`, `PGSERVICE` or `PGDATABASE` is set, unless
   `FRAISIER_RESET_ALLOW_PG_ENV=1`, and drops each database only once its name
   is typed back or given as `--yes=<dbname>`.
-- Still outside: the `backup` hook's `pg_dump`, which confiture starts with a
-  copy of the environment
-  ([fraiseql/confiture#799](https://github.com/fraiseql/confiture/issues/799)),
-  `fraisier db exec` with no `admin_url`, and a manual run of the scaffolded
-  scripts, which read the shell's `PG*`. See "What the URL does not cover" in
+- Still outside: `fraisier db exec` with no `admin_url`, and a manual run of
+  the scaffolded scripts, which read the shell's `PG*`. See "What the URL does not cover" in
   `docs/security.md`.
 - **An ambient `PGSERVICE` is refused**, whatever its value. A connection
   fraisier opens itself cannot drop it: libpq reads it even when every other
@@ -108,10 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PGOPTIONS`, `PGUSER` or `PGSSLMODE` in the deploy user's shell reached
   them. They now get the same environment as every other child fraisier
   starts: the URL's own values plus the operator defaults. confiture's
-  `--min-tables` check reads its unset keys from it too; the three confiture
-  1.43 gives it no value for (`sslcertmode`, `min_protocol_version`,
-  `max_protocol_version`) are put in that environment at the values a clean
-  environment resolves them to. fraisier no longer
+  `--min-tables` check reads its unset keys from it too, and the three libpq
+  refuses empty (`sslcertmode`, `min_protocol_version`,
+  `max_protocol_version`) are pinned at the values a clean environment
+  resolves them to. fraisier no longer
   writes the URL's other libpq keys into its own `os.environ` for the
   duration of a restore.
 
@@ -154,10 +156,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > restore needs exactly one, and a pgBackRest restore's checks after the
 > start could otherwise fail over to another host. Name the one host.
 
-- **confiture 1.43** (`fraiseql-confiture>=1.43.0,<1.44`). 1.43 adds
+- **confiture 1.44** (`fraiseql-confiture>=1.44.0,<1.45`). 1.43 adds
   `RestoreOptions.env`
   ([fraiseql/confiture#792](https://github.com/fraiseql/confiture/issues/792)),
-  which restore now passes. The drift gate gives the same verdicts as on 1.40.
+  which restore now passes; 1.44 adds `BackupConfig.env` and
+  `AuditConfig.connection_factory`
+  ([fraiseql/confiture#799](https://github.com/fraiseql/confiture/issues/799)),
+  which the hooks now get. The drift gate gives the same verdicts as on 1.40.
   Two changes from 1.42 reach a deploy:
   - ⚠️ A materialized view or view dropped and created again in one
     migration, and a CHECK dropped and added again under the same name, are

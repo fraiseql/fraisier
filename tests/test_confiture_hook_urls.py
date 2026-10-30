@@ -8,16 +8,22 @@ refuses was only noticed when registration failed and the hook was skipped.
 
 Now an enabled hook's URL is read before the migration and the deploy is
 refused, naming the hook and the reason but never the URL; ``AuditHook`` gets
-the pinned conninfo. ``BackupHook`` runs ``pg_dump`` with a copy of
-``os.environ``, which confiture 1.43 gives no way to replace.
+a connection factory that opens the pinned conninfo and ``BackupHook`` the
+child environment, so neither reads an ambient ``PG*`` variable.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import psycopg
 import pytest
+from confiture.core.hooks import HookContext, HookPhase
+from confiture.core.hooks.builtin import AuditHook, BackupHook
+from confiture.core.hooks.context import ExecutionContext
+from psycopg.conninfo import conninfo_to_dict
 
 from fraisier.config._lazy_env import LazyEnv
 from fraisier.dbops._pgconn import PgConn
@@ -47,17 +53,20 @@ def _registered_config(hooks: dict):
 
 
 class TestRegistration:
-    def test_the_audit_hook_connects_with_the_pinned_conninfo(self):
-        config = _registered_config(_audit(_URL))
+    def test_the_audit_hook_connects_with_the_pinned_conninfo(self, monkeypatch):
+        opened = []
+        monkeypatch.setattr(psycopg, "connect", opened.append)
 
-        assert config.database_url == PgConn.parse(_URL).conninfo()
+        AuditHook(_registered_config(_audit(_URL)))._connect()
+
+        assert opened == [PgConn.parse(_URL).conninfo()]
 
     def test_an_envvar_audit_url_is_resolved_first(self, monkeypatch):
         monkeypatch.setenv("ACME_AUDIT_URL", _URL)
 
         config = _registered_config(_audit(LazyEnv("ACME_AUDIT_URL")))
 
-        assert config.database_url == PgConn.parse(_URL).conninfo()
+        assert config.database_url == _URL
 
     def test_an_envvar_backup_url_is_resolved(self, monkeypatch):
         monkeypatch.setenv("ACME_BACKUP_URL", _URL)
@@ -65,6 +74,7 @@ class TestRegistration:
         config = _registered_config(_backup(LazyEnv("ACME_BACKUP_URL")))
 
         assert config.database_url == _URL
+        assert config.env == PgConn.parse(_URL).child_env()
 
     def test_registration_still_skips_a_hook_it_cannot_build(self, caplog):
         """``migrate_down`` registers hooks too: a rollback must not raise."""
@@ -75,6 +85,93 @@ class TestRegistration:
         migrator.register_hook.assert_not_called()
         assert "keepalives" in caplog.text
         assert "s3cret" not in caplog.text
+
+
+_AMBIENT = {"PGHOSTADDR": "192.0.2.1", "PGOPTIONS": "-c search_path=acme_other"}
+
+
+def _context(**metadata: object) -> HookContext[ExecutionContext]:
+    return HookContext(
+        phase=HookPhase.BEFORE_EXECUTE,
+        data=ExecutionContext(metadata={"migration_name": "001_acme", **metadata}),
+    )
+
+
+class TestTheHooksDoNotReadTheDeployEnvironment:
+    @pytest.fixture
+    def pg_dump(self, tmp_path, monkeypatch):
+        """A ``pg_dump`` on PATH that records its environment and argv."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        record = tmp_path / "pg_dump.record"
+        stub = bin_dir / "pg_dump"
+        stub.write_text(
+            "#!/bin/bash\n"
+            'if [ "$1" = --version ]; then echo "pg_dump (PostgreSQL) 18.0"; exit; fi\n'
+            f'{{ env | grep "^PG"; echo "argv $*"; }} > "{record}"\n'
+            'for a in "$@"; do [ "$prev" = -f ] && : > "$a"; prev="$a"; done\n'
+        )
+        stub.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+        return record
+
+    def test_the_backup_pg_dump_gets_the_child_environment(
+        self, pg_dump, tmp_path, monkeypatch
+    ):
+        for var, value in _AMBIENT.items():
+            monkeypatch.setenv(var, value)
+        hooks = _backup(_URL)
+        hooks["backup"]["backup_dir"] = str(tmp_path / "backups")
+
+        result = asyncio.run(BackupHook(_registered_config(hooks)).execute(_context()))
+
+        assert result.success, result.error
+        lines = pg_dump.read_text().splitlines()
+        assert "PGHOST=/nonexistent/acme" in lines
+        assert "PGPASSWORD=s3cret" in lines
+        assert not [ln for ln in lines if ln.startswith(tuple(_AMBIENT))]
+        assert "s3cret" not in next(ln for ln in lines if ln.startswith("argv "))
+
+    def test_the_audit_connection_ignores_ambient_variables(self, monkeypatch):
+        for var, value in _AMBIENT.items():
+            monkeypatch.setenv(var, value)
+        opened = []
+        monkeypatch.setattr(psycopg, "connect", opened.append)
+
+        AuditHook(_registered_config(_audit(_URL)))._connect()
+
+        (conninfo,) = opened
+        params = conninfo_to_dict(conninfo)
+        assert params.get("hostaddr", "") == ""
+        assert params.get("options", "") == ""
+
+    def test_the_audit_connection_refuses_an_ambient_service(self, monkeypatch):
+        hook = AuditHook(_registered_config(_audit(_URL)))
+        monkeypatch.setenv("PGSERVICE", "acme")
+
+        with pytest.raises(ValueError, match="PGSERVICE"):
+            hook._connect()
+
+    def test_a_failed_audit_connect_is_the_hooks_failure_not_the_migrations(self):
+        """``AuditHook`` reports a ``psycopg.Error``; anything else escapes it."""
+        hook = AuditHook(_registered_config(_audit(_URL)))
+
+        result = asyncio.run(hook.execute(_context()))
+
+        assert not result.success
+        assert "s3cret" not in (result.error or "")
+
+    def test_an_environment_the_audit_door_refuses_skips_it_at_registration(
+        self, monkeypatch, caplog
+    ):
+        """Not a hook whose factory raises mid-migration."""
+        monkeypatch.setenv("PGTZ", "Asia/Tokyo")
+        migrator = MagicMock()
+
+        _register_migration_hooks(migrator, _audit(_URL))
+
+        migrator.register_hook.assert_not_called()
+        assert "PGTZ" in caplog.text
 
 
 class TestRefusal:

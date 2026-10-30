@@ -241,3 +241,47 @@ def test_restore_options_env_is_the_whole_child_environment(tmp_path: Path) -> N
     )
     with pytest.raises(RestoreError, match=r"PATH of RestoreOptions\.env"):
         DatabaseRestorer().restore(options)
+
+
+def test_backup_config_env_is_the_whole_pg_dump_environment(tmp_path: Path) -> None:
+    """``database.hooks.backup`` hands ``BackupConfig.env`` the child env.
+
+    That keeps ambient ``PG*`` out of the backup's ``pg_dump`` only while
+    confiture runs it in that env alone: here ``pg_dump`` is looked up on the
+    ``PATH`` it names, not the test's, and is not found.
+    """
+    import asyncio
+
+    from confiture.core.hooks import HookContext, HookPhase
+    from confiture.core.hooks.builtin import BackupConfig, BackupHook
+    from confiture.core.hooks.context import ExecutionContext
+
+    config = BackupConfig(
+        backup_dir=tmp_path,
+        database_url="postgresql:///db?host=/nonexistent/acme",
+        env={"PATH": str(tmp_path)},
+    )
+    context = HookContext(phase=HookPhase.BEFORE_EXECUTE, data=ExecutionContext())
+
+    result = asyncio.run(BackupHook(config).execute(context))
+
+    assert result.error == (
+        "pg_dump not found on the PATH of BackupConfig.env. "
+        "Install PostgreSQL client tools there."
+    )
+
+
+def test_audit_config_connects_through_its_connection_factory() -> None:
+    """``database.hooks.audit`` connects through ``AuditConfig.connection_factory``."""
+    from confiture.core.hooks.builtin import AuditConfig, AuditHook
+
+    opened: list[str] = []
+    config = AuditConfig(
+        database_url="postgresql:///db",
+        signing_key="k",
+        connection_factory=opened.append,  # ty: ignore[invalid-argument-type]
+    )
+
+    AuditHook(config)._connect()
+
+    assert opened == ["postgresql:///db"]

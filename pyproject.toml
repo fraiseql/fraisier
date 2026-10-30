@@ -716,15 +716,28 @@ dependencies = [
   # other fraisier child, and the `os.environ` overlay is gone. That connection
   # gets no value for `sslcertmode` or `min`/`max_protocol_version` unless `env`
   # carries one, so `pinned_child_env()` puts their clean-environment values in
-  # it (confiture#799 asks confiture to pin them). `env` beside `superuser`
-  # is a `RestoreError`; fraisier never sets `superuser`. v1.42.0..v1.43.0 touches
-  # only `core/restorer.py` and `url_redaction.py` (a `base=` for `libpq_env`,
-  # which fraisier does not import), so no drift verdict or exit code can move,
-  # and the restorer never set a `PGOPTIONS` of its own for `env` to drop.
-  # The floor moves with the cap: restore passes `env`, which 1.42 rejects.
+  # it. `env` beside `superuser` is a `RestoreError`; fraisier never sets
+  # `superuser`. v1.42.0..v1.43.0 touches only `core/restorer.py` and
+  # `url_redaction.py` (a `base=` for `libpq_env`, which fraisier does not
+  # import), so no drift verdict or exit code can move, and the restorer never
+  # set a `PGOPTIONS` of its own for `env` to drop.
+  # **1.44.0 gives the built-in hooks the caller's connection (confiture#799).**
+  # `database.hooks.backup` passes `BackupConfig.env = PgConn.child_env()`, the
+  # whole environment of its `pg_dump` and `pg_dump --version`, and
+  # `database.hooks.audit` passes `AuditConfig.connection_factory`, which opens
+  # the pinned conninfo; neither reads an ambient `PG*` now. The `--min-tables`
+  # connection pins the three keywords itself as well; `pinned_child_env()`
+  # stays, so restore does not depend on which side pins them. 1.44 also reads
+  # `DatabaseConfig.from_url` with libpq's parser (confiture#793) and moves a
+  # keyword conninfo's password to `PGPASSWORD`; fraisier builds neither from a
+  # `DatabaseConfig`, and its sessions open through `migration_connection`.
+  # v1.43.0..v1.44.0 touches no drift, lint or exit-code module. Probed by
+  # tests/test_confiture_dependency_floor.py (`BackupConfig.env`,
+  # `AuditConfig.connection_factory`). The floor moves with the cap: the
+  # hooks pass both, which 1.43 rejects.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.43.0,<1.44",
+  "fraiseql-confiture>=1.44.0,<1.45",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

@@ -160,12 +160,15 @@ This avoids granting the deploy user OS-level sudo access to the postgres accoun
 
 `database_url` and `admin_url` are parsed the way libpq parses them. Every
 `psql`, `pg_dump`, `pg_restore` and `confiture` that fraisier starts takes its
-connection from that one parse; a `confiture` child that reads its URLs from
-its own config gets the same environment, with no URL's values in it. So does
-every connection fraisier opens itself: confiture's migration session, which
-fraisier opens for it (preflight, `migrate up` and `down`, the status probes,
-the rebuild's re-baseline), the pgBackRest refresh checks, the pg_tviews
-reads, `doctor`, the history database and `fraisier test-database`. That
+connection from that one parse, and so does the `pg_dump` of confiture's
+`backup` hook (`database.hooks.backup`), run in the environment fraisier
+gives it; a `confiture` child that reads its URLs from its own config gets
+the same environment, with no URL's values in it. So does every connection
+fraisier opens itself: confiture's migration session, which fraisier opens
+for it (preflight, `migrate up` and `down`, the status probes, the rebuild's
+re-baseline), the `audit` hook's connection, the pgBackRest refresh checks,
+the pg_tviews reads, `doctor`, the history database and
+`fraisier test-database`. That
 makes the URL the whole answer to "where does this connect, and as whom",
 outside the cases [listed below](#what-the-url-does-not-cover):
 
@@ -224,14 +227,6 @@ outside the cases [listed below](#what-the-url-does-not-cover):
 These connect without fraisier's parse, or with part of the ambient
 environment:
 
-- **confiture's `backup` hook**, when `database.hooks.backup` enables it,
-  runs `pg_dump` inside the migration with a copy of the deploy user's
-  environment: confiture 1.43 takes no environment for it
-  ([fraiseql/confiture#799](https://github.com/fraiseql/confiture/issues/799)).
-  Its `database_url` is read by `PgConn` before the migration, so a URL
-  `PgConn` refuses stops the deploy, but whatever the URL leaves out comes
-  from that environment. (`database.hooks.audit` connects in process with the
-  pinned conninfo, like every other in-process connection.)
 - **`fraisier db exec` with no `admin_url`** connects by database name through
   the operator's own environment, as their `psql` would, and first prints to
   stderr the target libpq resolves (host or socket, port, user, database) and
