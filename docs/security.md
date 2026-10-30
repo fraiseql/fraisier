@@ -160,10 +160,14 @@ This avoids granting the deploy user OS-level sudo access to the postgres accoun
 
 `database_url` and `admin_url` are parsed the way libpq parses them. Every
 `psql`, `pg_dump`, `pg_restore` and `confiture` that fraisier starts takes its
-connection from that one parse. So does every connection fraisier opens
-itself: the pgBackRest refresh checks, the pg_tviews reads, `doctor`, the
-history database and `fraisier test-database`. That makes the URL the whole
-answer to "where does this connect, and as whom":
+connection from that one parse; a `confiture` child that reads its URLs from
+its own config gets the same environment, with no URL's values in it. So does
+every connection fraisier opens itself: confiture's migration session, which
+fraisier opens for it (preflight, `migrate up` and `down`, the status probes,
+the rebuild's re-baseline), the pgBackRest refresh checks, the pg_tviews
+reads, `doctor`, the history database and `fraisier test-database`. That
+makes the URL the whole answer to "where does this connect, and as whom",
+outside the cases [listed below](#what-the-url-does-not-cover):
 
 - **The password never reaches argv.** It travels to the child as
   `PGPASSWORD`, so it is not visible in `ps` or `/proc/<pid>/cmdline`.
@@ -176,6 +180,12 @@ answer to "where does this connect, and as whom":
   SSH, no longer changes where or how fraisier connects. A connection
   fraisier opens itself can't drop a variable, so it passes every keyword
   the URL leaves out explicitly, as libpq's default.
+- **An ambient `PGTZ`, `PGDATESTYLE` or `PGGEQO` is refused.** libpq sends
+  them as startup settings, with no keyword a connection could pin them by,
+  and an ambient value outranks even `options`. A child drops them; a
+  connection fraisier opens itself refuses them, as do `fraisier validate`
+  and the deploy before anything runs. A session default belongs to the role
+  or the database (`ALTER ROLE … SET timezone`).
 - **An ambient `PGSERVICE` is refused**, whatever its value. libpq reads it
   even when every other keyword is given, and a service file fills whatever
   is left. `fraisier validate`, `doctor` and the deploy name it before
@@ -205,6 +215,22 @@ answer to "where does this connect, and as whom":
     variable to carry it.
 - **A URL with no user is fine.** libpq connects as the OS account running
   the deploy, which is what the peer-authenticated `admin_url` above relies on.
+
+#### What the URL does not cover
+
+These connect without fraisier's parse, or with part of the ambient
+environment:
+
+- **confiture's `backup` and `audit` hooks**, when `hooks:` enables them.
+  They run inside the migration: `audit` connects with the confiture config's
+  bare URL, and `backup` runs `pg_dump` with the deploy user's environment.
+- **confiture's `--min-tables` connection during a restore** reads
+  `min_protocol_version`, `max_protocol_version` and `sslcertmode` from the
+  environment: confiture 1.43 gives it no value for them.
+- **`fraisier db exec` with no `admin_url`** connects by database name through
+  the operator's own environment, as their `psql` would.
+- **The scaffolded `db_deploy.sh`** runs `confiture migrate` in whatever shell
+  runs it.
 
 To see who each URL actually connects as, run `fraisier doctor`: the
 `database_connected_as` check prints one line per role, `user to database on
