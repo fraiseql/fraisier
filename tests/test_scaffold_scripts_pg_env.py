@@ -125,6 +125,40 @@ class TestBackupSh:
         assert "s3cret" not in proc.stdout + proc.stderr
 
 
+class TestPgTarget:
+    @staticmethod
+    def _probe(scripts):
+        """pg_target alone, as the rendered scripts define it, under ``set -eu``."""
+        rendered = (scripts / "db_reset.sh").read_text()
+        start = rendered.index("pg_target() {")
+        end = rendered.index("\n}\n", start) + 3
+        probe = scripts / "pg_target_probe.sh"
+        probe.write_text(
+            "set -euo pipefail\n" + rendered[start:end] + "pg_target psql acme_db\n"
+        )
+        return probe
+
+    def test_a_hostaddr_alone_is_tcp_not_the_socket(self, scripts, stubs, tmp_path):
+        proc, _ = _run(self._probe(scripts), stubs, tmp_path, PGHOSTADDR="192.0.2.1")
+
+        assert proc.stderr.startswith("psql: host=(none) hostaddr=192.0.2.1")
+
+    def test_a_uid_with_no_name_does_not_stop_the_script(
+        self, scripts, stubs, tmp_path
+    ):
+        bin_dir, _ = stubs
+        fake_id = bin_dir / "id"
+        fake_id.write_text(
+            '#!/bin/bash\nif [ "$1" = "-un" ]; then exit 1; fi\necho 4242\n'
+        )
+        fake_id.chmod(0o755)
+
+        proc, _ = _run(self._probe(scripts), stubs, tmp_path)
+
+        assert proc.returncode == 0, proc.stderr
+        assert " user=uid=4242 db=acme_db" in proc.stderr
+
+
 class TestDbDeploySh:
     def test_it_names_the_pg_variables_confiture_will_read(
         self, scripts, stubs, tmp_path
@@ -145,6 +179,32 @@ class TestDbDeploySh:
             "PGUSER=acme_ro"
         ) in proc.stderr.splitlines()
         assert "s3cret" not in proc.stdout + proc.stderr
+
+    def test_a_variable_libpq_does_not_read_is_never_printed(
+        self, scripts, stubs, tmp_path
+    ):
+        """pgBackRest's secrets share the ``PG`` prefix."""
+        proc, _ = _run(
+            scripts / "db_deploy.sh",
+            stubs,
+            tmp_path,
+            "development",
+            PGBACKREST_REPO1_CIPHER_PASS="s3cret",
+        )
+
+        assert "s3cret" not in proc.stdout + proc.stderr
+        assert "PGBACKREST" not in proc.stderr
+
+    def test_it_lists_exactly_the_variables_libpq_reads(self):
+        from fraisier.dbops._pgconn import _KEYWORD_ENV, SESSION_VARIABLES
+        from fraisier.scaffold.renderer import _TEMPLATES_DIR
+
+        partial = (_TEMPLATES_DIR / "core" / "_pg_target.sh.j2").read_text()
+        (line,) = [ln for ln in partial.splitlines() if ln.startswith("_LIBPQ_VARS=")]
+
+        assert sorted(line.split('"')[1].split()) == sorted(
+            {*_KEYWORD_ENV.values(), *SESSION_VARIABLES}
+        )
 
     def test_with_no_pg_variables_it_says_so(self, scripts, stubs, tmp_path):
         proc, _ = _run(scripts / "db_deploy.sh", stubs, tmp_path, "development")

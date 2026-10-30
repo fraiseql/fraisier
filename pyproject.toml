@@ -712,8 +712,11 @@ dependencies = [
   # is the whole environment of every restore child, the `pg_restore -l` listing
   # included, and what the in-process `--min-tables` connection reads its unset
   # keys from; `PGPASSWORD` from `password` goes on top. restore passes
-  # `PgConn.child_env()`, so its children drop ambient `PG*` like every other
-  # fraisier child, and the `os.environ` overlay is gone. `env` beside `superuser`
+  # `PgConn.pinned_child_env()`, so its children drop ambient `PG*` like every
+  # other fraisier child, and the `os.environ` overlay is gone. That connection
+  # gets no value for `sslcertmode` or `min`/`max_protocol_version` unless `env`
+  # carries one, so `pinned_child_env()` puts their clean-environment values in
+  # it (confiture#799 asks confiture to pin them). `env` beside `superuser`
   # is a `RestoreError`; fraisier never sets `superuser`. v1.42.0..v1.43.0 touches
   # only `core/restorer.py` and `url_redaction.py` (a `base=` for `libpq_env`,
   # which fraisier does not import), so no drift verdict or exit code can move,

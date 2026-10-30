@@ -64,6 +64,15 @@ def build_psql_argv(
     return base
 
 
+def _os_user() -> str:
+    """libpq's default user, or the uid when it has no passwd entry."""
+    uid = os.geteuid()
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return f"uid={uid}"
+
+
 def operator_target(db_name: str, environ: Mapping[str, str] = os.environ) -> str:
     """Where ``psql <db_name>`` connects, as libpq resolves it from *environ*.
 
@@ -76,12 +85,13 @@ def operator_target(db_name: str, environ: Mapping[str, str] = os.environ) -> st
         value = environ.get(var)
         return f"{keyword}={value} ({var})" if value else f"{keyword}={default}"
 
-    parts = [field("host", "PGHOST", "(default socket)")]
-    if environ.get("PGHOSTADDR"):
+    hostaddr = environ.get("PGHOSTADDR")
+    parts = [field("host", "PGHOST", "(none)" if hostaddr else "(default socket)")]
+    if hostaddr:
         parts.append(field("hostaddr", "PGHOSTADDR", ""))
     parts += [
         field("port", "PGPORT", "5432"),
-        field("user", "PGUSER", pwd.getpwuid(os.geteuid()).pw_name),
+        field("user", "PGUSER", "" if environ.get("PGUSER") else _os_user()),
         f"db={db_name}",
     ]
     if environ.get("PGSERVICE"):

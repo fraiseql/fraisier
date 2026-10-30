@@ -26,6 +26,8 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from fraisier.dbops.restore import restore_backup
 
 _ADMIN_URL = "postgresql://postgres@localhost:5432/postgres"
@@ -321,6 +323,13 @@ class TestMinTablesConnectionIsPinned:
     fraisier's environment."""
 
     _SOCKET_URL = "postgresql:///acme_db?host=/nonexistent/acme"
+
+    @pytest.fixture(autouse=True)
+    def _libpq_18(self):
+        from psycopg import pq
+
+        if pq.version() < 180000:
+            pytest.skip("the protocol-version keywords arrived in libpq 18")  # ty: ignore[too-many-positional-arguments]
 
     def _keys(self, url: str) -> dict:
         from confiture.core.restorer import _connection_keys

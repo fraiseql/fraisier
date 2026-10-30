@@ -456,3 +456,26 @@ class TestDbExecWithoutAdminUrl:
             f"as the remote login: db={_DB_NAME} (host, port and user come from "
             "that login's environment)"
         )
+
+
+class TestOperatorTarget:
+    def test_a_uid_with_no_passwd_entry_does_not_stop_it(self, monkeypatch):
+        """psql connects as PGUSER there; the line must not fail first."""
+        from fraisier.dbops import exec as exec_mod
+
+        def missing(_uid):
+            raise KeyError(_uid)
+
+        monkeypatch.setattr(exec_mod.pwd, "getpwuid", missing)
+
+        assert "user=acme_ro (PGUSER)" in exec_mod.operator_target(
+            "acme_db", {"PGUSER": "acme_ro"}
+        )
+        assert " user=uid=" in exec_mod.operator_target("acme_db", {})
+
+    def test_a_hostaddr_alone_is_tcp_not_the_socket(self):
+        from fraisier.dbops.exec import operator_target
+
+        line = operator_target("acme_db", {"PGHOSTADDR": "192.0.2.1"})
+
+        assert line.startswith("host=(none) hostaddr=192.0.2.1 (PGHOSTADDR) ")

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from confiture.exceptions import RestoreError
 
+from fraisier.dbops._pgconn import _KEYWORD_ENV as ENV_VAR
 from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops.archive import ArchiveCheck, ArchiveVerdict, _read_toc
 from fraisier.dbops.restore import (
@@ -165,11 +166,13 @@ class TestRestoreBackup:
         """Every restore child runs in what any other fraisier child runs in,
         plus the three keywords confiture's --min-tables connection needs."""
         url = _TEST_URL + "?sslmode=require"
-        assert self._restored_env(url) == {
-            **PgConn.parse(url).child_env(),
-            "PGSSLCERTMODE": "allow",
-            "PGMINPROTOCOLVERSION": "3.0",
-            "PGMAXPROTOCOLVERSION": "3.0",
+        conn = PgConn.parse(url)
+        pins = {ENV_VAR[k]: v for k, v in conn.unset_pins().items()}
+        assert self._restored_env(url) == {**conn.child_env(), **pins}
+        assert set(pins) <= {
+            "PGSSLCERTMODE",
+            "PGMINPROTOCOLVERSION",
+            "PGMAXPROTOCOLVERSION",
         }
 
     def test_an_ambient_libpq_variable_never_reaches_a_restore_child(self, monkeypatch):
