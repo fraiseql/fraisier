@@ -145,6 +145,22 @@ class TestEachInProcessSite:
             outcome = outcome.detail  # doctor's CheckResult
         assert "PGSERVICE is set in the environment" in str(outcome)
 
+    @pytest.mark.parametrize(
+        ("url", "named"),
+        [
+            ("postgresql://u@db.acme.test/acme_db?keepalives=1", "keepalives"),
+            ("postgresql://u@db.acme.test/", "names no database"),
+        ],
+    )
+    def test_a_url_pgconn_refuses_is_refused_before_connecting(self, site, url, named):
+        """The bare URL used to connect; ``FRAISIER_DB_URL`` included (F5)."""
+        outcome, calls = _connect(site, url)
+
+        assert calls == []
+        with contextlib.suppress(AttributeError):
+            outcome = outcome.detail
+        assert named in str(outcome)
+
 
 def test_test_database_shows_no_password():
     """The URL's password may sit in the query, after the ``@``."""
