@@ -227,9 +227,6 @@ environment:
 - **confiture's `backup` and `audit` hooks**, when `hooks:` enables them.
   They run inside the migration: `audit` connects with the confiture config's
   bare URL, and `backup` runs `pg_dump` with the deploy user's environment.
-- **confiture's `--min-tables` connection during a restore** reads
-  `min_protocol_version`, `max_protocol_version` and `sslcertmode` from the
-  environment: confiture 1.43 gives it no value for them.
 - **`fraisier db exec` with no `admin_url`** connects by database name through
   the operator's own environment, as their `psql` would.
 - **The scaffolded `db_deploy.sh` and `backup.sh`** run `confiture migrate`

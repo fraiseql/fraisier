@@ -618,6 +618,26 @@ class TestConnectKwargs:
         clean environment resolves to."""
         assert PgConn.parse("postgresql:///acme_db").connect_kwargs()[keyword] == pin
 
+    @pytest.mark.parametrize(
+        ("query", "minimum", "maximum"),
+        [
+            ("min_protocol_version=3.2", "3.2", "latest"),
+            ("min_protocol_version=latest", "latest", "latest"),
+            ("min_protocol_version=3.0", "3.0", "3.0"),
+            ("min_protocol_version=3.2&max_protocol_version=3.2", "3.2", "3.2"),
+            ("max_protocol_version=3.2", "3.0", "3.2"),
+        ],
+    )
+    def test_the_maximum_follows_the_urls_minimum(self, query, minimum, maximum):
+        """libpq 18 derives an unset maximum: ``latest`` above a 3.0 minimum,
+        else 3.0. A fixed 3.0 under a 3.2 minimum refuses to connect."""
+        kwargs = PgConn.parse(f"postgresql:///acme_db?{query}").connect_kwargs()
+
+        assert (kwargs["min_protocol_version"], kwargs["max_protocol_version"]) == (
+            minimum,
+            maximum,
+        )
+
     def test_service_is_never_passed(self):
         assert "service" not in PgConn.parse("postgresql:///acme_db").connect_kwargs()
 

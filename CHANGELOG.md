@@ -62,9 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of fraisier's own would be. A declared drift gate that would stop the
   deploy is checked before the migration, since its child is the only one
   that reads `scratch_url`.
-- Still outside: confiture's `backup` and `audit` hooks, confiture's
-  `--min-tables` connection for three keywords, `fraisier db exec` with no
-  `admin_url`, and the scaffolded `db_deploy.sh` and `backup.sh`. See "What the URL does not cover" in
+- Still outside: confiture's `backup` and `audit` hooks, `fraisier db exec`
+  with no `admin_url`, and the scaffolded `db_deploy.sh` and `backup.sh`. See "What the URL does not cover" in
   `docs/security.md`.
 - **An ambient `PGSERVICE` is refused**, whatever its value. A connection
   fraisier opens itself cannot drop it: libpq reads it even when every other
@@ -85,8 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PGOPTIONS`, `PGUSER` or `PGSSLMODE` in the deploy user's shell reached
   them. They now get the same environment as every other child fraisier
   starts: the URL's own values plus the operator defaults. confiture's
-  `--min-tables` check reads its unset keys from it too, except three
-  confiture 1.43 gives no value for (see above). fraisier no longer
+  `--min-tables` check reads its unset keys from it too; the three confiture
+  1.43 gives it no value for (`sslcertmode`, `min_protocol_version`,
+  `max_protocol_version`) are put in that environment at the values a clean
+  environment resolves them to. fraisier no longer
   writes the URL's other libpq keys into its own `os.environ` for the
   duration of a restore.
 

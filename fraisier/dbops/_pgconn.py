@@ -136,7 +136,8 @@ SESSION_VARIABLES = frozenset({"PGTZ", "PGDATESTYLE", "PGGEQO"})
 TRANSPORT_REFUSED = 123
 
 #: Keywords with no compiled default whose ``''`` libpq refuses: the value a
-#: clean environment resolves each to, measured on libpq 18.
+#: clean environment resolves each to, measured on libpq 18. An unset maximum
+#: is derived from the minimum (:meth:`PgConn.unset_pins`).
 _UNSET_DEFAULTS = {
     "sslcertmode": "allow",
     "min_protocol_version": "3.0",
@@ -489,6 +490,40 @@ class PgConn:
         self.check_environment()
         return {**scrubbed(os.environ), **self.pg_env()}
 
+    def unset_pins(self) -> dict[str, str]:
+        """keyword → value for each :data:`_UNSET_DEFAULTS` keyword the URL
+        leaves out and the installed libpq knows.
+
+        libpq derives an unset ``max_protocol_version`` from the minimum:
+        ``latest`` above 3.0, else 3.0 (measured on libpq 18); a fixed 3.0
+        under a URL's 3.2 minimum would refuse to connect.
+        """
+        pins = {
+            keyword: value
+            for keyword, value in _pinned().items()
+            if keyword in _UNSET_DEFAULTS and keyword not in self.params
+        }
+        if (
+            "max_protocol_version" in pins
+            and self.params.get("min_protocol_version", "3.0") != "3.0"
+        ):
+            pins["max_protocol_version"] = "latest"
+        return pins
+
+    def pinned_child_env(self) -> dict[str, str]:
+        """:meth:`child_env` plus :meth:`unset_pins` as ``PG*`` variables.
+
+        For a child environment a dependency also builds an in-process
+        connection from, giving nothing for a variable the environment leaves
+        out (confiture's ``RestoreOptions.env``). A child resolves these values
+        anyway in a clean environment.
+
+        Raises:
+            ValueError: :meth:`check_environment` refused it.
+        """
+        pins = {_KEYWORD_ENV[k]: v for k, v in self.unset_pins().items()}
+        return {**self.child_env(), **pins}
+
     def connect_kwargs(self) -> dict[str, str]:
         """Keyword arguments for an in-process ``psycopg`` connection.
 
@@ -502,7 +537,7 @@ class PgConn:
             ValueError: :meth:`check_in_process` refused it.
         """
         self.check_in_process()
-        return {**_pinned(), **self.params}
+        return {**_pinned(), **self.unset_pins(), **self.params}
 
     def conninfo(self) -> str:
         """:meth:`connect_kwargs` as one libpq conninfo string.
