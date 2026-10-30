@@ -289,5 +289,20 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        render, never parsed
 #                                                        as fraises.yaml.
 #
+#   _validation.py:_validate_restore_migrate (admin_url multi-host)
+#                                            not-eligible
+#                                                        A ``!envvar`` admin_url
+#                                                        is not resolved at load;
+#                                                        RestoreMigrateStrategy
+#                                                        refuses a multi-host one
+#                                                        at init, before anything
+#                                                        runs.
+#
+#   dbops/_pgconn.py:config_child_env        non-config  Reads ``database_url`` /
+#                                                        ``scratch_url`` from a
+#                                                        confiture config, which
+#                                                        is confiture's YAML and
+#                                                        never holds a LazyEnv.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.
