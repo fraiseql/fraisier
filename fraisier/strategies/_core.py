@@ -456,8 +456,11 @@ class RebuildStrategy(Strategy):
             raw["database_url"] = db_url
         env = Environment.model_validate(raw)
 
-        # The database and its owner, as libpq reads the connection URL.
+        # The database and its owner, as libpq reads the connection URL. The
+        # re-baseline connects to it in process after the drop, so whatever
+        # would refuse that connection refuses it now.
         conn = PgConn.parse(env.database_url)
+        conn.check_in_process()
         db_name = conn.dbname
         db_owner = conn.user
 

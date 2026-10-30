@@ -963,3 +963,19 @@ class TestRebuildStrategyVersionStamp:
         """Empty app_version is treated as not-supplied; no raise."""
         strategy = RebuildStrategy(app_version="")
         assert strategy._app_version == ""
+
+
+class TestRebuildRefusesBeforeTheDrop:
+    """``reinit`` connects in process after the drop; its URL is checked first."""
+
+    def test_a_refused_migration_connection(self, _mock_rebuild_deps, monkeypatch):
+        mocks = _mock_rebuild_deps
+        mocks["builder_cls"].return_value.build_split.return_value = FakeSplitResult()
+        monkeypatch.setenv("PGTZ", "Asia/Tokyo")
+
+        with (
+            patch("fraisier.strategies._core.drop_db") as drop,
+            pytest.raises(ValueError, match="PGTZ is set"),
+        ):
+            RebuildStrategy().execute(Path("confiture.yaml"))
+        drop.assert_not_called()
