@@ -7,8 +7,9 @@ libpq client or confiture without going through one of the doors below.
 
 A door is where the URL is parsed by ``PgConn`` and the child's environment
 is built from it: ``_pg_cmd`` (env only), ``url_child`` / ``url_runner_child``
-(a password-free URL on argv), ``PreflightDatabase._conn_flags``, or
-``PgConn.child_env()`` itself.
+(a password-free URL on argv), ``PreflightDatabase._conn_flags``,
+``PgConn.child_env()`` itself, or ``config_child_env`` for a confiture child
+that reads its URLs from its config.
 
 An in-process connection has no child environment to build: libpq reads
 ``os.environ`` for every keyword its conninfo leaves out (#496). Its one door
@@ -39,7 +40,14 @@ LAUNCHERS = frozenset(
 )
 
 DOORS = frozenset(
-    {"_pg_cmd", "url_child", "url_runner_child", "_conn_flags", "child_env"}
+    {
+        "_pg_cmd",
+        "url_child",
+        "url_runner_child",
+        "_conn_flags",
+        "child_env",
+        "config_child_env",
+    }
 )
 
 #: ``module.connect`` calls that open a libpq connection in process.
@@ -61,17 +69,8 @@ EXEMPT: dict[str, str] = {
         "`pg_restore --schema-only --file OUT ARCHIVE` reads an archive and "
         "never connects"
     ),
-    "dbops/confiture.py:confiture_migrate": (
-        "confiture reads its connection from its own config; fraisier names no target"
-    ),
-    "dbops/confiture.py:confiture_rebuild": "as confiture_migrate",
-    "dbops/confiture.py:confiture_status": "as confiture_migrate",
     "dbops/drift.py:build_expected_schema": (
         "`confiture build --schema-only` writes a file and never connects"
-    ),
-    "dbops/drift.py:check_schema_drift": (
-        "confiture reads its connection from its own config; database_url is "
-        "only compared, never passed"
     ),
     "doctor.py:_check_confiture_version": "`confiture --version` never connects",
     "doctor.py:_confiture_cli_version": "`confiture --version` never connects",

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
 #: libpq keyword → environment variable, from ``PQconndefaults()`` on libpq
 #: 18. ``service`` is listed because libpq lists it; ``parse`` refuses it.
@@ -326,6 +327,44 @@ def in_process_refusal(environ: Mapping[str, str]) -> str | None:
         f"dropped: unset it (a session default belongs to the role or the "
         f"database: ALTER ROLE … SET)"
     )
+
+
+#: The keys of a confiture config that name a server its child connects to.
+CONFIG_URL_KEYS = ("database_url", "scratch_url")
+
+
+def config_child_env(confiture_config: Path) -> dict[str, str]:
+    """The environment for a confiture child that reads its URLs from a config.
+
+    :func:`scrubbed` ``os.environ`` and nothing else: the child connects to
+    every server :data:`CONFIG_URL_KEYS` names, so no one URL's
+    :meth:`PgConn.pg_env` may fill another's gaps (a scratch server must never
+    get the target's host or password). Each URL fraisier can read is refused
+    as a child of its own would be; a config it cannot read is left to the
+    child to report.
+
+    Raises:
+        ValueError: a URL the config names, or the environment, is refused.
+    """
+    import yaml
+
+    try:
+        raw = yaml.safe_load(confiture_config.read_text())
+    except OSError, yaml.YAMLError:
+        raw = None
+    for key in CONFIG_URL_KEYS:
+        url = raw.get(key) if isinstance(raw, dict) else None
+        if not isinstance(url, str):
+            continue
+        try:
+            PgConn.parse(url).check_environment()
+        except ValueError as exc:
+            msg = f"{confiture_config}: {key}: {exc}"
+            raise ValueError(msg) from None
+    refusal = environment_refusal(os.environ, {})
+    if refusal:
+        raise ValueError(refusal)
+    return scrubbed(os.environ)
 
 
 @functools.cache
