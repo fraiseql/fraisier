@@ -27,14 +27,12 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from pathlib import Path
+from typing import Any, Literal
 
+from fraisier.dbops._pgconn import config_child_env
 from fraisier.dbops._url import url_child
 from fraisier.dbops.confiture_executable import confiture_executable
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 TemplateMode = Literal["auto", "always", "never"]
 
@@ -176,12 +174,16 @@ def read_pending_preflight(
         "--scope",
         "pending",
     ]
-    # Without a URL confiture resolves its own from the config: fraisier names
-    # no target, so the child inherits our environment as it is.
-    env: dict[str, str] | None = None
+    # Without a URL confiture resolves its own from the config, which fraisier
+    # checks as it would its own.
     if database_url:
         url, env = url_child(database_url)
         cmd += ["--database-url", url]
+    else:
+        try:
+            env = config_child_env(Path(project_dir or ".") / confiture_config)
+        except ValueError as exc:
+            return None, str(exc)
     try:
         proc = subprocess.run(
             cmd,

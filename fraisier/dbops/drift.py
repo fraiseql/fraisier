@@ -61,7 +61,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fraisier.dbops._pgconn import PgConn
+from fraisier.dbops._pgconn import PgConn, config_child_env
 from fraisier.dbops.confiture_contract import (
     envelope_error_actionable,
     envelope_error_code,
@@ -692,9 +692,11 @@ def _build_error(build: subprocess.CompletedProcess[str]) -> str:
     return (build.stderr or build.stdout).strip()[:400]
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    cmd: list[str], env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     log.debug("post_migrate_check: %s", " ".join(cmd))
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
 
 
 #: confiture's refusal to compare a schema whose identifiers need quotes (#505).
@@ -899,6 +901,7 @@ def check_schema_drift(
     try:
         env_name = _env_for_build(project_dir, config)
         _check_urls_agree(config, database_url)
+        child_env = config_child_env(config)
         if _VIEW_REDEFINED in escalate and not _declares_scratch_url(config):
             return DriftResult(
                 passed=False,
@@ -992,7 +995,8 @@ def check_schema_drift(
                 str(expected),
                 "--format",
                 "json",
-            ]
+            ],
+            env=child_env,
         )
 
     try:

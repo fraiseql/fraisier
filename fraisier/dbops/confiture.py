@@ -28,7 +28,7 @@ from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
 from confiture.exceptions import ValidationError
 
-from fraisier.dbops._pgconn import PgConn
+from fraisier.dbops._pgconn import TRANSPORT_REFUSED, PgConn, config_child_env
 from fraisier.dbops.confiture_contract import (
     ConfitureFailureClass,
     classify_confiture_failure,
@@ -806,6 +806,16 @@ def _count_from_payload(stdout: str) -> int:
     return 0
 
 
+def _refused(exc: ValueError) -> ConfitureResult:
+    """A confiture child fraisier refused to start (:func:`config_child_env`)."""
+    return ConfitureResult(
+        success=False,
+        exit_code=TRANSPORT_REFUSED,
+        error=str(exc),
+        error_type=str(ConfitureFailureClass.INVALID_CONFIG),
+    )
+
+
 def _subprocess_failure(proc: subprocess.CompletedProcess[str]) -> ConfitureResult:
     """A failed confiture subprocess, classified by contract rather than prose.
 
@@ -877,7 +887,13 @@ def confiture_migrate(
     if auto_detect_baseline and direction == "up":
         cmd.append("--auto-detect-baseline")
 
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    try:
+        env = config_child_env(Path(cwd) / config_path)
+    except ValueError as exc:
+        return _refused(exc)
+    result = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, check=False, env=env
+    )
 
     if result.returncode != 0:
         return _subprocess_failure(result)
@@ -910,7 +926,13 @@ def confiture_rebuild(
     if drop_schemas:
         cmd.append("--drop-schemas")
 
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    try:
+        env = config_child_env(Path(cwd) / config_path)
+    except ValueError as exc:
+        return _refused(exc)
+    result = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, check=False, env=env
+    )
 
     if result.returncode != 0:
         return _subprocess_failure(result)
@@ -939,7 +961,13 @@ def confiture_status(  # pragma: no cover
         "json",
     ]
 
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    try:
+        env = config_child_env(Path(cwd) / config_path)
+    except ValueError as exc:
+        return StatusResult(exit_code=TRANSPORT_REFUSED, fatal=True, error=str(exc))
+    result = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, check=False, env=env
+    )
 
     status = StatusResult(exit_code=result.returncode, raw=result.stdout)
 
