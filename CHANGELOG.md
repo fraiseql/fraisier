@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "same database" check and the pgBackRest cluster-collision check parsed URLs
   their own way. They now read them as libpq does: escapes decoded, the last
   repeated parameter winning, `?dbname=` over the path, `?host=`/`?port=`
-  over the netloc, an omitted port being 5432. Each used to give a false
+  over the netloc, an omitted port being 5432, a `hostaddr` being where
+  libpq actually connects. Each used to give a false
   "same" or "different". A confiture config `database_url` that fraisier
   refuses makes `post_migrate_check` refuse instead of guessing.
 

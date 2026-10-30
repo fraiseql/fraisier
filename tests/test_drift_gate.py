@@ -1190,6 +1190,10 @@ class TestUrlsAreComparedAsLibpqReadsThem:
             ("postgresql:///other?dbname=app", "postgresql:///app"),
             ("postgresql://h/%61pp", "postgresql://h/app"),
             ("postgresql://h/app", "postgresql://h:5432/app"),
+            (
+                "postgresql://h/app?hostaddr=10.0.0.5",
+                "postgresql://h/app?hostaddr=10.0.0.5",
+            ),
         ],
     )
     def test_the_same_database(self, project: Path, configured, deployed) -> None:
@@ -1204,6 +1208,12 @@ class TestUrlsAreComparedAsLibpqReadsThem:
             ("postgresql://h:6543/app?port=5432", "postgresql://h:6543/app"),
             ("postgresql://h/app?host=elsewhere", "postgresql://h/app"),
             ("postgresql:///app?host=/a&host=/b", "postgresql:///app?host=/a"),
+            # libpq connects to hostaddr, not host: TCP to .5, not the socket.
+            ("postgresql:///app?hostaddr=10.0.0.5", "postgresql:///app"),
+            (
+                "postgresql://h/app?hostaddr=10.0.0.5",
+                "postgresql://h/app?hostaddr=10.0.0.6",
+            ),
         ],
     )
     def test_a_different_database(self, project: Path, configured, deployed) -> None:

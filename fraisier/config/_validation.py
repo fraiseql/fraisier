@@ -947,6 +947,9 @@ def _endpoint(url: Any) -> tuple[str, int] | None:
     here — this runs at load, before secrets are necessarily present — so it
     cannot prove a collision; nor can a URL ``PgConn`` refuses, which
     validation reports, or one naming several hosts.  Never guesses.
+
+    A ``hostaddr`` is the address libpq connects to, so it is the endpoint;
+    the host then only names the server for TLS and authentication.
     """
     if isinstance(url, LazyEnv) or not url:
         return None
@@ -956,9 +959,10 @@ def _endpoint(url: Any) -> tuple[str, int] | None:
         conn = PgConn.parse(str(url))
     except ValueError:
         return None
-    if not conn.host or "," in conn.host:
+    host = conn.params.get("hostaddr") or conn.host
+    if not host or "," in host:
         return None
-    return conn.host, conn.port or 5432
+    return host, conn.port or 5432
 
 
 def validate_restore_clusters(fraises: dict) -> None:

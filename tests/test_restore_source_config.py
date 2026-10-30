@@ -258,6 +258,12 @@ class TestEndpointsAreReadAsLibpqReadsThem:
             ("postgresql://postgres@%6Cocalhost:5433/postgres", ("localhost", 5433)),
             ("postgresql:///postgres?host=/run/postgresql", ("/run/postgresql", 5432)),
             ("postgresql://postgres@localhost/postgres", ("localhost", 5432)),
+            # libpq connects to hostaddr; host only names it for TLS and auth.
+            (
+                "postgresql://postgres@db.acme.test/postgres?hostaddr=10.0.0.5",
+                ("10.0.0.5", 5432),
+            ),
+            ("postgresql:///postgres?hostaddr=10.0.0.5&port=5433", ("10.0.0.5", 5433)),
         ],
     )
     def test_the_endpoint(self, url, endpoint) -> None:
@@ -270,6 +276,7 @@ class TestEndpointsAreReadAsLibpqReadsThem:
             "postgresql://postgres@localhost:5433/postgres?keepalives=1",
             "postgresql://postgres@localhost:5433",
             "postgresql://postgres@a,b/postgres",
+            "postgresql:///postgres?hostaddr=10.0.0.5,10.0.0.6",
         ],
     )
     def test_cannot_be_known(self, url) -> None:
