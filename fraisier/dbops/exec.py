@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import pwd
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _READONLY_PREFIXES = frozenset(["select", "explain", "show", "with", "table"])
 
@@ -56,3 +62,31 @@ def build_psql_argv(
 
     base += ["-c", f"{set_timeout} {sql}"]
     return base
+
+
+def operator_target(db_name: str, environ: Mapping[str, str] = os.environ) -> str:
+    """Where ``psql <db_name>`` connects, as libpq resolves it from *environ*.
+
+    Each value names the ``PG*`` variable it came from; a value with none is
+    libpq's default. An ambient ``PGSERVICE`` is named last: libpq reads its
+    service file before the variables. Never a password.
+    """
+
+    def field(keyword: str, var: str, default: str) -> str:
+        value = environ.get(var)
+        return f"{keyword}={value} ({var})" if value else f"{keyword}={default}"
+
+    parts = [field("host", "PGHOST", "(default socket)")]
+    if environ.get("PGHOSTADDR"):
+        parts.append(field("hostaddr", "PGHOSTADDR", ""))
+    parts += [
+        field("port", "PGPORT", "5432"),
+        field("user", "PGUSER", pwd.getpwuid(os.geteuid()).pw_name),
+        f"db={db_name}",
+    ]
+    if environ.get("PGSERVICE"):
+        parts.append(
+            f"service={environ['PGSERVICE']} (PGSERVICE): its service file "
+            "outranks the PG* above"
+        )
+    return " ".join(parts)
