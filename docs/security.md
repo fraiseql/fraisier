@@ -233,7 +233,14 @@ environment:
   from that environment. (`database.hooks.audit` connects in process with the
   pinned conninfo, like every other in-process connection.)
 - **`fraisier db exec` with no `admin_url`** connects by database name through
-  the operator's own environment, as their `psql` would.
+  the operator's own environment, as their `psql` would, and first prints to
+  stderr the target libpq resolves (host or socket, port, user, database) and
+  which of those came from a `PG*` variable; never a password. Over `ssh:` the
+  remote login's environment decides. On purpose: measured on a socket-only
+  host, dropping the `PG*` variables silently retargets an operator who
+  exported `PGHOST`/`PGUSER` (to their OS user on the default socket, with no
+  error), and refusing them breaks the command for anyone with one exported.
+  Set `database.admin_url` to pin the target.
 - **The scaffolded `db_deploy.sh` and `backup.sh`** run `confiture migrate`
   and `pg_dump` in whatever shell runs them.
 

@@ -116,7 +116,9 @@ def db_exec(
 ) -> None:
     """Execute a read-only SQL statement on a remote or local database.
 
-    Connects using the database.admin_url from fraises.yaml.
+    Connects using the database.admin_url from fraises.yaml. Without one,
+    psql connects to database.name as the operator's own psql would, and the
+    target libpq resolves is printed to stderr first.
     Statements are always run with statement_timeout applied.
     Only SELECT, EXPLAIN, SHOW, WITH, and TABLE are permitted.
 
@@ -130,7 +132,7 @@ def db_exec(
     import subprocess
 
     from fraisier.dbops._url import resolve_db_url, url_child, url_runner_child
-    from fraisier.dbops.exec import build_psql_argv, is_readonly_sql
+    from fraisier.dbops.exec import build_psql_argv, is_readonly_sql, operator_target
     from fraisier.runners import runner_from_config
 
     if sql and sql_file:
@@ -193,6 +195,19 @@ def db_exec(
     if timeout <= 0:
         console.print("[red]Error:[/red] --timeout must be a positive integer")
         raise SystemExit(1)
+
+    if pg_env is None:
+        # The operator's own psql: say where libpq will take it (#491, #493).
+        prefix = "fraisier db exec: no admin_url; running psql"
+        if ssh_config:
+            host = ssh_config.get("host", "<host>")
+            target = (
+                f"on {host} as the remote login: db={db_target} (host, port "
+                "and user come from that login's environment)"
+            )
+        else:
+            target = f"as the operator: {operator_target(db_target)}"
+        click.echo(f"{prefix} {target}", err=True)
 
     if env.lower() == "production":
         console.print(

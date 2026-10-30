@@ -344,3 +344,115 @@ class TestDbExecEdgeCases:
             main, ["db", "exec", "api", "-e", "staging", "--timeout", "-5", "SELECT 1"]
         )
         assert result.exit_code != 0
+
+
+_PREFIX = "fraisier db exec: no admin_url; running psql as the operator: "
+
+
+@pytest.fixture
+def name_only_config(monkeypatch):
+    """A local environment naming only the database: no admin_url."""
+    for var in ("PGHOST", "PGHOSTADDR", "PGPORT", "PGUSER", "PGSERVICE"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = MagicMock()
+    cfg.get_fraise.return_value = {"type": "api"}
+    cfg.get_fraise_environment.return_value = {
+        "type": "api",
+        "database": {"name": _DB_NAME},
+    }
+    with patch("fraisier.cli.main.get_config", return_value=cfg):
+        yield cfg
+
+
+def _exec_name_only(runner):
+    with patch(
+        "subprocess.run", return_value=MagicMock(stdout="1\n", returncode=0)
+    ) as run:
+        result = runner.invoke(main, ["db", "exec", "api", "-e", "staging", "SELECT 1"])
+    return result, run
+
+
+class TestDbExecWithoutAdminUrl:
+    """With no admin_url, psql runs in the operator's own environment (#491,
+    #493), and says on stderr where libpq will take it."""
+
+    def test_the_target_line_names_what_came_from_pg_variables(
+        self, runner, name_only_config, monkeypatch
+    ):
+        monkeypatch.setenv("PGHOST", "/run/acme")
+        monkeypatch.setenv("PGUSER", "acme_ro")
+
+        result, _ = _exec_name_only(runner)
+
+        assert result.exit_code == 0
+        assert result.stderr.splitlines()[0] == (
+            f"{_PREFIX}host=/run/acme (PGHOST) port=5432 "
+            f"user=acme_ro (PGUSER) db={_DB_NAME}"
+        )
+
+    def test_with_no_pg_variables_it_names_libpqs_defaults(
+        self, runner, name_only_config
+    ):
+        import os
+        import pwd
+
+        result, _ = _exec_name_only(runner)
+
+        os_user = pwd.getpwuid(os.geteuid()).pw_name
+        assert result.stderr.splitlines()[0] == (
+            f"{_PREFIX}host=(default socket) port=5432 user={os_user} db={_DB_NAME}"
+        )
+
+    def test_a_hostaddr_and_a_service_are_named(
+        self, runner, name_only_config, monkeypatch
+    ):
+        monkeypatch.setenv("PGHOSTADDR", "192.0.2.1")
+        monkeypatch.setenv("PGPORT", "6543")
+        monkeypatch.setenv("PGSERVICE", "acme")
+
+        result, _ = _exec_name_only(runner)
+
+        line = result.stderr.splitlines()[0]
+        assert " hostaddr=192.0.2.1 (PGHOSTADDR) port=6543 (PGPORT) " in line
+        assert line.endswith(
+            " service=acme (PGSERVICE): its service file outranks the PG* above"
+        )
+
+    def test_nothing_secret_is_printed(self, runner, name_only_config, monkeypatch):
+        monkeypatch.setenv("PGPASSWORD", "s3cret")
+        monkeypatch.setenv("PGHOST", "/run/acme")
+
+        result, _ = _exec_name_only(runner)
+
+        assert "s3cret" not in result.output
+        assert "PGPASSWORD" not in result.output
+
+    def test_the_line_is_not_on_stdout(self, runner, name_only_config):
+        result, _ = _exec_name_only(runner)
+
+        assert _PREFIX not in result.stdout
+
+    def test_psql_still_inherits_the_environment(self, runner, name_only_config):
+        _, run = _exec_name_only(runner)
+
+        assert run.call_args.kwargs["env"] is None
+
+    def test_over_ssh_it_says_the_remote_login_decides(self, runner, name_only_config):
+        name_only_config.get_fraise_environment.return_value = {
+            "type": "api",
+            "database": {"name": _DB_NAME},
+            "ssh": {"host": "prod.example.com", "user": "deploy"},
+        }
+        with patch(
+            "fraisier.runners.SSHRunner.run",
+            return_value=MagicMock(stdout="1\n", returncode=0),
+        ):
+            result = runner.invoke(
+                main, ["db", "exec", "api", "-e", "staging", "SELECT 1"]
+            )
+
+        assert result.stderr.splitlines()[0] == (
+            "fraisier db exec: no admin_url; running psql on prod.example.com "
+            f"as the remote login: db={_DB_NAME} (host, port and user come from "
+            "that login's environment)"
+        )
