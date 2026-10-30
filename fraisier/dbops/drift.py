@@ -373,17 +373,24 @@ def _routine_schemas(expected: Path) -> tuple[str, ...]:
     return tuple(sorted(found | {_DEFAULT_SCHEMA}))
 
 
-def _connection_target(url: str) -> tuple[str, str, str]:
-    """``(host, port, dbname)`` *url* connects to, as libpq reads it.
+def _connection_target(url: str) -> tuple[str, str, str, str]:
+    """``(host, hostaddr, port, dbname)`` *url* connects to, as libpq reads it.
 
     An omitted host is libpq's default socket (``""``), an omitted port 5432:
-    no child fraisier starts sees ``PGHOST`` or ``PGPORT``.
+    no child fraisier starts sees ``PGHOST`` or ``PGPORT``. ``hostaddr`` is
+    where libpq actually connects when it is given, so two URLs naming one
+    host through different addresses are different targets.
 
     Raises:
         ValueError: ``PgConn`` refuses *url*.
     """
     conn = PgConn.parse(url)
-    return conn.host or "", conn.params.get("port", "5432"), conn.dbname
+    return (
+        conn.host or "",
+        conn.params.get("hostaddr", ""),
+        conn.params.get("port", "5432"),
+        conn.dbname,
+    )
 
 
 def _declares_scratch_url(confiture_config: Path) -> bool:
