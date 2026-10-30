@@ -20,6 +20,8 @@ mkdir -p "${BACKUP_DIR}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
+{% include "core/_pg_target.sh.j2" %}
+
 # Prune one database's dumps: exempt the newest KEEP_MINIMUM, then apply the
 # age rule to the rest. Exempting BEFORE the age test rather than after is
 # what makes "the newest three survive" true in the only case that matters,
@@ -53,6 +55,7 @@ prune_with_floor() {
 # Backup {{ fraise.name }}
 log "Backing up database: {{ fraise.name }}"
 DUMP_FILE="${BACKUP_DIR}/{{ fraise.name }}_${TIMESTAMP}.sql.gz"
+pg_target pg_dump {{ fraise.name }} localhost {{ fraise.name }}
 if pg_dump -h localhost -U {{ fraise.name }} {{ fraise.name }} | gzip > "${DUMP_FILE}"; then
     log "  OK: ${DUMP_FILE} ($(du -h "${DUMP_FILE}" | cut -f1))"
 else

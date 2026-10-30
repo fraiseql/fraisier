@@ -1,0 +1,53 @@
+# Where a libpq client started from this shell connects, on stderr: each
+# value names the PG* variable that decided it, and no password is printed.
+# A manual run reads the operator's PG*; backup.service runs with systemd's.
+#   pg_target <client> <db> [host given on argv] [user given on argv]
+pg_target() {
+    local line
+    if [ -n "${3:-}" ]; then
+        line="host=$3"
+    elif [ -n "${PGHOST:-}" ]; then
+        line="host=${PGHOST} (PGHOST)"
+    else
+        line="host=(default socket)"
+    fi
+    if [ -n "${PGHOSTADDR:-}" ]; then
+        line+=" hostaddr=${PGHOSTADDR} (PGHOSTADDR)"
+    fi
+    if [ -n "${PGPORT:-}" ]; then
+        line+=" port=${PGPORT} (PGPORT)"
+    else
+        line+=" port=5432"
+    fi
+    if [ -n "${4:-}" ]; then
+        line+=" user=$4"
+    elif [ -n "${PGUSER:-}" ]; then
+        line+=" user=${PGUSER} (PGUSER)"
+    else
+        line+=" user=$(id -un)"
+    fi
+    line+=" db=$2"
+    if [ -n "${PGSERVICE:-}" ]; then
+        line+=" service=${PGSERVICE} (PGSERVICE): its service file outranks the PG* above"
+    fi
+    echo "$1: ${line}" >&2
+}
+
+# The PG* variables set in this shell, for a client whose URL decides first:
+# names and values, a password's value never.
+#   pg_ambient <what>
+pg_ambient() {
+    local var set=()
+    for var in $(compgen -e | grep '^PG' | sort); do
+        if [ "${var}" = "PGPASSWORD" ]; then
+            set+=("PGPASSWORD=(set)")
+        else
+            set+=("${var}=${!var}")
+        fi
+    done
+    if [ -z "${set[*]:-}" ]; then
+        echo "$1: the URL in its confiture config decides; no PG* variable is set" >&2
+    else
+        echo "$1: the URL in its confiture config decides; what it leaves out comes from ${set[*]}" >&2
+    fi
+}

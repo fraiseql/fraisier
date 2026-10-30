@@ -10,12 +10,15 @@ ERRORS=0
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
+{% include "core/_pg_target.sh.j2" %}
+
 log "Running database migrations (environment: ${ENVIRONMENT})"
 
 {% for fraise in fraises %}
 {% if not fraise.get('external_db', false) %}
 # Migrate {{ fraise.name }}
 log "Migrating: {{ fraise.name }}"
+pg_ambient "confiture migrate {{ fraise.name }}"
 if (cd "${PROJECT_DIR}" && uv run confiture migrate --database {{ fraise.name }} --environment "${ENVIRONMENT}"); then
     log "  OK: {{ fraise.name }}"
 else
