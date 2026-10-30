@@ -26,9 +26,8 @@ from fraisier.config.schema import (
     TIMER_FAMILIES,
     RetainEntry,
 )
-from fraisier.dbops._strategies import ADMIN_STRATEGIES
+from fraisier.dbops._strategies import ADMIN_STRATEGIES, TEMPLATE_MODES
 from fraisier.dbops.operations import TEMPLATE_STRATEGIES
-from fraisier.dbops.template_rule import TEMPLATE_MODES
 from fraisier.errors import ConfigurationError, ValidationError
 
 _GIT_URL_RE = re.compile(

@@ -28,17 +28,14 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from fraisier.dbops._pgconn import config_child_env
 from fraisier.dbops._url import url_child
 from fraisier.dbops.confiture_executable import confiture_executable
 
-TemplateMode = Literal["auto", "always", "never"]
-
-#: The values ``restore.template`` accepts.
-TEMPLATE_MODES: tuple[TemplateMode, ...] = ("auto", "always", "never")
-
+if TYPE_CHECKING:
+    from fraisier.dbops._strategies import TemplateMode
 
 #: Issues that mean ``migrate down`` cannot undo the migration they name: the
 #: set confiture 1.40 builds ``reversible`` from.

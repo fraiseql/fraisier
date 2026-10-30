@@ -15,7 +15,6 @@ from fraisier.dbops.confiture import migrate_down, migrate_up
 from fraisier.dbops.operations import DEFAULT_TEMPLATE_STRATEGY
 from fraisier.dbops.template_rule import (
     TemplateDecision,
-    TemplateMode,
     decide_template,
     read_pending_preflight,
 )
@@ -26,6 +25,7 @@ from ._restore_sources import DumpSource, PgBackRestSource
 if TYPE_CHECKING:
     from fraisier.config._lazy_env import LazyEnv
     from fraisier.config.restore_source import PgBackRestSpec
+    from fraisier.dbops._strategies import TemplateMode
     from fraisier.dbops.receipt import ActuationCheck
 
     from ._restore_sources import PreparedSource, RestoreSource
