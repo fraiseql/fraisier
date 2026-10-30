@@ -1194,6 +1194,11 @@ class TestUrlsAreComparedAsLibpqReadsThem:
                 "postgresql://h/app?hostaddr=10.0.0.5",
                 "postgresql://h/app?hostaddr=10.0.0.5",
             ),
+            ("postgresql://127.0.0.1/app", "postgresql:///app?hostaddr=127.0.0.1"),
+            (
+                "postgresql://a.acme.test/app?hostaddr=10.0.0.5",
+                "postgresql://b.acme.test/app?hostaddr=10.0.0.5",
+            ),
         ],
     )
     def test_the_same_database(self, project: Path, configured, deployed) -> None:

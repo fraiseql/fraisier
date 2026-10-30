@@ -183,13 +183,15 @@ outside the cases [listed below](#what-the-url-does-not-cover):
 - **An ambient `PGTZ`, `PGDATESTYLE` or `PGGEQO` is refused.** libpq sends
   them as startup settings, with no keyword a connection could pin them by,
   and an ambient value outranks even `options`. A child drops them; a
-  connection fraisier opens itself refuses them, as do `fraisier validate`
-  and the deploy before anything runs. A session default belongs to the role
+  connection fraisier opens itself refuses them, and the deploy does before
+  anything runs (`fraisier validate` too, for a URL written in
+  `fraises.yaml`). A session default belongs to the role
   or the database (`ALTER ROLE … SET timezone`).
 - **An ambient `PGSERVICE` is refused**, whatever its value. libpq reads it
   even when every other keyword is given, and a service file fills whatever
-  is left. `fraisier validate`, `doctor` and the deploy name it before
-  anything runs: unset it, and put the connection in the URL. A
+  is left. The deploy names it before anything runs, as do `doctor` and
+  `fraisier validate` for a URL written in `fraises.yaml`: unset it, and put
+  the connection in the URL. A
   `PGSERVICE` in the remote login's environment on a host reached over `ssh:`
   is still dropped there.
 - **A transport-security policy in the environment fails closed.** These
@@ -198,7 +200,8 @@ outside the cases [listed below](#what-the-url-does-not-cover):
   `PGSSLMINPROTOCOLVERSION`, `PGSSLMAXPROTOCOLVERSION`, `PGGSSENCMODE`,
   `PGCHANNELBINDING`, `PGKRBSRVNAME`, `PGGSSLIB`. But an operator who exported
   one meant a policy. So when one is set and a TCP URL does not set that
-  keyword itself, `fraisier validate` and the deploy refuse it, whatever the
+  keyword itself, the deploy refuses it (and `fraisier validate`, for a URL
+  written in `fraises.yaml`), whatever the
   value, before anything runs. The error names the fix, for example
   `put it in the URL (?sslmode=verify-full)`. A child launched over `ssh:`
   makes the same check against the remote login's environment and exits 123.
@@ -229,8 +232,10 @@ environment:
   environment: confiture 1.43 gives it no value for them.
 - **`fraisier db exec` with no `admin_url`** connects by database name through
   the operator's own environment, as their `psql` would.
-- **The scaffolded `db_deploy.sh`** runs `confiture migrate` in whatever shell
-  runs it.
+- **`fraisier validate`'s connectivity probe** runs `pg_isready -h … -p …`
+  with the environment it was started in.
+- **The scaffolded `db_deploy.sh` and `backup.sh`** run `confiture migrate`
+  and `pg_dump` in whatever shell runs them.
 
 To see who each URL actually connects as, run `fraisier doctor`: the
 `database_connected_as` check prints one line per role, `user to database on

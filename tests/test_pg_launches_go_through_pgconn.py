@@ -244,11 +244,27 @@ class _Imported:
     modules: frozenset[str]
     connects: frozenset[str]
     pools: frozenset[str]
+    migrators: frozenset[str]
+
+
+#: confiture's ways into a migration session, which must be given the door.
+CONFITURE_SESSIONS = frozenset({"Migrator", "MigratorSession"})
 
 
 def _imported(tree: ast.Module) -> _Imported:
     modules, connects, pools = set(CONNECT_MODULES), set(), set(POOLS)
+    migrators = set(CONFITURE_SESSIONS)
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.split(".")[0] == "confiture"
+        ):
+            migrators.update(
+                alias.asname
+                for alias in node.names
+                if alias.name in CONFITURE_SESSIONS and alias.asname
+            )
         if isinstance(node, ast.Import):
             for alias in node.names:
                 package = alias.name.split(".")[0]
@@ -265,7 +281,9 @@ def _imported(tree: ast.Module) -> _Imported:
                     modules.add(local)
                 elif alias.name in POOLS:
                     pools.add(local)
-    return _Imported(frozenset(modules), frozenset(connects), frozenset(pools))
+    return _Imported(
+        frozenset(modules), frozenset(connects), frozenset(pools), frozenset(migrators)
+    )
 
 
 def _opens_a_connection(node: ast.AST, names: _Imported) -> bool:
@@ -314,14 +332,22 @@ def _overrides(call: ast.Call) -> bool:
     return False
 
 
-def _confiture_session_violation(call: ast.Call) -> str | None:
-    """``Migrator.from_config`` must open its connection through the door."""
+def _confiture_session_violation(call: ast.Call, names: _Imported) -> str | None:
+    """A confiture session must open its connection through the door.
+
+    ``Migrator.from_config(...)`` and ``MigratorSession(...)`` take
+    ``connection_factory=``; confiture's ``create_connection`` is the bare
+    URL's connect itself.
+    """
     func = call.func
-    if not (
+    if _name(func) == "create_connection":
+        return "connects through confiture's create_connection, on the bare URL"
+    opens_a_session = (
         isinstance(func, ast.Attribute)
         and func.attr == "from_config"
-        and _name(func.value) == "Migrator"
-    ):
+        and _name(func.value) in names.migrators
+    ) or (isinstance(func, ast.Name) and func.id in names.migrators - {"Migrator"})
+    if not opens_a_session:
         return None
     factory = next(
         (k.value for k in call.keywords if k.arg == "connection_factory"), None
@@ -338,7 +364,7 @@ def _scope_violation(scope: ast.AST, names: _Imported) -> str | None:
     for call in nodes:
         if not isinstance(call, ast.Call):
             continue
-        if why := _confiture_session_violation(call):
+        if why := _confiture_session_violation(call, names):
             return why
         if not _opens_a_connection(call, names):
             continue
@@ -469,6 +495,22 @@ def test_every_in_process_connect_goes_through_conninfo():
             "def f(e):\n    Migrator.from_config(e, "
             "connection_factory=migration_connection)\n",
             False,
+        ),
+        (
+            "from confiture.core.migrator import Migrator as M\n"
+            "def f(e):\n    M.from_config(e)\n",
+            True,
+        ),
+        ("def f(e, d):\n    MigratorSession(e, d)\n", True),
+        (
+            "def f(e, d):\n    MigratorSession(e, d, "
+            "connection_factory=migration_connection)\n",
+            False,
+        ),
+        (
+            "from confiture.core.connection import create_connection\n"
+            "def f(u):\n    create_connection(u)\n",
+            True,
         ),
     ],
 )

@@ -71,7 +71,7 @@ class TestTheMigrationConnection:
         strategy, source, service_manager = _strategy()
         monkeypatch.setenv("PGSSLMODE", "verify-full")
 
-        with pytest.raises(DatabaseError, match="sslmode=verify-full"):
+        with pytest.raises(ValueError, match=r"database_url: .*sslmode=verify-full"):
             strategy.execute(config, database_url="postgresql://db.acme.test/staging")
         source.prepare.assert_not_called()
         assert service_manager.method_calls == []
@@ -88,20 +88,38 @@ class TestTheMigrationConnection:
         strategy, source, _ = _strategy()
         monkeypatch.setenv("PGDATESTYLE", "SQL, DMY")
 
-        with pytest.raises(DatabaseError, match="PGDATESTYLE"):
+        with pytest.raises(ValueError, match="database_url: PGDATESTYLE"):
             strategy.execute(
                 config, database_url="postgresql:///staging?host=/nonexistent/acme"
             )
         source.prepare.assert_not_called()
 
-    def test_the_step_8_child_when_the_deploy_names_no_url(self, config):
-        """``template: auto`` runs ``migrate preflight`` on the config's URLs."""
+    def test_a_scratch_url_the_restore_never_reads_is_not_checked(self, config):
+        """Neither step 8's child nor the migration connects to it."""
         config.write_text(
             "name: staging\ndatabase_url: postgresql:///staging?host=/nonexistent/acme\n"
             "scratch_url: postgresql:///scratch?keepalives=1\n"
         )
         strategy, source, _ = _strategy(template="auto")
+        source.prepare.side_effect = RuntimeError("reached prepare")
 
-        with pytest.raises(DatabaseError, match=r"scratch_url.*keepalives"):
+        with pytest.raises(RuntimeError, match="reached prepare"):
             strategy.execute(config)
+
+    def test_a_config_that_is_not_yaml(self, config):
+        config.write_text("name: [staging\n")
+        strategy, source, _ = _strategy()
+
+        with pytest.raises(DatabaseError, match="before anything is dropped"):
+            strategy.execute(config)
+        source.prepare.assert_not_called()
+
+    def test_an_envvar_database_url_is_resolved(self, config, monkeypatch):
+        from fraisier.config._lazy_env import LazyEnv
+
+        monkeypatch.setenv("ACME_DB_URL", "postgresql:///staging?keepalives=1")
+        strategy, source, _ = _strategy()
+
+        with pytest.raises(ValueError, match=r"database_url.*keepalives"):
+            strategy.execute(config, database_url=LazyEnv("ACME_DB_URL"))
         source.prepare.assert_not_called()
