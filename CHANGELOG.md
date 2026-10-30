@@ -79,6 +79,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > run. A session default belongs to the role or the database
 > (`ALTER ROLE … SET timezone`). Run `fraisier validate` to check.
 
+> ⚠️ **Upgrade note.** `FRAISIER_DB_URL` (the history database) and a
+> confiture config's `database_url` and `scratch_url` are now read by
+> `PgConn`, as `fraises.yaml`'s URLs already were. One that names no
+> database, or carries a keyword libpq has no environment variable for
+> (`keepalives`, `sslpassword`, `tcp_user_timeout`,
+> `fallback_application_name`, …), is refused where v0.95.0 connected:
+> `fraisier db-check` and the history migrations for `FRAISIER_DB_URL`, the
+> deploy's migration and the confiture children for a confiture config. Drop
+> the keyword, or name the database.
+
 - **confiture 1.43** (`fraiseql-confiture>=1.43.0,<1.44`). 1.43 adds
   `RestoreOptions.env`
   ([fraiseql/confiture#792](https://github.com/fraiseql/confiture/issues/792)),
