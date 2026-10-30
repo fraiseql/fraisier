@@ -153,7 +153,7 @@ def resolve_db_url(
         return None
     url = to_str(value)
     try:
-        PgConn.parse(url).check_environment()
+        PgConn.parse(url).check_in_process()
     except ValueError as exc:
         msg = f"{role}: {exc}"
         raise ValueError(msg) from None

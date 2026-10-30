@@ -44,7 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyword is given, a service file fills whatever is left, and an empty
   `service=` names a service called `""`. `fraisier validate`, `doctor` and
   the deploy refuse it before anything runs, and name the fix: unset it, and
-  put the connection in the URL. A `PGSERVICE` in the remote login's
+  put the connection in the URL.
+- **An ambient `PGTZ`, `PGDATESTYLE` or `PGGEQO` is refused** for the same
+  reason. libpq sends them as startup settings, with no keyword a connection
+  could pin them by, and an ambient value outranks even `options`. Children
+  drop them with every other `PG*`; a connection fraisier opens itself
+  cannot. A `PGSERVICE` in the remote login's
   environment on an `ssh:` host is still dropped there.
 - **Restore's own children drop ambient `PG*` too.** pg_restore, its
   `pg_restore -l` listing, the post-load `ANALYZE` and the deferred matview
@@ -59,9 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 > ⚠️ **Upgrade note.** If the deploy user's environment, a unit's
-> `Environment=`, or the shell running `fraisier` exports `PGSERVICE`, unset
-> it: v0.95.0 ignored it, and v0.96.0 refuses to run. Run `fraisier validate`
-> to check.
+> `Environment=`, or the shell running `fraisier` exports `PGSERVICE`, `PGTZ`,
+> `PGDATESTYLE` or `PGGEQO`, unset it: v0.95.0 ignored `PGSERVICE` and let the
+> other three reach the connections it opened itself, and v0.96.0 refuses to
+> run. A session default belongs to the role or the database
+> (`ALTER ROLE … SET timezone`). Run `fraisier validate` to check.
 
 - **confiture 1.43** (`fraiseql-confiture>=1.43.0,<1.44`). 1.43 adds
   `RestoreOptions.env`
