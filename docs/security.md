@@ -241,8 +241,19 @@ environment:
   exported `PGHOST`/`PGUSER` (to their OS user on the default socket, with no
   error), and refusing them breaks the command for anyone with one exported.
   Set `database.admin_url` to pin the target.
-- **The scaffolded `db_deploy.sh` and `backup.sh`** run `confiture migrate`
-  and `pg_dump` in whatever shell runs them.
+- **The scaffolded `backup.sh`, `db_deploy.sh` and `db_reset.sh`** run
+  `pg_dump`, `confiture migrate` and `dropdb`/`createdb` in whatever shell
+  runs them. `backup.service` starts `backup.sh` with systemd's environment,
+  which carries no `PG*` unless `DefaultEnvironment=` or `systemctl
+  set-environment` put one there; a manual run reads the operator's. Each
+  script prints on stderr where its client connects and which part a `PG*`
+  variable decided (`backup.sh`'s `-h localhost` loses to a `PGHOSTADDR`, and
+  the line shows it), never a password; `db_deploy.sh` can only list the
+  `PG*` that fill what its confiture URL leaves out. `db_reset.sh` refuses to
+  run while `PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGSERVICE` or `PGDATABASE` is
+  set, even empty, unless `FRAISIER_RESET_ALLOW_PG_ENV=1` is exported, and
+  drops a database only once its name is typed back or given as
+  `--yes=<dbname>`.
 
 To see who each URL actually connects as, run `fraisier doctor`: the
 `database_connected_as` check prints one line per role, `user to database on

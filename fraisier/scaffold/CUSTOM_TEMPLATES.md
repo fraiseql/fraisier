@@ -62,6 +62,7 @@ core/
   service.j2               # per-fraise systemd service unit
   install.sh.j2            # install script
   backup.sh.j2             # backup script
+  _pg_target.sh.j2         # shell helpers the database scripts include
   confiture.yaml.j2        # confiture config
   sudoers.j2               # sudoers drop-in
   ...

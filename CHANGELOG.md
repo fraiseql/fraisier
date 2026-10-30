@@ -68,11 +68,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   migration, and the deploy refuses one `PgConn` refuses, naming the hook
   but never the URL. `audit` connects with the pinned conninfo. `!envvar` in
   a hook block is resolved (it never was).
+- **`fraisier db exec` with no `admin_url` names its target.** It runs psql
+  on `database.name` in the operator's own environment, on purpose, and now
+  first prints to stderr the host or socket, port, user and database libpq
+  resolves, tagging each one a `PG*` variable decided. Never a password.
+- **The scaffolded database scripts name their target, and `db_reset.sh`
+  guards its drop.** `backup.sh`, `db_deploy.sh` and `db_reset.sh` print the
+  same line on stderr. `db_reset.sh` refuses to run while `PGHOST`,
+  `PGHOSTADDR`, `PGPORT`, `PGSERVICE` or `PGDATABASE` is set, unless
+  `FRAISIER_RESET_ALLOW_PG_ENV=1`, and drops each database only once its name
+  is typed back or given as `--yes=<dbname>`.
 - Still outside: the `backup` hook's `pg_dump`, which confiture starts with a
   copy of the environment
   ([fraiseql/confiture#799](https://github.com/fraiseql/confiture/issues/799)),
-  `fraisier db exec` with no `admin_url`, and the scaffolded `db_deploy.sh`
-  and `backup.sh`. See "What the URL does not cover" in
+  `fraisier db exec` with no `admin_url`, and a manual run of the scaffolded
+  scripts, which read the shell's `PG*`. See "What the URL does not cover" in
   `docs/security.md`.
 - **An ambient `PGSERVICE` is refused**, whatever its value. A connection
   fraisier opens itself cannot drop it: libpq reads it even when every other
@@ -126,6 +136,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > deploy before the migration, where v0.95.0 handed it to confiture unread.
 > That includes a literal `"${DATABASE_URL}"`: it was never expanded in that
 > block, so the hook could not connect. Write `!envvar DATABASE_URL`.
+
+> ⚠️ **Upgrade note.** A re-rendered `db_reset.sh` asks for each database's
+> name instead of `yes`, and refuses to run while `PGHOST`, `PGHOSTADDR`,
+> `PGPORT`, `PGSERVICE` or `PGDATABASE` is set. A script that piped `yes`
+> into it passes `--yes=<dbname>` for each database instead; export
+> `FRAISIER_RESET_ALLOW_PG_ENV=1` to reset with one of those set.
 
 > ⚠️ **Upgrade note.** A `restore_migrate` environment whose `admin_url`
 > names more than one host (`postgresql://h1,h2/…`) no longer loads: a
