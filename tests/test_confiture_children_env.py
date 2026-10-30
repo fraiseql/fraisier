@@ -96,15 +96,8 @@ def test_an_ambient_service_is_refused_before_the_launch(config, monkeypatch, si
 
 
 @pytest.mark.parametrize("site", WRAPPERS)
-@pytest.mark.parametrize(
-    "line",
-    [
-        "database_url: postgresql:///acme_db?keepalives=1",
-        "scratch_url: postgresql://db.acme.test/scratch?keepalives=1",
-    ],
-)
-def test_a_config_url_fraisier_refuses_is_not_launched(config, site, line):
-    config.write_text(f"name: production\n{line}\n")
+def test_a_config_url_fraisier_refuses_is_not_launched(config, site):
+    config.write_text("name: production\ndatabase_url: postgresql:///a?keepalives=1\n")
     with patch("subprocess.run", return_value=_proc()) as run:
         outcome = _wrappers(config)[site]()
 
@@ -113,20 +106,29 @@ def test_a_config_url_fraisier_refuses_is_not_launched(config, site, line):
 
 
 @pytest.mark.parametrize("site", WRAPPERS)
-@pytest.mark.parametrize("key", ["database_url", "scratch_url"])
-def test_a_tcp_url_would_lose_an_ambient_transport_policy(
-    config, monkeypatch, site, key
-):
+def test_a_tcp_url_would_lose_an_ambient_transport_policy(config, monkeypatch, site):
     """``scrubbed`` drops ``PGSSLMODE``; a TCP URL the child reads must not
     then connect without the policy the operator exported."""
-    other = "database_url: postgresql:///acme_db\n" if key == "scratch_url" else ""
-    config.write_text(f"name: production\n{other}{key}: postgresql://db.acme.test/x\n")
+    config.write_text("name: production\ndatabase_url: postgresql://db.acme.test/x\n")
     monkeypatch.setenv("PGSSLMODE", "verify-full")
     with patch("subprocess.run", return_value=_proc()) as run:
         outcome = _wrappers(config)[site]()
 
     run.assert_not_called()
     assert "sslmode=verify-full" in str(outcome)
+
+
+@pytest.mark.parametrize("site", WRAPPERS)
+def test_a_scratch_url_a_wrapper_never_reads_is_not_checked(config, site):
+    """Only the drift gate's child connects to ``scratch_url``."""
+    config.write_text(
+        "name: production\ndatabase_url: postgresql:///acme_db\n"
+        "scratch_url: postgresql://localhost\n"
+    )
+    with patch("subprocess.run", return_value=_proc()) as run:
+        _wrappers(config)[site]()
+
+    run.assert_called_once()
 
 
 @pytest.mark.usefixtures("ambient")

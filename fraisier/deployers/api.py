@@ -730,6 +730,35 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             },
         )
 
+    def _refuse_a_binding_gates_child(self, confiture_config: Path) -> None:
+        """Refuse now what a binding drift gate would refuse after the migration.
+
+        The gate's ``migrate validate`` child also connects to the config's
+        ``scratch_url``, which nothing before it reads. A gate that only
+        reports (undeclared, or ``on_critical: warn``) still reports it after.
+
+        Raises:
+            DeploymentError: the gate is binding and its child is refused.
+        """
+        from fraisier.post_migrate_check import load_post_migrate_check
+
+        gate = load_post_migrate_check(self.database_config)
+        if not (gate.enabled and gate.declared and gate.on_critical == "fail"):
+            return
+        from fraisier.dbops._pgconn import CONFIG_URL_KEYS, config_child_env
+
+        try:
+            config_child_env(confiture_config, CONFIG_URL_KEYS)
+        except ValueError as exc:
+            raise DeploymentError(
+                f"post_migrate_check could not run after the migration, so the "
+                f"deploy stops before it: {exc}",
+                context={
+                    "fraise": self.fraise_name,
+                    "environment": self.environment,
+                },
+            ) from None
+
     def _migrated_url(self) -> str | None:
         """The URL of the database this deploy migrated, or ``None`` if unreadable.
 
@@ -1321,6 +1350,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         # database than was migrated would report on the wrong schema.
         self._migrated_config = confiture_config
         self._migrated_database_url = database_url
+        self._refuse_a_binding_gates_child(confiture_config)
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
         hooks_config = self.database_config.get("hooks")

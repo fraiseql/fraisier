@@ -339,3 +339,39 @@ class TestOneConfigSnapshot:
             _deploy(_deployer(app, enabled=True))
 
         assert check.call_args.kwargs["project_dir"] == app
+
+
+class TestAGateChildRefusalStopsTheDeployBeforeTheMigration:
+    """The gate's child connects to the config's ``scratch_url``, which nothing
+    before it reads. A binding gate refused only after ``migrate up`` had
+    committed, so the deploy is refused before the migration instead."""
+
+    SCRATCH = "name: p\ndatabase_url: postgresql:///app\nscratch_url: postgresql://localhost\n"
+
+    def _run(self, deployer: APIDeployer, strategy: MagicMock) -> None:
+        resolved = (
+            strategy,
+            Path("db/environments/p.yaml"),
+            Path("db/migrations"),
+            None,
+        )
+        with patch.object(deployer, "_resolve_strategy", return_value=resolved):
+            deployer._run_strategy()
+
+    def test_a_binding_gate(self, app: Path) -> None:
+        (app / "db" / "environments" / "p.yaml").write_text(self.SCRATCH)
+        strategy = MagicMock()
+
+        with pytest.raises(DeploymentError, match=r"scratch_url.*names no database"):
+            self._run(_deployer(app, enabled=True), strategy)
+        strategy.execute.assert_not_called()
+
+    @pytest.mark.parametrize("check", [{}, {"enabled": True, "on_critical": "warn"}])
+    def test_a_gate_that_would_not_stop_the_deploy(self, app: Path, check) -> None:
+        """Undeclared or ``warn``: its refusal is reported after, as before."""
+        (app / "db" / "environments" / "p.yaml").write_text(self.SCRATCH)
+        strategy = MagicMock()
+
+        self._run(_deployer(app, **check), strategy)
+
+        strategy.execute.assert_called_once()

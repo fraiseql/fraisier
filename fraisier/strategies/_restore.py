@@ -24,6 +24,7 @@ from ._base import Strategy, StrategyResult
 from ._restore_sources import DumpSource, PgBackRestSource
 
 if TYPE_CHECKING:
+    from fraisier.config._lazy_env import LazyEnv
     from fraisier.config.restore_source import PgBackRestSpec
     from fraisier.dbops.receipt import ActuationCheck
 
@@ -344,10 +345,11 @@ class RestoreMigrateStrategy(Strategy):
         allow_irreversible: bool = False,
         allow_destructive: bool = False,
         pre_migrate_verify: bool = False,
-        database_url: str | None = None,
+        database_url: str | LazyEnv | None = None,
         hooks_config: dict[str, Any] | None = None,
         skip_preflight: bool = False,
     ) -> StrategyResult:
+        from fraisier.dbops._url import resolve_db_url
         from fraisier.dbops.operations import (
             create_db,
             drop_db,
@@ -356,6 +358,9 @@ class RestoreMigrateStrategy(Strategy):
         from fraisier.errors import DatabaseError
 
         cfg = self._config
+        # An ``!envvar`` URL becomes the concrete one every step below uses,
+        # as the migrate and rebuild strategies resolve theirs.
+        database_url = resolve_db_url(database_url, role="database_url")
 
         # Minted before anything happens, so the token belongs to this run and
         # to no other. It is written into the restored database at the end and
@@ -486,14 +491,17 @@ class RestoreMigrateStrategy(Strategy):
         """Refuse now a connection steps 8 and 9 would refuse after the drop.
 
         Step 9 migrates in process on *database_url*, else on the config's
-        own. Without *database_url*, step 8's ``template: auto`` starts a
-        confiture child on the config's URLs. A config that cannot be read
-        names no URL to check; the steps that read it report it.
+        own; step 8's child, when it runs, connects to the same database, and
+        an in-process connection refuses whatever a child would. A config
+        that cannot be read names no URL to check: the preflight reads it
+        before the drop, or, with the preflight off, the migration after.
 
         Raises:
             DatabaseError: naming the refusal.
         """
-        from fraisier.dbops._pgconn import PgConn, config_child_env
+        import yaml
+
+        from fraisier.dbops._pgconn import PgConn
         from fraisier.dbops.confiture import _load_env
         from fraisier.errors import DatabaseError
 
@@ -506,9 +514,7 @@ class RestoreMigrateStrategy(Strategy):
                 url = database_url
             if url:
                 PgConn.parse(url).check_in_process()
-            if not database_url and self._config.template_mode == "auto":
-                config_child_env(confiture_config)
-        except ValueError as exc:
+        except (ValueError, yaml.YAMLError) as exc:
             raise DatabaseError(
                 f"Refusing to restore before anything is dropped: {exc}"
             ) from None

@@ -59,23 +59,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fraisier's whole environment. They now get the environment every child
   gets, with no URL's values in it, since the drift child also connects to
   the config's `scratch_url`. Each URL the config names is refused as a child
-  of fraisier's own would be.
+  of fraisier's own would be. A declared drift gate that would stop the
+  deploy is checked before the migration, since its child is the only one
+  that reads `scratch_url`.
 - Still outside: confiture's `backup` and `audit` hooks, confiture's
   `--min-tables` connection for three keywords, `fraisier db exec` with no
-  `admin_url`, and the scaffolded `db_deploy.sh`. See "What the URL does not
-  cover" in `docs/security.md`.
+  `admin_url`, `fraisier validate`'s `pg_isready` probe, and the scaffolded
+  `db_deploy.sh` and `backup.sh`. See "What the URL does not cover" in
+  `docs/security.md`.
 - **An ambient `PGSERVICE` is refused**, whatever its value. A connection
   fraisier opens itself cannot drop it: libpq reads it even when every other
   keyword is given, a service file fills whatever is left, and an empty
-  `service=` names a service called `""`. `fraisier validate`, `doctor` and
-  the deploy refuse it before anything runs, and name the fix: unset it, and
-  put the connection in the URL.
+  `service=` names a service called `""`. The deploy refuses it before
+  anything runs, as do `doctor` and `fraisier validate` for a URL written in
+  `fraises.yaml`, and they name the fix: unset it, and put the connection in
+  the URL. A `PGSERVICE` in the remote login's environment on an `ssh:` host
+  is still dropped there.
 - **An ambient `PGTZ`, `PGDATESTYLE` or `PGGEQO` is refused** for the same
   reason. libpq sends them as startup settings, with no keyword a connection
   could pin them by, and an ambient value outranks even `options`. Children
   drop them with every other `PG*`; a connection fraisier opens itself
-  cannot. A `PGSERVICE` in the remote login's
-  environment on an `ssh:` host is still dropped there.
+  cannot, so the deploy refuses them before anything runs.
 - **Restore's own children drop ambient `PG*` too.** pg_restore, its
   `pg_restore -l` listing, the post-load `ANALYZE` and the deferred matview
   refresh, all started by confiture, inherited fraisier's environment, so a
@@ -94,7 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `PGDATESTYLE` or `PGGEQO`, unset it: v0.95.0 ignored `PGSERVICE` and let the
 > other three reach the connections it opened itself, and v0.96.0 refuses to
 > run. A session default belongs to the role or the database
-> (`ALTER ROLE … SET timezone`). Run `fraisier validate` to check.
+> (`ALTER ROLE … SET timezone`). `fraisier validate` reports it when a
+> `fraises.yaml` URL is written out; behind `!envvar`, the deploy refuses it
+> before anything runs.
 
 > ⚠️ **Upgrade note.** `FRAISIER_DB_URL` (the history database) and a
 > confiture config's `database_url` and `scratch_url` are now read by
@@ -105,6 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `fraisier db-check` and the history migrations for `FRAISIER_DB_URL`, the
 > deploy's migration and the confiture children for a confiture config. Drop
 > the keyword, or name the database.
+
+> ⚠️ **Upgrade note.** A `restore_migrate` environment whose `admin_url`
+> names more than one host (`postgresql://h1,h2/…`) no longer loads: a
+> restore needs exactly one, and a pgBackRest restore's checks after the
+> start could otherwise fail over to another host. Name the one host.
 
 - **confiture 1.43** (`fraiseql-confiture>=1.43.0,<1.44`). 1.43 adds
   `RestoreOptions.env`

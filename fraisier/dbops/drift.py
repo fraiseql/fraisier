@@ -61,7 +61,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fraisier.dbops._pgconn import PgConn, config_child_env
+from fraisier.dbops._pgconn import CONFIG_URL_KEYS, PgConn, config_child_env
 from fraisier.dbops.confiture_contract import (
     envelope_error_actionable,
     envelope_error_code,
@@ -373,24 +373,21 @@ def _routine_schemas(expected: Path) -> tuple[str, ...]:
     return tuple(sorted(found | {_DEFAULT_SCHEMA}))
 
 
-def _connection_target(url: str) -> tuple[str, str, str, str]:
-    """``(host, hostaddr, port, dbname)`` *url* connects to, as libpq reads it.
+def _connection_target(url: str) -> tuple[str, str, str]:
+    """``(address, port, dbname)`` *url* connects to, as libpq reads it.
 
-    An omitted host is libpq's default socket (``""``), an omitted port 5432:
-    no child fraisier starts sees ``PGHOST`` or ``PGPORT``. ``hostaddr`` is
-    where libpq actually connects when it is given, so two URLs naming one
-    host through different addresses are different targets.
+    The address is ``hostaddr`` when given, since that is where libpq
+    connects (the host then only names the server for TLS and
+    authentication), else the host. An omitted host is libpq's default socket
+    (``""``), an omitted port 5432: no child fraisier starts sees ``PGHOST``
+    or ``PGPORT``.
 
     Raises:
         ValueError: ``PgConn`` refuses *url*.
     """
     conn = PgConn.parse(url)
-    return (
-        conn.host or "",
-        conn.params.get("hostaddr", ""),
-        conn.params.get("port", "5432"),
-        conn.dbname,
-    )
+    address = conn.params.get("hostaddr") or conn.host or ""
+    return address, conn.params.get("port", "5432"), conn.dbname
 
 
 def _declares_scratch_url(confiture_config: Path) -> bool:
@@ -901,7 +898,7 @@ def check_schema_drift(
     try:
         env_name = _env_for_build(project_dir, config)
         _check_urls_agree(config, database_url)
-        child_env = config_child_env(config)
+        child_env = config_child_env(config, CONFIG_URL_KEYS)
         if _VIEW_REDEFINED in escalate and not _declares_scratch_url(config):
             return DriftResult(
                 passed=False,
