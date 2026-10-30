@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "same" or "different". A confiture config `database_url` that fraisier
   refuses makes `post_migrate_check` refuse instead of guessing.
 
+- **A restore refuses a connection it would fail on before it drops
+  anything.** A multi-host `admin_url` let a dump restore stop the service,
+  drop and recreate the database, and only then fail at `pg_restore`, which
+  takes one host. pgBackRest's checks after the cluster starts could fail over
+  to another host. `restore_migrate` and `fraisier validate` now refuse it. The
+  migration's own connection (`database_url`, or the confiture config's when
+  the deploy names none) and step 8's `migrate preflight` child are checked
+  before step 1 too, so a refusal of theirs no longer fires after the drop.
+
 ### Security
 
 - **Connections fraisier opens itself ignore ambient `PG*` too**
