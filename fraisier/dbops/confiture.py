@@ -271,7 +271,7 @@ _HOOK_SPECS: dict[str, tuple[str, str, str]] = {
 
 #: The hooks that connect with a ``database_url`` of their own, and whether
 #: they connect in process (``AuditHook``) or through a child (``BackupHook``'s
-#: ``pg_dump``, which confiture starts with a copy of ``os.environ``).
+#: ``pg_dump``).
 _HOOKS_IN_PROCESS: dict[str, bool] = {"audit": True, "backup": False}
 
 
@@ -310,11 +310,29 @@ def refuse_hook_urls(hooks_config: dict[str, Any] | None) -> None:
             raise ValueError(msg) from None
 
 
+def _audit_connection(url: str) -> psycopg.Connection:
+    """``AuditConfig.connection_factory``: *url*'s pinned conninfo, opened.
+
+    Not :func:`migration_connection`: ``AuditHook`` reports a
+    ``psycopg.Error`` as its own failure, and anything else escapes the hook.
+
+    Raises:
+        ValueError: ``PgConn`` refuses *url* or the environment.
+    """
+    import psycopg
+
+    return psycopg.connect(PgConn.parse(url).conninfo())
+
+
 def _hook_params(hook_key: str, cfg: dict[str, Any]) -> dict[str, Any]:
     """The keyword arguments for *hook_key*'s confiture config class.
 
-    ``!envvar`` values are resolved, and ``AuditHook``, which connects in
-    process, is given the pinned conninfo instead of its URL.
+    ``!envvar`` values are resolved. ``AuditHook`` connects through
+    :func:`_audit_connection`, and ``BackupHook``'s ``pg_dump`` runs in
+    ``PgConn.child_env()``, so neither reads an ambient ``PG*`` variable.
+
+    Raises:
+        ValueError: ``PgConn`` refuses the URL or the environment.
     """
     params = {
         k: to_str(v) if isinstance(v, LazyEnv) else v
@@ -322,8 +340,16 @@ def _hook_params(hook_key: str, cfg: dict[str, Any]) -> dict[str, Any]:
         if k != "enabled"
     }
     url = params.get("database_url")
-    if _HOOKS_IN_PROCESS.get(hook_key) and isinstance(url, str):
-        params["database_url"] = PgConn.parse(url).conninfo()
+    if hook_key not in _HOOKS_IN_PROCESS or not isinstance(url, str):
+        return params
+    conn = PgConn.parse(url)
+    if _HOOKS_IN_PROCESS[hook_key]:
+        # Refused here, the hook is skipped at registration; refused in the
+        # factory, the error would escape the hook mid-migration.
+        conn.check_in_process()
+        params["connection_factory"] = _audit_connection
+    else:
+        params["env"] = conn.child_env()
     return params
 
 
