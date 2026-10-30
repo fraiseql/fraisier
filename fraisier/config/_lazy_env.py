@@ -304,5 +304,10 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        is confiture's YAML and
 #                                                        never holds a LazyEnv.
 #
+#   dbops/confiture.py:_hook_params          not-eligible
+#                                                        Runs after every LazyEnv
+#                                                        in the hook's block is
+#                                                        resolved with ``to_str``.
+#
 # If a NEW config-derived ``isinstance(x, str)`` site appears, widen it
 # with ``is_string_like`` and add a row above.

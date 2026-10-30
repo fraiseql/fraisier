@@ -62,8 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of fraisier's own would be. A declared drift gate that would stop the
   deploy is checked before the migration, since its child is the only one
   that reads `scratch_url`.
-- Still outside: confiture's `backup` and `audit` hooks, `fraisier db exec`
-  with no `admin_url`, and the scaffolded `db_deploy.sh` and `backup.sh`. See "What the URL does not cover" in
+- **confiture's `audit` and `backup` hooks read their URL through `PgConn`.**
+  fraisier registers them from `database.hooks`, and passed their
+  `database_url` unread. An enabled hook's URL is now checked before the
+  migration, and the deploy refuses one `PgConn` refuses, naming the hook
+  but never the URL. `audit` connects with the pinned conninfo. `!envvar` in
+  a hook block is resolved (it never was).
+- Still outside: the `backup` hook's `pg_dump`, which confiture starts with a
+  copy of the environment
+  ([fraiseql/confiture#799](https://github.com/fraiseql/confiture/issues/799)),
+  `fraisier db exec` with no `admin_url`, and the scaffolded `db_deploy.sh`
+  and `backup.sh`. See "What the URL does not cover" in
   `docs/security.md`.
 - **An ambient `PGSERVICE` is refused**, whatever its value. A connection
   fraisier opens itself cannot drop it: libpq reads it even when every other
@@ -111,6 +120,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `fraisier db-check` and the history migrations for `FRAISIER_DB_URL`, the
 > deploy's migration and the confiture children for a confiture config. Drop
 > the keyword, or name the database.
+
+> ⚠️ **Upgrade note.** An enabled `database.hooks.audit` or
+> `database.hooks.backup` whose `database_url` `PgConn` refuses now stops the
+> deploy before the migration, where v0.95.0 handed it to confiture unread.
+> That includes a literal `"${DATABASE_URL}"`: it was never expanded in that
+> block, so the hook could not connect. Write `!envvar DATABASE_URL`.
 
 > ⚠️ **Upgrade note.** A `restore_migrate` environment whose `admin_url`
 > names more than one host (`postgresql://h1,h2/…`) no longer loads: a

@@ -759,6 +759,25 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 },
             ) from None
 
+    def _refuse_hook_urls(self, hooks_config: dict[str, Any] | None) -> None:
+        """Refuse a confiture hook whose URL ``PgConn`` refuses, before the migration.
+
+        Raises:
+            DeploymentError: :func:`~fraisier.dbops.confiture.refuse_hook_urls`.
+        """
+        from fraisier.dbops.confiture import refuse_hook_urls
+
+        try:
+            refuse_hook_urls(hooks_config)
+        except ValueError as exc:
+            raise DeploymentError(
+                str(exc),
+                context={
+                    "fraise": self.fraise_name,
+                    "environment": self.environment,
+                },
+            ) from None
+
     def _migrated_url(self) -> str | None:
         """The URL of the database this deploy migrated, or ``None`` if unreadable.
 
@@ -1354,6 +1373,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
 
         pre_verify = self.database_config.get("pre_migrate_verify", False)
         hooks_config = self.database_config.get("hooks")
+        self._refuse_hook_urls(hooks_config)
         old_cwd = Path.cwd()
         app_dir = Path(self.app_path) if self.app_path else None
         if app_dir and app_dir.is_dir():

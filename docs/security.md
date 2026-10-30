@@ -224,9 +224,14 @@ outside the cases [listed below](#what-the-url-does-not-cover):
 These connect without fraisier's parse, or with part of the ambient
 environment:
 
-- **confiture's `backup` and `audit` hooks**, when `hooks:` enables them.
-  They run inside the migration: `audit` connects with the confiture config's
-  bare URL, and `backup` runs `pg_dump` with the deploy user's environment.
+- **confiture's `backup` hook**, when `database.hooks.backup` enables it,
+  runs `pg_dump` inside the migration with a copy of the deploy user's
+  environment: confiture 1.43 takes no environment for it
+  ([fraiseql/confiture#799](https://github.com/fraiseql/confiture/issues/799)).
+  Its `database_url` is read by `PgConn` before the migration, so a URL
+  `PgConn` refuses stops the deploy, but whatever the URL leaves out comes
+  from that environment. (`database.hooks.audit` connects in process with the
+  pinned conninfo, like every other in-process connection.)
 - **`fraisier db exec` with no `admin_url`** connects by database name through
   the operator's own environment, as their `psql` would.
 - **The scaffolded `db_deploy.sh` and `backup.sh`** run `confiture migrate`
