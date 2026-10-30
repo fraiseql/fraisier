@@ -28,6 +28,7 @@ from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
 from confiture.exceptions import ValidationError
 
+from fraisier.config._lazy_env import LazyEnv, is_string_like, to_str
 from fraisier.dbops._pgconn import TRANSPORT_REFUSED, PgConn, config_child_env
 from fraisier.dbops.confiture_contract import (
     ConfitureFailureClass,
@@ -267,6 +268,56 @@ _HOOK_SPECS: dict[str, tuple[str, str, str]] = {
 }
 
 
+#: The hooks that connect with a ``database_url`` of their own, and whether
+#: they connect in process (``AuditHook``) or through a child (``BackupHook``'s
+#: ``pg_dump``, which confiture starts with a copy of ``os.environ``).
+_HOOKS_IN_PROCESS: dict[str, bool] = {"audit": True, "backup": False}
+
+
+def refuse_hook_urls(hooks_config: dict[str, Any] | None) -> None:
+    """Refuse an enabled hook whose ``database_url`` ``PgConn`` refuses.
+
+    Checked before the migration: registration skips a hook it cannot build,
+    so a refusal there would leave the migration running without it.
+
+    Raises:
+        ValueError: naming the hook and the reason, never the URL.
+    """
+    for key, in_process in _HOOKS_IN_PROCESS.items():
+        cfg = (hooks_config or {}).get(key)
+        if not isinstance(cfg, dict) or not cfg.get("enabled", False):
+            continue
+        url = cfg.get("database_url")
+        if not is_string_like(url):
+            continue
+        try:
+            conn = PgConn.parse(to_str(url))
+            if in_process:
+                conn.check_in_process()
+            else:
+                conn.check_environment()
+        except ValueError as exc:
+            msg = f"database.hooks.{key}.database_url: {exc}"
+            raise ValueError(msg) from None
+
+
+def _hook_params(hook_key: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """The keyword arguments for *hook_key*'s confiture config class.
+
+    ``!envvar`` values are resolved, and ``AuditHook``, which connects in
+    process, is given the pinned conninfo instead of its URL.
+    """
+    params = {
+        k: to_str(v) if isinstance(v, LazyEnv) else v
+        for k, v in cfg.items()
+        if k != "enabled"
+    }
+    url = params.get("database_url")
+    if _HOOKS_IN_PROCESS.get(hook_key) and isinstance(url, str):
+        params["database_url"] = PgConn.parse(url).conninfo()
+    return params
+
+
 def _register_migration_hooks(
     migrator: Any, hooks_config: dict[str, Any] | None
 ) -> None:
@@ -304,9 +355,7 @@ def _register_migration_hooks(
             )
             continue
         try:
-            # Strip 'enabled' before passing to config dataclass
-            params = {k: v for k, v in cfg.items() if k != "enabled"}
-            config = config_cls(**params)
+            config = config_cls(**_hook_params(hook_key, cfg))
             hook = hook_cls(config)
             migrator.register_hook(getattr(HookPhase, phase_name), hook)
             log.info("Registered %s hook", hook_key)

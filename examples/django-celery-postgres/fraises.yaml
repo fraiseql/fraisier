@@ -34,13 +34,13 @@ fraises:
             backup:
               enabled: true
               backup_dir: /var/backups/fraisier
-              database_url: "${DATABASE_URL}"
+              database_url: !envvar DATABASE_URL
               compress: true
               max_backups: 10
             audit:
               enabled: true
-              database_url: "${DATABASE_URL}"
-              signing_key: "${AUDIT_SIGNING_KEY}"
+              database_url: !envvar DATABASE_URL
+              signing_key: !envvar AUDIT_SIGNING_KEY
               environment: production
             slack:
               enabled: true

@@ -21,7 +21,7 @@ A syntactic check, so a heuristic. It follows names imported or aliased from
 psycopg, a door name reassigned before the connect, the module body, and a
 launch whose ``env=`` some path leaves ``None``. It cannot follow data: a
 subclass's ``connect``, a ``functools.partial``, a door built for another URL,
-or a connection opened inside a dependency (confiture's hooks) pass it.
+or a connection opened inside a dependency (confiture's backup hook) pass it.
 """
 
 from __future__ import annotations
