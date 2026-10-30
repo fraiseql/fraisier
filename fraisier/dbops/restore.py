@@ -81,10 +81,21 @@ def _restore_connection(connection_url: str) -> PgConn:
     and the like) reaches the restore through :meth:`PgConn.child_env`.
     """
     conn = PgConn.parse(connection_url)
-    if conn.host and "," in conn.host:
+    refuse_multi_host(connection_url)
+    return conn
+
+
+def refuse_multi_host(connection_url: str) -> None:
+    """Refuse a URL naming more than one host: a restore needs exactly one.
+
+    Raises:
+        ValueError: *connection_url* names several hosts, or ``PgConn``
+            refuses it.
+    """
+    host = PgConn.parse(connection_url).host
+    if host and "," in host:
         msg = "a URL naming more than one host cannot be restored into"
         raise ValueError(msg)
-    return conn
 
 
 def _reassign_owner(

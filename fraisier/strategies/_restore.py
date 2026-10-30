@@ -107,11 +107,16 @@ class RestoreMigrateStrategy(Strategy):
     ) -> None:
         from fraisier.dbops._url import resolve_db_url
         from fraisier.dbops._validation import validate_pg_identifier
+        from fraisier.dbops.restore import refuse_multi_host
 
         validate_pg_identifier(config.db_name, "database name")
         # Before anything runs: the dump source stops the service before the
-        # first child connects with this URL.
-        resolve_db_url(admin_url, role="admin_url")
+        # first child connects with this URL, and drops the database before
+        # the restore that cannot take several hosts. pgBackRest's checks
+        # after the start could fail over to another one.
+        resolved = resolve_db_url(admin_url, role="admin_url")
+        if resolved:
+            refuse_multi_host(resolved)
         if config.target_owner:
             validate_pg_identifier(config.target_owner, "target owner")
         if config.template_name:
@@ -360,6 +365,7 @@ class RestoreMigrateStrategy(Strategy):
         run_id = uuid.uuid4().hex
 
         # Steps 1-2.5: everything that can refuse before anything is destroyed.
+        self._refuse_connections(confiture_config, database_url)
         prepared = self._source.prepare(
             self,
             confiture_config=confiture_config,
@@ -473,6 +479,39 @@ class RestoreMigrateStrategy(Strategy):
             actuation=actuation,
             template=template,
         )
+
+    def _refuse_connections(
+        self, confiture_config: Path, database_url: str | None
+    ) -> None:
+        """Refuse now a connection steps 8 and 9 would refuse after the drop.
+
+        Step 9 migrates in process on *database_url*, else on the config's
+        own. Without *database_url*, step 8's ``template: auto`` starts a
+        confiture child on the config's URLs. A config that cannot be read
+        names no URL to check; the steps that read it report it.
+
+        Raises:
+            DatabaseError: naming the refusal.
+        """
+        from fraisier.dbops._pgconn import PgConn, config_child_env
+        from fraisier.dbops.confiture import _load_env
+        from fraisier.errors import DatabaseError
+
+        try:
+            try:
+                url = _load_env(
+                    confiture_config, database_url=database_url
+                ).database_url
+            except OSError:
+                url = database_url
+            if url:
+                PgConn.parse(url).check_in_process()
+            if not database_url and self._config.template_mode == "auto":
+                config_child_env(confiture_config)
+        except ValueError as exc:
+            raise DatabaseError(
+                f"Refusing to restore before anything is dropped: {exc}"
+            ) from None
 
     def _check_and_start(
         self,

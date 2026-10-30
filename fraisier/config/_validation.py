@@ -484,6 +484,16 @@ def _validate_restore_migrate(fraise_name: str, db: dict) -> list[str]:
         errors.append(
             f"{fraise_name}: strategy 'restore_migrate' requires database.name"
         )
+    admin_url = db.get("admin_url")
+    if isinstance(admin_url, str) and not validate_pg_url_string(
+        fraise_name, "admin_url", admin_url
+    ):
+        from fraisier.dbops.restore import refuse_multi_host
+
+        try:
+            refuse_multi_host(admin_url)
+        except ValueError as exc:
+            errors.append(f"{fraise_name}: database.admin_url: {exc}")
     if isinstance(restore, dict):
         jobs = restore.get("jobs")
         if jobs is not None:
