@@ -525,7 +525,13 @@ class RebuildStrategy(Strategy):
             shutil.rmtree(output_dir, ignore_errors=True)
 
         # Re-baseline migration tracking table.
-        with Migrator.from_config(env, migrations_dir=migrations_dir) as m:
+        from fraisier.dbops.confiture import migration_connection
+
+        with Migrator.from_config(
+            env,
+            migrations_dir=migrations_dir,
+            connection_factory=migration_connection,
+        ) as m:
             m.reinit()
 
         # Snapshot the freshly-built DB as a template for fast reseeds.

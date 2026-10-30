@@ -28,6 +28,7 @@ from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
 from confiture.exceptions import ValidationError
 
+from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops.confiture_contract import (
     ConfitureFailureClass,
     classify_confiture_failure,
@@ -40,6 +41,7 @@ from fraisier.errors import MigrationError as FraisierMigrationError
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Iterator
 
+    import psycopg
     from confiture import MigrateDownResult, MigrateUpResult
     from confiture.config.environment import Environment
 
@@ -168,6 +170,36 @@ class RollbackError(Exception):
 # ---------------------------------------------------------------------------
 # Python API — used by strategies
 # ---------------------------------------------------------------------------
+
+
+def migration_connection(url: str) -> psycopg.Connection:
+    """The connection confiture migrates with, opened through :class:`PgConn`.
+
+    Passed as ``Migrator.from_config(connection_factory=)``. confiture's own
+    factory connects with the bare URL, so libpq filled every keyword it
+    leaves out from the deploy user's environment: an ambient ``PGOPTIONS``
+    reached the schema change, a ``PGPORT`` moved a socket URL to another
+    cluster. A connect failure is raised as confiture's own factory raises it.
+
+    Raises:
+        ValueError: ``PgConn`` refuses *url* or the environment.
+        confiture.exceptions.ConfigurationError: the connect failed.
+    """
+    import psycopg
+    from confiture.exceptions import ConfigurationError
+
+    conninfo = PgConn.parse(url).conninfo()
+    try:
+        return psycopg.connect(conninfo)
+    except psycopg.Error as e:
+        raise ConfigurationError(
+            f"Failed to connect to database: {e}",
+            error_code="CONFIG_006",
+            resolution_hint=(
+                "Check that the database server is running and the connection "
+                "credentials are correct"
+            ),
+        ) from e
 
 
 def _load_env(
@@ -308,7 +340,11 @@ def preflight(
     config = _resolve_config(config_path, database_url)
 
     # Inside the session, confiture judges the pending migrations only.
-    with Migrator.from_config(config, migrations_dir=mdir) as m:
+    with Migrator.from_config(
+        config,
+        migrations_dir=mdir,
+        connection_factory=migration_connection,
+    ) as m:
         irreversible = [info.version for info in m.preflight().irreversible]
 
     if irreversible:
@@ -389,7 +425,11 @@ def dry_run_execute(
         env = _load_env(config_path, database_url=database_url)
         with (
             _project_cwd(project_dir),
-            Migrator.from_config(env, migrations_dir=mdir) as m,
+            Migrator.from_config(
+                env,
+                migrations_dir=mdir,
+                connection_factory=migration_connection,
+            ) as m,
         ):
             if env.migration.view_helpers == "auto":
                 from confiture.core.view_manager import ViewManager
@@ -484,7 +524,11 @@ def migrate_up(
 
     with (
         _project_cwd(project_dir),
-        Migrator.from_config(env, migrations_dir=Path(migrations_dir)) as m,
+        Migrator.from_config(
+            env,
+            migrations_dir=Path(migrations_dir),
+            connection_factory=migration_connection,
+        ) as m,
     ):
         # Auto-install view helpers if configured (mirrors confiture CLI behavior).
         if env.migration.view_helpers == "auto":
@@ -589,7 +633,11 @@ def migrate_down(
 
     with (
         _project_cwd(project_dir),
-        Migrator.from_config(config, migrations_dir=Path(migrations_dir)) as m,
+        Migrator.from_config(
+            config,
+            migrations_dir=Path(migrations_dir),
+            connection_factory=migration_connection,
+        ) as m,
     ):
         # Register migration hooks if configured (for rollback operations)
         _register_migration_hooks(m, hooks_config)
@@ -630,7 +678,11 @@ def has_pending(  # pragma: no cover
 ) -> bool:
     """Check if there are pending migrations."""
     config = _resolve_config(config_path, database_url)
-    with Migrator.from_config(config, migrations_dir=Path(migrations_dir)) as m:
+    with Migrator.from_config(
+        config,
+        migrations_dir=Path(migrations_dir),
+        connection_factory=migration_connection,
+    ) as m:
         return m.status().has_pending
 
 
