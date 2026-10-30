@@ -89,6 +89,30 @@ def test_an_ambient_service_is_refused(url, tmp_path: Path, monkeypatch):
         PgConn.parse(url).conninfo()
 
 
+@pytest.mark.parametrize(
+    ("var", "value", "setting", "pinned"),
+    [
+        ("PGTZ", "Asia/Tokyo", "TimeZone", "UTC"),
+        ("PGDATESTYLE", "SQL, DMY", "DateStyle", "ISO"),
+        ("PGGEQO", "off", "geqo", "on"),
+    ],
+)
+def test_an_ambient_startup_setting_is_refused(
+    url, monkeypatch, var, value, setting, pinned
+):
+    """No keyword can pin these, and an ambient one beats ``options``."""
+    monkeypatch.setenv(var, value)
+    options = PgConn.parse(url).params.get("options", "")
+    with psycopg.connect(
+        url, options=f"{options} -c {setting}={pinned}", connect_timeout=5
+    ) as conn:
+        reached = conn.execute(f"SHOW {setting}").fetchone()[0]
+
+    assert reached == value
+    with pytest.raises(ValueError, match=f"{var} is set in the environment"):
+        PgConn.parse(url).conninfo()
+
+
 class TestAUserlessSocketUrl:
     """The documented ``admin_url`` form names no user: it connects as the
     OS account, as its children do, never as ``PGUSER``."""

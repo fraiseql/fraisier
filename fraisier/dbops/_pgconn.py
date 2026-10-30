@@ -126,6 +126,11 @@ TRANSPORT_POLICY = frozenset(
     }
 )
 
+#: Variables libpq sends as startup settings, with no conninfo keyword: a
+#: connection fraisier opens in process cannot pin them, so it refuses them.
+#: A child drops them with every other ``PG*``.
+SESSION_VARIABLES = frozenset({"PGTZ", "PGDATESTYLE", "PGGEQO"})
+
 #: Exit status of a runner command refused by :func:`environment_refusal`.
 TRANSPORT_REFUSED = 123
 
@@ -306,6 +311,23 @@ def environment_refusal(
     return transport_refusal(environ, pg_env)
 
 
+def in_process_refusal(environ: Mapping[str, str]) -> str | None:
+    """Why a connection fraisier opens in process may not be made from *environ*.
+
+    A :data:`SESSION_VARIABLES` variable, whatever its value: libpq sends it
+    to the server, and an ambient value outranks even ``options``.
+    """
+    present = sorted(v for v in SESSION_VARIABLES if v in environ)
+    if not present:
+        return None
+    return (
+        f"{', '.join(present)} is set in the environment, and libpq sends it "
+        f"to every connection fraisier opens in process, where it cannot be "
+        f"dropped: unset it (a session default belongs to the role or the "
+        f"database: ALTER ROLE … SET)"
+    )
+
+
 @functools.cache
 def _pinned() -> dict[str, str]:
     """keyword → the value libpq uses when nothing sets it.
@@ -399,6 +421,20 @@ class PgConn:
         if refusal:
             raise ValueError(refusal)
 
+    def check_in_process(self, environ: Mapping[str, str] = os.environ) -> None:
+        """Refuse what :meth:`check_environment` and :func:`in_process_refusal` refuse.
+
+        For a URL fraisier also connects to in process, checked before
+        anything runs.
+
+        Raises:
+            ValueError: naming the variable and the fix.
+        """
+        self.check_environment(environ)
+        refusal = in_process_refusal(environ)
+        if refusal:
+            raise ValueError(refusal)
+
     def child_env(self) -> dict[str, str]:
         """The environment for a child connecting with this URL.
 
@@ -416,12 +452,14 @@ class PgConn:
 
         libpq fills every keyword a conninfo leaves out from ``os.environ``, so
         each one a child would not inherit is pinned (:func:`_pinned`) and the
-        connection is the one a child given :meth:`child_env` makes.
+        connection is the one a child given :meth:`child_env` makes. The
+        startup settings no keyword can pin are refused instead
+        (:func:`in_process_refusal`).
 
         Raises:
-            ValueError: :meth:`check_environment` refused it.
+            ValueError: :meth:`check_in_process` refused it.
         """
-        self.check_environment()
+        self.check_in_process()
         return {**_pinned(), **self.params}
 
     def conninfo(self) -> str:
@@ -430,7 +468,7 @@ class PgConn:
         Keyword arguments given to ``psycopg.connect`` beside it override it.
 
         Raises:
-            ValueError: :meth:`check_environment` refused it.
+            ValueError: :meth:`connect_kwargs` refused it.
         """
         from psycopg.conninfo import make_conninfo
 

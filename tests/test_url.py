@@ -96,6 +96,31 @@ class TestResolveDbUrlRefusesEarly:
         )
 
 
+class TestAnAmbientStartupSettingIsRefusedEarly:
+    """Every URL fraisier resolves is also connected to in process (the
+    migration, the pgBackRest checks, the pg_tviews reads), where an ambient
+    ``PGTZ``/``PGDATESTYLE``/``PGGEQO`` cannot be dropped: refused before
+    anything runs, and by ``fraisier validate``."""
+
+    @pytest.mark.parametrize("var", ["PGTZ", "PGDATESTYLE", "PGGEQO"])
+    def test_at_resolution(self, monkeypatch, var):
+        from fraisier.dbops._url import resolve_db_url
+
+        monkeypatch.setenv(var, "x")
+
+        with pytest.raises(ValueError, match=f"database_url: {var} is set"):
+            resolve_db_url("postgresql:///db")
+
+    def test_by_validate(self, monkeypatch):
+        from fraisier.config._validation import validate_pg_url_string
+
+        monkeypatch.setenv("PGTZ", "Asia/Tokyo")
+
+        [error] = validate_pg_url_string("api", "database_url", "postgresql:///db")
+
+        assert "PGTZ is set" in error
+
+
 class TestValidationReportsTheRefusal:
     def test_a_literal_url_appears_in_validate_errors(self):
         from fraisier.config._validation import validate_pg_url_string

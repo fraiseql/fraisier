@@ -528,6 +528,34 @@ class TestAmbientServiceIsRefused:
         PgConn.parse("postgresql:///acme_db").check_environment()
 
 
+class TestAmbientSessionVariablesAreRefusedInProcess:
+    """libpq sends ``PGTZ``, ``PGDATESTYLE`` and ``PGGEQO`` as startup
+    settings. They have no conninfo keyword, so a connection fraisier opens
+    in process cannot pin them, and an ambient value outranks even
+    ``options='-c TimeZone=…'``. A child drops them with the rest of ``PG*``.
+    """
+
+    @pytest.mark.parametrize("var", ["PGTZ", "PGDATESTYLE", "PGGEQO"])
+    @pytest.mark.parametrize("door", ["connect_kwargs", "conninfo"])
+    def test_refused_in_process(self, monkeypatch, door, var):
+        monkeypatch.setenv(var, "")
+
+        with pytest.raises(ValueError, match=f"{var} is set in the environment"):
+            getattr(PgConn.parse("postgresql:///acme_db"), door)()
+
+    @pytest.mark.parametrize("var", ["PGTZ", "PGDATESTYLE", "PGGEQO"])
+    def test_a_child_drops_it(self, monkeypatch, var):
+        monkeypatch.setenv(var, "SQL, DMY")
+
+        assert var not in PgConn.parse("postgresql:///acme_db").child_env()
+
+    def test_the_message_names_the_fix(self, monkeypatch):
+        monkeypatch.setenv("PGTZ", "Asia/Tokyo")
+
+        with pytest.raises(ValueError, match="unset it"):
+            PgConn.parse("postgresql:///acme_db").conninfo()
+
+
 def _env_backed_keywords() -> dict[str, str | None]:
     """keyword → compiled default, for each keyword the installed libpq reads
     from an environment variable."""

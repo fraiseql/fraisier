@@ -378,7 +378,7 @@ def validate_pg_url_string(fraise_name: str, field: str, value: str) -> list[str
     from fraisier.dbops._pgconn import PgConn
 
     try:
-        PgConn.parse(value).check_environment()
+        PgConn.parse(value).check_in_process()
     except ValueError as exc:
         # Not echoed: the URL may carry a password.
         return [f"{fraise_name}: database.{field}: {exc}"]
