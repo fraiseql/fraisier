@@ -211,7 +211,9 @@ def restore_backup(
         min_tables_schema=min_tables_schema,
         # The whole environment of every child the restore starts, and what
         # its in-process --min-tables connection reads its unset keys from:
-        # the one any fraisier child gets, never the ambient libpq variables.
+        # the one any fraisier child gets. confiture 1.43 gives that
+        # connection no value for min/max_protocol_version or sslcertmode, so
+        # those three still come from the ambient environment.
         # confiture refuses it beside ``superuser``, which fraisier never sets.
         env=conn.child_env(),
     )

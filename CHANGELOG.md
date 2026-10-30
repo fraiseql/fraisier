@@ -39,15 +39,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Connections fraisier opens itself ignore ambient `PG*` too**
-  ([#496](https://github.com/fraiseql/fraisier/issues/496)). The pgBackRest
-  refresh checks, the pg_tviews reads, `doctor`'s `pg_tviews_contract`, the
-  history database and `fraisier test-database` connected with the bare URL,
-  so libpq filled everything it left out from the environment. A user-less
-  `admin_url` connected as `PGUSER`, not the OS account its children used,
-  and `PGOPTIONS` reached the session. They now pass every keyword the URL
-  leaves out explicitly, as libpq's default, so they connect exactly as the
-  children do: the URL's values plus the same operator defaults. A static
-  check fails the build on an in-process connection that doesn't.
+  ([#496](https://github.com/fraiseql/fraisier/issues/496)). confiture's
+  migration session (preflight, `migrate up` and `down`, the status probes,
+  the rebuild's re-baseline), the pgBackRest refresh checks, the pg_tviews
+  reads, `doctor`'s `pg_tviews_contract`, the history database and `fraisier
+  test-database` connected with the bare URL, so libpq filled everything it
+  left out from the environment. A user-less `admin_url` connected as
+  `PGUSER`, not the OS account its children used; `PGOPTIONS` reached the
+  session, the schema change's included; a `PGPORT` moved a socket URL's
+  migration to another cluster. They now pass every keyword the URL leaves
+  out explicitly, as libpq's default, so they reach the server, user and
+  database a child does, with the same operator defaults. fraisier hands
+  confiture the migration's connection. A static check flags an in-process
+  connect or confiture session that skips this; it reads syntax, so it is a
+  heuristic, and cannot see a connection a dependency opens.
+- **A confiture child that reads its URLs from its config drops ambient
+  `PG*` too.** `confiture migrate`, `rebuild` and `status`, the drift gate's
+  `migrate validate` and restore step 8's `migrate preflight` inherited
+  fraisier's whole environment. They now get the environment every child
+  gets, with no URL's values in it, since the drift child also connects to
+  the config's `scratch_url`. Each URL the config names is refused as a child
+  of fraisier's own would be.
+- Still outside: confiture's `backup` and `audit` hooks, confiture's
+  `--min-tables` connection for three keywords, `fraisier db exec` with no
+  `admin_url`, and the scaffolded `db_deploy.sh`. See "What the URL does not
+  cover" in `docs/security.md`.
 - **An ambient `PGSERVICE` is refused**, whatever its value. A connection
   fraisier opens itself cannot drop it: libpq reads it even when every other
   keyword is given, a service file fills whatever is left, and an empty
@@ -66,7 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PGOPTIONS`, `PGUSER` or `PGSSLMODE` in the deploy user's shell reached
   them. They now get the same environment as every other child fraisier
   starts: the URL's own values plus the operator defaults. confiture's
-  `--min-tables` check reads its unset keys from it too. fraisier no longer
+  `--min-tables` check reads its unset keys from it too, except three
+  confiture 1.43 gives no value for (see above). fraisier no longer
   writes the URL's other libpq keys into its own `os.environ` for the
   duration of a restore.
 
