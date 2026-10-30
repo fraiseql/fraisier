@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from fraisier import ssh
 from fraisier.config._lazy_env import LazyEnv
+from fraisier.dbops._pgconn import scrubbed
 from fraisier.errors import ConfigurationError, ValidationError
 
 if TYPE_CHECKING:
@@ -491,11 +492,14 @@ class ValidationRunner:
                 db_host = db.get("host", "localhost")
                 db_port = db.get("port", 5432)
                 try:
+                    # Scrubbed: an ambient PGHOSTADDR or PGSERVICE would
+                    # probe another server than -h/-p name.
                     subprocess.run(
                         ["pg_isready", "-h", str(db_host), "-p", str(db_port)],
                         capture_output=True,
                         timeout=10,
                         check=True,
+                        env=scrubbed(os.environ),
                     )
                     results.append(
                         ValidationCheckResult(

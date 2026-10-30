@@ -232,8 +232,6 @@ environment:
   environment: confiture 1.43 gives it no value for them.
 - **`fraisier db exec` with no `admin_url`** connects by database name through
   the operator's own environment, as their `psql` would.
-- **`fraisier validate`'s connectivity probe** runs `pg_isready -h … -p …`
-  with the environment it was started in.
 - **The scaffolded `db_deploy.sh` and `backup.sh`** run `confiture migrate`
   and `pg_dump` in whatever shell runs them.
 

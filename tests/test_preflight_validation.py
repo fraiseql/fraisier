@@ -155,6 +155,22 @@ class TestGitReachabilityCheck:
 
 
 class TestDBCheck:
+    def test_pg_isready_reads_only_its_host_and_port(
+        self, runner_with_config, monkeypatch
+    ):
+        # An ambient PGHOSTADDR would send the probe elsewhere than -h names.
+        monkeypatch.setenv("PGHOSTADDR", "192.0.2.1")
+        monkeypatch.setenv("PGSSLMODE", "require")
+        monkeypatch.setenv("PGSERVICE", "acme")
+        monkeypatch.setenv("PGPASSFILE", "/nonexistent/acme/pgpass")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            runner_with_config.run_operational(skip_ssh=True, skip_git=True)
+        (call,) = mock_run.call_args_list
+        assert call.args[0][0] == "pg_isready"
+        pg_vars = {k for k in call.kwargs["env"] if k.startswith("PG")}
+        assert pg_vars == {"PGPASSFILE"}
+
     def test_skip_db(self, runner_with_config):
         results = runner_with_config.run_operational(
             skip_ssh=True, skip_db=True, skip_git=True
