@@ -66,12 +66,14 @@ class ConfitureMigrateStrategy(MigrationStrategy):
     def get_current_version(self, project_dir: Path) -> str | None:
         """Get current Confiture migration version."""
         try:
-            from fraisier.dbops.confiture import _load_env
+            from fraisier.dbops.confiture import _load_env, migration_connection
 
             env = _load_env(self.config_file)
 
             with Migrator.from_config(
-                env, migrations_dir=project_dir / "db" / "migrations"
+                env,
+                migrations_dir=project_dir / "db" / "migrations",
+                connection_factory=migration_connection,
             ) as m:
                 status = m.status()
                 applied_versions = status.applied
@@ -91,12 +93,14 @@ class ConfitureMigrateStrategy(MigrationStrategy):
     def get_latest_version(self, project_dir: Path) -> str | None:
         """Get latest available Confiture migration."""
         try:
-            from fraisier.dbops.confiture import _load_env
+            from fraisier.dbops.confiture import _load_env, migration_connection
 
             env = _load_env(self.config_file)
 
             with Migrator.from_config(
-                env, migrations_dir=project_dir / "db" / "migrations"
+                env,
+                migrations_dir=project_dir / "db" / "migrations",
+                connection_factory=migration_connection,
             ) as m:
                 status = m.status()
                 pending_versions = status.pending
@@ -194,11 +198,13 @@ class ConfitureMigrateStrategy(MigrationStrategy):
     ) -> list[dict[str, Any]]:
         """Get Confiture migration history."""
         try:
-            from fraisier.dbops.confiture import _load_env
+            from fraisier.dbops.confiture import _load_env, migration_connection
 
             env = _load_env(self.config_file)
             with Migrator.from_config(
-                env, migrations_dir=project_dir / "db" / "migrations"
+                env,
+                migrations_dir=project_dir / "db" / "migrations",
+                connection_factory=migration_connection,
             ) as m:
                 status = m.status()
                 applied_migrations = [
