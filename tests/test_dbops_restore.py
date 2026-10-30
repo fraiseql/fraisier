@@ -162,9 +162,15 @@ class TestRestoreBackup:
         return _options_from(restorer_cls).env
 
     def test_restore_children_get_the_child_environment(self):
-        """Every restore child runs in what any other fraisier child runs in."""
+        """Every restore child runs in what any other fraisier child runs in,
+        plus the three keywords confiture's --min-tables connection needs."""
         url = _TEST_URL + "?sslmode=require"
-        assert self._restored_env(url) == PgConn.parse(url).child_env()
+        assert self._restored_env(url) == {
+            **PgConn.parse(url).child_env(),
+            "PGSSLCERTMODE": "allow",
+            "PGMINPROTOCOLVERSION": "3.0",
+            "PGMAXPROTOCOLVERSION": "3.0",
+        }
 
     def test_an_ambient_libpq_variable_never_reaches_a_restore_child(self, monkeypatch):
         monkeypatch.setenv("PGOPTIONS", "-c search_path=acme")

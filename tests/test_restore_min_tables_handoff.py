@@ -312,3 +312,48 @@ class TestTheCliSaysIt:
         res = self._invoke(100)
         assert res.exit_code == 0, res.output
         assert "no table-count floor" not in res.output.lower()
+
+
+class TestMinTablesConnectionIsPinned:
+    """confiture builds its in-process ``--min-tables`` connection from
+    ``RestoreOptions.env``, and gives the three keywords libpq refuses ``''``
+    for no value of its own: the env must carry them, or libpq reads them from
+    fraisier's environment."""
+
+    _SOCKET_URL = "postgresql:///acme_db?host=/nonexistent/acme"
+
+    def _keys(self, url: str) -> dict:
+        from confiture.core.restorer import _connection_keys
+
+        restorer = _restorer_returning_success()
+        with patch("fraisier.dbops.restore.DatabaseRestorer", restorer):
+            restore_backup(
+                backup_path="/backup/production/db.dump",
+                db_name="staging_db",
+                connection_url=url,
+                min_tables=1,
+            )
+        return _connection_keys(restorer.return_value.restore.call_args[0][0])
+
+    def test_ambient_values_do_not_reach_it(self, monkeypatch):
+        monkeypatch.setenv("PGSSLCERTMODE", "require")
+        monkeypatch.setenv("PGMINPROTOCOLVERSION", "3.2")
+        monkeypatch.setenv("PGMAXPROTOCOLVERSION", "3.2")
+
+        keys = self._keys(self._SOCKET_URL)
+
+        assert (
+            keys["sslcertmode"],
+            keys["min_protocol_version"],
+            keys["max_protocol_version"],
+        ) == ("allow", "3.0", "3.0")
+
+    def test_the_urls_own_values_win(self, monkeypatch):
+        monkeypatch.setenv("PGMAXPROTOCOLVERSION", "3.0")
+
+        keys = self._keys(f"{self._SOCKET_URL}&min_protocol_version=3.2")
+
+        assert (keys["min_protocol_version"], keys["max_protocol_version"]) == (
+            "3.2",
+            "latest",
+        )

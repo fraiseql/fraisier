@@ -175,3 +175,18 @@ class TestAPasswordlessUrl:
         url = passwordless.replace(f"{PW_PROBE_ROLE}@", f"{PW_PROBE_ROLE}:{secret}@")
 
         assert _pinned(url)[0] == PW_PROBE_ROLE
+
+
+def test_a_url_raising_the_minimum_protocol_still_connects(url):
+    """An unset maximum must follow the minimum, as libpq derives it."""
+    with psycopg.connect(PgConn.parse(url).conninfo(), connect_timeout=5) as conn:
+        if conn.info.server_version < 180000:
+            pytest.skip("protocol 3.2 needs a PostgreSQL 18 server")  # ty: ignore[too-many-positional-arguments]
+    sep = "&" if "?" in url else "?"
+
+    with psycopg.connect(
+        PgConn.parse(f"{url}{sep}min_protocol_version=3.2").conninfo(),
+        connect_timeout=5,
+    ) as conn:
+        assert conn.pgconn.protocol_version == 3
+        assert conn.execute("SELECT 1").fetchone() == (1,)
