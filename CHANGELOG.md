@@ -64,8 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that reads `scratch_url`.
 - Still outside: confiture's `backup` and `audit` hooks, confiture's
   `--min-tables` connection for three keywords, `fraisier db exec` with no
-  `admin_url`, `fraisier validate`'s `pg_isready` probe, and the scaffolded
-  `db_deploy.sh` and `backup.sh`. See "What the URL does not cover" in
+  `admin_url`, and the scaffolded `db_deploy.sh` and `backup.sh`. See "What the URL does not cover" in
   `docs/security.md`.
 - **An ambient `PGSERVICE` is refused**, whatever its value. A connection
   fraisier opens itself cannot drop it: libpq reads it even when every other
