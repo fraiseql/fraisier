@@ -8,6 +8,8 @@ pg_target() {
         line="host=$3"
     elif [ -n "${PGHOST:-}" ]; then
         line="host=${PGHOST} (PGHOST)"
+    elif [ -n "${PGHOSTADDR:-}" ]; then
+        line="host=(none)"
     else
         line="host=(default socket)"
     fi
@@ -24,7 +26,7 @@ pg_target() {
     elif [ -n "${PGUSER:-}" ]; then
         line+=" user=${PGUSER} (PGUSER)"
     else
-        line+=" user=$(id -un)"
+        line+=" user=$(id -un 2>/dev/null || echo "uid=$(id -u)")"
     fi
     line+=" db=$2"
     if [ -n "${PGSERVICE:-}" ]; then
@@ -33,13 +35,19 @@ pg_target() {
     echo "$1: ${line}" >&2
 }
 
-# The PG* variables set in this shell, for a client whose URL decides first:
+# Every variable libpq reads: nothing else is listed, since other tools'
+# secrets share the PG prefix (PGBACKREST_*).
+_LIBPQ_VARS="PGAPPNAME PGCHANNELBINDING PGCLIENTENCODING PGCONNECT_TIMEOUT PGDATABASE PGDATESTYLE PGGEQO PGGSSDELEGATION PGGSSENCMODE PGGSSLIB PGHOST PGHOSTADDR PGKRBSRVNAME PGLOADBALANCEHOSTS PGMAXPROTOCOLVERSION PGMINPROTOCOLVERSION PGOPTIONS PGPASSFILE PGPASSWORD PGPORT PGREQUIREAUTH PGREQUIREPEER PGSERVICE PGSSLCERT PGSSLCERTMODE PGSSLCOMPRESSION PGSSLCRL PGSSLCRLDIR PGSSLKEY PGSSLMAXPROTOCOLVERSION PGSSLMINPROTOCOLVERSION PGSSLMODE PGSSLNEGOTIATION PGSSLROOTCERT PGSSLSNI PGTARGETSESSIONATTRS PGTZ PGUSER"
+
+# The libpq variables set in this shell, for a client whose URL decides first:
 # names and values, a password's value never.
 #   pg_ambient <what>
 pg_ambient() {
     local var set=()
-    for var in $(compgen -e | grep '^PG' | sort); do
-        if [ "${var}" = "PGPASSWORD" ]; then
+    for var in ${_LIBPQ_VARS}; do
+        if [ -z "${!var+x}" ]; then
+            continue
+        elif [ "${var}" = "PGPASSWORD" ]; then
             set+=("PGPASSWORD=(set)")
         else
             set+=("${var}=${!var}")

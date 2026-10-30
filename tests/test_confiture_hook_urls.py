@@ -105,6 +105,17 @@ class TestRefusal:
         with pytest.raises(ValueError, match="PGTZ"):
             refuse_hook_urls(_audit(_URL))
 
+    def test_an_unset_envvar_in_any_field_is_refused(self, monkeypatch):
+        """Registration would skip the hook: the deploy must stop instead."""
+        monkeypatch.delenv("ACME_SIGNING_KEY", raising=False)
+        hooks = _audit(_URL)
+        hooks["audit"]["signing_key"] = LazyEnv("ACME_SIGNING_KEY")
+
+        with pytest.raises(ValueError, match="ACME_SIGNING_KEY") as info:
+            refuse_hook_urls(hooks)
+
+        assert str(info.value).startswith("database.hooks.audit: ")
+
     def test_a_disabled_hook_is_not_read(self):
         hooks = _audit(_REFUSED)
         hooks["audit"]["enabled"] = False
@@ -131,6 +142,30 @@ class TestTheDeployRefusesBeforeTheStrategy:
                 return_value=(strategy, Path("c.yaml"), Path("db/m"), None),
             ),
             pytest.raises(DeploymentError, match=r"database\.hooks\.audit"),
+        ):
+            deployer._run_strategy()
+
+        strategy.execute.assert_not_called()
+
+    def test_an_unset_envvar_url_stops_the_deploy_too(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.delenv("ACME_AUDIT_URL", raising=False)
+        deployer = APIDeployer(
+            {
+                "app_path": str(tmp_path),
+                "database": {"hooks": _audit(LazyEnv("ACME_AUDIT_URL"))},
+            }
+        )
+        strategy = MagicMock()
+
+        with (
+            patch.object(
+                deployer,
+                "_resolve_strategy",
+                return_value=(strategy, Path("c.yaml"), Path("db/m"), None),
+            ),
+            pytest.raises(DeploymentError, match="ACME_AUDIT_URL"),
         ):
             deployer._run_strategy()
 

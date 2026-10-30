@@ -66,15 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fraisier registers them from `database.hooks`, and passed their
   `database_url` unread. An enabled hook's URL is now checked before the
   migration, and the deploy refuses one `PgConn` refuses, naming the hook
-  but never the URL. `audit` connects with the pinned conninfo. `!envvar` in
-  a hook block is resolved (it never was).
+  but never the URL. `audit` connects with the pinned conninfo. Every
+  `!envvar` in an enabled hook's block is resolved (it never was), and one
+  that is unset stops the deploy too, where registration would skip the hook.
 - **`fraisier db exec` with no `admin_url` names its target.** It runs psql
   on `database.name` in the operator's own environment, on purpose, and now
   first prints to stderr the host or socket, port, user and database libpq
-  resolves, tagging each one a `PG*` variable decided. Never a password.
+  resolves, tagging each one a `PG*` variable decided, and an ambient
+  `PGSERVICE`, whose service file it does not read. Over `ssh:` it names the
+  database and says the remote login's environment decides the rest. Never a
+  password.
 - **The scaffolded database scripts name their target, and `db_reset.sh`
-  guards its drop.** `backup.sh`, `db_deploy.sh` and `db_reset.sh` print the
-  same line on stderr. `db_reset.sh` refuses to run while `PGHOST`,
+  guards its drop.** `backup.sh` and `db_reset.sh` print the same line on
+  stderr; `db_deploy.sh`, whose confiture URL decides first, lists the libpq
+  variables set, a password's value never. `db_reset.sh` refuses to run while `PGHOST`,
   `PGHOSTADDR`, `PGPORT`, `PGSERVICE` or `PGDATABASE` is set, unless
   `FRAISIER_RESET_ALLOW_PG_ENV=1`, and drops each database only once its name
   is typed back or given as `--yes=<dbname>`.
@@ -135,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `database.hooks.backup` whose `database_url` `PgConn` refuses now stops the
 > deploy before the migration, where v0.95.0 handed it to confiture unread.
 > That includes a literal `"${DATABASE_URL}"`: it was never expanded in that
-> block, so the hook could not connect. Write `!envvar DATABASE_URL`.
+> block, so the hook could not connect. Write `!envvar DATABASE_URL`. An
+> `!envvar` in an enabled hook's block that is unset stops the deploy too.
 
 > ⚠️ **Upgrade note.** A re-rendered `db_reset.sh` asks for each database's
 > name instead of `yes`, and refuses to run while `PGHOST`, `PGHOSTADDR`,

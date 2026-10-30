@@ -37,6 +37,7 @@ from fraisier.dbops.confiture_contract import (
     envelope_error_message,
 )
 from fraisier.dbops.confiture_executable import confiture_executable
+from fraisier.errors import ConfigurationError
 from fraisier.errors import MigrationError as FraisierMigrationError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -278,7 +279,8 @@ def refuse_hook_urls(hooks_config: dict[str, Any] | None) -> None:
     """Refuse an enabled hook whose ``database_url`` ``PgConn`` refuses.
 
     Checked before the migration: registration skips a hook it cannot build,
-    so a refusal there would leave the migration running without it.
+    so a refusal there would leave the migration running without it. Every
+    ``!envvar`` in the hook's block is resolved here for the same reason.
 
     Raises:
         ValueError: naming the hook and the reason, never the URL.
@@ -287,6 +289,13 @@ def refuse_hook_urls(hooks_config: dict[str, Any] | None) -> None:
         cfg = (hooks_config or {}).get(key)
         if not isinstance(cfg, dict) or not cfg.get("enabled", False):
             continue
+        try:
+            for value in cfg.values():
+                if isinstance(value, LazyEnv):
+                    value.resolve()
+        except ConfigurationError as exc:
+            msg = f"database.hooks.{key}: {exc}"
+            raise ValueError(msg) from None
         url = cfg.get("database_url")
         if not is_string_like(url):
             continue

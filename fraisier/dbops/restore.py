@@ -78,7 +78,7 @@ def _restore_connection(connection_url: str) -> PgConn:
     as discrete fields and has no connection-URL entry point, so a URL with
     more than one host cannot be expressed (it passes exactly one
     ``-h``/``-p``) and is refused. Whatever else the URL sets (``PGSSLMODE``
-    and the like) reaches the restore through :meth:`PgConn.child_env`.
+    and the like) reaches the restore through :meth:`PgConn.pinned_child_env`.
     """
     conn = PgConn.parse(connection_url)
     refuse_multi_host(connection_url)
