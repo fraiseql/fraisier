@@ -154,6 +154,49 @@ def terminate_backends(
     )
 
 
+def refuse_without_createdb(*, connection_url: str, db_name: str) -> None:
+    """Refuse a drop-and-recreate the role at *connection_url* cannot finish.
+
+    ``DROP DATABASE`` needs only ownership, ``CREATE DATABASE`` needs
+    ``CREATEDB``: a role that owns *db_name* without it drops the database,
+    then fails to create it. Checked before anything is dropped.
+
+    Raises:
+        DatabaseError: the role may not create databases, or the check could
+            not connect. The message names the role, never the URL.
+    """
+    from fraisier.errors import DatabaseError
+
+    code, stdout, stderr = _pg_cmd(
+        [
+            "psql",
+            "-t",
+            "-A",
+            "-F",
+            "|",
+            "-c",
+            "SELECT current_user, rolcreatedb OR rolsuper FROM pg_roles "
+            "WHERE rolname = current_user",
+        ],
+        connection_url=connection_url,
+    )
+    if code != 0:
+        msg = (
+            f"cannot check admin_url before dropping {db_name}: "
+            f"{stderr.strip() or f'psql exited {code}'}"
+        )
+        raise DatabaseError(msg)
+    role, _, may_create = stdout.strip().partition("|")
+    if may_create != "t":
+        msg = (
+            f"admin_url connects as role {role!r}, which may not create "
+            f"databases: the rebuild would drop {db_name} and fail to create "
+            f"it. Nothing was dropped. Fix: ALTER ROLE {role} CREATEDB (as a "
+            "superuser), or point admin_url at a role that has CREATEDB"
+        )
+        raise DatabaseError(msg)
+
+
 def unset_template_flag(
     db_name: str,
     *,

@@ -42,6 +42,13 @@ fraisier init --template django
 fraisier init --output config/ --template node
 ```
 
+The `django` and `rails` templates give `development` the `rebuild` strategy,
+which drops and recreates the database through
+`admin_url: postgresql:///postgres`: the local socket in libpq's default
+directory, with peer authentication. The deploy OS user must exist as a
+PostgreSQL role with `CREATEDB` (`createuser --createdb <deploy user>`); the
+rebuild checks that before it drops anything.
+
 ---
 
 ### fraisier list

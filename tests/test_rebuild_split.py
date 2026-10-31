@@ -55,6 +55,7 @@ def _mock_rebuild_deps():
         patch("confiture.core.builder.SchemaBuilder") as mock_builder_cls,
         patch("confiture.core.migrator.Migrator.from_config") as mock_migrator,
         patch("fraisier.strategies._core.terminate_backends"),
+        patch("fraisier.strategies._core.refuse_without_createdb"),
         patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
         patch(
             "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -301,6 +302,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends") as mock_term,
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db") as mock_drop,
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -328,6 +330,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -359,6 +362,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -392,6 +396,7 @@ class TestRebuildStrategyTemplateCreation:
                 "fraisier.strategies._core.terminate_backends",
                 side_effect=lambda db, **_kw: terminate_calls.append(db),
             ),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
         ):
@@ -446,6 +451,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db") as mock_drop,
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
         ):
@@ -478,6 +484,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", side_effect=drop_side_effect),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
         ):
@@ -497,6 +504,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -520,6 +528,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -548,6 +557,7 @@ class TestRebuildStrategyTemplateCreation:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", side_effect=create_returns),
             pytest.raises(subprocess.CalledProcessError),
@@ -571,6 +581,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
@@ -604,6 +615,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
@@ -657,6 +669,7 @@ class TestRebuildStrategyVersionStamp:
                 "fraisier.strategies._core.terminate_backends",
                 side_effect=_record_term,
             ),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", side_effect=_record_drop),
             patch("fraisier.strategies._core.create_db", side_effect=_record_create),
             patch("fraisier.strategies._core.run_psql", side_effect=_record_psql),
@@ -694,6 +707,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
@@ -736,6 +750,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
@@ -778,6 +793,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
@@ -817,6 +833,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -859,6 +876,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -892,6 +910,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch(
                 "fraisier.strategies._core.create_db", return_value=(0, "", "")
@@ -933,6 +952,7 @@ class TestRebuildStrategyVersionStamp:
 
         with (
             patch("fraisier.strategies._core.terminate_backends"),
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db", return_value=(0, "", "")),
             patch("fraisier.strategies._core.create_db", return_value=(0, "", "")),
             patch(
@@ -974,6 +994,7 @@ class TestRebuildRefusesBeforeTheDrop:
         monkeypatch.setenv("PGTZ", "Asia/Tokyo")
 
         with (
+            patch("fraisier.strategies._core.refuse_without_createdb"),
             patch("fraisier.strategies._core.drop_db") as drop,
             pytest.raises(ValueError, match="PGTZ is set"),
         ):

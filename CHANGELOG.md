@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it and the command exited 1, including the config `fraisier init` writes.
   It now gives the config loader's verdict on the block: a strategy fraisier
   knows, the `admin_url` that strategy needs, and URLs fraisier can read.
+- **The config `fraisier init` writes loads.** The `django` and `rails`
+  templates gave `development` the `rebuild` strategy with no `admin_url`,
+  which the loader refuses. They now set `admin_url: postgresql:///postgres`
+  (libpq's default socket, peer authentication), with a comment that the
+  deploy OS user needs a PostgreSQL role with `CREATEDB`.
+- **`validate-deployment` reports a config the loader refuses as an error,
+  not a traceback.** It prints the loader's message, which names the field
+  and the fix, and exits 1.
+- **A rebuild whose `admin_url` role cannot create databases refuses before
+  dropping anything.** `DROP DATABASE` needs only ownership, so a role that
+  owned the database but lacked `CREATEDB` dropped it, then failed on
+  `createdb` with only an exit status, and the database was gone. The
+  rebuild now checks the role first and names it and the fix
+  (`ALTER ROLE … CREATEDB`).
 
 ## [0.96.0] - 2026-10-31
 

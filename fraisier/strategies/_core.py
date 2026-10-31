@@ -22,6 +22,7 @@ from fraisier.dbops.operations import (
     DEFAULT_TEMPLATE_STRATEGY,
     create_db,
     drop_db,
+    refuse_without_createdb,
     run_psql,
     terminate_backends,
 )
@@ -494,6 +495,7 @@ class RebuildStrategy(Strategy):
             app_path = Path(split.app_path)
 
             # Drop and recreate the database as postgres superuser.
+            refuse_without_createdb(connection_url=admin_url, db_name=db_name)
             terminate_backends(db_name, connection_url=admin_url)
             drop_db(db_name, connection_url=admin_url)
             code, _, stderr = create_db(
