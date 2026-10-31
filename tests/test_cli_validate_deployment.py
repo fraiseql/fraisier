@@ -8,10 +8,13 @@ import subprocess
 from pathlib import Path  # noqa: TC003
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
 from fraisier.cli.main import main
+from fraisier.init_templates import django_template, rails_template
+from fraisier.validation import DeploymentReadinessValidator
 
 
 def _make_config(tmp_path: Path, config_dict: dict) -> str:
@@ -236,26 +239,6 @@ class TestDatabaseConfigCheck:
             assert result.exit_code == 0
             assert "skipped" in result.output.lower()
 
-    def test_incomplete_database_config_fails(self, tmp_path):
-        """Database config missing required fields fails."""
-        config = _minimal_config()
-        app_path = tmp_path / "app"
-        app_path.mkdir()
-        config["fraises"]["my_api"]["environments"]["production"]["app_path"] = str(
-            app_path
-        )
-        config["fraises"]["my_api"]["environments"]["production"]["database"] = {
-            "host": "localhost",
-        }
-        config_file = _make_config(tmp_path, config)
-        runner = CliRunner()
-
-        with patch.dict(os.environ, _with_wrappers(tmp_path)):
-            result = runner.invoke(
-                main, ["-c", config_file, "validate-deployment", "my_api", "production"]
-            )
-            assert result.exit_code == 1
-
     def test_complete_database_config_passes(self, tmp_path):
         """Complete database config passes."""
         config = _minimal_config()
@@ -265,9 +248,7 @@ class TestDatabaseConfigCheck:
             app_path
         )
         config["fraises"]["my_api"]["environments"]["production"]["database"] = {
-            "host": "localhost",
-            "dbname": "my_db",
-            "user": "my_user",
+            "name": "acme_db",
             "strategy": "rebuild",
             "admin_url": "postgresql:///postgres?host=/var/run/postgresql",
         }
@@ -279,6 +260,56 @@ class TestDatabaseConfigCheck:
                 main, ["-c", config_file, "validate-deployment", "my_api", "production"]
             )
             assert result.exit_code == 0
+
+
+def _init_database_block(template) -> dict:
+    """The production ``database:`` block a ``fraisier init`` template writes."""
+    (fraise,) = yaml.safe_load(template())["fraises"].values()
+    return fraise["environments"]["production"]["database"]
+
+
+class TestDatabaseConfigIsTheLoadersVerdict:
+    """``database_config_complete`` asks what the config loader asks, no more."""
+
+    @pytest.mark.parametrize("template", [django_template, rails_template])
+    def test_the_block_fraisier_init_writes_passes(self, tmp_path, template):
+        config = _minimal_config()
+        env = config["fraises"]["my_api"]["environments"]["production"]
+        env["app_path"] = str(tmp_path)
+        env["database"] = _init_database_block(template)
+        config_file = _make_config(tmp_path, config)
+
+        with patch.dict(os.environ, _with_wrappers(tmp_path)):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "-c",
+                    config_file,
+                    "validate-deployment",
+                    "my_api",
+                    "production",
+                    "--json",
+                ],
+            )
+
+        rows = {r["name"]: r for r in json.loads(result.output)["checks"]}
+        assert rows["database_config_complete"]["passed"], rows[
+            "database_config_complete"
+        ]
+
+    def test_a_block_the_loader_refuses_fails_with_its_reason(self):
+        validator = DeploymentReadinessValidator(
+            {
+                "fraise_name": "my_api",
+                "environment": "production",
+                "database": {"name": "acme_db", "strategy": "rebuild"},
+            }
+        )
+
+        result = validator._check_database_config_complete()
+
+        assert not result.passed
+        assert "requires database.admin_url" in (result.message or "")
 
 
 class TestSystemdCheck:
