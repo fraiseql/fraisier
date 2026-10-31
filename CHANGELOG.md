@@ -177,6 +177,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     none`. No setting overrides it. See "Unfinished backfill placeholders" in
     the deployment guide.
 
+### Removed
+
+- **`ValidationRunner.run_operational`**, with its git, SSH and database
+  probes. No command called it, and its database probe read
+  `database.host`/`database.port`, which the config does not define, so it
+  checked `localhost:5432` whatever the URL named. `fraisier validate` and
+  `validate-deployment` are unchanged.
+
 ## [0.95.0] - 2026-10-27
 
 ### Fixed
