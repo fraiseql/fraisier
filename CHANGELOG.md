@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fraisier validate-deployment` accepts a real `database:` block.** Its
+  `database_config_complete` check required `host`, `dbname` and `user`,
+  keys no fraisier config has, so every environment with a database failed
+  it and the command exited 1, including the config `fraisier init` writes.
+  It now gives the config loader's verdict on the block: a strategy fraisier
+  knows, the `admin_url` that strategy needs, and URLs fraisier can read.
+
 ## [0.96.0] - 2026-10-31
 
 ### Fixed

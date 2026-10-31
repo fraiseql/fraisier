@@ -578,7 +578,14 @@ class DeploymentReadinessValidator:
         return ValidationCheckResult(name="app_path_writable", passed=True)
 
     def _check_database_config_complete(self) -> ValidationCheckResult:
-        """Check database config is present and complete if configured."""
+        """Check the ``database:`` block as the config loader checks it.
+
+        The loader's per-environment validation is the one definition of a
+        complete block (a strategy it knows, the ``admin_url`` that strategy
+        needs, URLs ``PgConn`` reads); this check reports its verdict.
+        """
+        from fraisier.config._validation import validate_one_fraise_environment
+
         db_config = self.fraise_config.get("database")
 
         if not db_config:
@@ -589,17 +596,17 @@ class DeploymentReadinessValidator:
                 message="not configured (skipped)",
             )
 
-        required_db_fields = ["host", "dbname", "user", "strategy"]
-        missing = [f for f in required_db_fields if not db_config.get(f)]
-
-        if missing:
+        try:
+            validate_one_fraise_environment(
+                str(self.fraise_config.get("fraise_name", "database")),
+                str(self.fraise_config.get("environment", "")),
+                {"database": db_config},
+            )
+        except ValidationError as exc:
             return ValidationCheckResult(
                 name="database_config_complete",
                 passed=False,
-                message=(
-                    f"Database config incomplete. Missing: {', '.join(missing)}. "
-                    f"Fix: add {', '.join(missing)} to database section"
-                ),
+                message=f"Database config refused: {exc}",
                 severity="error",
             )
 
