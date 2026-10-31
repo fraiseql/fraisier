@@ -55,6 +55,18 @@ jobs:
         uv run pytest --version
         pg_isready -h localhost -p 5432 -U fraisier && echo 'PostgreSQL ready' || echo 'PostgreSQL not ready'
 
+    - name: A PostgreSQL on libpq's default socket
+      # `fraisier init` writes `admin_url: postgresql:///postgres`: the socket in
+      # libpq's default directory, as the OS user, by peer authentication. The
+      # service container is reachable over TCP only, so the runner's own
+      # PostgreSQL serves that socket, with TCP off so it leaves the
+      # container's port 5432 alone, and the runner user gets a CREATEDB role.
+      run: |
+        sudo sed -i "s/^#\?listen_addresses.*/listen_addresses = ''/" /etc/postgresql/*/main/postgresql.conf
+        sudo systemctl start postgresql.service
+        sudo -u postgres createuser --createdb "$(id -un)"
+        psql postgresql:///postgres -Atc "SELECT current_user, rolcreatedb FROM pg_roles WHERE rolname = current_user"
+
     - name: Run tests with coverage
       env:
         # The suite skips itself into a green report without this: the ten
@@ -73,8 +85,14 @@ jobs:
           --cov=fraisier \
           --cov-report=xml \
           --cov-report=term-missing \
+          --junitxml=junit.xml \
           -v \
           --tb=short
+
+    - name: The init template's rebuild ran, and passed
+      # It skips where no server is on libpq's default socket, and a skip is
+      # green: count the passes in the run above instead.
+      run: python3 .github/scripts/assert_passed.py junit.xml tests.integration.test_rebuild_admin_url 2
 
     - name: Upload coverage
       uses: codecov/codecov-action@v6

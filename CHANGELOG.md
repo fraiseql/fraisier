@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ⚠️ **A rebuild could drop the database and then fail to recreate it.**
+  The `rebuild` strategy drops and recreates the database through
+  `admin_url`. Dropping a database needs only ownership; creating one needs
+  `CREATEDB`. So when the `admin_url` role owned the database but lacked
+  `CREATEDB`, the rebuild dropped it, failed on `createdb` with only an exit
+  status, and left no database. The rebuild now checks the role before it
+  drops anything, and refuses with the role's name and the fix
+  (`ALTER ROLE … CREATEDB`).
 - **`fraisier validate-deployment` accepts a real `database:` block.** Its
   `database_config_complete` check required `host`, `dbname` and `user`,
   keys no fraisier config has, so every environment with a database failed
@@ -23,12 +31,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate-deployment` reports a config the loader refuses as an error,
   not a traceback.** It prints the loader's message, which names the field
   and the fix, and exits 1.
-- **A rebuild whose `admin_url` role cannot create databases refuses before
-  dropping anything.** `DROP DATABASE` needs only ownership, so a role that
-  owned the database but lacked `CREATEDB` dropped it, then failed on
-  `createdb` with only an exit status, and the database was gone. The
-  rebuild now checks the role first and names it and the fix
-  (`ALTER ROLE … CREATEDB`).
 
 ## [0.96.0] - 2026-10-31
 
