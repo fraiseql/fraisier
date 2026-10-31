@@ -237,13 +237,21 @@ def validate_deployment(
         fraisier validate-deployment my_api production
         fraisier validate-deployment my_api staging --json
     """
+    from fraisier.errors import ValidationError
     from fraisier.validation import DeploymentReadinessValidator
 
     from ._json import dumps as json_dumps
 
     config = ctx.obj["config"]
 
-    fraise_config = config.get_fraise_environment(fraise, environment)
+    # The loader validates the environment as it reads it; its refusal names
+    # the field and the fix, which a traceback would bury.
+    try:
+        fraise_config = config.get_fraise_environment(fraise, environment)
+    except ValidationError as exc:
+        console.print("[red]Error:[/red] ", end="")
+        console.print(str(exc), markup=False, highlight=False)
+        raise SystemExit(1) from None
     if not fraise_config:
         console.print(
             f"[red]Error:[/red] Fraise '{fraise}' environment '{environment}' not found"

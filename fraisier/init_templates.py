@@ -66,6 +66,11 @@ fraises:
         database:
           name: django_dev
           strategy: rebuild
+          # The rebuild drops and recreates the database through admin_url.
+          # This one is the local socket in libpq's default directory, with
+          # peer auth: the deploy OS user must exist as a PostgreSQL role
+          # with CREATEDB (createuser --createdb <deploy user>).
+          admin_url: postgresql:///postgres
           # Migration command: confiture migrate up
           # (or manage.py migrate if not using confiture)
         health_check:
@@ -112,6 +117,11 @@ fraises:
         database:
           name: rails_dev
           strategy: rebuild
+          # The rebuild drops and recreates the database through admin_url.
+          # This one is the local socket in libpq's default directory, with
+          # peer auth: the deploy OS user must exist as a PostgreSQL role
+          # with CREATEDB (createuser --createdb <deploy user>).
+          admin_url: postgresql:///postgres
           # Migration: rails db:migrate / rake db:migrate
         health_check:
           url: http://localhost:3000/health
