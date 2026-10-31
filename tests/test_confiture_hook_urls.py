@@ -15,16 +15,23 @@ child environment, so neither reads an ambient ``PG*`` variable.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import psycopg
 import pytest
 from confiture.core.hooks import HookContext, HookPhase
-from confiture.core.hooks.builtin import AuditHook, BackupHook
+from confiture.core.hooks.builtin import (
+    AuditConfig,
+    AuditHook,
+    BackupConfig,
+    BackupHook,
+)
 from confiture.core.hooks.context import ExecutionContext
 from psycopg.conninfo import conninfo_to_dict
 
+from fraisier.config import AuditHookConfig, BackupHookConfig
 from fraisier.config._lazy_env import LazyEnv
 from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops.confiture import _register_migration_hooks, refuse_hook_urls
@@ -267,3 +274,43 @@ class TestTheDeployRefusesBeforeTheStrategy:
             deployer._run_strategy()
 
         strategy.execute.assert_not_called()
+
+
+def _fields(cls: type) -> set[str]:
+    return {f.name for f in dataclasses.fields(cls)}
+
+
+class TestTheSchemaDescribesWhatConfitureTakes:
+    """``BackupHookConfig``/``AuditHookConfig`` describe ``database.hooks``.
+
+    Each block reaches confiture's config class as keyword arguments, so a
+    field confiture does not take makes registration skip the hook.
+    """
+
+    @pytest.mark.parametrize(
+        ("ours", "theirs", "supplied"),
+        [
+            # fraisier supplies `env`; `compress` is deprecated for `compression`.
+            (BackupHookConfig, BackupConfig, {"env", "compress"}),
+            (AuditHookConfig, AuditConfig, {"connection_factory"}),
+        ],
+    )
+    def test_the_fields_are_confitures(self, ours, theirs, supplied):
+        assert _fields(ours) - {"enabled"} == _fields(theirs) - supplied
+
+    @pytest.mark.parametrize(
+        ("key", "block"),
+        [
+            ("backup", BackupHookConfig(enabled=True, database_url=_URL)),
+            (
+                "audit",
+                AuditHookConfig(enabled=True, database_url=_URL, signing_key="k"),
+            ),
+        ],
+    )
+    def test_a_block_written_to_the_schema_registers(self, key, block):
+        migrator = MagicMock()
+
+        _register_migration_hooks(migrator, {key: dataclasses.asdict(block)})
+
+        migrator.register_hook.assert_called_once()

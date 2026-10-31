@@ -528,12 +528,17 @@ class ShipCheckConfig:
 
 @dataclass
 class BackupHookConfig:
-    """Configuration for pre-migration backup hook."""
+    """``database.hooks.backup``: confiture's ``BackupHook``, before each migration.
+
+    The fields besides ``enabled`` are confiture's ``BackupConfig``; fraisier
+    supplies its ``env``, the child environment of ``database_url``.
+    """
 
     enabled: bool = False
     backup_dir: str = "/var/backups/fraisier"
-    retention_days: int = 30
-    compress: bool = True
+    database_url: str = ""
+    max_backups: int = 10
+    compression: str | None = None  # confiture's default: zstd
 
 
 @dataclass(frozen=True)
@@ -597,10 +602,16 @@ class RetainEntry:
 
 @dataclass
 class AuditHookConfig:
-    """Configuration for post-migration audit hook."""
+    """``database.hooks.audit``: confiture's ``AuditHook``, after each migration.
+
+    The fields besides ``enabled`` are confiture's ``AuditConfig``; fraisier
+    supplies its ``connection_factory``, which opens ``database_url`` pinned.
+    """
 
     enabled: bool = False
-    audit_dir: str = "/var/log/fraisier/audit"
+    database_url: str = ""
+    signing_key: str = ""
+    environment: str = "unknown"
 
 
 @dataclass
