@@ -176,6 +176,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     before anything applies. Fill it in, or write `-- confiture:backfill
     none`. No setting overrides it. See "Unfinished backfill placeholders" in
     the deployment guide.
+- **`BackupHookConfig` and `AuditHookConfig` have confiture's fields.** They
+  describe `database.hooks.backup` and `.audit`, whose keys reach confiture's
+  `BackupConfig` and `AuditConfig` as keyword arguments. But they had
+  `retention_days`, `compress` and `audit_dir`, which confiture does not
+  take, so a block written to them was logged and skipped at registration.
+  They now have `backup_dir`, `database_url`, `max_backups` and `compression`,
+  and `database_url`, `signing_key` and `environment`. The config loader
+  never built them, so a `fraises.yaml` reads as before.
 
 ### Removed
 
