@@ -7,7 +7,7 @@ propagate.  ``tv_user`` is LOGGED (the default from beta.28), which
 explicit refill and finds it empty, so the test can see the gap it closes.
 ``tv_post`` is UNLOGGED, so the refill covers both kinds.
 
-Needs pg_tviews read contract 2 (0.1.0-beta.30, the release confiture 1.37
+Needs pg_tviews read contract 2 or 3 (0.1.0-beta.30 or later, the release confiture 1.37
 requires) on the server.  The ``tviews`` CI leg runs it; elsewhere it skips
 without one.
 """
@@ -74,7 +74,7 @@ def lean_dump(pg_tviews_target: PgTarget, tmp_path: Path):
     _exec(target, "postgres", f"CREATE DATABASE {_SRC_DB}")
     # Its own round trip: in one batch with CREATE EXTENSION the hook is not
     # loaded yet and the TVIEWs become plain tables.
-    _exec(target, _SRC_DB, "CREATE EXTENSION pg_tviews")
+    _exec(target, _SRC_DB, "CREATE EXTENSION pg_tviews CASCADE")
     _exec(
         target,
         _SRC_DB,

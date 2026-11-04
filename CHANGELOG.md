@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `!envvar NAME` for the whole URL, and percent-encode a literal `${` in a
   password as `%24%7B`. `${VAR}` in `hooks:` and `notifications:` is unchanged.
 
+### Fixed
+
+- **fraisier reads pg_tviews 0.1.0-beta.35.** It offers read contract 3, which
+  fraisier refused as "newer": every TVIEW check, rebuild and status failed with
+  "upgrade fraisier". What fraisier reads (the registry,
+  `pg_tviews_rebuild_all`, `pg_tviews_profile`) is unchanged in contract 3, so
+  it now reads contracts 2 and 3. confiture reads contract 3 only from 1.45.0.
+- **The empty-TVIEW probe names the fix that works on beta.35**
+  ([#504](https://github.com/fraiseql/fraisier/issues/504)). From beta.35 a
+  backing view is its TVIEW owner's alone, so a deploy role holding
+  `SELECT` on `tv_<entity>` is refused it all the same, and the
+  `GRANT SELECT` fraisier named fixed nothing. It now names
+  `GRANT <TVIEW owner> TO <role>` there, and still names `GRANT SELECT` on
+  beta.34 and earlier.
+
 ## [0.97.0] - 2026-11-06
 
 **Two ⚠️ changes to read before upgrading:** the API vhosts now need nginx's brotli
@@ -97,6 +112,7 @@ reconciles its units, failing on drift by default (#506).
   CLI's next steps printed exited 1. They now say
   `sudo fraisier scaffold-install`. A deploy stopped by a pending operator
   install says so and names it, instead of advising a retry that cannot help.
+||||||| parent of d6e7e08 (fix(tviews): read pg_tviews 0.1.0-beta.35, and name the grant that works there)
 
 ## [0.96.1] - 2026-11-05
 

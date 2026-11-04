@@ -1447,16 +1447,27 @@ reads, say), and a superuser gets it too.
   TVIEW owner's, and it says so instead.
 
 A TVIEW the deploy role may not read, or whose backing view it may not read, cannot be
-verified. The probe logs `pg_tviews: cannot verify …` naming it and the
-`GRANT SELECT ON <schema>.tv_<entity>` that fixes it, skips it, and does not fail the
-deploy; the TVIEWs the role can read are still checked. From pg_tviews 0.1.0-beta.25 the
-backing view takes its TVIEW table's `SELECT` grants, so a role that reads `tv_<entity>`
-reads the view.
+verified. The probe logs `pg_tviews: cannot verify …` naming it and the `GRANT` that
+fixes it, skips it, and does not fail the deploy; the TVIEWs the role can read are still
+checked. Which `GRANT` depends on the pg_tviews:
+
+- **0.1.0-beta.25 to beta.34** (read contract 2): the backing view takes its TVIEW
+  table's `SELECT` grants, so the fix is `GRANT SELECT ON <schema>.tv_<entity> TO
+  <current role>`.
+- **0.1.0-beta.35 and later** (read contract 3): the backing view is its TVIEW owner's
+  alone. No grant reaches it, so a deploy role that reads `tv_<entity>` is refused all
+  the same, and the fix is `GRANT <TVIEW owner> TO <current role>`. A deploy role that
+  owns its TVIEWs needs nothing.
 
 Under `on_empty: fail` that is not a warning: a TVIEW nobody can look at has cleared
 nothing, so a gate the project declared (and the restore probe) stops, naming each one and
-the `GRANT SELECT ON <schema>.tv_<entity> TO <current role>` that fixes it. `on_empty: warn`,
-and a gate that is only the default, keep the log line.
+the `GRANT` that fixes it. `on_empty: warn`, and a gate that is only the default, keep
+the log line.
+
+pg_tviews 0.1.0-beta.35 also reports empty TVIEWs itself, in
+`pg_tviews_check_health()`'s `contents` component. fraisier does not read it: it leaves
+out UNLOGGED TVIEWs, and a TVIEW whose owner the caller is not a member of, and answers
+`OK` all the same (measured), where the probe names each TVIEW it could not check.
 
 `on_empty: warn` turns the refusals into a log line, the way `on_critical: warn`
 does; `fail` is the default for the same reason it is there. The probe follows

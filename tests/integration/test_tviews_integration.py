@@ -5,7 +5,7 @@ restore.  :func:`_empty` reproduces the state exactly as pg_tviews itself report
 it (``is_empty`` and ``needs_rebuild`` both true), without needing a cluster to
 crash.
 
-Needs pg_tviews read contract 2 (0.1.0-beta.30, the release confiture 1.37
+Needs pg_tviews read contract 2 or 3 (0.1.0-beta.30 or later, the release confiture 1.37
 requires).  The ``tviews`` CI leg runs it; elsewhere it skips without one.
 """
 
@@ -63,7 +63,7 @@ def url(pg_tviews_target: PgTarget) -> Iterator[str]:
         # Own round trips: in one batch with CREATE EXTENSION the hook is not
         # loaded yet and `tv_post` becomes a plain table.
         with psycopg.connect(target, autocommit=True) as conn:
-            conn.execute("CREATE EXTENSION pg_tviews")
+            conn.execute("CREATE EXTENSION pg_tviews CASCADE")
         with psycopg.connect(target, autocommit=True) as conn:
             conn.execute(_TREE)
         yield target
@@ -305,3 +305,62 @@ def test_a_refusal_on_a_table_names_the_owner_not_the_function_grant(
     assert "owner" in message
     assert "GRANT EXECUTE" not in message
     assert "superuser" not in message
+
+
+_READER = "fraisier_it_tview_reader"
+
+
+def test_the_grant_an_unreadable_tview_names_is_the_fix(url: str) -> None:
+    """A role refused a TVIEW owned by another is told what lets it check it.
+
+    Up to contract 2 the backing view takes its table's grants, so a role without
+    ``SELECT`` on the table is the one refused.  From contract 3 (pg_tviews
+    0.1.0-beta.35) the view is the owner's alone, so a role holding that grant is
+    refused too.  Either way the statement in the message is executed verbatim,
+    and the probe then finds the TVIEW emptied here.
+    """
+    with psycopg.connect(url, autocommit=True) as conn:
+        for role in (_OWNER, _READER):
+            if not conn.execute(
+                "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
+            ).fetchone():
+                conn.execute(f"CREATE ROLE {role}")
+        conn.execute(f"GRANT CREATE ON SCHEMA public TO {_OWNER}")
+        conn.execute(f"SET ROLE {_OWNER}")
+        conn.execute(
+            "CREATE TABLE tb_note (pk_note bigint PRIMARY KEY, id uuid NOT NULL "
+            "UNIQUE, body text)"
+        )
+        conn.execute(
+            "INSERT INTO tb_note VALUES "
+            "(1, '00000000-0000-0000-0000-0000000000b1', 'hi')"
+        )
+        conn.execute(
+            "CREATE TABLE tv_note AS SELECT pk_note, id, "
+            "jsonb_build_object('body', body) AS data FROM tb_note"
+        )
+        row = conn.execute("SELECT tviews.contract_version()").fetchone()
+        if row and row[0] >= 3:
+            # The role pg_tviews#287 leaves behind: it holds the grant that was
+            # the fix up to contract 2, and is refused all the same.
+            conn.execute(f"GRANT SELECT ON tv_note TO {_READER}")
+        conn.execute("TRUNCATE tv_note")
+        conn.execute("RESET ROLE")
+        # Only the TVIEW under test is the reader's to judge.
+        conn.execute(f"GRANT SELECT ON tv_post, tv_user TO {_READER}")
+    reader = _as_role(url, _READER)
+    try:
+        with pytest.raises(tviews.TviewError) as excinfo:
+            tviews.find_empty_tviews(reader, on_unreadable="fail")
+        message = str(excinfo.value)
+        assert "public.tv_note" in message
+        grant = message[message.index("GRANT") :].split(";", maxsplit=1)[0]
+        with psycopg.connect(url, autocommit=True) as conn:
+            conn.execute(grant)
+
+        found = tviews.find_empty_tviews(reader)
+        assert [e.tview for e in found] == ["public.tv_note"]
+    finally:
+        # A membership is the cluster's and outlives the fixture's database.
+        with psycopg.connect(url, autocommit=True) as conn:
+            conn.execute(f"REVOKE {_OWNER} FROM {_READER}")

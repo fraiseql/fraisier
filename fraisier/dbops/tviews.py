@@ -6,8 +6,9 @@ nothing then tells the application: every count passes and the read model is
 simply gone.  This module is how fraisier sees that, and the one place that
 knows how pg_tviews is spoken to.
 
-Everything goes through pg_tviews' documented read contract 2 (0.1.0-beta.30)
-— the ``tviews.registry`` view and ``contract_version()`` — never ``pg_tview_meta``,
+Everything goes through pg_tviews' documented read contracts 2 (0.1.0-beta.30)
+and 3 (0.1.0-beta.35) — the ``tviews.registry`` view and ``contract_version()`` —
+never ``pg_tview_meta``,
 and never a name inferred from another (``v_<entity>`` from ``tv_<entity>``).
 The extension's schema is read from the catalog rather than assumed to be
 ``tviews``.
@@ -29,11 +30,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: The read contract fraisier speaks (pg_tviews 0.1.0-beta.30, the first release to
-#: offer it), and the only one confiture reads (confiture #714): a host upgrades
-#: both together.  It replaced the profile's ``tview`` column, which
-#: :func:`profile_tviews` composes back.
-CONTRACT = 2
+#: The read contracts fraisier speaks, oldest first.  Contract 2 (pg_tviews
+#: 0.1.0-beta.30, confiture #714) replaced the profile's ``tview`` column, which
+#: :func:`profile_tviews` composes back.  Contract 3 (0.1.0-beta.35) renamed
+#: functions fraisier never calls: the registry, ``pg_tviews_rebuild_all`` and
+#: ``pg_tviews_profile`` read as under contract 2.  confiture reads both from 1.45.
+CONTRACTS = (2, 3)
+
+#: The first contract whose backing views no grant reaches (pg_tviews#287).
+_OWNER_ONLY_VIEWS = 3
 
 _CONNECT_TIMEOUT_SECONDS = 10
 
@@ -115,11 +120,11 @@ def read_support(conn: _Executes) -> TviewsSupport:
         ).fetchone()
     except psycopg.Error:
         return TviewsSupport("outdated", schema)
-    if contract is None or contract[0] < CONTRACT:
+    if contract is None or contract[0] < CONTRACTS[0]:
         return TviewsSupport("outdated", schema)
-    if contract[0] > CONTRACT:
+    if contract[0] > CONTRACTS[-1]:
         return TviewsSupport("newer", schema, contract[0])
-    return TviewsSupport("ok", schema, CONTRACT)
+    return TviewsSupport("ok", schema, contract[0])
 
 
 def _connect(url: str) -> Connection:
@@ -137,7 +142,7 @@ def tviews_installed(url: str) -> bool:
 
 
 _HINT_OUTDATED = (
-    f"pg_tviews here predates read contract {CONTRACT}; upgrade it to "
+    f"pg_tviews here predates read contract {CONTRACTS[0]}; upgrade it to "
     "0.1.0-beta.30 together with confiture, which reads only that contract, then "
     "run ALTER EXTENSION pg_tviews UPDATE, then "
     "SELECT * FROM tviews.pg_tviews_reregister_all()"
@@ -157,7 +162,8 @@ def _usable(conn: _Executes) -> TviewsSupport | None:
     if support.state == "newer":
         raise TviewError(
             f"pg_tviews here offers read contract {support.contract}, which this "
-            f"fraisier does not read (it reads {CONTRACT}); upgrade fraisier"
+            f"fraisier does not read (it reads {' and '.join(map(str, CONTRACTS))}); "
+            "upgrade fraisier"
         )
     return support if support.state == "ok" else None
 
@@ -213,11 +219,10 @@ def find_empty_tviews(
                     )
                 ).fetchone()
             except psycopg.errors.InsufficientPrivilege:
-                grant = _grant_hint(conn, schema, name)
+                grant = _grant_hint(conn, schema, name, support.contract)
                 log.warning(
                     "pg_tviews: cannot verify %s.%s (backing view %s.%s): "
-                    "permission denied; skipped. Fix: %s; the backing view "
-                    "follows its table's grants",
+                    "permission denied; skipped. Fix: %s",
                     schema,
                     name,
                     view_schema,
@@ -260,15 +265,30 @@ def list_tviews(url: str) -> list[tuple[str, str]]:
         return [(str(schema), str(name)) for schema, name in rows]
 
 
-def _grant_hint(conn: _Executes, schema: str, name: str) -> str:
-    """The ``GRANT`` that lets the connecting role read a TVIEW, ready to paste."""
+def _grant_hint(conn: _Executes, schema: str, name: str, contract: int | None) -> str:
+    """The ``GRANT`` that lets the connecting role read a TVIEW, ready to paste.
+
+    Up to contract 2 the backing view takes its table's ``SELECT`` grants.  From
+    contract 3 (pg_tviews 0.1.0-beta.35) it is the TVIEW owner's alone, whatever
+    is granted, so only membership in the owner's role reads it.
+    """
+    if contract is not None and contract >= _OWNER_ONLY_VIEWS:
+        row = conn.execute(
+            "SELECT pg_get_userbyid(c.relowner), current_user FROM pg_class c "
+            "WHERE c.oid = %s::regclass",
+            (sql.Identifier(schema, name).as_string(),),
+        ).fetchone()
+        owner, role = row or ("<owner>", "<role>")
+        grant = sql.SQL("GRANT {o} TO {r}").format(
+            o=sql.Identifier(owner), r=sql.Identifier(role)
+        )
+        return f"{grant.as_string()}; the backing view is its TVIEW owner's alone"
     row = conn.execute("SELECT current_user").fetchone()
     role = row[0] if row else "<role>"
-    return (
-        sql.SQL("GRANT SELECT ON {t} TO {r}")
-        .format(t=sql.Identifier(schema, name), r=sql.Identifier(role))
-        .as_string()
+    grant = sql.SQL("GRANT SELECT ON {t} TO {r}").format(
+        t=sql.Identifier(schema, name), r=sql.Identifier(role)
     )
+    return f"{grant.as_string()}; the backing view follows its table's grants"
 
 
 def _rebuild_grant(conn: _Executes, schema: str) -> tuple[str, str]:
