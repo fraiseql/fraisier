@@ -1,0 +1,18 @@
+    # Compression (#500). Debian's nginx.conf compresses text/html alone; these
+    # are the types an API answers with. gzip_proxied: every response here
+    # comes through proxy_pass. A bearer token travels in a request header and
+    # is not reflected in the body, which keeps BREACH out of reach.
+    gzip on;
+    gzip_proxied any;
+    gzip_types application/json application/graphql-response+json;
+    gzip_min_length 1024;
+    gzip_comp_level 5;
+    gzip_vary on;
+{% if scaffold.nginx.brotli %}
+    # brotli needs nginx's brotli module (libnginx-mod-http-brotli-filter);
+    # scaffold.nginx.brotli: false where the host cannot have it.
+    brotli on;
+    brotli_types application/json application/graphql-response+json;
+    brotli_min_length 1024;
+    brotli_comp_level 5;
+{% endif %}

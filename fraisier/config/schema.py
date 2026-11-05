@@ -370,6 +370,12 @@ class NginxScaffoldConfig:
     restricted_paths: list[str] = field(default_factory=list)
     webhook_port: int = 8080
     gateway_fraise: str | None = None
+    brotli: bool = True
+    """Compress API responses with brotli as well as gzip (#500).
+
+    Needs nginx's brotli module (``libnginx-mod-http-brotli-filter``), which
+    ``install.sh`` installs; ``false`` on a host that cannot have it.
+    """
 
     @property
     def cors_origins_escaped(self) -> list[str]:

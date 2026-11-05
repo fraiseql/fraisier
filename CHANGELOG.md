@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ⚠️ **The API vhosts compress JSON with gzip and brotli**
+  ([#500](https://github.com/fraiseql/fraisier/issues/500)). Debian's stock
+  `nginx.conf` compresses `text/html` alone, so every JSON and GraphQL
+  response went out uncompressed. Every HTTPS vhost now compresses
+  `application/json` and `application/graphql-response+json` (1 KiB and up,
+  level 5); a 28 KB JSON response measured 2.6 KB with gzip and 1.2 KB with
+  brotli. **brotli is on by default and needs nginx's brotli module**,
+  `libnginx-mod-http-brotli-filter` (Debian 12/13, Ubuntu 24.04; not Ubuntu
+  22.04). `sudo fraisier scaffold-install` installs it, and refuses before
+  changing anything where it cannot; `fraisier setup` refuses unless it is
+  loaded. Set `scaffold.nginx.brotli: false` to keep gzip alone. The vhosts
+  change when an operator runs `sudo fraisier scaffold-install`, as for any
+  nginx change; a deploy does not install them. Until then, a deploy that
+  re-renders the scaffold stops at the changed vhost, reported as a
+  `pending operator install`.
+
 ### Fixed
 
 - ⚠️ **Four deploy steps that never ran now do**
@@ -40,8 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scaffold-diff` compared against a stale render. A `fraises.yaml` change
   did re-render, but with the old templates. The deploy now reads
   `template_dir` from the `fraises.yaml` it installs. The first deploy after
-  upgrading copies the current templates, so it re-renders and installs the
-  scaffold once even when nothing else changed.
+  upgrading copies the current templates and, where they differ from the
+  ones on the server, re-renders. If that render changes a file only an
+  operator installs (nginx, sudoers, sockets), the deploy stops as for any
+  such change, until `sudo fraisier scaffold-install` installs it.
 
 ## [0.96.1] - 2026-11-05
 

@@ -418,6 +418,31 @@ sudo fraisier setup
     application services
 12. Validates the result: `nginx -t`, and every `git_repo` exists
 
+#### Compression
+
+Every HTTPS vhost fraisier renders compresses `application/json` and
+`application/graphql-response+json` responses with gzip and brotli (responses
+of 1 KiB or more, level 5). Debian's stock `nginx.conf` turns gzip on for
+`text/html` alone, so without this an API answered uncompressed.
+
+brotli needs nginx's brotli module, `libnginx-mod-http-brotli-filter`. Debian
+12 and 13 and Ubuntu 24.04 package it; Ubuntu 22.04 does not. `install.sh` (and so `sudo fraisier scaffold-install`)
+installs it with the other packages, and refuses before changing anything on a
+host where nginx neither loads it nor apt can install it. `fraisier setup`
+installs no packages, so it refuses unless the module is already loaded. On
+such a host, keep gzip and turn brotli off:
+
+```yaml
+scaffold:
+  nginx:
+    brotli: false
+```
+
+A bearer token travels in a request header and is not reflected in response
+bodies, which keeps compression-based attacks such as BREACH out of reach of
+a token-authenticated API. An API that echoes a secret into a compressed
+response body should weigh that before relying on the default.
+
 Filter to a specific environment or server:
 
 ```bash
