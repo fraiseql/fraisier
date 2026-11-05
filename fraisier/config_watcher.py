@@ -30,6 +30,12 @@ class ConfigWatcher:
 
     HASH_FILENAME = ".config_hash"
     HASH_ALGORITHM = "sha256"
+    RENDERED_BY_FILENAME = ".scaffold_rendered_by"
+    """The fraisier version that last rendered the state tree.
+
+    The hash covers fraises.yaml and ``template_dir``, not fraisier's own
+    templates, so it cannot see an upgrade; this file can.
+    """
 
     def __init__(self, project_dir: Path) -> None:
         """Initialize config watcher.
@@ -40,6 +46,7 @@ class ConfigWatcher:
         self.project_dir = Path(project_dir)
         self.config_file = self.project_dir / "fraises.yaml"
         self.hash_file = self.project_dir / self.HASH_FILENAME
+        self.rendered_by_file = self.project_dir / self.RENDERED_BY_FILENAME
 
     def compute_hash(self) -> str:
         """Compute hash of fraises.yaml plus any ``scaffold.template_dir`` tree.
@@ -122,6 +129,21 @@ class ConfigWatcher:
         except FileNotFoundError:
             return True  # Config doesn't exist, treat as change
 
+    def rendered_by(self) -> str | None:
+        """The fraisier version that last rendered the state tree, if recorded."""
+        try:
+            return self.rendered_by_file.read_text().strip() or None
+        except OSError:
+            return None
+
+    def rendered_by_this_version(self) -> bool:
+        """Whether the running fraisier rendered the state tree."""
+        return self.rendered_by() == running_version()
+
+    def save_rendered_by(self) -> None:
+        """Record that the running fraisier rendered the state tree."""
+        self.rendered_by_file.write_text(running_version() + "\n")
+
     def forget_hash(self) -> None:
         """Drop the saved hash, so the next deploy treats the config as changed."""
         self.hash_file.unlink(missing_ok=True)
@@ -137,3 +159,10 @@ class ConfigWatcher:
             self.hash_file.write_text(current)
         except OSError as e:
             raise OSError(f"Failed to save config hash: {e}") from e
+
+
+def running_version() -> str:
+    """The running fraisier's version, read at each call."""
+    import fraisier
+
+    return fraisier.__version__

@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded. Set `scaffold.nginx.brotli: false` to keep gzip alone. The vhosts
   change when an operator runs `sudo fraisier scaffold-install`, as for any
   nginx change; a deploy does not install them. Until then, a deploy that
-  re-renders the scaffold stops at the changed vhost, reported as a
+  changes `fraises.yaml` stops at the changed vhost, reported as a
   `pending operator install`.
 
 ### Fixed
@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator installs (nginx, sudoers, sockets), the deploy stops as for any
   such change, until `sudo fraisier scaffold-install` installs it.
 
+- **The first deploy after a fraisier upgrade re-renders the scaffold
+  state.** Change detection hashes `fraises.yaml` and `template_dir`, not
+  fraisier's own templates, so after an upgrade the state tree kept the old
+  version's render until the config next changed, and `scaffold-diff`
+  compared the host against it. The deploy now records which fraisier
+  rendered the tree (`.scaffold_rendered_by`, beside the config hash) and
+  re-renders when that changes. It installs nothing: what the new templates
+  change on the host is installed by `sudo fraisier scaffold-install`, and
+  an upgrade does not stop the next deploy. A failed re-render is logged and
+  retried on the next deploy.
 - **Every hint that names `scaffold-install` gives the command that works.**
   `scaffold-install` refuses a non-root caller and renders its own tree, so
   the `fraisier scaffold-install` and `fraisier scaffold && fraisier

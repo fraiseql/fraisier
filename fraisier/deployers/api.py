@@ -453,6 +453,9 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         if app_config.exists():
             self._validate_before_sync(app_config)
             self._sync_fraises_yaml(source_path=app_config, dest_path=opt_config)
+            from fraisier.config_watcher import ConfigWatcher, running_version
+
+            watcher = ConfigWatcher(opt_config.parent)
             if self._detect_config_changes(config_path=opt_config):
                 logger.info(
                     "fraises.yaml changed — regenerating nginx and scaffold config"
@@ -464,12 +467,38 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 # Trade-off: if disk fills mid-regenerate and some files are
                 # corrupt, the hash is still saved and future deploys will skip
                 # regeneration.  Recovery: run `fraisier scaffold` manually.
-                from fraisier.config_watcher import ConfigWatcher
-
-                ConfigWatcher(opt_config.parent).save_hash()
+                watcher.save_hash()
+                watcher.save_rendered_by()
                 logger.info("Scaffold regenerated — config hash updated")
                 self._install_scaffold(config_path=opt_config)
                 logger.info("Scaffold regenerated and installed")
+            elif not watcher.rendered_by_this_version():
+                # A fraisier upgrade changes the built-in templates, which the
+                # hash cannot see. Re-render so the state tree and
+                # `scaffold-diff` describe this version, and install nothing:
+                # what the new templates change on the host is the operator's
+                # to install, and an upgrade must not stop the next deploy.
+                logger.info(
+                    "fraisier %s did not render the scaffold state "
+                    "(last rendered by %s); re-rendering it without installing. "
+                    "`sudo fraisier scaffold-install` installs what changed.",
+                    running_version(),
+                    watcher.rendered_by() or "an unrecorded version",
+                )
+                try:
+                    self._regenerate_scaffold(config_path=opt_config)
+                except Exception as exc:
+                    # Best effort: the deploy itself is unchanged by an
+                    # upgrade, so a render failure here must not stop it.
+                    # Not recorded, so the next deploy tries again.
+                    logger.warning(
+                        "Could not re-render the scaffold state for fraisier "
+                        "%s: %s. The deploy continues; the next one tries again.",
+                        running_version(),
+                        exc,
+                    )
+                else:
+                    watcher.save_rendered_by()
 
             # Unconditional, and after the regeneration: the units on disk now
             # describe this file, and so must everything the deploy does next.

@@ -459,7 +459,7 @@ and the difference matters when you debug either one.
 |---|---|---|
 | Default | `scripts/generated` (relative to CWD) | `/var/lib/fraisier/<project>/scaffold` |
 | Purpose | what **you** render and review before installing | what the **machine** reads at deploy time |
-| Written by | `fraisier scaffold`, `fraisier setup` | `fraisier bootstrap`, `fraisier setup`, every config-changing deploy |
+| Written by | `fraisier scaffold`, `fraisier setup` | `fraisier bootstrap`, `fraisier setup`, every config-changing deploy, and the first deploy after a fraisier upgrade (rendered, not installed) |
 | Read by | `fraisier setup` (its install sources) | the root scaffold-install helper, the unit staleness check |
 
 `fraisier setup` installs from `output_dir` on purpose: that is what makes the manual
