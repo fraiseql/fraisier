@@ -97,6 +97,16 @@ def _unidentified_host_message(config: FraisierConfig, known: list[str]) -> str:
     return "\n".join(lines)
 
 
+#: Exits 0 when the host's nginx loads its brotli module: compiled in
+#: (``nginx -V``) or loaded from the effective config (``nginx -T``) (#500).
+NGINX_BROTLI_PROBE = (
+    "sh",
+    "-c",
+    "nginx -V 2>&1 | grep -q brotli"
+    " || nginx -T 2>/dev/null | grep -q ngx_http_brotli_filter_module",
+)
+
+
 @dataclass
 class SetupAction:
     """A single provisioning step."""
@@ -171,6 +181,7 @@ class ServerSetup:
         Returns list of (action, success) tuples.
         """
         self._renderer.render()
+        self._require_nginx_brotli()
         self._write_env_file()
 
         actions = self.plan()
@@ -192,6 +203,26 @@ class ServerSetup:
                 results.append((action, False))
 
         return results
+
+    def _require_nginx_brotli(self) -> None:
+        """Refuse before the first action if the vhosts need a module nginx lacks.
+
+        The rendered vhosts use brotli unless ``scaffold.nginx.brotli`` is
+        false (#500), and setup installs no packages. Without the module the
+        vhosts would be installed, ``nginx -t`` would fail only at the end, and
+        nginx's next reload or start would fail on them.
+        """
+        if not self.config.scaffold.nginx.brotli:
+            return
+        if self.runner.run(list(NGINX_BROTLI_PROBE), check=False).returncode == 0:
+            return
+        raise ValidationError(
+            "The nginx vhosts use brotli, but nginx here does not load its "
+            "brotli module, and fraisier setup installs no packages. Either "
+            "`apt install libnginx-mod-http-brotli-filter` (Debian 12/13, "
+            "Ubuntu 24.04), or set `scaffold.nginx.brotli: false` in "
+            "fraises.yaml (gzip stays on). Nothing has been changed."
+        )
 
     # ------------------------------------------------------------------
     # Planning methods

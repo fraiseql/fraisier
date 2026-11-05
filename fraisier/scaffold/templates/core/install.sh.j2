@@ -462,6 +462,35 @@ _ensure_dir() {
   _run sudo chmod "$mode" "$path"
 }
 
+{% if scaffold.nginx.brotli %}
+# The vhosts compress with brotli (scaffold.nginx.brotli, on by default). nginx
+# must load its brotli module, or `nginx -t` refuses every vhost, so the module
+# must be loaded already or installable with the packages below (#500).
+_nginx_brotli_ready() {
+  if command -v nginx &>/dev/null && \
+     { nginx -V 2>&1 | grep -q brotli || nginx -T 2>/dev/null | grep -q ngx_http_brotli_filter_module; }; then
+    [[ "$VERBOSE" == "true" ]] && echo "  ✓ nginx loads its brotli module"
+    return 0
+  fi
+  if apt-cache show libnginx-mod-http-brotli-filter &>/dev/null; then
+    [[ "$VERBOSE" == "true" ]] && echo "  ✓ libnginx-mod-http-brotli-filter is installable"
+    return 0
+  fi
+  if ! apt-cache show nginx &>/dev/null; then
+    # No package lists yet (apt-get update runs below): nothing to judge by.
+    # apt-get install names the package itself if it cannot have it.
+    echo "  ! apt has no package lists yet; libnginx-mod-http-brotli-filter is checked when it installs"
+    return 0
+  fi
+  echo "  ✗ The nginx vhosts use brotli, but nginx here does not load its brotli" >&2
+  echo "    module and apt cannot install libnginx-mod-http-brotli-filter." >&2
+  echo "    Either: apt install libnginx-mod-http-brotli-filter (from a source" >&2
+  echo "    that has it), or set scaffold.nginx.brotli: false in fraises.yaml" >&2
+  echo "    (gzip stays on)." >&2
+  return 1
+}
+
+{% endif %}
 # Helper function to check prerequisites
 _validate_prerequisites() {
   local has_errors=false
@@ -497,6 +526,10 @@ _validate_prerequisites() {
     fi
   done
 
+{% if scaffold.nginx.brotli %}
+  _nginx_brotli_ready || has_errors=true
+{% endif %}
+
   if [[ "$has_errors" == "true" ]]; then
     echo "Validation failed. Cannot proceed." >&2
     return 1
@@ -514,6 +547,15 @@ elif [[ "$VALIDATE_ONLY" == "true" ]]; then
   _validate_prerequisites
   exit $?
 fi
+{% if scaffold.nginx.brotli %}
+
+# Before the first change: a host that cannot have the brotli module would
+# otherwise be converted up to the vhosts, then fail `nginx -t` there.
+if [[ "$DRY_RUN" != "true" ]] && ! _nginx_brotli_ready; then
+  echo "Cannot proceed: nothing has been changed." >&2
+  exit 1
+fi
+{% endif %}
 
 # Create deploy user if it does not exist
 if ! id -u "${DEPLOY_USER}" &>/dev/null; then
@@ -627,6 +669,9 @@ _run sudo apt-get install -y -qq --no-install-recommends \
     git \
     postgresql-client \
     nginx \
+{% if scaffold.nginx.brotli %}
+    libnginx-mod-http-brotli-filter \
+{% endif %}
     certbot \
     python3-certbot-nginx
 

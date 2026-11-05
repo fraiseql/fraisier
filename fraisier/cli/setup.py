@@ -109,7 +109,12 @@ def setup(
         console.print("Aborted.")
         return
 
-    results = server_setup.execute()
+    try:
+        results = server_setup.execute()
+    except ValidationError as exc:
+        console.print("[red]Cannot provision[/red]\n")
+        console.print(str(exc), markup=False, highlight=False)
+        raise SystemExit(1) from None
 
     succeeded = sum(1 for _, ok in results if ok)
     failed = sum(1 for _, ok in results if not ok)

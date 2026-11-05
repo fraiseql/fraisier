@@ -331,6 +331,11 @@ class FraisierConfig:
         raw = self._config.get("scaffold", {}) or {}
         raw_systemd = raw.get("systemd", {}) or {}
         raw_nginx = raw.get("nginx", {}) or {}
+        brotli = raw_nginx.get("brotli", True)
+        if not isinstance(brotli, bool):
+            raise ValidationError(
+                f"scaffold.nginx.brotli must be true or false, got {brotli!r}",
+            )
         raw_gh = raw.get("github_actions", {}) or {}
         raw_pg = raw.get("postgresql", {}) or {}
 
@@ -361,6 +366,7 @@ class FraisierConfig:
                 restricted_paths=raw_nginx.get("restricted_paths", []),
                 webhook_port=raw_nginx.get("webhook_port", 8080),
                 gateway_fraise=raw_nginx.get("gateway_fraise"),
+                brotli=brotli,
             ),
             github_actions=GithubActionsScaffoldConfig(
                 python_versions=raw_gh.get("python_versions", ["3.12"]),
