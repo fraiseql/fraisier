@@ -414,9 +414,9 @@ class TestDeployStopsBeforeTouchingTheTree:
     tree and then ran the install command in a missing directory.
     """
 
-    def _deployer(self, tmp_path):
-        from fraisier.config import FraisierConfig
-        from fraisier.deployers.api import APIDeployer
+    def _deployer(self, tmp_path, monkeypatch):
+        from fraisier.deployers.registry import build_deployer
+        from fraisier.runners import LocalRunner
 
         p = tmp_path / "fraises.yaml"
         p.write_text(
@@ -436,26 +436,29 @@ fraises:
         app_path: /var/www/prod
 """
         )
-        deployer = APIDeployer(
+        monkeypatch.setenv("FRAISIER_CONFIG", str(p))
+        return build_deployer(
+            "api",
             {
+                "fraise_name": "my_api",
+                "environment": "production",
                 "app_path": "/var/www/prod",
                 "deploy_user": "deployer",
                 "install": {
                     "command": ["/usr/local/bin/uv", "sync"],
                     "user": "appuser",
                 },
-            }
+            },
+            runner=LocalRunner(),
         )
-        deployer.config_object = FraisierConfig(p)
-        return deployer
 
-    def test_install_aborts_and_never_runs_the_command(self, tmp_path):
+    def test_install_aborts_and_never_runs_the_command(self, tmp_path, monkeypatch):
         """A wrong-owner app_path raises before the install command is invoked."""
         import pytest
 
         from fraisier.errors import DeploymentError
 
-        deployer = self._deployer(tmp_path)
+        deployer = self._deployer(tmp_path, monkeypatch)
         mock_runner = Mock()
         deployer.runner = mock_runner
 

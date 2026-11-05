@@ -306,6 +306,38 @@ class BaseDeployer(StatusRecordMixin, ABC):
         # Default implementation - subclasses can override
         return True  # pragma: no cover
 
+    @staticmethod
+    def _opt_config_path() -> Path:
+        """Path to the server-side fraises.yaml the deploy reads/writes."""
+        return Path(os.environ.get("FRAISIER_CONFIG") or "/opt/fraisier/fraises.yaml")
+
+    def _deployed_config(self) -> Any | None:
+        """The typed config of the project this deploy belongs to, or None.
+
+        ``config_object`` when the caller gave one; otherwise the server's
+        fraises.yaml (:meth:`_opt_config_path`), the file the deploy installs
+        and the scaffold renders from. ``build_deployer``, which the CLI, the
+        daemon and the webhook all build through, gives no ``config_object``,
+        so every deploy-path reader of it did nothing until this (#506).
+
+        Read at each call, not cached: before the config sync it is the
+        previous deploy's file, after it this deploy's. None, with a warning,
+        when the file is absent or does not load; each caller decides whether
+        that is a refusal.
+        """
+        if self.config_object is not None:
+            return self.config_object
+        from fraisier.config import get_config
+
+        path = self._opt_config_path()
+        if not path.exists():
+            return None
+        try:
+            return get_config(path)
+        except Exception as exc:
+            logger.warning("Could not load the deployed config %s: %s", path, exc)
+            return None
+
     def _sync_fraises_yaml(
         self, source_path: Path | None = None, dest_path: Path | None = None
     ) -> None:

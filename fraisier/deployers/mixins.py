@@ -127,8 +127,10 @@ class GitDeployMixin(StatusRecordMixin):
     """
 
     # These attributes are provided by BaseDeployer (the consuming class).
+    # Annotations only: a stub method here would shadow BaseDeployer's in the MRO.
     runner: CommandRunner
     config: dict[str, Any]
+    _deployed_config: Callable[[], Any]
 
     def _init_git_deploy(self, config: dict[str, Any]) -> None:
         """Initialize git deploy fields from config."""
@@ -231,7 +233,7 @@ class GitDeployMixin(StatusRecordMixin):
                 env_key,
             )
             # Verify manifest ownership and delete paths owned by wrong user
-            _co = getattr(self, "config_object", None)
+            _co = self._deployed_config()
             if _co is not None:
                 from fraisier.config.loader import FraisierConfig
                 from fraisier.deployers.preflight_ownership import (

@@ -719,7 +719,9 @@ class TestUnitInstallerSocketPathIsOneFact:
         import logging
 
         from fraisier.config import FraisierConfig
+        from fraisier.deployers.registry import build_deployer
         from fraisier.deployers.scheduled import ScheduledDeployer
+        from fraisier.runners import LocalRunner
         from fraisier.scaffold.renderer import ScaffoldRenderer
 
         moved = Path("/run/fraisier/moved/unit-installer-elsewhere.sock")
@@ -747,12 +749,13 @@ class TestUnitInstallerSocketPathIsOneFact:
 
         assert _resolve_socket_path(config, "production", override=None) == moved
 
-        deployer = ScheduledDeployer(
+        monkeypatch.setenv("FRAISIER_CONFIG", str(cfg_path))
+        deployer = build_deployer(
+            "scheduled",
             {"environment": "production", "fraise_name": "nightly"},
-            config_object=config,
+            runner=LocalRunner(),
         )
-        deployer.environment = "production"
-        deployer.fraise_name = "nightly"
+        assert isinstance(deployer, ScheduledDeployer)
         with caplog.at_level(logging.WARNING, logger="fraisier"):
             deployer._auto_install_scheduled_units_if_applicable()
 

@@ -152,8 +152,9 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
     def _auto_install_scheduled_units_if_applicable(self) -> None:
         """Run the webhook auto-install hook when wiring is available.
 
-        Quiet no-op when:
-        - The deployer wasn't given a ``config_object`` (FraisierConfig).
+        No-op when:
+        - The deployed config (:meth:`_deployed_config`) is absent or does
+          not load; a warning says so.
         - The host has no unit-installer socket (pre-v0.29; deploy_event
           records the situation but doesn't fail the deploy).
         - The env name is "unknown" (the base deployer's fallback when
@@ -163,7 +164,15 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
         pre-v0.29 errors as deploy failures so the operator sees them in
         the deploy log.
         """
-        if self.config_object is None:
+        config = self._deployed_config()
+        if config is None:
+            logger.warning(
+                "No deployed config at %s; skipping the scheduled-unit "
+                "auto-install for %s/%s",
+                self._opt_config_path(),
+                self.fraise_name,
+                self.environment,
+            )
             return
         if self.environment == "unknown":
             return
@@ -176,13 +185,11 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             return
 
         try:
-            project_name = self.config_object.project_name
+            project_name = config.project_name
         except AttributeError:  # pragma: no cover
             return
         fraise_config = (
-            self.config_object.fraises.get(self.fraise_name)
-            if hasattr(self.config_object, "fraises")
-            else None
+            config.fraises.get(self.fraise_name) if hasattr(config, "fraises") else None
         )
         if not fraise_config or fraise_config.get("type") != "scheduled":
             return
@@ -212,7 +219,7 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             return
 
         report = auto_install_scheduled_units(
-            self.config_object,
+            config,
             self.environment,
             fraise_name=self.fraise_name,
             policy=policy,
