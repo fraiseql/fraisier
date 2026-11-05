@@ -116,3 +116,79 @@ class TestATemplateOnlyCommitRegenerates:
         assert self._deploy(app, monkeypatch) is True
 
         assert self._deploy(app, monkeypatch) is False
+
+
+class TestAFraisierUpgradeReRenders:
+    """A new fraisier re-renders the state tree, and installs nothing.
+
+    Change detection hashes fraises.yaml and ``template_dir``, not fraisier's
+    own templates, so after an upgrade the state tree kept the old version's
+    render and ``scaffold-diff`` compared the host against it. The install
+    stays the operator's: an upgrade must not make the next deploy stop on a
+    vhost it never asked to change.
+    """
+
+    @staticmethod
+    def _deploy(app: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[bool, bool]:
+        """Run the deploy's config sync once; return (rendered, installed)."""
+        deployer = _deployer(app)
+        rendered: list[Path] = []
+        installed: list[Path] = []
+
+        def regenerate(*, config_path: Path) -> None:
+            rendered.append(config_path)
+
+        def install(*, config_path: Path) -> None:
+            installed.append(config_path)
+
+        monkeypatch.setattr(deployer, "_regenerate_scaffold", regenerate)
+        monkeypatch.setattr(deployer, "_install_scaffold", install)
+        monkeypatch.setattr(deployer, "_refresh_config_from_synced_file", lambda: None)
+        deployer._sync_config_if_needed()
+        return bool(rendered), bool(installed)
+
+    @pytest.fixture
+    def app(self, tmp_path, monkeypatch) -> Path:
+        monkeypatch.setenv("FRAISIER_CONFIG", str(tmp_path / "opt" / "fraises.yaml"))
+        monkeypatch.setattr("fraisier.__version__", "1.0.0")
+        return _checkout(tmp_path)
+
+    def test_an_upgrade_renders_without_installing(self, app, monkeypatch):
+        assert self._deploy(app, monkeypatch) == (True, True)
+        monkeypatch.setattr("fraisier.__version__", "1.1.0")
+
+        assert self._deploy(app, monkeypatch) == (True, False)
+
+    def test_it_renders_once_per_version(self, app, monkeypatch):
+        self._deploy(app, monkeypatch)
+        monkeypatch.setattr("fraisier.__version__", "1.1.0")
+        self._deploy(app, monkeypatch)
+
+        assert self._deploy(app, monkeypatch) == (False, False)
+
+    def test_a_host_without_a_recorded_version_renders_once(self, app, monkeypatch):
+        self._deploy(app, monkeypatch)
+        (app.parent / "opt" / ".scaffold_rendered_by").unlink()
+
+        assert self._deploy(app, monkeypatch) == (True, False)
+
+    def test_a_config_change_still_installs(self, app, monkeypatch):
+        self._deploy(app, monkeypatch)
+        monkeypatch.setattr("fraisier.__version__", "1.1.0")
+        (app / _TEMPLATE).write_text("# CUSTOM v2\n")
+
+        assert self._deploy(app, monkeypatch) == (True, True)
+
+    def test_a_failed_upgrade_render_neither_stops_nor_records(self, app, monkeypatch):
+        self._deploy(app, monkeypatch)
+        monkeypatch.setattr("fraisier.__version__", "1.1.0")
+        deployer = _deployer(app)
+
+        def broken(*, config_path: Path) -> None:
+            raise RuntimeError(f"render failed for {config_path}")
+
+        monkeypatch.setattr(deployer, "_regenerate_scaffold", broken)
+        monkeypatch.setattr(deployer, "_refresh_config_from_synced_file", lambda: None)
+        deployer._sync_config_if_needed()
+
+        assert self._deploy(app, monkeypatch) == (True, False)

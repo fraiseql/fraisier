@@ -1976,6 +1976,8 @@ class TestSyncConfigHashPersistence:
                 return_value=SimpleNamespace(
                     save_hash=fake_save_hash,
                     has_changed=lambda: True,
+                    save_rendered_by=lambda: None,
+                    rendered_by_this_version=lambda: True,
                 ),
             ),
             patch.object(deployer, "_detect_config_changes", return_value=True),
@@ -2031,6 +2033,8 @@ class TestSyncConfigHashPersistence:
                 return_value=SimpleNamespace(
                     save_hash=lambda: None,
                     has_changed=lambda: True,
+                    save_rendered_by=lambda: None,
+                    rendered_by_this_version=lambda: True,
                 ),
             ),
         ):
