@@ -81,8 +81,8 @@ class ScheduledDeployer(GitDeployMixin, BaseDeployer):
             raise DeploymentError(
                 f"systemctl helper rejected the request: {reason}. This host's "
                 "helper predates the timer actions this deploy needs. Upgrade "
-                "fraisier on the host, then run `fraisier scaffold && sudo "
-                "fraisier scaffold-install --yes` to refresh the helper's "
+                "fraisier on the host, then run `sudo fraisier scaffold-install` "
+                "to refresh the helper's "
                 "allowlist and restart it.",
                 context={
                     "fraise": self.fraise_name,

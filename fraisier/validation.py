@@ -719,7 +719,7 @@ class DeploymentReadinessValidator:
                 passed=False,
                 message=(
                     f"Sudoers file not installed: {sudoers_path}. "
-                    f"Fix: run 'fraisier scaffold-install' to install sudo rules"
+                    f"Fix: run 'sudo fraisier scaffold-install' to install sudo rules"
                 ),
                 severity="warning",
             )

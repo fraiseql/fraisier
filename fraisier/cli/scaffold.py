@@ -57,7 +57,7 @@ def _report_foreign_units(config, *, server: str | None = None) -> None:
         )
     console.print(
         "  Nothing was stopped or removed. To disable and delete them:\n"
-        "    fraisier scaffold-install --prune-foreign"
+        "    sudo fraisier scaffold-install --prune-foreign"
     )
 
 
@@ -244,8 +244,8 @@ def scaffold(
         console.print("  1. Review generated files:")
         console.print(f"     git diff {config.scaffold.output_dir}/")
         console.print("\n  2. Install to system:")
-        console.print("     fraisier scaffold-install --dry-run    # Preview")
-        console.print("     fraisier scaffold-install --yes        # Install")
+        console.print("     sudo fraisier scaffold-install --dry-run    # Preview")
+        console.print("     sudo fraisier scaffold-install --yes        # Install")
 
 
 def _build_install_cmd(
@@ -638,10 +638,10 @@ def scaffold_install(
     install as root (#433). `--yes` skips the question, not the diff.
 
     \b
-    Examples (each under sudo):
-        fraisier scaffold-install --dry-run       # Preview changes
-        fraisier scaffold-install --validate-only # Check prerequisites
-        fraisier scaffold-install --yes           # Install without prompt
+    Examples:
+        sudo fraisier scaffold-install --dry-run       # Preview changes
+        sudo fraisier scaffold-install --validate-only # Check prerequisites
+        sudo fraisier scaffold-install --yes           # Install without prompt
     """
     config = require_config(ctx)
 

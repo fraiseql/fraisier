@@ -361,7 +361,7 @@ def trigger_deploy(
                     "  1. This host's deploy unit predates v0.64.0 and cannot "
                     "return a result.\n"
                     "     Re-render and reinstall it — retrying will not help:\n"
-                    "       fraisier scaffold && fraisier scaffold-install\n"
+                    "       sudo fraisier scaffold-install\n"
                     "     fraisier doctor lists every deploy unit that cannot "
                     "answer.\n"
                     "  2. The deploy unit died mid-run. Check what it logged:\n"

@@ -155,7 +155,7 @@ def auto_install_scheduled_units(
     if not is_socket_present:
         msg = (
             "unit-installer helper not on host. "
-            f"Run 'fraisier scaffold-install --yes' to bootstrap. "
+            f"Run 'sudo fraisier scaffold-install --yes' to bootstrap. "
             f"(host is pre-v0.29; expected socket at {socket_path})"
         )
         raise ScheduledInstallError(msg)

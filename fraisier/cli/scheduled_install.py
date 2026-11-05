@@ -1,6 +1,6 @@
 """``fraisier scheduled-install`` CLI command.
 
-Flat command (symmetric with ``fraisier scaffold-install``), wired here and
+Flat command (symmetric with ``sudo fraisier scaffold-install``), wired here and
 registered through the import chain in ``fraisier/cli/main.py``.
 
 Operator runs ``sudo fraisier scheduled-install --env <env>`` to lay down the
@@ -179,7 +179,7 @@ def _print_verbose_diff(diff: UnitDiff) -> None:
     help=(
         "Route the apply through the unit-installer socket helper instead of "
         "writing /etc/systemd/system/ directly. Drops the sudo requirement. "
-        "Helper must be on the host (requires `fraisier scaffold-install`)."
+        "Helper must be on the host (requires `sudo fraisier scaffold-install`)."
     ),
 )
 @click.option(
@@ -474,7 +474,7 @@ def _run_apply(
                 "[red]Error:[/red] unit-installer socket not found at "
                 f"[bold]{socket_path}[/bold]. "
                 "This host has not been bootstrapped with the v0.29 helper. "
-                "Run [bold]fraisier scaffold-install --yes[/bold] first."
+                "Run [bold]sudo fraisier scaffold-install --yes[/bold] first."
             )
             ctx.exit(EXIT_OPERATOR_ERROR)
         try:

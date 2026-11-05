@@ -382,7 +382,7 @@ class RemoteDeploymentValidator:
                         passed=False,
                         message=(
                             f"{path} not found. "
-                            "Fix: run 'fraisier scaffold-install' to deploy "
+                            "Fix: run 'sudo fraisier scaffold-install' to deploy "
                             "wrapper scripts"
                         ),
                         severity="error",
@@ -403,7 +403,7 @@ class RemoteDeploymentValidator:
             passed=False,
             message=(
                 f"Sudoers file not found: {path}. "
-                "Fix: run 'fraisier scaffold-install' to install sudoers rules"
+                "Fix: run 'sudo fraisier scaffold-install' to install sudoers rules"
             ),
             severity="warning",
         )

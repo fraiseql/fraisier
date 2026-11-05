@@ -258,7 +258,7 @@ def _check_helper_sudoers(config: FraisierConfig | None) -> CheckResult:
             "helper_sudoers",
             "warn",
             f"{path} not present",
-            fix_hint=f"run `fraisier scaffold-install` to install {path}",
+            fix_hint=f"run `sudo fraisier scaffold-install` to install {path}",
         )
     try:
         mode = path.stat().st_mode & 0o777
@@ -517,7 +517,7 @@ def _check_webhook_hosted_trees_writable(config: FraisierConfig | None) -> Check
             f"their deploys fail read-only (git fetch exits 255). The installed "
             f"unit is most likely the one rendered for another host",
             fix_hint=(
-                "run `fraisier scaffold && sudo fraisier scaffold-install --yes` "
+                "run `sudo fraisier scaffold-install --yes` "
                 "on this machine to install the unit rendered for it"
             ),
         )
@@ -1308,7 +1308,7 @@ def _check_pre_migrate_dump_writable(config: FraisierConfig | None) -> CheckResu
             f"{', '.join(missing)} — the dump gate will fail closed and block "
             f"every deploy with pending migrations",
             fix_hint=(
-                "run `fraisier scaffold && sudo fraisier scaffold-install --yes` "
+                "run `sudo fraisier scaffold-install --yes` "
                 "to regenerate the unit with the dump directory allowed"
             ),
         )
@@ -1670,7 +1670,7 @@ def _check_foreign_units(config: FraisierConfig | None) -> CheckResult:
         f"not run on this host: {listed}",
         fix_hint=(
             "they may be another application's running services — review, then "
-            "'fraisier scaffold-install --prune-foreign' to disable and delete"
+            "'sudo fraisier scaffold-install --prune-foreign' to disable and delete"
         ),
     )
 
@@ -1904,7 +1904,7 @@ def _check_backup_retention(config: FraisierConfig | None) -> CheckResult:
         "warn",
         listed,
         fix_hint=(
-            "run 'fraisier scaffold-install' on this host to install and "
+            "run 'sudo fraisier scaffold-install' on this host to install and "
             "enable the retention timers; until then nothing is pruning "
             f"{', '.join(entry.dir for entry in missing)}"
         ),
@@ -1950,7 +1950,7 @@ def _check_pgbackrest_helper(config: FraisierConfig | None) -> CheckResult:
             "warn",
             f"pgBackRest helper not installed for {', '.join(missing)}",
             fix_hint=(
-                "run 'fraisier scaffold && sudo fraisier scaffold-install --yes' on "
+                "run 'sudo fraisier scaffold-install --yes' on "
                 "this host; until then a pgBackRest refresh cannot stop or restore "
                 "its cluster"
             ),
@@ -3183,7 +3183,7 @@ def _check_deploy_result_channel(_config: FraisierConfig | None) -> CheckResult:
                 "every `trigger-deploy --wait` against these exits 1 until the "
                 "unit runs a newer fraisier — retrying does not help. Re-render "
                 "and reinstall:\n"
-                "  fraisier scaffold && fraisier scaffold-install\n"
+                "  sudo fraisier scaffold-install\n"
                 "then confirm the deploy user's binary moved: "
                 "`ls -l ~/.local/bin/fraisier`"
             ),

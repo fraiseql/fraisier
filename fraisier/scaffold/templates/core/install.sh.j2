@@ -1011,7 +1011,7 @@ fi
 # Unit-installer helper for {{ pair.environment }} (#240, runs as root)
 #
 # `fraisier scheduled-install` requires this socket and, when it is missing,
-# tells the operator to run `fraisier scaffold-install --yes` to bootstrap it —
+# tells the operator to run `sudo fraisier scaffold-install --yes` to bootstrap it —
 # which never installed it. Both sides pointed at each other and neither acted.
 #
 # The sequence is #279's re-bake, for #279's reason: the .service bakes its
