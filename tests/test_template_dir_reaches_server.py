@@ -173,13 +173,9 @@ fraises:
         return out
 
     def test_template_dir_is_copied_next_to_fraises_yaml(self, tmp_path):
-        from fraisier.config import FraisierConfig
-
         d, app = self._deployer(tmp_path, "scripts/scaffold-templates")
         dest = tmp_path / "opt" / "fraises.yaml"
 
-        with_cfg = FraisierConfig(app / "fraises.yaml")
-        d.config_object = with_cfg
         d._sync_fraises_yaml(source_path=app / "fraises.yaml", dest_path=dest)
 
         joined = " ".join(self._synced_paths(d.runner))
@@ -188,11 +184,8 @@ fraises:
         )
 
     def test_no_template_sync_when_not_configured(self, tmp_path):
-        from fraisier.config import FraisierConfig
-
         d, app = self._deployer(tmp_path, None)
         dest = tmp_path / "opt" / "fraises.yaml"
-        d.config_object = FraisierConfig(app / "fraises.yaml")
 
         d._sync_fraises_yaml(source_path=app / "fraises.yaml", dest_path=dest)
 
