@@ -63,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator installs (nginx, sudoers, sockets), the deploy stops as for any
   such change, until `sudo fraisier scaffold-install` installs it.
 
+- **Every hint that names `scaffold-install` gives the command that works.**
+  `scaffold-install` refuses a non-root caller and renders its own tree, so
+  the `fraisier scaffold-install` and `fraisier scaffold && fraisier
+  scaffold-install` that deploy errors, `doctor`, the validators and the
+  CLI's next steps printed exited 1. They now say
+  `sudo fraisier scaffold-install`. A deploy stopped by a pending operator
+  install says so and names it, instead of advising a retry that cannot help.
+
 ## [0.96.1] - 2026-11-05
 
 ### Fixed

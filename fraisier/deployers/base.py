@@ -848,12 +848,24 @@ class BaseDeployer(StatusRecordMixin, ABC):
             # The helper's stderr was captured on the socket and then
             # dropped from the message — "command not allowed" is the
             # line an operator needs, and it is never on stdout (#381).
+            pending = getattr(socket_result, "pending", [])
+            # A pending file is the operator's to install (#433): retrying the
+            # deploy cannot help, so the default "retry" hint would mislead.
+            remedy = (
+                "These files are installed by an operator: run `sudo fraisier "
+                "scaffold-install` on this host (it shows the diff and asks), "
+                "then deploy again."
+                if pending
+                else ""
+            )
             raise DeploymentError(
                 f"Failed to install scaffold files via socket helper: "
-                f"{self._combine_output(socket_result)}",
+                f"{self._combine_output(socket_result)}"
+                + (f"\n  {remedy}" if remedy else ""),
                 context={
-                    "pending": getattr(socket_result, "pending", []),
+                    "pending": pending,
                     "refused": getattr(socket_result, "refused", {}),
                 },
+                recovery_hint="" if remedy else None,
             )
         logger.info("✓ Scaffold files installed via helper socket")

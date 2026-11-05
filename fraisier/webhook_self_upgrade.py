@@ -240,7 +240,7 @@ def maybe_self_upgrade(
                 "rejected pre-flight: %s. The webhook unit is missing from "
                 "the helper allowlist (typically because this host was "
                 "scaffolded before fraisier 0.18.0). Re-run "
-                "`fraisier scaffold && fraisier scaffold-install --yes` to "
+                "`sudo fraisier scaffold-install --yes` to "
                 "refresh it, then the next deploy will self-upgrade.",
                 required,
                 rejection,

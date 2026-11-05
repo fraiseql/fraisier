@@ -180,8 +180,8 @@ class HelperClient:
         except OSError as exc:
             raise HelperUnavailableError(
                 f"the pgBackRest helper is not reachable at {self._path}: {exc}. "
-                f"It is installed by `fraisier scaffold && sudo fraisier "
-                f"scaffold-install --yes`; `fraisier doctor` (pgbackrest_helper) "
+                f"It is installed by `sudo fraisier scaffold-install`; "
+                f"`fraisier doctor` (pgbackrest_helper) "
                 f"says which environments lack it"
             ) from exc
 

@@ -949,7 +949,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                     logger.error(
                         f"Pre-pull scaffold sync failed: {e}\n"
                         "nginx config may be stale — run: "
-                        "fraisier scaffold && fraisier scaffold-install --yes"
+                        "sudo fraisier scaffold-install --yes"
                     )
                     # Continue with deployment - config mismatch is not fatal
 
@@ -982,8 +982,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                         "install step to avoid a misleading 'command not "
                         "allowed'.\n"
                         "  Remediation: fix the underlying error below, then "
-                        "redeploy (or run `fraisier scaffold && fraisier "
-                        "scaffold-install --yes`).",
+                        "redeploy (or run `sudo fraisier scaffold-install`).",
                         context={"phase": "post_pull_config_sync"},
                         cause=e,
                         # Remediation is already inline above; suppress the

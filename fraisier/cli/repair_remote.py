@@ -90,7 +90,7 @@ def repair_remote(
     Checks requiring manual intervention (no auto-fix):
       - SSH connectivity failure
       - Missing git repo                        →  fraisier bootstrap
-      - Missing wrapper scripts / sudoers       →  fraisier scaffold-install
+      - Missing wrapper scripts / sudoers       →  sudo fraisier scaffold-install
 
     \b
     Examples:
