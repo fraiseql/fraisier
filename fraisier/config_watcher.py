@@ -9,6 +9,22 @@ import yaml
 logger = logging.getLogger("fraisier")
 
 
+def configured_template_dir(config_file: Path) -> str | None:
+    """The ``scaffold.template_dir`` *config_file* names, as written, or None.
+
+    Parsed straight from the YAML rather than through FraisierConfig: change
+    detection and the template sync both run before anything has validated the
+    file, and a config that fails to fully validate must not make them raise.
+    """
+    try:
+        raw = yaml.safe_load(Path(config_file).read_text()) or {}
+        configured = (raw.get("scaffold") or {}).get("template_dir")
+    except Exception:
+        logger.debug("Could not read template_dir from %s", config_file, exc_info=True)
+        return None
+    return str(configured) if configured else None
+
+
 class ConfigWatcher:
     """Tracks fraises.yaml — and any custom template tree — via SHA256."""
 
@@ -52,18 +68,8 @@ class ConfigWatcher:
         return hasher.hexdigest()
 
     def _template_dir(self) -> Path | None:
-        """Resolve ``scaffold.template_dir`` relative to the project directory.
-
-        Parsed straight from the YAML rather than through FraisierConfig: this
-        runs before regeneration decides anything, and a config that fails to
-        fully validate must not make change detection raise.
-        """
-        try:
-            raw = yaml.safe_load(self.config_file.read_text()) or {}
-            configured = (raw.get("scaffold") or {}).get("template_dir")
-        except Exception:
-            logger.debug("Could not read template_dir for hashing", exc_info=True)
-            return None
+        """Resolve ``scaffold.template_dir`` relative to the project directory."""
+        configured = configured_template_dir(self.config_file)
         if not configured:
             return None
         path = Path(configured)

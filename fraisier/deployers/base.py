@@ -362,7 +362,7 @@ class BaseDeployer(StatusRecordMixin, ABC):
         self._keep_replaced_config(dest_path)
         self.runner.run(["mv", "-f", str(tmp_path), str(dest_path)])
 
-        self._sync_template_dir(source_path.parent, dest_path.parent)
+        self._sync_template_dir(source_path, dest_path.parent)
 
         logger.info(
             "Config synced successfully",
@@ -440,7 +440,7 @@ class BaseDeployer(StatusRecordMixin, ABC):
         except OSError as exc:  # pragma: no cover - defensive
             logger.debug("Could not remove %s: %s", replaced.previous, exc)
 
-    def _sync_template_dir(self, source_dir: Path, dest_dir: Path) -> None:
+    def _sync_template_dir(self, source_config: Path, dest_dir: Path) -> None:
         """Copy ``scaffold.template_dir`` next to the synced fraises.yaml (#312).
 
         A relative ``template_dir`` resolves against the *config* directory, so
@@ -456,16 +456,21 @@ class BaseDeployer(StatusRecordMixin, ABC):
         checkout to resolve against. This keeps the existing model, where
         fraises.yaml is synced from the deploying fraise's checkout.
 
+        ``template_dir`` is read from *source_config*, the ``fraises.yaml`` this
+        deploy is installing: the deployed commit says which templates it ships.
+        It was read from ``self.config_object``, which no deploy sets, so the
+        sync never ran, and a template-only commit never regenerated (#502).
+
         Best-effort: a failure here must not abort a deploy that would otherwise
         succeed, but it is logged loudly because the result is a server running
         built-in templates while the repo says otherwise.
         """
-        template_dir = None
-        cfg = getattr(self, "config_object", None)
-        if cfg is not None:
-            template_dir = getattr(getattr(cfg, "scaffold", None), "template_dir", None)
+        from fraisier.config_watcher import configured_template_dir
+
+        template_dir = configured_template_dir(source_config)
         if not template_dir:
             return
+        source_dir = Path(source_config).parent
 
         rel = Path(template_dir)
         if rel.is_absolute():

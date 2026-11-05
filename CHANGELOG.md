@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A deploy whose commit changes only a template re-renders the scaffold**
+  ([#502](https://github.com/fraiseql/fraisier/issues/502)). The deploy never
+  copied `scaffold.template_dir` to the server: it looked the setting up on a
+  config object no deploy path sets, and skipped the copy without a word. The
+  server kept the templates `fraisier bootstrap` uploaded, change detection
+  hashed that frozen copy, and a template-only commit changed nothing, so
+  `scaffold-diff` compared against a stale render. A `fraises.yaml` change
+  did re-render, but with the old templates. The deploy now reads
+  `template_dir` from the `fraises.yaml` it installs. The first deploy after
+  upgrading copies the current templates, so it re-renders and installs the
+  scaffold once even when nothing else changed.
+
 ## [0.96.1] - 2026-11-05
 
 ### Fixed
