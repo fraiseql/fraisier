@@ -281,7 +281,7 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         if not blocked:
             return
 
-        project = getattr(self.config_object, "project_name", None)
+        project = getattr(self._deployed_config(), "project_name", None)
         unit = f"fraisier-{project}-webhook.service" if project else "the webhook unit"
         raise DeploymentError(
             f"Cannot write to {', '.join(blocked)} from inside this deploy's "
@@ -395,11 +395,6 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
         generated = state_dir / "systemd" / self.systemd_service
         live = Path("/etc/systemd/system") / self.systemd_service
         self._check_service_file_staleness_paths(generated, live)
-
-    @staticmethod
-    def _opt_config_path() -> Path:
-        """Path to the server-side fraises.yaml the deploy reads/writes."""
-        return Path(os.environ.get("FRAISIER_CONFIG") or "/opt/fraisier/fraises.yaml")
 
     def _validate_before_sync(self, app_config: Path) -> None:
         """Refuse to install a fraises.yaml that cannot be loaded (#383).
@@ -1220,6 +1215,31 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
             service_restarted=restarted,
         )
 
+    def _pgbackrest_socket(self) -> str:
+        """The pgBackRest helper socket for this fraise and environment (#424).
+
+        Named by the project, which only the deployed config knows. Without it
+        the restore would reach ``prepare`` with no socket and fail on an
+        assertion, so refuse here and name the file (#506).
+        """
+        from fraisier.errors import DeploymentError
+        from fraisier.naming import pgbackrest_helper_socket_path
+
+        project = getattr(self._deployed_config(), "project_name", None)
+        if not project:
+            path = self._opt_config_path()
+            raise DeploymentError(
+                f"restore.source is pgbackrest, but the project name that "
+                f"names its helper socket comes from {path}, which is absent "
+                f"or does not load. Fix or restore {path} (or point "
+                f"FRAISIER_CONFIG at the deployed fraises.yaml), then deploy "
+                f"again.",
+                context={"config_path": str(path)},
+            )
+        return str(
+            pgbackrest_helper_socket_path(project, self.fraise_name, self.environment)
+        )
+
     def _resolve_strategy(self) -> tuple[Any, Path, Path, str | None]:
         """Resolve database strategy, config path, migrations dir, and database_url."""
         from fraisier.strategies import get_strategy
@@ -1264,15 +1284,10 @@ class APIDeployer(GitDeployMixin, BaseDeployer):
                 self.database_config
             ).on_empty
             kwargs["db_name"] = self.database_config.get("name", "")
-            project = getattr(self.config_object, "project_name", None)
-            if project:
-                from fraisier.naming import pgbackrest_helper_socket_path
-
-                kwargs["pgbackrest_socket"] = str(
-                    pgbackrest_helper_socket_path(
-                        project, self.fraise_name, self.environment
-                    )
-                )
+            if (self.database_config.get("restore") or {}).get(
+                "source"
+            ) == "pgbackrest":
+                kwargs["pgbackrest_socket"] = self._pgbackrest_socket()
             if self.systemd_service:
                 from fraisier.service_managers import get_service_manager
 

@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ⚠️ **Four deploy steps that never ran now do**
+  ([#506](https://github.com/fraiseql/fraisier/issues/506)). They read the
+  project's config from an attribute that none of the deployers built by
+  the CLI, the daemon or the webhook had, so each one did nothing. They now
+  read the server's `fraises.yaml` (`FRAISIER_CONFIG`, or
+  `/opt/fraisier/fraises.yaml`), the file the deploy installs:
+  - **A deploy with `restore_migrate` and `restore.source: pgbackrest`
+    works.** It always failed in `prepare` with `AssertionError:
+    pgbackrest_socket not configured`, before anything was stopped. Without
+    a readable deployed config it now refuses and names the file.
+    `fraisier db restore` was not affected.
+  - **A scheduled fraise's deploy reconciles its units**, as
+    `scheduled.auto_install` documents. **This changes what such a deploy
+    does:** a missing unit is installed, and with the default
+    `on_drift: fail` a unit that differs from the render **fails the
+    deploy**. Set `on_drift: overwrite` or `skip` to choose otherwise.
+  - The `sudo -u` install fallback checks path ownership before it runs
+    the install command: a wrong-owner venv is removed and recreated, and
+    a wrong-owner `app_path` is refused.
+  - The sandbox-write refusal names the unit,
+    `fraisier-<project>-webhook.service`.
+
 - **A deploy whose commit changes only a template re-renders the scaffold**
   ([#502](https://github.com/fraiseql/fraisier/issues/502)). The deploy never
   copied `scaffold.template_dir` to the server: it looked the setting up on a

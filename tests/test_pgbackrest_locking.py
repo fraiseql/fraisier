@@ -21,12 +21,15 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from fraisier.cli.main import main
 from fraisier.deployers.api import APIDeployer
+from fraisier.deployers.registry import build_deployer
 from fraisier.errors import DatabaseError, DeploymentLockError, RestoreFailedClosed
 from fraisier.locking import deployment_lock
+from fraisier.runners import LocalRunner
 from fraisier.strategies import RestoreMigrateStrategy
 from fraisier.strategies._restore_sources import PgBackRestSource
 
@@ -209,18 +212,29 @@ class TestTheWebhook:
         assert outcome == {"lock_was_held": True}
 
     def test_the_deployer_builds_the_pgbackrest_source_with_the_helper_socket(
-        self,
+        self, tmp_path, monkeypatch
     ) -> None:
-        deployer = APIDeployer(
-            {
-                "fraise_name": "api",
-                "environment": "staging",
-                "app_path": "/var/www/api",
-                "systemd_service": "api.staging.service",
-                "database": PGBACKREST_DB,
-            },
-            config_object=MagicMock(project_name="proj"),
+        env = {
+            "fraise_name": "api",
+            "environment": "staging",
+            "app_path": "/var/www/api",
+            "systemd_service": "api.staging.service",
+            "database": PGBACKREST_DB,
+        }
+        server_config = tmp_path / "fraises.yaml"
+        server_config.write_text(
+            yaml.safe_dump(
+                {
+                    "name": "proj",
+                    "fraises": {
+                        "api": {"type": "api", "environments": {"staging": env}}
+                    },
+                }
+            )
         )
+        monkeypatch.setenv("FRAISIER_CONFIG", str(server_config))
+        deployer = build_deployer("api", env, runner=LocalRunner())
+        assert isinstance(deployer, APIDeployer)
 
         strategy, *_ = deployer._resolve_strategy()
 
