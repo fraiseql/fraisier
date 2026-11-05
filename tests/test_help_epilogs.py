@@ -6,7 +6,8 @@ so an agent or operator can grok flag interactions without source-reading.
 
 The convention matches existing docstrings: indented lines under an
 ``Examples:`` header beginning with ``fraisier <subcommand>`` (a leading
-``$ `` shell prompt is also accepted).
+``$ `` shell prompt is also accepted, and ``sudo `` for a command that only
+runs as root, such as ``scaffold-install``).
 
 ``ship`` additionally must spell out the ``--pr`` / ``--auto-merge`` /
 ``--wait-deploy`` interaction matrix that #221 flags as opaque.
@@ -30,7 +31,7 @@ _NO_EXAMPLE_REQUIRED: frozenset[str] = frozenset(
     }
 )
 
-_EXAMPLE_LINE = re.compile(r"^\s+(?:\$\s+)?fraisier\b")
+_EXAMPLE_LINE = re.compile(r"^\s+(?:\$\s+)?(?:sudo\s+)?fraisier\b")
 
 
 def _iter_leaf_commands(
