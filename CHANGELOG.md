@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.97.0] - 2026-11-06
+
+**Two ⚠️ changes to read before upgrading:** the API vhosts now need nginx's brotli
+module unless `scaffold.nginx.brotli: false` (#500), and a scheduled fraise's deploy now
+reconciles its units, failing on drift by default (#506).
+
 ### Added
 
 - ⚠️ **The API vhosts compress JSON with gzip and brotli**
