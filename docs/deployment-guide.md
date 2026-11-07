@@ -1521,19 +1521,69 @@ populated view, `3` it could not check (no pg_tviews, an older one, no
 connection). A host that could not look never reports what a host that looked and
 passed reports.
 
-**pg_tviews must be 0.1.0-beta.30 or later.** fraisier and confiture both read only
-its read contract 2, so upgrade the extension and confiture together. On an older
-pg_tviews confiture refuses with `CONFIG_014`, so on such a host the drift gate fails
-every deploy of a TVIEW project, after its migrations ran. So does the migration
-preflight, and `migrate up` refuses a migration that creates or drops a TVIEW before
-applying anything, including one that upgrades the extension: upgrade it out of band,
-before the deploy. fraisier's own TVIEW checks refuse it with the same advice.
-`fraisier doctor` checks this beforehand
-(`pg_tviews_contract`) by asking confiture's own
-`require_supported_pg_tviews_on`, since `pg_extension.extversion` reads `0.1.0`
-on every beta. Upgrade the package, then run `ALTER EXTENSION pg_tviews UPDATE`
-on each database as a superuser, then `SELECT * FROM tviews.pg_tviews_reregister_all()`
-once, as confiture's `CONFIG_014` hint says.
+**pg_tviews must be 0.1.0-beta.30 or later.** fraisier and confiture read its read
+contracts 2 and 3, and fraisier is tested on 0.1.0-beta.37. On an older pg_tviews
+confiture refuses with `CONFIG_014`, so on such a host the drift gate fails every
+deploy of a TVIEW project, after its migrations ran. So does the migration preflight,
+and `migrate up` refuses a migration that creates or drops a TVIEW before applying
+anything. fraisier's own TVIEW checks refuse it too, and say how to recreate it.
+`fraisier doctor` checks this beforehand (`pg_tviews_contract`) by asking confiture's
+own `require_supported_pg_tviews_on`, since `pg_extension.extversion` reads `0.1.0` on
+every beta.
+
+#### Upgrading pg_tviews
+
+An upgrade is three steps: install the new package (with jsonb_delta, which pg_tviews
+requires), restart PostgreSQL so it loads the new library, then bring each database's
+pg_tviews catalog to that library. A release updates only from the one before it, so
+what the third step is depends on the release the database is on:
+
+- **From the release before** (0.1.0-beta.36 to beta.37): the next deploy does it.
+  Its `migrate up` runs `ALTER EXTENSION pg_tviews UPDATE` under the migration lock,
+  before applying any migration, and the deploy logs a warning saying so:
+  `pg_tviews 0.1.0-beta.36 updated to 0.1.0-beta.37: migrate up ran ALTER EXTENSION
+  pg_tviews UPDATE before applying migrations, which re-derived every TVIEW`.
+- **From any older release** (0.1.0-beta.35 and earlier, to beta.37): no update
+  reaches it, so the extension is dropped and every TVIEW created again. fraisier
+  never does that itself. A deploy refuses before applying anything and names the
+  command to run by hand, from the project directory:
+
+  ```bash
+  confiture migrate up --recreate-pg-tviews --config db/environments/<env>.yaml
+  ```
+
+  In one transaction it drops the extension, creates it again and creates every TVIEW
+  the schema files declare; base tables keep their rows, each TVIEW is refilled from
+  them, and the pending migrations are applied too. Then deploy again. Until it runs,
+  pg_tviews refuses every write to a TVIEW's base tables (`55000`), so run it right
+  after the restart.
+
+A deploy that cannot bring the catalog to the library fails with
+`PG_TVIEWS_NOT_UPDATED`, changes nothing, and says which release the database is
+still on. Besides the recreate above, that happens when:
+
+- **The update re-derives a TVIEW whose owner may no longer read what it reads.**
+  PostgreSQL refuses the whole update (`42501`), naming the first such TVIEW, its
+  owner and the privilege. Grant it, or drop that TVIEW, then deploy again.
+- **PostgreSQL was not restarted** after the package was installed: the library
+  loaded is not the one installed. Restart it.
+- **`pre_migrate_verify: true`.** The verification is a dry run, and a dry run
+  updates nothing, so it refuses between the restart and the update. Run
+  `ALTER EXTENSION pg_tviews UPDATE` in each database by hand, as the extension's
+  owner or a superuser, then deploy.
+
+pg_tviews 0.1.0-beta.36 and later also refuse three kinds of TVIEW migrations that
+older releases took. A deploy that hits one fails like any failed migration, and its
+message says what to do:
+
+- **`42P13`**: a function the TVIEW calls sets a `search_path` that does not end in
+  `pg_temp`. PostgreSQL's hint gives the fix:
+  `ALTER FUNCTION <function> SET search_path = <schema>, pg_temp`.
+- **`42710`**: the TVIEW's GraphQL type name is another TVIEW's. Name its type with
+  the `typename` option, or rename the other one's.
+- **`42501`** on a table of another role: a TVIEW whose definition reads it needs
+  `TRIGGER` on it, because pg_tviews refreshes the TVIEW through triggers there. The
+  deploy names the `GRANT TRIGGER ON <table> TO <role>` to run as that table's owner.
 
 ### Leaving TVIEW rows out of a dump: `tview_data` (#471)
 
@@ -1574,8 +1624,8 @@ smaller dump.
   pg_tviews fraisier cannot read**, or no connection to read it: the backup
   fails and the gate aborts the deploy before migrating. Dumping everything
   instead would quietly ignore the setting. That includes a pg_tviews older
-  than beta.30, which offers only read contract 1; the message says to upgrade
-  it together with confiture.
+  than beta.30, which offers only read contract 1; the message says how to
+  create it again at the current release.
 - **Lean dumps are a size series of their own.** They are named
   `{db}_{mode}_{timestamp}_lean[_{algo}].dump`. The size check (a dump under half
   of the previous one fails) compares a lean dump only with lean ones, and a full
