@@ -298,7 +298,7 @@ class TestListTviews:
     ) -> None:
         patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(tviews.TviewError, match=r"together with confiture"):
+        with pytest.raises(tviews.TviewError, match=r"predates read contract 2"):
             tviews.list_tviews("postgresql:///app")
 
 
@@ -319,16 +319,41 @@ class TestOutdatedAdvice:
 
         minimum = confiture.platform.MINIMUM_PG_TVIEWS
 
-        assert f"upgrade it to {minimum} together" in self.outdated_message(monkeypatch)
+        assert f"({minimum}," in self.outdated_message(monkeypatch)
 
-    def test_it_names_the_reregistration_the_upgrade_needs(
+    def test_it_names_the_release_fraisier_is_tested_on(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """confiture 1.37's ``CONFIG_014`` hint: re-register after the UPDATE."""
-        assert self.outdated_message(monkeypatch).endswith(
-            "run ALTER EXTENSION pg_tviews UPDATE, then "
-            "SELECT * FROM tviews.pg_tviews_reregister_all()"
-        )
+        message = self.outdated_message(monkeypatch)
+
+        assert f"Install pg_tviews {tviews.TESTED_PG_TVIEWS} " in message
+
+    def test_it_says_no_update_reaches_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A release updates only from the one before it (confiture's CONFIG_014)."""
+        message = self.outdated_message(monkeypatch)
+
+        assert "confiture migrate up --recreate-pg-tviews --config" in message
+        assert "ALTER EXTENSION pg_tviews UPDATE" not in message
+        assert "pg_tviews_reregister_all" not in message
+
+    def test_it_says_to_restart_before_the_recreate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The recreate refuses a library PostgreSQL has not loaded yet."""
+        message = self.outdated_message(monkeypatch)
+
+        assert message.index("restart PostgreSQL") < message.index("--recreate")
+
+
+def test_the_tested_release_is_the_one_the_tviews_ci_leg_builds() -> None:
+    """The advice names the release the TVIEW suite runs against, and no other."""
+    dockerfile = (
+        Path(__file__).resolve().parent.parent / "ci" / "pg-tviews" / "Dockerfile"
+    ).read_text()
+
+    assert f"v{tviews.TESTED_PG_TVIEWS} tag" in dockerfile
 
 
 class TestUnderContractThreeTheBackingViewIsTheOwners:
@@ -428,7 +453,7 @@ class TestFindEmpty:
     ) -> None:
         patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(tviews.TviewError, match=r"together with confiture"):
+        with pytest.raises(tviews.TviewError, match=r"predates read contract 2"):
             tviews.find_empty_tviews("postgresql:///app")
 
 

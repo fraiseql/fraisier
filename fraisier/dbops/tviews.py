@@ -141,12 +141,29 @@ def tviews_installed(url: str) -> bool:
         return read_support(conn).state == "ok"
 
 
-_HINT_OUTDATED = (
-    f"pg_tviews here predates read contract {CONTRACTS[0]}; upgrade it to "
-    "0.1.0-beta.30 together with confiture, which reads only that contract, then "
-    "run ALTER EXTENSION pg_tviews UPDATE, then "
-    "SELECT * FROM tviews.pg_tviews_reregister_all()"
-)
+#: The pg_tviews release the TVIEW suite runs against (``ci/pg-tviews/Dockerfile``),
+#: and the one an outdated install is told to move to.
+TESTED_PG_TVIEWS = "0.1.0-beta.37"
+
+
+def _outdated_hint() -> str:
+    """What to do about a pg_tviews older than any contract fraisier reads.
+
+    No release updates from it: each updates only from the one before, so the
+    extension is dropped and its TVIEWs created again, as confiture's
+    ``CONFIG_014`` says. fraisier never does that itself.
+    """
+    from confiture.platform import MINIMUM_PG_TVIEWS
+
+    return (
+        f"pg_tviews here predates read contract {CONTRACTS[0]} ({MINIMUM_PG_TVIEWS}, "
+        "the oldest fraisier and confiture read), and a pg_tviews release updates "
+        f"only from the one before it. Install pg_tviews {TESTED_PG_TVIEWS} with "
+        "jsonb_delta, which it requires, restart PostgreSQL, then drop the "
+        "extension and create every TVIEW again from the schema files, by hand, "
+        "from the project directory: `confiture migrate up --recreate-pg-tviews "
+        "--config db/environments/<env>.yaml`"
+    )
 
 
 def _usable(conn: _Executes) -> TviewsSupport | None:
@@ -158,7 +175,7 @@ def _usable(conn: _Executes) -> TviewsSupport | None:
     """
     support = read_support(conn)
     if support.state == "outdated":
-        raise TviewError(_HINT_OUTDATED)
+        raise TviewError(_outdated_hint())
     if support.state == "newer":
         raise TviewError(
             f"pg_tviews here offers read contract {support.contract}, which this "
