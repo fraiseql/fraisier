@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator
+from confiture.exceptions import ConfigurationError as ConfitureConfigurationError
 from confiture.exceptions import ValidationError
 
 from fraisier.config._lazy_env import LazyEnv, is_string_like, to_str
@@ -37,7 +38,7 @@ from fraisier.dbops.confiture_contract import (
     envelope_error_message,
 )
 from fraisier.dbops.confiture_executable import confiture_executable
-from fraisier.errors import ConfigurationError
+from fraisier.errors import ConfigurationError, PgTviewsUpdateError
 from fraisier.errors import MigrationError as FraisierMigrationError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -46,6 +47,7 @@ if TYPE_CHECKING:  # pragma: no cover
     import psycopg
     from confiture import MigrateDownResult, MigrateUpResult
     from confiture.config.environment import Environment
+    from confiture.core.migrator import UpEvent
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +81,84 @@ _ALLOW_IRREVERSIBLE_HINT = (
     "Set `allow_irreversible: true` on this environment to apply them anyway, "
     "or give each one a down."
 )
+
+#: confiture's refusal of a pg_tviews catalog it cannot bring to the library the
+#: server loaded (1.45.0, exit 5). Nothing was changed when it is raised.
+_PG_TVIEWS_NOT_UPDATED = "CONFIG_016"
+
+_PG_TVIEWS_CATALOG = re.compile(r"^pg_tviews (\S+) in this database")
+
+
+def _report_pg_tviews_update(event: UpEvent) -> None:
+    """Say that ``migrate up`` updated pg_tviews: the result does not carry it."""
+    if event.kind == "pg_tviews_updated":
+        log.warning(
+            "%s: migrate up ran ALTER EXTENSION pg_tviews UPDATE before applying "
+            "migrations, which re-derived every TVIEW",
+            event.message,
+        )
+
+
+def _pg_tviews_remedy(exc: ConfitureConfigurationError, config_path: Path) -> str:
+    """What to do about *exc*, in terms of what fraisier ran and will run again."""
+    confiture_hint = exc.resolution_hint or ""
+    cause = exc.__cause__
+    if getattr(cause, "sqlstate", None) == "42501" and "re-register" in str(cause):
+        return (
+            "The update re-derives every TVIEW as its owner, and a TVIEW's owner "
+            "may no longer read what that TVIEW reads; pg_tviews names the first "
+            "one. Grant its owner each privilege named, or drop that TVIEW, then "
+            "deploy again."
+        )
+    recreate = (
+        "from the project directory, run "
+        f"`confiture migrate up --recreate-pg-tviews --config {config_path}` by "
+        "hand. In one transaction it drops the extension, creates it again and "
+        "creates every TVIEW again from the schema files; base tables keep their "
+        "rows, each TVIEW is refilled from them, and the pending migrations are "
+        "applied too. fraisier never runs it itself."
+    )
+    if "--dry-run" in confiture_hint:
+        return (
+            "Update it by hand, then deploy again: `ALTER EXTENSION pg_tviews "
+            "UPDATE` in that database, as the extension's owner or a superuser. "
+            "If pg_tviews has no update from that release, " + recreate
+        )
+    if "--recreate-pg-tviews" in confiture_hint:
+        return (
+            "A pg_tviews release updates only from the one before it, so this "
+            f"database's TVIEWs must be created again: {recreate} Then deploy again."
+        )
+    return confiture_hint
+
+
+def _pg_tviews_refusal(
+    exc: BaseException, config_path: Path | str
+) -> PgTviewsUpdateError | None:
+    """*exc* in fraisier's terms when it is confiture's ``CONFIG_016``, else None."""
+    if not (
+        isinstance(exc, ConfitureConfigurationError)
+        and exc.error_code == _PG_TVIEWS_NOT_UPDATED
+    ):
+        return None
+    # PostgreSQL's HINT and CONTEXT lines follow a refused statement's message;
+    # its first line already names what was refused.
+    refusal = (exc.args[0] if exc.args else str(exc)).split("\n", 1)[0]
+    hint = exc.resolution_hint or ""
+    catalog = _PG_TVIEWS_CATALOG.match(refusal)
+    kept = f"the database is still on pg_tviews {catalog[1]}" if catalog else ""
+    lead = (
+        "pre_migrate_verify dry-runs the migrations first, and a dry run "
+        "updates nothing: "
+        if "--dry-run" in hint
+        else ""
+    )
+    message = f"{lead}{refusal}. Nothing was changed: {kept or 'pg_tviews'}"
+    message += ", and no migration was applied" if kept else " was left as it was"
+    return PgTviewsUpdateError(
+        message, recovery_hint=_pg_tviews_remedy(exc, Path(config_path))
+    )
+
 
 MAX_LOCK_RETRIES = 3
 
@@ -557,6 +637,9 @@ def dry_run_execute(
             execution_time_ms=elapsed_ms,
         )
     except Exception as e:  # pragma: no cover
+        refusal = _pg_tviews_refusal(e, config_path)
+        if refusal is not None:
+            raise refusal from e
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return MigrationResult(
             success=False,
@@ -644,8 +727,14 @@ def migrate_up(
                     lock_timeout=lock_timeout,
                     require_reversible=require_reversible,
                     allow_destructive=allow_destructive,
+                    on_event=_report_pg_tviews_update,
                 )
                 break
+            except ConfitureConfigurationError as exc:
+                refusal = _pg_tviews_refusal(exc, config_path)
+                if refusal is None:
+                    raise
+                raise refusal from exc
             except ValidationError as exc:
                 # Confiture 1.2+ refuses a migration marked destructive
                 # (VALID_002), and 1.42+ one still carrying a backfill
@@ -736,7 +825,13 @@ def migrate_down(
     ):
         # Register migration hooks if configured (for rollback operations)
         _register_migration_hooks(m, hooks_config)
-        result: MigrateDownResult = m.down(steps=steps)
+        try:
+            result: MigrateDownResult = m.down(steps=steps)
+        except ConfitureConfigurationError as exc:
+            refusal = _pg_tviews_refusal(exc, config_path)
+            if refusal is None:
+                raise
+            raise refusal from exc
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 

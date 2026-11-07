@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  },
+  "error": {
+    "code": "CONFIG_016",
+    "message": "pg_tviews 0.1.0-beta.35 in this database cannot be brought to the loaded library 0.1.0-beta.37: pg_tviews 0.1.0-beta.37 has no update from 0.1.0-beta.35",
+    "severity": "error",
+    "details": {},
+    "migration": null,
+    "file": null,
+    "line": null,
+    "actionable": "Drop the extension and create every TVIEW again from the schema files: confiture migrate up --recreate-pg-tviews (one transaction; base tables keep their rows, TVIEWs are refilled from them)"
+  },
+  "command": "migrate up"
+}
