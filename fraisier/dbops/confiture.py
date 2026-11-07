@@ -99,6 +99,45 @@ def _report_pg_tviews_update(event: UpEvent) -> None:
         )
 
 
+#: pg_tviews' refusal (0.1.0-beta.36 and later) of a TVIEW whose definition reads
+#: a table or TVIEW of another role: the writes it would refresh run through
+#: triggers on that table. It names the table and the privilege, not the grant.
+_TRIGGER_REFUSED = re.compile(
+    r"^permission denied for table (\S+): .*needs the TRIGGER privilege$"
+)
+
+
+def _postgres_error(failure: BaseException | None) -> BaseException | None:
+    """The PostgreSQL error at the root of *failure*, if any."""
+    seen: set[int] = set()
+    while failure is not None and id(failure) not in seen:
+        if getattr(failure, "sqlstate", None):
+            return failure
+        seen.add(id(failure))
+        failure = failure.__cause__ or failure.__context__
+    return None
+
+
+def _migration_hint(result: object) -> str | None:
+    """A fix for what PostgreSQL refused that its own message does not give.
+
+    pg_tviews' other refusals of a TVIEW definition carry their fix as a HINT,
+    which confiture's message keeps (``42P13``: the ``ALTER FUNCTION … SET
+    search_path = <schema>, pg_temp``; ``42710``: the ``typename`` option).
+    """
+    error = _postgres_error(getattr(result, "failure", None))
+    if error is None:
+        return None
+    refused = _TRIGGER_REFUSED.match(str(error).split("\n", 1)[0])
+    if refused is None:
+        return None
+    return (
+        f"GRANT TRIGGER ON {refused[1]} TO <the role creating the TVIEW>, as that "
+        "table's owner: pg_tviews refreshes a TVIEW through triggers on every "
+        "table it reads. Then deploy again."
+    )
+
+
 def _pg_tviews_remedy(exc: ConfitureConfigurationError, config_path: Path) -> str:
     """What to do about *exc*, in terms of what fraisier ran and will run again."""
     confiture_hint = exc.resolution_hint or ""
@@ -787,6 +826,7 @@ def migrate_up(
             db_error=reason,
             rollback_attempted=False,
             steps_applied=len(result.migrations_applied),
+            recovery_hint=_migration_hint(result),
         )
 
     return MigrationResult(

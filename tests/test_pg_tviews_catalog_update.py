@@ -24,9 +24,12 @@ import psycopg
 import pytest
 from confiture.core.migrator import UpEvent, UpObserver
 from confiture.exceptions import ConfigurationError as ConfitureConfigurationError
+from confiture.exceptions import MigrationError as ConfitureMigrationError
+from confiture.exceptions import SQLError
 from confiture.models.results import MigrateDownResult, MigrateUpResult
 
 from fraisier.errors import DatabaseError, PgTviewsUpdateError
+from fraisier.errors import MigrationError as FraisierMigrationError
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "confiture"
 _CONFIG = Path("/srv/acme/db/environments/production.yaml")
@@ -246,3 +249,56 @@ def test_postgresql_s_context_lines_do_not_bury_the_outcome() -> None:
 
     assert "CONTEXT" not in excinfo.value.message
     assert excinfo.value.message.endswith("no migration was applied")
+
+
+def _failed_on(pg_error: psycopg.Error) -> MigrateUpResult:
+    """A migration PostgreSQL refused, chained as confiture 1.45.0 chains it.
+
+    ``failure`` is confiture's ``MigrationError``, caused by its ``SQLError``,
+    caused by psycopg's error (measured on a live refusal).
+    """
+    sql_error = SQLError("CREATE TABLE tv_profile AS ...", None, pg_error)
+    sql_error.__cause__ = pg_error
+    failure = ConfitureMigrationError(f"Failed to apply migration: {pg_error}")
+    failure.__cause__ = sql_error
+    return MigrateUpResult(
+        success=False,
+        migrations_applied=[],
+        total_duration_ms=1,
+        checksums_verified=True,
+        dry_run=False,
+        errors=[str(failure)],
+        failure=failure,
+    )
+
+
+def _failing(result: MigrateUpResult) -> MagicMock:
+    session = MagicMock()
+    session.up.return_value = result
+    return session
+
+
+#: pg_tviews 0.1.0-beta.37's refusal of a definition that reads another role's
+#: TVIEW, verbatim from a live run.
+_TRIGGER_REFUSED = (
+    'permission denied for table "public"."tv_user": this TVIEW\'s writes would '
+    "refresh tv_profile, which needs the TRIGGER privilege"
+)
+
+
+class TestATviewReadingAnotherRolesTable:
+    def test_names_the_grant_that_lets_it(self) -> None:
+        refused = _failed_on(psycopg.errors.InsufficientPrivilege(_TRIGGER_REFUSED))
+        with pytest.raises(FraisierMigrationError) as excinfo:
+            _migrate_up(_failing(refused))
+
+        assert 'GRANT TRIGGER ON "public"."tv_user" TO' in (excinfo.value.recovery_hint)
+
+    def test_another_permission_refusal_keeps_the_general_advice(self) -> None:
+        refused = _failed_on(
+            psycopg.errors.InsufficientPrivilege("permission denied for table tb_x")
+        )
+        with pytest.raises(FraisierMigrationError) as excinfo:
+            _migrate_up(_failing(refused))
+
+        assert "GRANT TRIGGER" not in excinfo.value.recovery_hint
