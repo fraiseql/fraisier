@@ -66,6 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs on PostgreSQL 18 only, and updates only from beta.37: a database on
   beta.36 or older is recreated.
 
+- **ruff 0.17.4** in both the pre-commit hook and `uv.lock`. No code change:
+  both ruff gates are clean.
+
 ### Fixed
 
 - **A confiture config may name its URL with `${VAR}`.** confiture 1.46
