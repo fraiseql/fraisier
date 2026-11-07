@@ -735,9 +735,25 @@ dependencies = [
   # tests/test_confiture_dependency_floor.py (`BackupConfig.env`,
   # `AuditConfig.connection_factory`). The floor moves with the cap: the
   # hooks pass both, which 1.43 rejects.
+  # **1.45.0 reads pg_tviews read contract 3 and updates its catalog (#808, #809).**
+  # pg_tviews 0.1.0-beta.35 and later offer contract 3 alone, which 1.44 refuses
+  # with CONFIG_014 everywhere it reads TVIEWs, doctor's check included. `migrate
+  # up` (and `migrate down`) now run `ALTER EXTENSION pg_tviews UPDATE` under the
+  # migration lock when the loaded library is one release past the catalog; the
+  # in-process deploy hears of it only through the `pg_tviews_updated` event and
+  # says so. A catalog no update reaches, a library PostgreSQL has not reloaded,
+  # and an update PostgreSQL refuses (pg_tviews beta.37: `42501` when a TVIEW's
+  # owner cannot read its sources, `42710` on a taken GraphQL type name) are
+  # `CONFIG_016`, exit 5, nothing changed; a dry run inside that window is
+  # `CONFIG_016` too. `--exit-codes-json` adds CONFIG_016 and moves nothing else.
+  # Drift: an extension that another one in the tree requires (jsonb_delta under
+  # `CREATE EXTENSION pg_tviews CASCADE`) is now the tree's, so a database built
+  # from such a tree reports one `extra_object` fewer; kinds and severities are
+  # unchanged. Probed by tests/test_confiture_dependency_floor.py (contract 3,
+  # the event). The floor moves with the cap: beta.35+ needs both.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.44.0,<1.45",
+  "fraiseql-confiture>=1.45.0,<1.46",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0,<7.0",

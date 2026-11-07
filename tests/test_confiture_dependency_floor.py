@@ -56,7 +56,7 @@ CONFITURE_IMPORT_SURFACE: dict[str, tuple[str, ...]] = {
     # importing it is exactly what that form needs to resolve.
     "confiture.core.hooks.builtin": ("BackupHook",),
     "confiture.core.locking": ("LockAcquisitionError",),
-    "confiture.core.migrator": ("Migrator",),
+    "confiture.core.migrator": ("Migrator", "UpEvent"),
     "confiture.core.restorer": ("DatabaseRestorer", "RestoreOptions"),
     "confiture.core.view_manager": ("ViewManager",),
     "confiture.exceptions": ("ConfigurationError", "MigrationError", "RestoreError"),
@@ -285,3 +285,27 @@ def test_audit_config_connects_through_its_connection_factory() -> None:
     AuditHook(config)._connect()
 
     assert opened == ["postgresql:///db"]
+
+
+def test_the_installed_confiture_reads_pg_tviews_contract_3() -> None:
+    """pg_tviews 0.1.0-beta.35 and later offer read contract 3 alone.
+
+    A confiture that reads only contract 2 refuses every such database with
+    ``CONFIG_014``: its build, its drift check and doctor's pg_tviews check.
+    """
+    from confiture.core.live_catalog import CONTRACT_VERSIONS
+
+    assert 3 in CONTRACT_VERSIONS
+
+
+def test_migrate_up_reports_the_pg_tviews_update_it_ran() -> None:
+    """``migrate up`` updates a pg_tviews catalog one release behind its library.
+
+    fraisier tells the operator when that ran, and hears of it only through this
+    event: the result carries nothing about it.
+    """
+    import typing
+
+    from confiture.core._migrator.events import UpEventKind
+
+    assert "pg_tviews_updated" in typing.get_args(UpEventKind)
