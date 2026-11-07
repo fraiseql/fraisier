@@ -572,6 +572,17 @@ class TestLoadEnv:
 
         assert env.database_url == "postgresql://u@localhost/override"
 
+    def test_an_override_holding_a_template_reference_is_refused(self, tmp_path):
+        """The override is what confiture 1.46 would expand on read: a ``${``
+        in it never reaches the ``Environment``."""
+        from fraisier.dbops.confiture import _load_env
+
+        cfg = tmp_path / "confiture.yaml"
+        cfg.write_text("database_url: postgresql://u@localhost/original\n")
+
+        with pytest.raises(ValueError, match=r"^database_url: holds '\$\{'"):
+            _load_env(cfg, database_url="postgresql://u:${DB_PASSWORD}@h/db")
+
 
 class TestSchemaHash:
     """Test schema hash computation."""

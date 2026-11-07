@@ -128,6 +128,27 @@ def url_runner_child(url: str) -> tuple[str, dict[str, str]]:
 _ROLE_LABELS = {"database_url": "app", "admin_url": "admin"}
 
 
+def refuse_url_template(url: str) -> None:
+    """Refuse a URL that still holds ``${`` once fraisier has resolved it.
+
+    confiture expands ``${VAR}`` in an ``Environment``'s URL when it is read
+    (1.46, #813) and refuses a malformed reference; before that it kept the text.
+    fraisier's own children read it literally on every version. So a ``${`` would
+    connect one way in process and another in a child: refused before either.
+
+    Raises:
+        ValueError: naming both fixes, never the URL (it may hold a password).
+    """
+    if "${" in url:
+        msg = (
+            "holds '${', which confiture reads as an environment-variable "
+            "reference and fraisier's own children do not. Name a variable "
+            "with !envvar NAME (the whole URL), or percent-encode a literal "
+            "'${' as %24%7B"
+        )
+        raise ValueError(msg)
+
+
 def resolve_db_url(
     value: str | LazyEnv | None,
     *,
@@ -143,8 +164,9 @@ def resolve_db_url(
 
     The resolved URL is parsed by :class:`~fraisier.dbops._pgconn.PgConn`, so
     one libpq would read differently is refused here, before the strategy has
-    done anything (a dump restore stops the service before its first child).
-    *role* names the field in that refusal.
+    done anything (a dump restore stops the service before its first child),
+    as is one that still holds ``${`` (:func:`refuse_url_template`). *role*
+    names the field in that refusal.
 
     Raises:
         ValueError: naming *role* and what is wrong, never the password.
@@ -153,6 +175,7 @@ def resolve_db_url(
         return None
     url = to_str(value)
     try:
+        refuse_url_template(url)
         PgConn.parse(url).check_in_process()
     except ValueError as exc:
         msg = f"{role}: {exc}"

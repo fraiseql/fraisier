@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- ⚠️ **A database URL that still holds `${` is refused.** It applies to
+  `database.database_url` and `database.admin_url`, after `!envvar` resolves them.
+  `fraisier validate` reports it, and a deploy refuses it before it connects.
+  confiture 1.46 expands `${VAR}` in the URL fraisier passes it in process, while
+  fraisier's own children (`pg_dump`, `psql`) read the text as
+  written, so one URL would have connected two ways. Name a variable with
+  `!envvar NAME` for the whole URL, and percent-encode a literal `${` in a
+  password as `%24%7B`. `${VAR}` in `hooks:` and `notifications:` is unchanged.
+
 ## [0.97.0] - 2026-11-06
 
 **Two ⚠️ changes to read before upgrading:** the API vhosts now need nginx's brotli

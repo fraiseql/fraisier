@@ -221,14 +221,25 @@ def _load_env(
     fraisier builds the ``Environment`` directly via ``model_validate`` (to
     inject the ``database_url`` override), which is still strict — so this
     defaulting remains necessary.
+
+    Raises:
+        ValueError: the override holds ``${``, which confiture 1.46+ would
+            expand on read (:func:`~fraisier.dbops._url.refuse_url_template`).
     """
     import yaml
     from confiture.config.environment import Environment
+
+    from fraisier.dbops._url import refuse_url_template
 
     raw: dict = yaml.safe_load(Path(config_path).read_text()) or {}  # type: ignore[assignment]
     raw.setdefault("name", Path(config_path).stem)
     raw.setdefault("include_dirs", [])
     if database_url:
+        try:
+            refuse_url_template(database_url)
+        except ValueError as exc:
+            msg = f"database_url: {exc}"
+            raise ValueError(msg) from None
         raw["database_url"] = database_url
     return Environment.model_validate(raw)
 
