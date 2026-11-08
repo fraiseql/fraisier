@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ⚠️ **confiture 1.47.0 is required** (`>=1.47.0,<1.48`), and fraisier's floors
+  for the packages it shares with confiture rise to what confiture requires:
+  `psycopg` 3.3.0 (every extra that names it), `click` 8.2.1, `rich` 13.7.0,
+  `pyyaml` 6.0.1. No version below them installs beside this confiture.
+- **`restore.template: auto` reads the right ledger.** Its pending-scoped
+  preflight passes `--database-url` beside the project's confiture config,
+  and before confiture 1.47 that dropped the config's
+  `migration.tracking_table`: with a schema-qualified tracking table off the
+  connection's `search_path`, the preflight refused (`CONFIG_015`) and every
+  restore took the template. confiture 1.47 keeps the config's settings, so
+  the decision is made on the pending set again.
+
 - ⚠️ **A database URL that still holds `${` is refused.** It applies to
   `database.database_url` and `database.admin_url`, after `!envvar` resolves them.
   `fraisier validate` reports it, and a deploy refuses it before it connects.
@@ -40,6 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A confiture config may name its URL with `${VAR}`.** confiture 1.46
+  expands `${UPPER_NAME}` in a config's `database_url` and `scratch_url` when
+  it connects. fraisier read the text as written, so it refused such a config
+  as "not a PostgreSQL URL" before every confiture child, and the drift gate
+  could not compare it with the deploy's URL. It now reads both through
+  confiture's own `Environment`, checks the expanded URL, and refuses an unset
+  variable by name before anything starts. fraisier's own
+  `database.database_url` still refuses `${` (see above).
+- **A backup where confiture ran and applied nothing is not a failed ledger
+  restore.** The restore preflight's #262 guard counted confiture's own tables
+  (the checkpoint and lock-holder tables, and the `confiture` schema that
+  `view_helpers: auto` installs) and fraisier's restore receipt as application
+  objects beside the empty ledger, and refused. It now leaves out what
+  confiture names as its own (`ledger.bookkeeping_tables()` /
+  `bookkeeping_schemas()`) and fraisier's `fraisier` schema.
 - **fraisier reads pg_tviews 0.1.0-beta.35 and later.** They offer read contract
   3, which fraisier refused as "newer": every TVIEW check, rebuild and status
   failed with "upgrade fraisier". What fraisier reads (the registry,

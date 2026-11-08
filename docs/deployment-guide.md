@@ -1067,9 +1067,7 @@ database:
 The gate builds the schema this checkout would produce (`confiture build
 --schema-only`, no database connection, into a temp path that is cleaned
 up) and hands it to `confiture migrate validate --check-live-drift`.
-Warnings do not fail; only critical drift does. `confiture_lock_holder`
-shows up as an `EXTRA_TABLE` warning on every fraisier-managed database,
-which is why that distinction matters.
+Warnings do not fail; only critical drift does.
 
 **It runs after `migrate up`, not before.** `--check-live-drift` grades
 the DDL against live and rates "in the DDL, not in live" —

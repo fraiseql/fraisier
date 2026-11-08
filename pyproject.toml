@@ -754,6 +754,37 @@ dependencies = [
   # from such a tree reports one `extra_object` fewer; kinds and severities are
   # unchanged. Probed by tests/test_confiture_dependency_floor.py (contract 3,
   # the event, the update's signatures). The floor moves with the cap: beta.35+ needs both.
+  # **1.46.0 and 1.47.0, audited together.**
+  #   * ⚠️ `database_url` / `scratch_url` expand `${UPPER_NAME}` on read (#813);
+  #     `Environment` keeps the text in `written_*`, an unset variable is a
+  #     `ConfigurationError` naming it. fraisier refuses `${` in its own URLs
+  #     (`refuse_url_template`), and reads a confiture config's URLs through
+  #     `Environment.from_file` (public from 1.47.0) in `_pgconn.configured_url`,
+  #     so every child and the drift gate's URL agreement check the expansion,
+  #     as `migrate validate -c` connects with it.
+  #   * Floors (#814): psycopg 3.3.0, pydantic 2.12.2, typer 0.24 (click 8.2.1).
+  #     fraisier's shared floors match; tests/test_dependency_floors_match_confiture.py.
+  #   * `--database-url` beside an explicit `--config` replaces the connection
+  #     only (#825): the config's `tracking_table`, `locking`, `strict_mode` and
+  #     `view_helpers` now apply. Measured with `tracking_table:
+  #     public.tb_confiture` and `search_path = app`: restore's pending-scoped
+  #     preflight (template_rule.py) was `CONFIG_015` on 1.45, so `auto` took the
+  #     template as an unread payload; 1.47 gives the verdict. Nothing in fraisier
+  #     compensated; its own preflight config is not passed with `--database-url`.
+  #   * The lock-holder table sits in the tracking table's schema (#826), measured
+  #     `app.` on 1.45, `public.` on 1.47 for the case above. `_migration_lock`'s
+  #     arguments are unchanged; fraisier names the table nowhere.
+  #   * `ledger.bookkeeping_schemas()` (#827): the #262 guard now counts neither
+  #     it, `bookkeeping_tables()` nor fraisier's receipt schema.
+  #   * A view's column list is kept in the parsed tree (#822): the drift gate's
+  #     scratch-tier payloads are byte-identical on 1.45.0 and 1.47.0 for a
+  #     matching and a renamed column list. `migrate diff --fail-on-change`,
+  #     `baseline --database-url`, quoted names under `--exclude`,
+  #     `ObjectRef.identity`, `view_columns`/`view_reads`: fraisier calls or
+  #     reads none of them. No change to `pg_tviews_update`, `live_catalog`,
+  #     `_migrator.events`, `error_codes` or `exceptions`; CONFIG_016's text is
+  #     unchanged. The floor moves with the cap: `from_file` and
+  #     `bookkeeping_schemas` are 1.47's.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
   "fraiseql-confiture>=1.47.0,<1.48",
