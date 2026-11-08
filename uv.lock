@@ -339,7 +339,7 @@ wheels = [
 
 [[package]]
 name = "fraiseql-confiture"
-version = "1.45.0"
+version = "1.47.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pglast" },
@@ -350,11 +350,11 @@ dependencies = [
     { name = "sqlglot" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4d/6c/684efb4e6477c7fbadb9fddd6b010462c99814551b0a229e456c4196ab3b/fraiseql_confiture-1.45.0.tar.gz", hash = "sha256:c14343ccfd0717c5b6ce1118344b01143888056c37e5bdb63b33b9d9f278423d", size = 4334095, upload-time = "2026-11-05T17:40:07.435Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/9a/a0dfd60360f54112fcaeba0714c069ae780f55a33045fd72f54f2f4f87ef/fraiseql_confiture-1.47.0.tar.gz", hash = "sha256:98a412cc067e3f19517a6df152c0b06b411cbfec963dd5c61bb016a7fb8e8e30", size = 4362962, upload-time = "2026-11-08T12:19:10.276Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/28/00b5faf993be8fab50752c6cabbf9ab75137c981a3d27eafbe7f7428b81a/fraiseql_confiture-1.45.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:af935984e96a54174298f10424beddf71dc0cdd99834024552b119607d9e8cb4", size = 1770500, upload-time = "2026-11-05T17:40:02.22Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/61/6b21da5eed41f133f5c8cd76fd4624f7cb7e1c823106dc838cf3e2a50ea2/fraiseql_confiture-1.45.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:b480655fb474881d96ba5d5bbbc1ebf398af7c5dec9a562dd50c22c34fe88d07", size = 1797295, upload-time = "2026-11-05T17:40:04.277Z" },
-    { url = "https://files.pythonhosted.org/packages/e2/d9/6ece850289ed01cf26551f31cd3803bd2c62072e6510d3e4cbf62fac9441/fraiseql_confiture-1.45.0-cp314-cp314-win_amd64.whl", hash = "sha256:af2b8ee8c8e44fc2956ca64057da308556c6e97feec45b9e37fe953ad3dade7f", size = 1716320, upload-time = "2026-11-05T17:40:05.661Z" },
+    { url = "https://files.pythonhosted.org/packages/30/b7/9b063e64eb1ea48a4a354207a5d86ba852118f27200bf63dc3a7e9c8f900/fraiseql_confiture-1.47.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:350e7a1b35b125f11c08946b1e3ca2ba37163d5757f73935125512b732818695", size = 1780908, upload-time = "2026-11-08T12:19:05.101Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/d7/d9a2fe2dff2dd49b6fffca8e2bddf71c480a167aae6d43a42074a12ca448/fraiseql_confiture-1.47.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:eef4a0db0eeb5279ed42b0d6168ea2a22a71d29407f9d615ea36c33839c3cfd0", size = 1807680, upload-time = "2026-11-08T12:19:07.107Z" },
+    { url = "https://files.pythonhosted.org/packages/10/19/1f595f0d535d03f93b04b2edb1bd3f0989e83f78696fbb6c18a87232463a/fraiseql_confiture-1.47.0-cp314-cp314-win_amd64.whl", hash = "sha256:749675fc8c4cf4f24ac04687e7ec6adc5f3490ecf42a95fd2c8247af534e96f7", size = 1726775, upload-time = "2026-11-08T12:19:08.635Z" },
 ]
 
 [[package]]
@@ -416,22 +416,22 @@ dev = [
 requires-dist = [
     { name = "aiomysql", marker = "extra == 'all-databases'", specifier = ">=0.2.0,<1.0" },
     { name = "aiosqlite", marker = "extra == 'all-databases'", specifier = ">=0.19.0,<1.0" },
-    { name = "click", specifier = ">=8.1.0,<9.0" },
+    { name = "click", specifier = ">=8.2.1,<9.0" },
     { name = "fastapi", specifier = ">=0.109.0,<1.0" },
-    { name = "fraiseql-confiture", specifier = ">=1.45.0,<1.46" },
+    { name = "fraiseql-confiture", specifier = ">=1.47.0,<1.48" },
     { name = "httpx", specifier = ">=0.27.0,<1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0,<1.0" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0" },
     { name = "mcp", extras = ["cli"], marker = "extra == 'mcp'", specifier = ">=1.9.0" },
     { name = "packaging", specifier = ">=23.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'all-databases'", specifier = ">=3.1.0,<4.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.1.0,<4.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1.0,<4.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'all-databases'", specifier = ">=3.3.0,<4.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.3.0,<4.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.3.0,<4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0,<1.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0" },
-    { name = "pyyaml", specifier = ">=6.0,<7.0" },
-    { name = "rich", specifier = ">=13.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.1,<7.0" },
+    { name = "rich", specifier = ">=13.7.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3.0,<1.0" },
     { name = "strawberry-graphql", marker = "extra == 'graphql'", specifier = ">=0.220.0,<1.0" },
     { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'", specifier = ">=4.0.0" },
