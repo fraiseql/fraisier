@@ -191,3 +191,66 @@ def test_an_ambient_service_is_refused_without_a_readable_config(tmp_path, monke
 
     run.assert_not_called()
     assert "PGSERVICE" in result.error
+
+
+# confiture 1.46 (#813) expands ``${UPPER_NAME}`` in a config's ``database_url``
+# and ``scratch_url`` when a child connects with them, so fraisier checks the URL
+# the child will use: the expansion, never the text as written.
+
+
+@pytest.mark.parametrize("site", WRAPPERS)
+@pytest.mark.parametrize(
+    "written", ["${ACME_DB_URL}", "postgresql:///acme_db?${ACME_DB_QUERY}"]
+)
+def test_a_config_url_is_checked_as_confiture_expands_it(
+    config, monkeypatch, site, written
+):
+    monkeypatch.setenv("ACME_DB_URL", "postgresql:///acme_db?keepalives=1")
+    monkeypatch.setenv("ACME_DB_QUERY", "keepalives=1")
+    config.write_text(f"name: production\ndatabase_url: {written}\n")
+    with patch("subprocess.run", return_value=_proc()) as run:
+        outcome = _wrappers(config)[site]()
+
+    run.assert_not_called()
+    assert "keepalives" in str(outcome)
+
+
+@pytest.mark.parametrize("site", WRAPPERS)
+def test_a_config_url_naming_a_variable_is_launched(config, monkeypatch, site):
+    monkeypatch.setenv("ACME_DB_URL", "postgresql:///acme_db")
+    config.write_text("name: production\ndatabase_url: ${ACME_DB_URL}\n")
+    with patch("subprocess.run", return_value=_proc()) as run:
+        _wrappers(config)[site]()
+
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize("site", WRAPPERS)
+def test_a_config_url_naming_an_unset_variable_is_not_launched(
+    config, monkeypatch, site
+):
+    monkeypatch.delenv("ACME_DB_URL", raising=False)
+    config.write_text("name: production\ndatabase_url: ${ACME_DB_URL}\n")
+    with patch("subprocess.run", return_value=_proc()) as run:
+        outcome = _wrappers(config)[site]()
+
+    run.assert_not_called()
+    assert "ACME_DB_URL" in str(outcome)
+
+
+def test_the_drift_gate_checks_an_expanded_scratch_url(config, monkeypatch):
+    monkeypatch.setenv("ACME_SCRATCH_URL", "postgresql:///scratch?keepalives=1")
+    config.write_text(
+        "name: production\ndatabase_url: postgresql:///acme_db\n"
+        "scratch_url: ${ACME_SCRATCH_URL}\n"
+    )
+    with patch("subprocess.run") as run:
+        result = check_schema_drift(
+            project_dir=config.parents[2],
+            confiture_config=config,
+            checks=["live-drift"],
+        )
+
+    run.assert_not_called()
+    assert not result.passed
+    assert "keepalives" in str(result.error)

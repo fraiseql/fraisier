@@ -334,6 +334,36 @@ def in_process_refusal(environ: Mapping[str, str]) -> str | None:
 CONFIG_URL_KEYS = ("database_url", "scratch_url")
 
 
+def configured_url(confiture_config: Path, key: str) -> str | None:
+    """The URL a confiture child connects to for *key*, as confiture reads it.
+
+    confiture expands ``${UPPER_NAME}`` in ``database_url`` and ``scratch_url``
+    when a command connects with them (1.46, #813), so the text as written is
+    not what the child uses. This reads the config through confiture's own
+    ``Environment``, whose properties expand on read. ``None`` when confiture
+    cannot read the config, which is left to the child to report, or when it
+    names no such URL.
+
+    Raises:
+        ValueError: confiture refuses to expand the URL (an unset variable, or
+            an expansion that is not a PostgreSQL URL); its message names the
+            variable, never the value.
+    """
+    import yaml
+    from confiture.config.environment import Environment
+    from confiture.exceptions import ConfigurationError
+
+    try:
+        environment = Environment.from_file(confiture_config)
+    except ConfigurationError, OSError, TypeError, ValueError, yaml.YAMLError:
+        return None
+    try:
+        url = getattr(environment, key)
+    except ConfigurationError as exc:
+        raise ValueError(str(exc)) from None
+    return url if isinstance(url, str) else None
+
+
 def config_child_env(
     confiture_config: Path, keys: tuple[str, ...] = ("database_url",)
 ) -> dict[str, str]:
@@ -344,23 +374,18 @@ def config_child_env(
     :meth:`PgConn.pg_env` may fill another's gaps (a scratch server must never
     get the target's host or password). Each URL under *keys*, the ones this
     child connects to (:data:`CONFIG_URL_KEYS` for the drift gate's), is
-    refused as a child of fraisier's own would be; a config fraisier cannot
-    read is left to the child to report.
+    refused as a child of fraisier's own would be, as confiture expands it
+    (:func:`configured_url`); a config confiture cannot read is left to the
+    child to report.
 
     Raises:
         ValueError: a URL the config names, or the environment, is refused.
     """
-    import yaml
-
-    try:
-        raw = yaml.safe_load(confiture_config.read_text())
-    except OSError, yaml.YAMLError:
-        raw = None
     for key in keys:
-        url = raw.get(key) if isinstance(raw, dict) else None
-        if not isinstance(url, str):
-            continue
         try:
+            url = configured_url(confiture_config, key)
+            if url is None:
+                continue
             PgConn.parse(url).check_environment()
         except ValueError as exc:
             msg = f"{confiture_config}: {key}: {exc}"

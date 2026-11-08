@@ -334,3 +334,29 @@ def test_the_pg_tviews_update_fraisier_runs_before_a_dry_run_is_callable_as_used
 
     lock = inspect.signature(MigratorSession._migration_lock).parameters
     assert {"no_lock", "lock_timeout"} <= set(lock)
+
+
+def test_environment_from_file_expands_its_urls_on_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """``configured_url`` reads a config's URLs as confiture connects with them.
+
+    ``Environment.from_file`` is public from 1.47.0, and ``database_url`` /
+    ``scratch_url`` expand ``${UPPER_NAME}`` on each read from 1.46.0 (#813),
+    keeping the text as written in ``written_*``.
+    """
+    from confiture.config.environment import Environment
+
+    monkeypatch.setenv("ACME_DB_URL", "postgresql:///acme_db")
+    monkeypatch.setenv("ACME_SCRATCH_HOST", "scratch.acme.test")
+    config = tmp_path / "production.yaml"
+    config.write_text(
+        "database_url: ${ACME_DB_URL}\n"
+        "scratch_url: postgresql://${ACME_SCRATCH_HOST}/postgres\n"
+    )
+
+    environment = Environment.from_file(config)
+
+    assert environment.database_url == "postgresql:///acme_db"
+    assert environment.scratch_url == "postgresql://scratch.acme.test/postgres"
+    assert environment.written_database_url == "${ACME_DB_URL}"

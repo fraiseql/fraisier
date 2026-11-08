@@ -298,10 +298,13 @@ def is_string_like(value: Any) -> TypeGuard[str | LazyEnv]:
 #                                                        at init, before anything
 #                                                        runs.
 #
-#   dbops/_pgconn.py:config_child_env        non-config  Reads ``database_url`` /
+#   dbops/_pgconn.py:configured_url          non-config  Reads ``database_url`` /
 #                                                        ``scratch_url`` from a
-#                                                        confiture config, which
-#                                                        is confiture's YAML and
+#                                                        confiture config through
+#                                                        confiture's Environment,
+#                                                        which expands its own
+#                                                        ``${VAR}``; it is
+#                                                        confiture's YAML and
 #                                                        never holds a LazyEnv.
 #
 #   dbops/confiture.py:_hook_params          not-eligible
