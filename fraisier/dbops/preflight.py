@@ -20,6 +20,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fraisier.dbops._pgconn import PgConn
 from fraisier.dbops.confiture_contract import (
@@ -29,6 +30,9 @@ from fraisier.dbops.confiture_contract import (
     envelope_error_message,
 )
 from fraisier.dbops.confiture_executable import confiture_executable
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +90,11 @@ def extract_schema_only(
         raise DatabaseError(f"Schema extraction failed: {result.stderr}")
 
     return schema_file
+
+
+def _sql_literals(names: Iterable[str]) -> str:
+    """*names* as a comma-separated list of SQL string literals, in sorted order."""
+    return ", ".join("'" + name.replace("'", "''") + "'" for name in sorted(names))
 
 
 def _run_admin_sql(admin_url: str, sql: str) -> subprocess.CompletedProcess[str]:
@@ -402,20 +411,32 @@ class PreflightDatabase:
             return None
         return self._scalar_int(f"SELECT count(*) FROM {table_name}")
 
-    def count_user_relations(self, exclude_table: str) -> int | None:
-        """Count user tables/views in this DB, excluding *exclude_table*.
+    def count_user_relations(self, tracking_table: str) -> int | None:
+        """Count the application's tables and views in this DB.
 
         A schema-only restore of a real production backup recreates the
         application's tables and views; a brand-new (never-migrated) database
         has none.  This distinguishes a *populated schema with an empty ledger*
         (a failed tracking-data restore → #262) from a *genuinely fresh* backup
         (legitimately empty ledger, nothing to collide with).
+
+        confiture's own tables (the ledger of *tracking_table*, its checkpoint
+        and lock-holder tables) and schemas (the view helpers'), named by
+        confiture itself, are not the application's, and nor is fraisier's
+        restore receipt: a database where confiture ran and applied nothing
+        holds them all.
         """
-        base = exclude_table.rsplit(".", 1)[-1].replace("'", "''")
+        from confiture.core import ledger
+
+        from fraisier.dbops.receipt import RECEIPT_SCHEMA
+
+        schemas = {"pg_catalog", "information_schema", RECEIPT_SCHEMA}
+        schemas |= ledger.bookkeeping_schemas()
+        tables = ledger.bookkeeping_tables(tracking_table)
         return self._scalar_int(
             "SELECT count(*) FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-            f"AND table_name <> '{base}'"
+            f"WHERE table_schema NOT IN ({_sql_literals(schemas)}) "
+            f"AND table_name NOT IN ({_sql_literals(tables)})"
         )
 
 

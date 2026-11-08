@@ -56,6 +56,9 @@ CONFITURE_IMPORT_SURFACE: dict[str, tuple[str, ...]] = {
     # importing it is exactly what that form needs to resolve.
     "confiture.core.hooks.builtin": ("BackupHook",),
     "confiture.core.locking": ("LockAcquisitionError",),
+    # The #262 guard counts the application's relations, not confiture's own
+    # (``bookkeeping_schemas`` is 1.47.0's).
+    "confiture.core.ledger": ("bookkeeping_schemas", "bookkeeping_tables"),
     "confiture.core.migrator": ("Migrator", "UpEvent"),
     # Outside confiture's public API: ``pre_migrate_verify`` runs the pg_tviews
     # update a dry run cannot (1.45.0). See the signature test below.
