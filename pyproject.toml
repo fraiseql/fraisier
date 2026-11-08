@@ -742,7 +742,7 @@ dependencies = [
   # migration lock when the loaded library is one release past the catalog; the
   # in-process deploy hears of it only through the `pg_tviews_updated` event and
   # says so. A catalog no update reaches, a library PostgreSQL has not reloaded,
-  # and an update PostgreSQL refuses (pg_tviews beta.37: `42501` when a TVIEW's
+  # and an update PostgreSQL refuses (pg_tviews beta.37+: `42501` when a TVIEW's
   # owner cannot read its sources, `42710` on a taken GraphQL type name) are
   # `CONFIG_016`, exit 5, nothing changed; a dry run inside that window is
   # `CONFIG_016` too, so `pre_migrate_verify` first runs the update itself through

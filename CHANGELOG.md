@@ -22,16 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ALTER EXTENSION pg_tviews UPDATE` under the migration lock, before applying
   anything, when PostgreSQL has loaded a pg_tviews library one release past the
   database's catalog. The update re-derives every TVIEW. The deploy logs a
-  warning when it ran (`pg_tviews 0.1.0-beta.36 updated to 0.1.0-beta.37: migrate
+  warning when it ran (`pg_tviews 0.1.0-beta.37 updated to 0.1.0-beta.38: migrate
   up ran ALTER EXTENSION pg_tviews UPDATE …`); confiture's result does not say.
   A catalog older than the release before is never touched: see the
   `PG_TVIEWS_NOT_UPDATED` entry below.
-- **fraisier is tested on pg_tviews 0.1.0-beta.37** (the `tviews` CI leg), and
+- **fraisier is tested on pg_tviews 0.1.0-beta.38** (the `tviews` CI leg), and
   its advice for a pg_tviews older than read contract 2 follows confiture's
   `CONFIG_014`: a release updates only from the one before it, so install
-  beta.37, restart PostgreSQL, and create the extension and its TVIEWs again by
+  beta.38, restart PostgreSQL, and create the extension and its TVIEWs again by
   hand with `confiture migrate up --recreate-pg-tviews --config …`. It no longer
   names `pg_tviews_reregister_all()`, which the update now runs itself.
+  beta.38 is the first release whose update re-derives a TVIEW that reads a
+  materialized view, a foreign table or a sequence; on beta.37 such a TVIEW
+  aborted the update for the whole database (`cannot have triggers`). beta.38
+  runs on PostgreSQL 18 only, and updates only from beta.37: a database on
+  beta.36 or older is recreated.
 
 ### Fixed
 

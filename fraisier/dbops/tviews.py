@@ -143,7 +143,7 @@ def tviews_installed(url: str) -> bool:
 
 #: The pg_tviews release the TVIEW suite runs against (``ci/pg-tviews/Dockerfile``),
 #: and the one an outdated install is told to move to.
-TESTED_PG_TVIEWS = "0.1.0-beta.37"
+TESTED_PG_TVIEWS = "0.1.0-beta.38"
 
 
 def _outdated_hint() -> str:

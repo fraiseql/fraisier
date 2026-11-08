@@ -1522,7 +1522,7 @@ connection). A host that could not look never reports what a host that looked an
 passed reports.
 
 **pg_tviews must be 0.1.0-beta.30 or later.** fraisier and confiture read its read
-contracts 2 and 3, and fraisier is tested on 0.1.0-beta.37. On an older pg_tviews
+contracts 2 and 3, and fraisier is tested on 0.1.0-beta.38. On an older pg_tviews
 confiture refuses with `CONFIG_014`, so on such a host the drift gate fails every
 deploy of a TVIEW project, after its migrations ran. So does the migration preflight,
 and `migrate up` refuses a migration that creates or drops a TVIEW before applying
@@ -1533,17 +1533,21 @@ every beta.
 
 #### Upgrading pg_tviews
 
+From 0.1.0-beta.38, pg_tviews runs on PostgreSQL 18 only: `CREATE EXTENSION` refuses
+16 and 17. A server on 16 or 17 moves to PostgreSQL 18 first, on the pg_tviews
+release it runs now, and only then takes the new package.
+
 An upgrade is three steps: install the new package (with jsonb_delta, which pg_tviews
 requires), restart PostgreSQL so it loads the new library, then bring each database's
 pg_tviews catalog to that library. A release updates only from the one before it, so
 what the third step is depends on the release the database is on:
 
-- **From the release before** (0.1.0-beta.36 to beta.37): the next deploy does it.
+- **From the release before** (0.1.0-beta.37 to beta.38): the next deploy does it.
   Its `migrate up` runs `ALTER EXTENSION pg_tviews UPDATE` under the migration lock,
   before applying any migration, and the deploy logs a warning saying so:
-  `pg_tviews 0.1.0-beta.36 updated to 0.1.0-beta.37: migrate up ran ALTER EXTENSION
+  `pg_tviews 0.1.0-beta.37 updated to 0.1.0-beta.38: migrate up ran ALTER EXTENSION
   pg_tviews UPDATE before applying migrations, which re-derived every TVIEW`.
-- **From any older release** (0.1.0-beta.35 and earlier, to beta.37): no update
+- **From any older release** (0.1.0-beta.36 and earlier, to beta.38): no update
   reaches it, so the extension is dropped and every TVIEW created again. fraisier
   never does that itself. A deploy refuses before applying anything and names the
   command to run by hand, from the project directory:
