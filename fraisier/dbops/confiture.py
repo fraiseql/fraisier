@@ -24,8 +24,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from confiture.core import pg_tviews_update
 from confiture.core.locking import LockAcquisitionError
-from confiture.core.migrator import Migrator
+from confiture.core.migrator import Migrator, UpEvent
 from confiture.exceptions import ConfigurationError as ConfitureConfigurationError
 from confiture.exceptions import ValidationError
 
@@ -47,7 +48,6 @@ if TYPE_CHECKING:  # pragma: no cover
     import psycopg
     from confiture import MigrateDownResult, MigrateUpResult
     from confiture.config.environment import Environment
-    from confiture.core.migrator import UpEvent
 
 log = logging.getLogger(__name__)
 
@@ -688,6 +688,47 @@ def dry_run_execute(
         )
 
 
+def _update_pg_tviews_before_verifying(
+    config_path: Path | str,
+    *,
+    migrations_dir: Path | str,
+    lock_timeout: int,
+    database_url: str | None,
+    project_dir: Path | str | None,
+) -> None:
+    """Run the pg_tviews update the real ``migrate up`` would run first.
+
+    A dry run updates nothing, and confiture refuses one while the update is due
+    (``CONFIG_016``): without this, ``pre_migrate_verify`` would stop every deploy
+    after a pg_tviews upgrade. The update is taken under confiture's migration
+    lock, as ``migrate up`` takes it, and changes nothing when refused.
+
+    ``pg_tviews_update.bring_up_to_date`` and ``_migration_lock`` are outside
+    confiture's public API; ``tests/test_confiture_dependency_floor.py`` pins
+    both.
+    """
+    env = _load_env(config_path, database_url=database_url)
+    with (
+        _project_cwd(project_dir),
+        Migrator.from_config(
+            env,
+            migrations_dir=Path(migrations_dir),
+            connection_factory=migration_connection,
+        ) as m,
+        m._migration_lock(no_lock=False, lock_timeout=lock_timeout).acquire(),
+    ):
+        assert m._conn is not None, "Connection must be available inside context"
+        try:
+            done = pg_tviews_update.bring_up_to_date(m._conn)
+        except ConfitureConfigurationError as exc:
+            refusal = _pg_tviews_refusal(exc, config_path)
+            if refusal is None:
+                raise
+            raise refusal from exc
+    if done is not None:
+        _report_pg_tviews_update(UpEvent("pg_tviews_updated", message=done.message))
+
+
 def migrate_up(
     config_path: Path | str,
     *,
@@ -719,7 +760,14 @@ def migrate_up(
             path against the working directory then behave identically on both
             deploy routes (#371). ``None`` leaves the cwd untouched.
     """
-    if pre_migrate_verify:  # pragma: no cover
+    if pre_migrate_verify:
+        _update_pg_tviews_before_verifying(
+            config_path,
+            migrations_dir=migrations_dir,
+            lock_timeout=lock_timeout,
+            database_url=database_url,
+            project_dir=project_dir,
+        )
         verify_result = dry_run_execute(
             config_path,
             migrations_dir=migrations_dir,

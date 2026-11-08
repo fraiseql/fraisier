@@ -1567,10 +1567,12 @@ still on. Besides the recreate above, that happens when:
   owner and the privilege. Grant it, or drop that TVIEW, then deploy again.
 - **PostgreSQL was not restarted** after the package was installed: the library
   loaded is not the one installed. Restart it.
-- **`pre_migrate_verify: true`.** The verification is a dry run, and a dry run
-  updates nothing, so it refuses between the restart and the update. Run
-  `ALTER EXTENSION pg_tviews UPDATE` in each database by hand, as the extension's
-  owner or a superuser, then deploy.
+
+With `pre_migrate_verify: true` the update runs before the verification, under the
+same migration lock: the verification is a dry run, and a dry run updates nothing,
+so it would otherwise refuse every deploy between the restart and the update. A
+refused update stops the deploy there, as above, before anything is verified or
+applied.
 
 pg_tviews 0.1.0-beta.36 and later also refuse three kinds of TVIEW migrations that
 older releases took. A deploy that hits one fails like any failed migration, and its

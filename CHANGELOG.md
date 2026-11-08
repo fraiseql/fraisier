@@ -56,11 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the update refused a TVIEW whose owner may no longer read its sources
   (`42501`), or a restart when PostgreSQL still runs the old library. `migrate
   down` reports it the same way.
-- **`pre_migrate_verify: true` no longer fails every pg_tviews upgrade as a
-  generic `MIGRATION_FAILED`.** Its dry run is refused between the restart and
-  the update, before the real `migrate up` could update anything. It is now
-  `PG_TVIEWS_NOT_UPDATED`, naming the `ALTER EXTENSION pg_tviews UPDATE` to run
-  first.
+- **`pre_migrate_verify: true` no longer fails every pg_tviews upgrade.** Its
+  dry run updates nothing, and confiture refuses a dry run between the restart
+  and the update. fraisier now runs the update first, under confiture's
+  migration lock, then verifies against the updated catalog. A refused update is
+  `PG_TVIEWS_NOT_UPDATED`, as for any deploy.
 - **A TVIEW migration refused for want of `TRIGGER` names the grant.** From
   pg_tviews 0.1.0-beta.36 a TVIEW whose definition reads another role's table
   needs `TRIGGER` on it; the deploy now says `GRANT TRIGGER ON <table> TO <role>`.

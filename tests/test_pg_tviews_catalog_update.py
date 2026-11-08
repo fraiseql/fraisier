@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 import psycopg
 import pytest
 from confiture.core.migrator import UpEvent, UpObserver
+from confiture.core.pg_tviews_update import CatalogUpdate
 from confiture.exceptions import ConfigurationError as ConfitureConfigurationError
 from confiture.exceptions import MigrationError as ConfitureMigrationError
 from confiture.exceptions import SQLError
@@ -191,19 +192,116 @@ class TestTheUpdateMigrateUpRan:
         assert "pg_tviews" not in caplog.text
 
 
+def _dry_run_refused() -> None:
+    from fraisier.dbops.confiture import dry_run_execute
+
+    with (
+        patch("fraisier.dbops.confiture.Migrator") as migrator,
+        patch("fraisier.dbops.confiture._load_env", return_value=_env()),
+    ):
+        _wire(migrator, _refusing(_dry_run()))
+        dry_run_execute(_CONFIG)
+
+
 class TestADryRunInsideTheWindow:
+    """Reached only when the catalog falls behind after the update ran first."""
+
     def test_is_its_own_failure_not_a_failed_verification(self) -> None:
-        """``pre_migrate_verify`` dry-runs first, and a dry run updates nothing."""
         with pytest.raises(PgTviewsUpdateError) as excinfo:
-            _migrate_up(_refusing(_dry_run()), pre_migrate_verify=True)
+            _dry_run_refused()
 
         assert "pre_migrate_verify" in str(excinfo.value)
 
     def test_names_the_update_to_run_by_hand(self) -> None:
         with pytest.raises(PgTviewsUpdateError) as excinfo:
-            _migrate_up(_refusing(_dry_run()), pre_migrate_verify=True)
+            _dry_run_refused()
 
         assert "ALTER EXTENSION pg_tviews UPDATE" in excinfo.value.recovery_hint
+
+
+_UPDATED = CatalogUpdate("updated", "0.1.0-beta.36", "0.1.0-beta.37")
+
+
+class TestPreMigrateVerifyUpdatesFirst:
+    """A dry run updates nothing, so it is refused while the update is due.
+
+    With ``pre_migrate_verify`` fraisier runs the update the real run would run
+    first, under confiture's migration lock, then dry-runs against the updated
+    catalog.
+    """
+
+    @staticmethod
+    def _deploy(
+        update: object, calls: list[str], *, pre_migrate_verify: bool = True
+    ) -> None:
+        """Deploy with *update* as the update's outcome; *calls* logs the order."""
+        from fraisier.dbops.confiture import MigrationResult, migrate_up
+
+        session = MagicMock()
+        session.up.return_value = _applied()
+        lock = session._migration_lock.return_value.acquire.return_value
+        lock.__enter__.side_effect = lambda *_: calls.append("lock")
+        lock.__exit__.side_effect = lambda *_: calls.append("unlock")
+
+        def bring_up_to_date(conn: object) -> object:
+            assert conn is session._conn
+            calls.append("update")
+            if isinstance(update, Exception):
+                raise update
+            return update
+
+        def verify(*_: object, **__: object) -> MigrationResult:
+            calls.append("verify")
+            return MigrationResult(success=True)
+
+        with (
+            patch("fraisier.dbops.confiture.Migrator") as migrator,
+            patch("fraisier.dbops.confiture._load_env", return_value=_env()),
+            patch(
+                "fraisier.dbops.confiture.pg_tviews_update.bring_up_to_date",
+                side_effect=bring_up_to_date,
+            ),
+            patch("fraisier.dbops.confiture.dry_run_execute", side_effect=verify),
+        ):
+            _wire(migrator, session)
+            migrate_up(_CONFIG, pre_migrate_verify=pre_migrate_verify)
+
+    def test_the_update_runs_under_the_lock_before_the_dry_run(self) -> None:
+        calls: list[str] = []
+        self._deploy(_UPDATED, calls)
+
+        assert calls == ["lock", "update", "unlock", "verify"]
+
+    def test_the_update_is_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="fraisier.dbops.confiture"):
+            self._deploy(_UPDATED, [])
+
+        assert "pg_tviews 0.1.0-beta.36 updated to 0.1.0-beta.37" in caplog.text
+        assert "ALTER EXTENSION pg_tviews UPDATE" in caplog.text
+
+    def test_a_current_catalog_is_not_reported(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        calls: list[str] = []
+        with caplog.at_level(logging.WARNING, logger="fraisier.dbops.confiture"):
+            self._deploy(None, calls)
+
+        assert calls[-1] == "verify"
+        assert "pg_tviews" not in caplog.text
+
+    def test_a_refused_update_is_reported_and_not_dry_run(self) -> None:
+        calls: list[str] = []
+        with pytest.raises(PgTviewsUpdateError) as excinfo:
+            self._deploy(_owner_reads(), calls)
+
+        assert "verify" not in calls
+        assert "still on pg_tviews 0.1.0-beta.36" in str(excinfo.value)
+
+    def test_without_verification_confiture_s_own_run_updates(self) -> None:
+        calls: list[str] = []
+        self._deploy(None, calls, pre_migrate_verify=False)
+
+        assert calls == []
 
 
 def test_another_configuration_refusal_is_left_alone() -> None:

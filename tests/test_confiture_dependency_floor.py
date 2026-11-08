@@ -57,6 +57,9 @@ CONFITURE_IMPORT_SURFACE: dict[str, tuple[str, ...]] = {
     "confiture.core.hooks.builtin": ("BackupHook",),
     "confiture.core.locking": ("LockAcquisitionError",),
     "confiture.core.migrator": ("Migrator", "UpEvent"),
+    # Outside confiture's public API: ``pre_migrate_verify`` runs the pg_tviews
+    # update a dry run cannot (1.45.0). See the signature test below.
+    "confiture.core.pg_tviews_update": ("CatalogUpdate", "bring_up_to_date"),
     "confiture.core.restorer": ("DatabaseRestorer", "RestoreOptions"),
     "confiture.core.view_manager": ("ViewManager",),
     "confiture.exceptions": ("ConfigurationError", "MigrationError", "RestoreError"),
@@ -309,3 +312,25 @@ def test_migrate_up_reports_the_pg_tviews_update_it_ran() -> None:
     from confiture.core._migrator.events import UpEventKind
 
     assert "pg_tviews_updated" in typing.get_args(UpEventKind)
+
+
+def test_the_pg_tviews_update_fraisier_runs_before_a_dry_run_is_callable_as_used() -> (
+    None
+):
+    """``pre_migrate_verify`` updates pg_tviews itself, as ``migrate up`` does.
+
+    Both names are confiture internals: ``bring_up_to_date(conn)`` under the
+    session's ``_migration_lock(no_lock=..., lock_timeout=...)``. A change to
+    either fails here, not in a deploy.
+    """
+    import inspect
+
+    from confiture.core._migrator.session import MigratorSession
+    from confiture.core.pg_tviews_update import bring_up_to_date
+
+    update = inspect.signature(bring_up_to_date).parameters
+    assert next(iter(update)) == "conn"
+    assert all(p.default is not p.empty for p in list(update.values())[1:])
+
+    lock = inspect.signature(MigratorSession._migration_lock).parameters
+    assert {"no_lock", "lock_timeout"} <= set(lock)

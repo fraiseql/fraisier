@@ -745,12 +745,15 @@ dependencies = [
   # and an update PostgreSQL refuses (pg_tviews beta.37: `42501` when a TVIEW's
   # owner cannot read its sources, `42710` on a taken GraphQL type name) are
   # `CONFIG_016`, exit 5, nothing changed; a dry run inside that window is
-  # `CONFIG_016` too. `--exit-codes-json` adds CONFIG_016 and moves nothing else.
+  # `CONFIG_016` too, so `pre_migrate_verify` first runs the update itself through
+  # `pg_tviews_update.bring_up_to_date` under the session's `_migration_lock`,
+  # both outside confiture's public API. `--exit-codes-json` adds CONFIG_016 and
+  # moves nothing else.
   # Drift: an extension that another one in the tree requires (jsonb_delta under
   # `CREATE EXTENSION pg_tviews CASCADE`) is now the tree's, so a database built
   # from such a tree reports one `extra_object` fewer; kinds and severities are
   # unchanged. Probed by tests/test_confiture_dependency_floor.py (contract 3,
-  # the event). The floor moves with the cap: beta.35+ needs both.
+  # the event, the update's signatures). The floor moves with the cap: beta.35+ needs both.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
   "fraiseql-confiture>=1.45.0,<1.46",
