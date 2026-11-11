@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.98.0] - 2026-11-11
+
+**Four ⚠️ changes to read before upgrading:** confiture 1.48 is required and a deploy
+no longer installs its view helpers, so remove `view_helpers:` from every confiture
+config and run `confiture install-helpers` once on a new database whose migrations call
+them; a database URL that still holds `${` is refused; and a deploy updates pg_tviews
+when the server runs the next release (tested on 0.1.0-beta.38).
+
 ### Changed
 
 - ⚠️ **confiture 1.48.0 is required** (`>=1.48.0,<1.49`), and fraisier's floors
@@ -46,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `!envvar NAME` for the whole URL, and percent-encode a literal `${` in a
   password as `%24%7B`. `${VAR}` in `hooks:` and `notifications:` is unchanged.
 - ⚠️ **A deploy updates pg_tviews when the server runs the next release.**
-  confiture 1.45.0 (now required: `>=1.45.0,<1.46`) makes `migrate up` run
+  confiture (1.45.0 and later; this release requires 1.48) makes `migrate up` run
   `ALTER EXTENSION pg_tviews UPDATE` under the migration lock, before applying
   anything, when PostgreSQL has loaded a pg_tviews library one release past the
   database's catalog. The update re-derives every TVIEW. The deploy logs a
