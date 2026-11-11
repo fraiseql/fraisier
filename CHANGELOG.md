@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A confiture config confiture refuses stops `fraisier db migrate`, the
+  drift gate and the template preflight before they start a child.** fraisier
+  read such a config as unreadable and left it to the child, which refused it
+  as its own exit; it now gives the deploy's own message, naming the file, each
+  refused field and, for `view_helpers:`, the fix. A missing file is still the
+  child's to report.
 - **`restore.template: auto` says why its preflight gave no answer.** When
   confiture's pending-scoped preflight could not judge (no database to connect
   to, a config it refuses), the restore logged "the preflight payload could not

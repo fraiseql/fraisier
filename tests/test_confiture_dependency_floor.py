@@ -26,6 +26,7 @@ from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pydantic
 import pytest
 from packaging.requirements import Requirement
 from packaging.version import Version
@@ -386,3 +387,5 @@ def test_view_helpers_are_not_a_migration_setting(tmp_path: Path) -> None:
 
     assert refused.value.error_code == "CONFIG_002"
     assert "view_helpers" in str(refused.value)
+    # configured_url reads the refused fields off the chained pydantic error.
+    assert isinstance(refused.value.__cause__, pydantic.ValidationError)

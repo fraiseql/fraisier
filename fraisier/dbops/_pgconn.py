@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
+    import pydantic
+
 #: libpq keyword → environment variable, from ``PQconndefaults()`` on libpq
 #: 18. ``service`` is listed because libpq lists it; ``parse`` refuses it.
 _KEYWORD_ENV: dict[str, str] = {
@@ -334,6 +336,38 @@ def in_process_refusal(environ: Mapping[str, str]) -> str | None:
 CONFIG_URL_KEYS = ("database_url", "scratch_url")
 
 
+class ConfigRefusedError(ValueError):
+    """confiture refuses a config's settings; the message names file and fields."""
+
+
+#: Where confiture 1.48 refuses a setting it removed (``extra_forbidden``).
+_REMOVED_VIEW_HELPERS = ("migration", "view_helpers")
+
+
+def refused_config_message(
+    config_path: Path | str, exc: pydantic.ValidationError
+) -> str:
+    """Name the file and each refused field, never a value the file holds.
+
+    pydantic's own text can carry the input, and a config's input includes its
+    database URL, password and all.
+    """
+    locations = [tuple(str(part) for part in error["loc"]) for error in exc.errors()]
+    fields = "; ".join(
+        f"{'.'.join(loc)}: {error['msg']}"
+        for loc, error in zip(locations, exc.errors(), strict=True)
+    )
+    message = f"{config_path}: confiture refuses this config ({fields})"
+    if _REMOVED_VIEW_HELPERS in locations:
+        message += (
+            ". confiture 1.48 removed `migration.view_helpers`: remove "
+            "`view_helpers:` from this file. A database whose migrations call "
+            "confiture's view helpers needs them installed once, with "
+            "`confiture install-helpers`"
+        )
+    return message
+
+
 def configured_url(confiture_config: Path, key: str) -> str | None:
     """The URL a confiture child connects to for *key*, as confiture reads it.
 
@@ -345,17 +379,25 @@ def configured_url(confiture_config: Path, key: str) -> str | None:
     names no such URL.
 
     Raises:
+        ConfigRefusedError: confiture refuses the config's settings, as every
+            command it runs with this file would.
         ValueError: confiture refuses to expand the URL (an unset variable, or
             an expansion that is not a PostgreSQL URL); its message names the
             variable, never the value.
     """
+    import pydantic
     import yaml
     from confiture.config.environment import Environment
     from confiture.exceptions import ConfigurationError
 
     try:
         environment = Environment.from_file(confiture_config)
-    except ConfigurationError, OSError, TypeError, ValueError, yaml.YAMLError:
+    except ConfigurationError as exc:
+        if isinstance(exc.__cause__, pydantic.ValidationError):
+            msg = refused_config_message(confiture_config, exc.__cause__)
+            raise ConfigRefusedError(msg) from None
+        return None
+    except OSError, TypeError, ValueError, yaml.YAMLError:
         return None
     try:
         url = getattr(environment, key)
@@ -387,6 +429,8 @@ def config_child_env(
             if url is None:
                 continue
             PgConn.parse(url).check_environment()
+        except ConfigRefusedError:
+            raise
         except ValueError as exc:
             msg = f"{confiture_config}: {key}: {exc}"
             raise ValueError(msg) from None

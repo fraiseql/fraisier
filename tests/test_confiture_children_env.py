@@ -254,3 +254,42 @@ def test_the_drift_gate_checks_an_expanded_scratch_url(config, monkeypatch):
     run.assert_not_called()
     assert not result.passed
     assert "keepalives" in str(result.error)
+
+
+@pytest.mark.parametrize("site", WRAPPERS)
+def test_a_config_confiture_refuses_is_not_launched(config, site):
+    """A config confiture refuses fails here, the way a deploy's does.
+
+    The child would refuse it too, but as its own exit; this names the file
+    and the fix before anything starts, and never a value the file holds.
+    """
+    config.write_text(
+        "name: production\n"
+        "database_url: postgresql://acme:s3cret-acme@localhost/acme_db\n"
+        "migration:\n  view_helpers: auto\n"
+    )
+    with patch("subprocess.run", return_value=_proc()) as run:
+        outcome = _wrappers(config)[site]()
+
+    run.assert_not_called()
+    assert f"{config}: confiture refuses this config" in str(outcome)
+    assert "remove `view_helpers:`" in str(outcome)
+    assert "s3cret-acme" not in str(outcome)
+
+
+def test_a_refused_config_is_named_once(config):
+    """Not ``<file>: database_url: <file>: …``: the refusal is the file's."""
+    from fraisier.dbops._pgconn import ConfigRefusedError, config_child_env
+
+    config.write_text(
+        "name: production\ndatabase_url: postgresql:///acme_db\n"
+        "migration:\n  strict_mode: sometimes\n"
+    )
+
+    with pytest.raises(ConfigRefusedError) as refused:
+        config_child_env(config)
+
+    assert str(refused.value) == (
+        f"{config}: confiture refuses this config (migration.strict_mode: "
+        "Input should be a valid boolean, unable to interpret input)"
+    )

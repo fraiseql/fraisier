@@ -32,7 +32,12 @@ from confiture.exceptions import ConfigurationError as ConfitureConfigurationErr
 from confiture.exceptions import ValidationError
 
 from fraisier.config._lazy_env import LazyEnv, is_string_like, to_str
-from fraisier.dbops._pgconn import TRANSPORT_REFUSED, PgConn, config_child_env
+from fraisier.dbops._pgconn import (
+    TRANSPORT_REFUSED,
+    PgConn,
+    config_child_env,
+    refused_config_message,
+)
 from fraisier.dbops.confiture_contract import (
     ConfitureFailureClass,
     classify_confiture_failure,
@@ -364,35 +369,7 @@ def _load_env(
     try:
         return Environment.model_validate(raw)
     except pydantic.ValidationError as exc:
-        raise ValueError(_refused_config_message(config_path, exc)) from None
-
-
-#: Where confiture 1.48 refuses a setting it removed (``extra_forbidden``).
-_REMOVED_VIEW_HELPERS = ("migration", "view_helpers")
-
-
-def _refused_config_message(
-    config_path: Path | str, exc: pydantic.ValidationError
-) -> str:
-    """Name the file and each refused field, never a value the file holds.
-
-    pydantic's own text can carry the input, and a config's input includes its
-    database URL, password and all.
-    """
-    locations = [tuple(str(part) for part in error["loc"]) for error in exc.errors()]
-    fields = "; ".join(
-        f"{'.'.join(loc)}: {error['msg']}"
-        for loc, error in zip(locations, exc.errors(), strict=True)
-    )
-    message = f"{config_path}: confiture refuses this config ({fields})"
-    if _REMOVED_VIEW_HELPERS in locations:
-        message += (
-            ". confiture 1.48 removed `migration.view_helpers`: remove "
-            "`view_helpers:` from this file. A database whose migrations call "
-            "confiture's view helpers needs them installed once, with "
-            "`confiture install-helpers`"
-        )
-    return message
+        raise ValueError(refused_config_message(config_path, exc)) from None
 
 
 def _resolve_config(
