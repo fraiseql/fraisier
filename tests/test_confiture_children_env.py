@@ -293,3 +293,14 @@ def test_a_refused_config_is_named_once(config):
         f"{config}: confiture refuses this config (migration.strict_mode: "
         "Input should be a valid boolean, unable to interpret input)"
     )
+
+
+@pytest.mark.parametrize("site", WRAPPERS)
+def test_a_config_missing_a_field_is_left_to_the_child(config, site):
+    """confiture requires ``database_url``; what to do without one is the
+    child's to say (the drift gate says it itself), as for a missing file."""
+    config.write_text("name: production\n")
+    with patch("subprocess.run", return_value=_proc()) as run:
+        _wrappers(config)[site]()
+
+    run.assert_called_once()

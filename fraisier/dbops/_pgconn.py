@@ -393,8 +393,13 @@ def configured_url(confiture_config: Path, key: str) -> str | None:
     try:
         environment = Environment.from_file(confiture_config)
     except ConfigurationError as exc:
-        if isinstance(exc.__cause__, pydantic.ValidationError):
-            msg = refused_config_message(confiture_config, exc.__cause__)
+        cause = exc.__cause__
+        # A setting confiture refuses is refused here; a field the file leaves
+        # out (``database_url``) is the child's to report, as a missing file is.
+        if isinstance(cause, pydantic.ValidationError) and any(
+            error["type"] != "missing" for error in cause.errors()
+        ):
+            msg = refused_config_message(confiture_config, cause)
             raise ConfigRefusedError(msg) from None
         return None
     except OSError, TypeError, ValueError, yaml.YAMLError:
