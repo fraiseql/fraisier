@@ -9,10 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- ⚠️ **confiture 1.47.0 is required** (`>=1.47.0,<1.48`), and fraisier's floors
+- ⚠️ **confiture 1.48.0 is required** (`>=1.48.0,<1.49`), and fraisier's floors
   for the packages it shares with confiture rise to what confiture requires:
   `psycopg` 3.3.0 (every extra that names it), `click` 8.2.1, `rich` 13.7.0,
   `pyyaml` 6.0.1. No version below them installs beside this confiture.
+- ⚠️ **A deploy no longer installs confiture's view helpers.** confiture 1.48
+  made them opt-in and removed `migration.view_helpers`; fraisier had copied
+  its `auto` default and installed them on every deploy's migration and
+  `pre_migrate_verify` dry run (and `fraisier db migrate` did through confiture,
+  for a config under `db/environments/`). A database that already has them keeps them.
+  A new database whose migrations call `confiture.save_and_drop_dependent_views()`
+  needs them installed once, by hand: `confiture install-helpers --config …`.
+  **Remove `view_helpers:` from your confiture configs:** confiture now refuses
+  an unknown `migration:` key (`CONFIG_002`), so a config still carrying it
+  fails every deploy before it connects; fraisier's error names the file and
+  says to remove the key.
+- **`fraisier db migrate` honours the confiture config's `migration:` settings
+  wherever the file lives.** It runs `confiture migrate up --config …`, which
+  read `strict_mode`, `locking` and `backfill` only from
+  `db/environments/<name>.yaml` and took the defaults for a config anywhere
+  else; a deploy, which migrates in process, always read them. Both now agree.
 - **`restore.template: auto` reads the right ledger.** Its pending-scoped
   preflight passes `--database-url` beside the project's confiture config,
   and before confiture 1.47 that dropped the config's
@@ -63,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A backup where confiture ran and applied nothing is not a failed ledger
   restore.** The restore preflight's #262 guard counted confiture's own tables
   (the checkpoint and lock-holder tables, and the `confiture` schema that
-  `view_helpers: auto` installs) and fraisier's restore receipt as application
+  `confiture install-helpers` creates) and fraisier's restore receipt as application
   objects beside the empty ledger, and refused. It now leaves out what
   confiture names as its own (`ledger.bookkeeping_tables()` /
   `bookkeeping_schemas()`) and fraisier's `fraisier` schema.
