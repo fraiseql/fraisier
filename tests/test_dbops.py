@@ -513,6 +513,43 @@ class TestLoadEnv:
         with pytest.raises(ValueError, match=r"^database_url: holds '\$\{'"):
             _load_env(cfg, database_url="postgresql://u:${DB_PASSWORD}@h/db")
 
+    def test_a_removed_view_helpers_setting_names_the_file_and_the_fix(self, tmp_path):
+        """confiture 1.48 removed ``migration.view_helpers`` and refuses the key."""
+        from fraisier.dbops.confiture import _load_env
+
+        cfg = tmp_path / "confiture.yaml"
+        cfg.write_text(
+            "database_url: postgresql://u@localhost/db\n"
+            "migration:\n  view_helpers: auto\n"
+        )
+
+        with pytest.raises(ValueError) as refused:
+            _load_env(cfg)
+
+        assert str(refused.value).startswith(f"{cfg}: ")
+        assert "remove `view_helpers:`" in str(refused.value)
+
+    def test_an_invalid_config_names_the_file_and_never_its_values(self, tmp_path):
+        from fraisier.dbops.confiture import _load_env
+
+        cfg = tmp_path / "confiture.yaml"
+        cfg.write_text(
+            "database_url: postgresql://u:s3cret-acme@localhost/db\n"
+            "migration:\n  destructive: sometimes\n"
+        )
+
+        with pytest.raises(ValueError) as refused:
+            _load_env(cfg)
+
+        message = str(refused.value)
+        assert message.startswith(f"{cfg}: ")
+        assert "migration.destructive" in message
+        assert "view_helpers" not in message
+        assert "sometimes" not in message
+        assert "s3cret-acme" not in message
+        assert refused.value.__cause__ is None
+        assert refused.value.__suppress_context__
+
 
 class TestSchemaHash:
     """Test schema hash computation."""

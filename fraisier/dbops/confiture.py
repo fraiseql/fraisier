@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import pydantic
 from confiture.core import pg_tviews_update
 from confiture.core.locking import LockAcquisitionError
 from confiture.core.migrator import Migrator, UpEvent
@@ -360,7 +361,38 @@ def _load_env(
             msg = f"database_url: {exc}"
             raise ValueError(msg) from None
         raw["database_url"] = database_url
-    return Environment.model_validate(raw)
+    try:
+        return Environment.model_validate(raw)
+    except pydantic.ValidationError as exc:
+        raise ValueError(_refused_config_message(config_path, exc)) from None
+
+
+#: Where confiture 1.48 refuses a setting it removed (``extra_forbidden``).
+_REMOVED_VIEW_HELPERS = ("migration", "view_helpers")
+
+
+def _refused_config_message(
+    config_path: Path | str, exc: pydantic.ValidationError
+) -> str:
+    """Name the file and each refused field, never a value the file holds.
+
+    pydantic's own text can carry the input, and a config's input includes its
+    database URL, password and all.
+    """
+    locations = [tuple(str(part) for part in error["loc"]) for error in exc.errors()]
+    fields = "; ".join(
+        f"{'.'.join(loc)}: {error['msg']}"
+        for loc, error in zip(locations, exc.errors(), strict=True)
+    )
+    message = f"{config_path}: confiture refuses this config ({fields})"
+    if _REMOVED_VIEW_HELPERS in locations:
+        message += (
+            ". confiture 1.48 removed `migration.view_helpers`: remove "
+            "`view_helpers:` from this file. A database whose migrations call "
+            "confiture's view helpers needs them installed once, with "
+            "`confiture install-helpers`"
+        )
+    return message
 
 
 def _resolve_config(
