@@ -194,6 +194,30 @@ def read_pending_preflight(
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"confiture preflight did not run: {exc}"
     try:
-        return json.loads(proc.stdout), None
+        payload = json.loads(proc.stdout)
     except ValueError:
         return None, f"confiture preflight exited {proc.returncode} without JSON"
+    refusal = _envelope_refusal(payload)
+    if refusal is not None:
+        return None, f"confiture preflight exited {proc.returncode}: {refusal}"
+    return payload, None
+
+
+def _envelope_refusal(payload: Any) -> str | None:
+    """``CODE: message. remedy`` when *payload* is confiture's error envelope.
+
+    Under ``--format json`` a preflight that could not judge (no database, a
+    refused config) prints ``{"ok": false, "error": {code, message,
+    actionable, …}}`` in place of a report; read as one, it said only that it
+    "could not be read".
+    """
+    if not isinstance(payload, dict) or payload.get("ok") is not False:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    refusal = f"{error.get('code')}: {error.get('message')}"
+    actionable = error.get("actionable")
+    if isinstance(actionable, str) and actionable:
+        refusal += f". {actionable}"
+    return refusal

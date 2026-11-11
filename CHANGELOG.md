@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`restore.template: auto` says why its preflight gave no answer.** When
+  confiture's pending-scoped preflight could not judge (no database to connect
+  to, a config it refuses), the restore logged "the preflight payload could not
+  be read" and took the template. It still takes the template, and now logs
+  confiture's code, message and remedy, e.g. `confiture preflight exited 5:
+  CONFIG_002: …`.
 - **A confiture config may name its URL with `${VAR}`.** confiture 1.46
   expands `${UPPER_NAME}` in a config's `database_url` and `scratch_url` when
   it connects. fraisier read the text as written, so it refused such a config

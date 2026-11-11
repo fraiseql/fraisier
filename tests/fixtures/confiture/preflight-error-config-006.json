@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  },
+  "error": {
+    "code": "CONFIG_006",
+    "message": "Failed to connect to database: connection failed: connection to server on socket \"/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  database \"acme_staging\" does not exist",
+    "severity": "error",
+    "details": {},
+    "migration": null,
+    "file": null,
+    "line": null,
+    "actionable": "Check that the database server is running and the connection credentials are correct"
+  },
+  "command": "migrate preflight"
+}

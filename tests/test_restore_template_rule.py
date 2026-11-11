@@ -265,6 +265,33 @@ class TestReadPendingPreflight:
         assert error is None
         assert payload is not None
 
+    def test_an_error_envelope_is_an_error_that_names_confitures_code(self):
+        """Captured from confiture 1.48.0: exit 3, no database to connect to.
+
+        Handed on as a payload, it reached the rule as "the preflight payload
+        could not be read", which says neither what failed nor what to do.
+        """
+        stdout = (FIXTURES / "preflight-error-config-006.json").read_text()
+        with patch("subprocess.run", return_value=_proc(3, stdout)):
+            payload, error = read_pending_preflight(CONFIG, MDIR)
+
+        assert payload is None
+        assert error is not None
+        assert error.startswith("confiture preflight exited 3: CONFIG_006: ")
+        assert 'database "acme_staging" does not exist' in error
+        assert error.endswith(
+            ". Check that the database server is running and the connection "
+            "credentials are correct"
+        )
+
+    def test_an_envelope_without_a_remedy_still_names_the_code(self):
+        envelope = {"ok": False, "error": {"code": "CONFIG_015", "message": "m"}}
+        with patch("subprocess.run", return_value=_proc(5, json.dumps(envelope))):
+            payload, error = read_pending_preflight(CONFIG, MDIR)
+
+        assert payload is None
+        assert error == "confiture preflight exited 5: CONFIG_015: m"
+
     def test_output_that_is_not_json_is_an_error(self):
         with patch("subprocess.run", return_value=_proc(3, "connection refused")):
             payload, error = read_pending_preflight(CONFIG, MDIR)
