@@ -248,8 +248,12 @@ class TestScaffoldInstallDefault:
     """The load-bearing one: a default install must not stop a service."""
 
     @pytest.fixture(autouse=True)
-    def _as_root_on_the_prepared_tree(self, tmp_path, monkeypatch):
-        """scaffold-install runs as root on its own render (#433); here, ``out``."""
+    def ran(self, tmp_path, monkeypatch) -> list[list[str]]:
+        """scaffold-install runs as root on its own render (#433); here, ``out``.
+
+        Every script it runs is recorded instead of run: the real argv starts
+        with ``sudo``, which a test host may not grant without a password.
+        """
         from fraisier.cli import scaffold as scaffold_mod
 
         monkeypatch.setattr(scaffold_mod, "_euid", lambda: 0)
@@ -258,9 +262,17 @@ class TestScaffoldInstallDefault:
         )
         monkeypatch.setattr(scaffold_mod, "_host_payload", lambda _tree: {})
         monkeypatch.setattr(scaffold_mod, "_write_root_policy", lambda _p: None)
+        commands: list[list[str]] = []
+
+        def _record(cmd: list[str]) -> int:
+            commands.append(cmd)
+            return 0
+
+        monkeypatch.setattr(scaffold_mod, "_run_script", _record)
+        return commands
 
     def test_scaffold_install_does_not_touch_foreign_units_by_default(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, ran
     ):
         from fraisier.cli.main import main
 
@@ -300,9 +312,12 @@ class TestScaffoldInstallDefault:
         )
 
         assert result.exit_code == 0
+        assert ran == [["sudo", str(script), "--dry-run"]]
         assert pruned == [], "a default scaffold-install pruned a foreign unit"
 
-    def test_prune_foreign_is_reachable_only_with_the_flag(self, tmp_path, monkeypatch):
+    def test_prune_foreign_is_reachable_only_with_the_flag(
+        self, tmp_path, monkeypatch, ran
+    ):
         from fraisier.cli.main import main
 
         cfg = tmp_path / "fraises.yaml"
@@ -345,4 +360,5 @@ class TestScaffoldInstallDefault:
         )
 
         assert result.exit_code == 0
+        assert ran == [["sudo", str(script)]]
         assert pruned == found

@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.98.0] - 2026-11-11
+
+**Four ⚠️ changes to read before upgrading:** confiture 1.48 is required and a deploy
+no longer installs its view helpers, so remove `view_helpers:` from every confiture
+config and run `confiture install-helpers` once on a new database whose migrations call
+them; a database URL that still holds `${` is refused; and a deploy updates pg_tviews
+when the server runs the next release (tested on 0.1.0-beta.38).
+
+### Changed
+
+- ⚠️ **confiture 1.48.0 is required** (`>=1.48.0,<1.49`), and fraisier's floors
+  for the packages it shares with confiture rise to what confiture requires:
+  `psycopg` 3.3.0 (every extra that names it), `click` 8.2.1, `rich` 13.7.0,
+  `pyyaml` 6.0.1. No version below them installs beside this confiture.
+- ⚠️ **A deploy no longer installs confiture's view helpers.** confiture 1.48
+  made them opt-in and removed `migration.view_helpers`; fraisier had copied
+  its `auto` default and installed them on every deploy's migration and
+  `pre_migrate_verify` dry run (and `fraisier db migrate` did through confiture,
+  for a config under `db/environments/`). A database that already has them keeps them.
+  A new database whose migrations call `confiture.save_and_drop_dependent_views()`
+  needs them installed once, by hand: `confiture install-helpers --config …`.
+  **Remove `view_helpers:` from your confiture configs:** confiture now refuses
+  an unknown `migration:` key (`CONFIG_002`), so a config still carrying it
+  fails every deploy before it connects; fraisier's error names the file and
+  says to remove the key.
+- **`fraisier db migrate` honours the confiture config's `migration:` settings
+  wherever the file lives.** It runs `confiture migrate up --config …`, which
+  read `strict_mode`, `locking` and `backfill` only from
+  `db/environments/<name>.yaml` and took the defaults for a config anywhere
+  else; a deploy, which migrates in process, always read them. Both now agree.
+- **`restore.template: auto` reads the right ledger.** Its pending-scoped
+  preflight passes `--database-url` beside the project's confiture config,
+  and before confiture 1.47 that dropped the config's
+  `migration.tracking_table`: with a schema-qualified tracking table off the
+  connection's `search_path`, the preflight refused (`CONFIG_015`) and every
+  restore took the template. confiture 1.47 keeps the config's settings, so
+  the decision is made on the pending set again.
+
+- ⚠️ **A database URL that still holds `${` is refused.** It applies to
+  `database.database_url` and `database.admin_url`, after `!envvar` resolves them.
+  `fraisier validate` reports it, and a deploy refuses it before it connects.
+  confiture 1.46 expands `${VAR}` in the URL fraisier passes it in process, while
+  fraisier's own children (`pg_dump`, `psql`) read the text as
+  written, so one URL would have connected two ways. Name a variable with
+  `!envvar NAME` for the whole URL, and percent-encode a literal `${` in a
+  password as `%24%7B`. `${VAR}` in `hooks:` and `notifications:` is unchanged.
+- ⚠️ **A deploy updates pg_tviews when the server runs the next release.**
+  confiture (1.45.0 and later; this release requires 1.48) makes `migrate up` run
+  `ALTER EXTENSION pg_tviews UPDATE` under the migration lock, before applying
+  anything, when PostgreSQL has loaded a pg_tviews library one release past the
+  database's catalog. The update re-derives every TVIEW. The deploy logs a
+  warning when it ran (`pg_tviews 0.1.0-beta.37 updated to 0.1.0-beta.38: migrate
+  up ran ALTER EXTENSION pg_tviews UPDATE …`); confiture's result does not say.
+  A catalog older than the release before is never touched: see the
+  `PG_TVIEWS_NOT_UPDATED` entry below.
+- **fraisier is tested on pg_tviews 0.1.0-beta.38** (the `tviews` CI leg), and
+  its advice for a pg_tviews older than read contract 2 follows confiture's
+  `CONFIG_014`: a release updates only from the one before it, so install
+  beta.38, restart PostgreSQL, and create the extension and its TVIEWs again by
+  hand with `confiture migrate up --recreate-pg-tviews --config …`. It no longer
+  names `pg_tviews_reregister_all()`, which the update now runs itself.
+  beta.38 is the first release whose update re-derives a TVIEW that reads a
+  materialized view, a foreign table or a sequence; on beta.37 such a TVIEW
+  aborted the update for the whole database (`cannot have triggers`). beta.38
+  runs on PostgreSQL 18 only, and updates only from beta.37: a database on
+  beta.36 or older is recreated.
+
+- **ruff 0.17.4** in both the pre-commit hook and `uv.lock`. No code change:
+  both ruff gates are clean.
+
+### Fixed
+
+- **A confiture config confiture refuses stops `fraisier db migrate`, the
+  drift gate and the template preflight before they start a child.** fraisier
+  read such a config as unreadable and left it to the child, which refused it
+  as its own exit; it now gives the deploy's own message, naming the file, each
+  refused field and, for `view_helpers:`, the fix. A missing file, or a field
+  the file leaves out (`database_url`), is still the child's to report.
+- **`restore.template: auto` says why its preflight gave no answer.** When
+  confiture's pending-scoped preflight could not judge (no database to connect
+  to, a config it refuses), the restore logged "the preflight payload could not
+  be read" and took the template. It still takes the template, and now logs
+  confiture's code, message and remedy, e.g. `confiture preflight exited 5:
+  CONFIG_002: …`.
+- **A confiture config may name its URL with `${VAR}`.** confiture 1.46
+  expands `${UPPER_NAME}` in a config's `database_url` and `scratch_url` when
+  it connects. fraisier read the text as written, so it refused such a config
+  as "not a PostgreSQL URL" before every confiture child, and the drift gate
+  could not compare it with the deploy's URL. It now reads both through
+  confiture's own `Environment`, checks the expanded URL, and refuses an unset
+  variable by name before anything starts. fraisier's own
+  `database.database_url` still refuses `${` (see above).
+- **A backup where confiture ran and applied nothing is not a failed ledger
+  restore.** The restore preflight's #262 guard counted confiture's own tables
+  (the checkpoint and lock-holder tables, and the `confiture` schema that
+  `confiture install-helpers` creates) and fraisier's restore receipt as application
+  objects beside the empty ledger, and refused. It now leaves out what
+  confiture names as its own (`ledger.bookkeeping_tables()` /
+  `bookkeeping_schemas()`) and fraisier's `fraisier` schema.
+- **fraisier reads pg_tviews 0.1.0-beta.35 and later.** They offer read contract
+  3, which fraisier refused as "newer": every TVIEW check, rebuild and status
+  failed with "upgrade fraisier". What fraisier reads (the registry,
+  `pg_tviews_rebuild_all`, `pg_tviews_profile`) is unchanged in contract 3, so
+  it now reads contracts 2 and 3, as confiture 1.45 does.
+- **The empty-TVIEW probe names the fix that works from beta.35**
+  ([#504](https://github.com/fraiseql/fraisier/issues/504)). From beta.35 a
+  backing view is its TVIEW owner's alone, so a deploy role holding
+  `SELECT` on `tv_<entity>` is refused it all the same, and the
+  `GRANT SELECT` fraisier named fixed nothing. It now names
+  `GRANT <TVIEW owner> TO <role>` there, and still names `GRANT SELECT` on
+  beta.34 and earlier.
+- **A pg_tviews catalog a deploy cannot update is its own failure,
+  `PG_TVIEWS_NOT_UPDATED`.** confiture's `CONFIG_016` reached the deploy as a raw
+  confiture error whose hint names a command that refuses without `--config`.
+  It is now a database failure that applied nothing, says which release the
+  database is still on, and names the fix: the full `--recreate-pg-tviews`
+  command to run by hand for a catalog no update reaches, the privilege to grant
+  when the update refused a TVIEW whose owner may no longer read its sources
+  (`42501`), or a restart when PostgreSQL still runs the old library. `migrate
+  down` reports it the same way.
+- **`pre_migrate_verify: true` no longer fails every pg_tviews upgrade.** Its
+  dry run updates nothing, and confiture refuses a dry run between the restart
+  and the update. fraisier now runs the update first, under confiture's
+  migration lock, then verifies against the updated catalog. A refused update is
+  `PG_TVIEWS_NOT_UPDATED`, as for any deploy.
+- **A TVIEW migration refused for want of `TRIGGER` names the grant.** From
+  pg_tviews 0.1.0-beta.36 a TVIEW whose definition reads another role's table
+  needs `TRIGGER` on it; the deploy now says `GRANT TRIGGER ON <table> TO <role>`.
+  beta.36's other new refusals, `42P13` (a `search_path` not ending in
+  `pg_temp`) and `42710` (a GraphQL type name already taken), already carry
+  PostgreSQL's hint with the fix.
+
 ## [0.97.0] - 2026-11-06
 
 **Two ⚠️ changes to read before upgrading:** the API vhosts now need nginx's brotli

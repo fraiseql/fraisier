@@ -179,7 +179,6 @@ def test_success_is_false_on_every_halt_shape(
 
 def _env() -> MagicMock:
     env = MagicMock()
-    env.migration.view_helpers = "manual"
     env.migration.tracking_table = "tb_confiture"
     env.database_url = "postgresql:///testdb"
     return env

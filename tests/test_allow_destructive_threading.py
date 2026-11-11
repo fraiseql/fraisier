@@ -98,7 +98,6 @@ class TestTheConversionIsNarrow:
         session = MagicMock()
         session.up.side_effect = exc
         env = MagicMock()
-        env.migration.view_helpers = "off"
 
         with (
             patch("fraisier.dbops.confiture._load_env", return_value=env),

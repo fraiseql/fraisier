@@ -32,6 +32,11 @@ from typing import TYPE_CHECKING, Any
 
 from fraisier.dbops._pgconn import config_child_env
 from fraisier.dbops._url import url_child
+from fraisier.dbops.confiture_contract import (
+    envelope_error_actionable,
+    envelope_error_code,
+    envelope_error_message,
+)
 from fraisier.dbops.confiture_executable import confiture_executable
 
 if TYPE_CHECKING:
@@ -194,6 +199,30 @@ def read_pending_preflight(
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"confiture preflight did not run: {exc}"
     try:
-        return json.loads(proc.stdout), None
+        payload = json.loads(proc.stdout)
     except ValueError:
         return None, f"confiture preflight exited {proc.returncode} without JSON"
+    code = envelope_error_code(proc.stdout)
+    if code is not None:
+        return None, f"confiture preflight exited {proc.returncode}: " + (
+            _envelope_refusal(code, proc.stdout)
+        )
+    return payload, None
+
+
+def _envelope_refusal(code: str, stdout: str) -> str:
+    """``CODE: message. remedy`` from confiture's error envelope.
+
+    A report with an error-severity finding is ``"ok": false`` too, but it
+    carries no ``error`` object: it is read as the report it is.
+
+    Under ``--format json`` a preflight that could not judge (no database, a
+    refused config) prints ``{"ok": false, "error": {code, message,
+    actionable, …}}`` in place of a report; read as one, it said only that it
+    "could not be read".
+    """
+    refusal = f"{code}: {envelope_error_message(stdout)}"
+    actionable = envelope_error_actionable(stdout)
+    if actionable:
+        refusal += f". {actionable}"
+    return refusal

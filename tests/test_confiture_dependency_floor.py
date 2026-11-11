@@ -26,6 +26,7 @@ from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pydantic
 import pytest
 from packaging.requirements import Requirement
 from packaging.version import Version
@@ -56,9 +57,14 @@ CONFITURE_IMPORT_SURFACE: dict[str, tuple[str, ...]] = {
     # importing it is exactly what that form needs to resolve.
     "confiture.core.hooks.builtin": ("BackupHook",),
     "confiture.core.locking": ("LockAcquisitionError",),
-    "confiture.core.migrator": ("Migrator",),
+    # The #262 guard counts the application's relations, not confiture's own
+    # (``bookkeeping_schemas`` is 1.47.0's).
+    "confiture.core.ledger": ("bookkeeping_schemas", "bookkeeping_tables"),
+    "confiture.core.migrator": ("Migrator", "UpEvent"),
+    # Outside confiture's public API: ``pre_migrate_verify`` runs the pg_tviews
+    # update a dry run cannot (1.45.0). See the signature test below.
+    "confiture.core.pg_tviews_update": ("CatalogUpdate", "bring_up_to_date"),
     "confiture.core.restorer": ("DatabaseRestorer", "RestoreOptions"),
-    "confiture.core.view_manager": ("ViewManager",),
     "confiture.exceptions": ("ConfigurationError", "MigrationError", "RestoreError"),
     "confiture.models.migration": ("Migration",),
     # ``doctor``'s ``pg_tviews_contract`` asks confiture's own check (1.34.0).
@@ -285,3 +291,101 @@ def test_audit_config_connects_through_its_connection_factory() -> None:
     AuditHook(config)._connect()
 
     assert opened == ["postgresql:///db"]
+
+
+def test_the_installed_confiture_reads_pg_tviews_contract_3() -> None:
+    """pg_tviews 0.1.0-beta.35 and later offer read contract 3 alone.
+
+    A confiture that reads only contract 2 refuses every such database with
+    ``CONFIG_014``: its build, its drift check and doctor's pg_tviews check.
+    """
+    from confiture.core.live_catalog import CONTRACT_VERSIONS
+
+    assert 3 in CONTRACT_VERSIONS
+
+
+def test_migrate_up_reports_the_pg_tviews_update_it_ran() -> None:
+    """``migrate up`` updates a pg_tviews catalog one release behind its library.
+
+    fraisier tells the operator when that ran, and hears of it only through this
+    event: the result carries nothing about it.
+    """
+    import typing
+
+    from confiture.core._migrator.events import UpEventKind
+
+    assert "pg_tviews_updated" in typing.get_args(UpEventKind)
+
+
+def test_the_pg_tviews_update_fraisier_runs_before_a_dry_run_is_callable_as_used() -> (
+    None
+):
+    """``pre_migrate_verify`` updates pg_tviews itself, as ``migrate up`` does.
+
+    Both names are confiture internals: ``bring_up_to_date(conn)`` under the
+    session's ``_migration_lock(no_lock=..., lock_timeout=...)``. A change to
+    either fails here, not in a deploy.
+    """
+    import inspect
+
+    from confiture.core._migrator.session import MigratorSession
+    from confiture.core.pg_tviews_update import bring_up_to_date
+
+    update = inspect.signature(bring_up_to_date).parameters
+    assert next(iter(update)) == "conn"
+    assert all(p.default is not p.empty for p in list(update.values())[1:])
+
+    lock = inspect.signature(MigratorSession._migration_lock).parameters
+    assert {"no_lock", "lock_timeout"} <= set(lock)
+
+
+def test_environment_from_file_expands_its_urls_on_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """``configured_url`` reads a config's URLs as confiture connects with them.
+
+    ``Environment.from_file`` is public from 1.47.0, and ``database_url`` /
+    ``scratch_url`` expand ``${UPPER_NAME}`` on each read from 1.46.0 (#813),
+    keeping the text as written in ``written_*``.
+    """
+    from confiture.config.environment import Environment
+
+    monkeypatch.setenv("ACME_DB_URL", "postgresql:///acme_db")
+    monkeypatch.setenv("ACME_SCRATCH_HOST", "scratch.acme.test")
+    config = tmp_path / "production.yaml"
+    config.write_text(
+        "database_url: ${ACME_DB_URL}\n"
+        "scratch_url: postgresql://${ACME_SCRATCH_HOST}/postgres\n"
+    )
+
+    environment = Environment.from_file(config)
+
+    assert environment.database_url == "postgresql:///acme_db"
+    assert environment.scratch_url == "postgresql://scratch.acme.test/postgres"
+    assert environment.written_database_url == "${ACME_DB_URL}"
+
+
+def test_view_helpers_are_not_a_migration_setting(tmp_path: Path) -> None:
+    """No ``migration:`` setting installs confiture's view helpers (1.48.0).
+
+    ``migration.view_helpers`` is gone and an unknown key in the block is
+    refused, so a config still carrying it fails loudly rather than deploying
+    without the helpers it asked for. ``migrate_up`` installs nothing either;
+    ``confiture install-helpers`` is the one way in.
+    """
+    from confiture.config.environment import Environment, MigrationConfig
+    from confiture.exceptions import ConfigurationError
+
+    assert "view_helpers" not in MigrationConfig.model_fields
+    config = tmp_path / "production.yaml"
+    config.write_text(
+        "database_url: postgresql:///acme_db\nmigration:\n  view_helpers: auto\n"
+    )
+
+    with pytest.raises(ConfigurationError) as refused:
+        Environment.from_file(config)
+
+    assert refused.value.error_code == "CONFIG_002"
+    assert "view_helpers" in str(refused.value)
+    # configured_url reads the refused fields off the chained pydantic error.
+    assert isinstance(refused.value.__cause__, pydantic.ValidationError)

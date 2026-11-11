@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "parser": {
+    "pglast": "8.7",
+    "pg_major": 18
+  },
+  "error": {
+    "code": "CONFIG_016",
+    "message": "pg_tviews 0.1.0-beta.36 in this database cannot be brought to the loaded library 0.1.0-beta.37: PostgreSQL refused it: pg_tviews: 1 TVIEW(s) could not be re-registered; first: tv_tag: Failed to re-register TVIEW tag: the roles reading for it may no longer read what they read: tv_tag (acme_owner lacks SELECT on public.tb_tag); grant each privilege named, or drop the TVIEW\nHINT:  SELECT * FROM tviews.pg_tviews_reregister_all() lists them\nCONTEXT:  PL/pgSQL function tviews.pg_tviews_reregister_all(boolean) line 41 at RAISE\nSQL statement \"SELECT pg_catalog.count(*) FROM tviews.pg_tviews_reregister_all(strict => true)\"\nextension script file \"pg_tviews--0.1.0-beta.36--0.1.0-beta.37.sql\", near line 10",
+    "severity": "error",
+    "details": {},
+    "migration": null,
+    "file": null,
+    "line": null,
+    "actionable": "ALTER EXTENSION and DROP/CREATE EXTENSION need the extension's owner or a superuser, and jsonb_delta installed (pg_tviews requires it); nothing was changed"
+  },
+  "command": "migrate up"
+}

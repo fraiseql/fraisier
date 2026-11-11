@@ -13,7 +13,7 @@ too: restoring by hand with ``--disable-triggers`` leaves ``tv_post`` at the old
 value, so this assertion can see a dead TVIEW.  This test is the regression pin
 for either side of that changing.
 
-Needs pg_tviews read contract 2 (0.1.0-beta.30, the release confiture 1.37
+Needs pg_tviews read contract 2 or 3 (0.1.0-beta.30 or later, the release confiture 1.37
 requires) on the server.  The ``tviews`` CI leg runs it; elsewhere it skips
 without one — the ``pg_tviews_target`` fixture says so.
 """
@@ -72,7 +72,7 @@ def test_a_restored_tview_follows_its_base_tables(pg_tviews_target, tmp_path, jo
         _exec("postgres", target, f"CREATE DATABASE {_SRC_DB}")
         # Its own round trip: in one batch with CREATE EXTENSION the hook is
         # not loaded yet and `tv_post` becomes a plain table.
-        _exec(_SRC_DB, target, "CREATE EXTENSION pg_tviews")
+        _exec(_SRC_DB, target, "CREATE EXTENSION pg_tviews CASCADE")
         _exec(
             _SRC_DB,
             target,

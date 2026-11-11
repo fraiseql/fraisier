@@ -280,6 +280,18 @@ class DatabaseTransactionError(DatabaseError):
     )
 
 
+class PgTviewsUpdateError(DatabaseError):
+    """pg_tviews' catalog could not be brought to the library its server loaded.
+
+    confiture's ``CONFIG_016`` (1.45.0): ``migrate up`` updates a catalog one
+    release behind before it applies anything, and refuses every other case
+    with nothing changed, so no migration was applied.
+    """
+
+    code = "PG_TVIEWS_NOT_UPDATED"
+    steps_applied = 0
+
+
 class MigrationError(DatabaseError):
     """Database migration operation failed.
 

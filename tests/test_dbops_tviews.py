@@ -116,8 +116,16 @@ class TestSupport:
         # resolved from the catalog, not assumed to be `tviews`
         assert '"pgx".contract_version()' in conn.queries[-1][0]
 
-    def test_a_contract_past_two_is_newer_not_outdated(self) -> None:
+    def test_contract_three_is_read_too(self) -> None:
+        """pg_tviews 0.1.0-beta.35 offers contract 3; what fraisier reads of it
+        (the registry, ``pg_tviews_rebuild_all``, ``pg_tviews_profile``) kept
+        contract 2's names, as confiture 1.45 reads it beside contract 2."""
         support = tviews.read_support(FakeConn(EXTENSION, ("contract_version", [(3,)])))
+
+        assert (support.state, support.contract) == ("ok", 3)
+
+    def test_a_contract_past_three_is_newer_not_outdated(self) -> None:
+        support = tviews.read_support(FakeConn(EXTENSION, ("contract_version", [(4,)])))
 
         assert support.state == "newer"
 
@@ -125,9 +133,9 @@ class TestSupport:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Telling an operator to upgrade a pg_tviews that is ahead would be wrong."""
-        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(3,)])))
+        patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(4,)])))
 
-        with pytest.raises(tviews.TviewError, match=r"contract 3.*upgrade fraisier"):
+        with pytest.raises(tviews.TviewError, match=r"contract 4.*upgrade fraisier"):
             tviews.find_empty_tviews("postgresql:///app")
 
     def test_installed_is_true_only_on_contract_two(
@@ -290,7 +298,7 @@ class TestListTviews:
     ) -> None:
         patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(tviews.TviewError, match=r"together with confiture"):
+        with pytest.raises(tviews.TviewError, match=r"predates read contract 2"):
             tviews.list_tviews("postgresql:///app")
 
 
@@ -311,16 +319,93 @@ class TestOutdatedAdvice:
 
         minimum = confiture.platform.MINIMUM_PG_TVIEWS
 
-        assert f"upgrade it to {minimum} together" in self.outdated_message(monkeypatch)
+        assert f"({minimum}," in self.outdated_message(monkeypatch)
 
-    def test_it_names_the_reregistration_the_upgrade_needs(
+    def test_it_names_the_release_fraisier_is_tested_on(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """confiture 1.37's ``CONFIG_014`` hint: re-register after the UPDATE."""
-        assert self.outdated_message(monkeypatch).endswith(
-            "run ALTER EXTENSION pg_tviews UPDATE, then "
-            "SELECT * FROM tviews.pg_tviews_reregister_all()"
+        message = self.outdated_message(monkeypatch)
+
+        assert f"Install pg_tviews {tviews.TESTED_PG_TVIEWS} " in message
+
+    def test_it_says_no_update_reaches_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A release updates only from the one before it (confiture's CONFIG_014)."""
+        message = self.outdated_message(monkeypatch)
+
+        assert "confiture migrate up --recreate-pg-tviews --config" in message
+        assert "ALTER EXTENSION pg_tviews UPDATE" not in message
+        assert "pg_tviews_reregister_all" not in message
+
+    def test_it_says_to_restart_before_the_recreate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The recreate refuses a library PostgreSQL has not loaded yet."""
+        message = self.outdated_message(monkeypatch)
+
+        assert message.index("restart PostgreSQL") < message.index("--recreate")
+
+
+def test_the_tested_release_is_the_one_the_tviews_ci_leg_builds() -> None:
+    """The advice names the release the TVIEW suite runs against, and no other."""
+    dockerfile = (
+        Path(__file__).resolve().parent.parent / "ci" / "pg-tviews" / "Dockerfile"
+    ).read_text()
+
+    assert f"v{tviews.TESTED_PG_TVIEWS} tag" in dockerfile
+
+
+class TestUnderContractThreeTheBackingViewIsTheOwners:
+    """From pg_tviews 0.1.0-beta.35 a backing view is its TVIEW owner's alone.
+
+    No grant reaches it: none is copied from the table, and one made on the view
+    is revoked.  A role reads it only as a member of the owner's role, so that is
+    the fix to name; ``GRANT SELECT`` on the table would be one the role may
+    already hold.  Measured on beta.35: a role holding it is still refused, and
+    ``GRANT <owner> TO <role>`` lets the probe read the view.
+    """
+
+    def _conn(self) -> FakeConn:
+        return FakeConn(
+            EXTENSION,
+            ("contract_version", [(3,)]),
+            REGISTRY,
+            (
+                'EXISTS (SELECT 1 FROM "public"."tv_post"',
+                psycopg.errors.InsufficientPrivilege("permission denied for view"),
+            ),
+            probe('app"."tv_user', tv=False, view=True),
+            ("relowner", [("app_owner", "deploy")]),
         )
+
+    def test_the_warning_names_membership_in_the_owners_role(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        patch_connect(monkeypatch, self._conn())
+
+        with caplog.at_level("WARNING", logger="fraisier.dbops.tviews"):
+            found = tviews.find_empty_tviews("postgresql:///app")
+
+        assert [e.tview for e in found] == ["app.tv_user"]
+        (warning,) = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert 'GRANT "app_owner" TO "deploy"' in warning
+        assert "GRANT SELECT" not in warning
+        assert "follows its table's grants" not in warning
+
+    def test_under_fail_the_error_names_it_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_connect(monkeypatch, self._conn())
+
+        with pytest.raises(tviews.TviewError) as raised:
+            tviews.find_empty_tviews("postgresql:///app", on_unreadable="fail")
+
+        assert 'GRANT "app_owner" TO "deploy"' in str(raised.value)
 
 
 class TestFindEmpty:
@@ -368,7 +453,7 @@ class TestFindEmpty:
     ) -> None:
         patch_connect(monkeypatch, FakeConn(EXTENSION, ("contract_version", [(1,)])))
 
-        with pytest.raises(tviews.TviewError, match=r"together with confiture"):
+        with pytest.raises(tviews.TviewError, match=r"predates read contract 2"):
             tviews.find_empty_tviews("postgresql:///app")
 
 

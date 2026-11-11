@@ -375,8 +375,10 @@ def validate_pg_url_string(fraise_name: str, field: str, value: str) -> list[str
     enforcement (database connection time).
     """
     from fraisier.dbops._pgconn import PgConn
+    from fraisier.dbops._url import refuse_url_template
 
     try:
+        refuse_url_template(value)
         PgConn.parse(value).check_in_process()
     except ValueError as exc:
         # Not echoed: the URL may carry a password.

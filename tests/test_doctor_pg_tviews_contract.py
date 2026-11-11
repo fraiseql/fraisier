@@ -9,16 +9,14 @@ check asks confiture's own ``require_supported_pg_tviews_on`` instead.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import confiture.platform
 import psycopg
+import pytest
 from confiture.exceptions import ConfigurationError
 
 from fraisier import doctor
-
-if TYPE_CHECKING:
-    import pytest
 
 URL = "postgresql://app@db.example/app"
 
@@ -59,17 +57,30 @@ def _config(*urls: str | None) -> Any:
     return SimpleNamespace(fraises={"api": {"environments": envs}})
 
 
-#: confiture 1.37.0's own refusal, captured from ``require_supported_pg_tviews_on``
-#: against a pg_tviews 0.1.0-beta.27 server (read contract 1), not composed.
+#: confiture 1.45.0's own refusal of a pg_tviews 0.1.0-beta.27 (read contract 1),
+#: produced by its ``require_supported_pg_tviews``, not composed.
 _REFUSAL = ConfigurationError(
-    "pg_tviews 0.1.0-beta.27 offers read contract 1; confiture reads contract 2.",
+    "pg_tviews 0.1.0-beta.27 offers read contract 1; confiture reads contracts 2 "
+    "and 3, which pg_tviews 0.1.0-beta.30 and later offer.",
     error_code="CONFIG_014",
     resolution_hint=(
-        "Upgrade the server's pg_tviews to 0.1.0-beta.30 or later: "
-        "ALTER EXTENSION pg_tviews UPDATE, then "
-        "SELECT * FROM tviews.pg_tviews_reregister_all()"
+        "Upgrade the server's pg_tviews to 0.1.0-beta.30 or later. From the release "
+        "before the one installed, ALTER EXTENSION pg_tviews UPDATE (confiture "
+        "migrate up runs it); from an older one, drop the extension and create the "
+        "TVIEWs again (confiture migrate up --recreate-pg-tviews)"
     ),
 )
+
+
+def test_the_refusal_is_the_installed_confiture_s() -> None:
+    """The fixture above is what this confiture says, so it cannot go stale."""
+    from confiture.core.live_catalog import require_supported_pg_tviews
+
+    with pytest.raises(ConfigurationError) as caught:
+        require_supported_pg_tviews("0.1.0-beta.27", 1)
+
+    assert caught.value.args == _REFUSAL.args
+    assert caught.value.resolution_hint == _REFUSAL.resolution_hint
 
 
 def _run(
@@ -117,7 +128,7 @@ def test_fails_when_confiture_refuses_the_pg_tviews(monkeypatch) -> None:
     assert result.status == "fail"
     assert "offers read contract 1" in result.detail
     assert "0.1.0-beta.27" in result.detail
-    assert "pg_tviews_reregister_all()" in (result.fix_hint or "")
+    assert "--recreate-pg-tviews" in (result.fix_hint or "")
 
 
 def test_asks_confiture_on_its_own_connection_not_the_url(monkeypatch) -> None:

@@ -61,7 +61,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fraisier.dbops._pgconn import CONFIG_URL_KEYS, PgConn, config_child_env
+from fraisier.dbops._pgconn import (
+    CONFIG_URL_KEYS,
+    PgConn,
+    config_child_env,
+    configured_url,
+)
 from fraisier.dbops.confiture_contract import (
     envelope_error_actionable,
     envelope_error_code,
@@ -417,7 +422,9 @@ def _check_urls_agree(confiture_config: Path, database_url: str | None) -> None:
     ``-c`` config names.  fraisier's deploy, meanwhile, can override the URL from
     fraises.yaml, and that override never reaches the config file.  When the two
     name different databases the honest answer is to refuse — a gate that checks
-    the wrong database and reports it clean is worse than no gate at all.
+    the wrong database and reports it clean is worse than no gate at all.  The
+    config's URL is compared as confiture connects with it, its ``${VAR}``
+    references expanded (:func:`~fraisier.dbops._pgconn.configured_url`).
 
     Raises:
         ValueError: the two URLs name different databases.
@@ -438,7 +445,11 @@ def _check_urls_agree(confiture_config: Path, database_url: str | None) -> None:
         )
         raise ValueError(msg)
     try:
-        configured_target = _connection_target(configured)
+        expanded = configured_url(confiture_config, "database_url")
+        if expanded is None:
+            msg = "confiture cannot read the file"
+            raise ValueError(msg)
+        configured_target = _connection_target(expanded)
     except ValueError as exc:
         msg = (
             f"post_migrate_check cannot tell which database {confiture_config} "

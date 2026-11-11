@@ -1239,6 +1239,40 @@ class TestUrlsAreComparedAsLibpqReadsThem:
         with pytest.raises(ValueError, match=r"production\.yaml.*keepalives"):
             _check_urls_agree(config, "postgresql:///app")
 
+    @pytest.mark.parametrize(
+        ("written", "deployed", "agree"),
+        [
+            ("${ACME_DB_URL}", "postgresql:///app", True),
+            ("${ACME_DB_URL}", "postgresql:///other", False),
+            ("postgresql://${ACME_DB_HOST}/app", "postgresql://db.acme.test/app", True),
+            ("postgresql://${ACME_DB_HOST}/app", "postgresql://h/app", False),
+        ],
+    )
+    def test_a_configured_url_is_compared_as_confiture_expands_it(
+        self, project: Path, monkeypatch, written, deployed, agree
+    ) -> None:
+        """``migrate validate -c`` connects to the expansion (confiture 1.46)."""
+        monkeypatch.setenv("ACME_DB_URL", "postgresql:///app")
+        monkeypatch.setenv("ACME_DB_HOST", "db.acme.test")
+        config = project / "db/environments/production.yaml"
+        config.write_text(f"name: production\ndatabase_url: {written}\n")
+
+        if agree:
+            _check_urls_agree(config, deployed)
+        else:
+            with pytest.raises(ValueError, match="different database"):
+                _check_urls_agree(config, deployed)
+
+    def test_a_configured_url_naming_an_unset_variable_cannot_be_compared(
+        self, project: Path, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("ACME_DB_URL", raising=False)
+        config = project / "db/environments/production.yaml"
+        config.write_text("name: production\ndatabase_url: ${ACME_DB_URL}\n")
+
+        with pytest.raises(ValueError, match=r"production\.yaml.*ACME_DB_URL"):
+            _check_urls_agree(config, "postgresql:///app")
+
 
 def test_the_temporary_schema_file_never_outlives_the_check(
     project: Path,

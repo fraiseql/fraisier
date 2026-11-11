@@ -160,3 +160,70 @@ def test_the_restore_strategy_refuses_a_bad_admin_url_before_anything_runs():
         )
     service_manager.assert_not_called()
     assert service_manager.method_calls == []
+
+
+class TestATemplateReferenceInAUrlIsRefused:
+    """A URL fraisier passes that still holds ``${`` is refused before it connects.
+
+    confiture 1.46 expands ``${VAR}`` in an ``Environment``'s URL when it is
+    read, and 1.45 keeps it literal; fraisier's own children read it literally
+    on either. Refused here, no path depends on which.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "postgresql://app:${DB_PASSWORD}@db.acme/app",
+            "postgresql://app:p${lower}x@db.acme/app",
+            "postgresql://app:p${unclosed@db.acme/app",
+            "postgresql://app@db.acme/${DB_NAME}",
+        ],
+    )
+    def test_at_resolution(self, url):
+        from fraisier.dbops._url import resolve_db_url
+
+        with pytest.raises(ValueError, match=r"^admin_url: .*\$\{") as exc:
+            resolve_db_url(url, role="admin_url")
+        assert "DB_PASSWORD" not in str(exc.value)
+        assert "lower" not in str(exc.value)
+
+    def test_the_refusal_names_both_fixes(self):
+        from fraisier.dbops._url import resolve_db_url
+
+        with pytest.raises(ValueError) as exc:
+            resolve_db_url("postgresql://app:${DB_PASSWORD}@db.acme/app")
+        assert "!envvar" in str(exc.value)
+        assert "%24%7B" in str(exc.value)
+
+    def test_an_envvar_url_holding_one_is_refused(self, monkeypatch):
+        from fraisier.config._lazy_env import LazyEnv
+        from fraisier.dbops._url import resolve_db_url
+
+        monkeypatch.setenv("FRAISIER_TEST_DB_URL", "postgresql://u:a${B}c@h/db")
+
+        with pytest.raises(ValueError, match=r"^database_url: "):
+            resolve_db_url(LazyEnv("FRAISIER_TEST_DB_URL"))
+
+    def test_by_validate(self):
+        from fraisier.config._validation import validate_pg_url_string
+
+        [error] = validate_pg_url_string(
+            "api", "database_url", "postgresql://app:${DB_PASSWORD}@db.acme/app"
+        )
+
+        assert error.startswith("api: database.database_url: holds")
+        assert "!envvar" in error
+        assert "DB_PASSWORD" not in error
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "postgresql://app:p%24%7BX%7D@db.acme/app",
+            "postgresql://app:pa$$word@db.acme/app",
+            "postgresql://app:p{x}@db.acme/app",
+        ],
+    )
+    def test_what_confiture_would_not_expand_passes(self, url):
+        from fraisier.dbops._url import resolve_db_url
+
+        assert resolve_db_url(url) == url

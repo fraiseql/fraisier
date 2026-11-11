@@ -38,7 +38,7 @@ from urllib.parse import quote, unquote, urlparse
 
 import pytest
 
-from fraisier.dbops.tviews import CONTRACT
+from fraisier.dbops.tviews import CONTRACTS
 from fraisier.locking import file_deployment_lock
 from fraisier.ssh import SshTarget
 
@@ -430,7 +430,7 @@ def pytest_collection_modifyitems(items: list[Any]) -> None:
 
 @pytest.fixture
 def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
-    """A server with pg_tviews read contract 2 (0.1.0-beta.30 or later), or skip.
+    """A server with pg_tviews read contract 2 or 3 (0.1.0-beta.30 or later), or skip.
 
     **Skips even under ``FRAISIER_INTEGRATION=1``, on purpose.**  The main CI
     server has no pg_tviews, so a TVIEW test cannot be mandatory there.  The
@@ -449,7 +449,7 @@ def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
         conn.execute(f"CREATE DATABASE {probe_db}")
     try:
         with psycopg.connect(pg_target.dsn(probe_db), autocommit=True) as conn:
-            conn.execute("CREATE EXTENSION pg_tviews")
+            conn.execute("CREATE EXTENSION pg_tviews CASCADE")
         with psycopg.connect(pg_target.dsn(probe_db), autocommit=True) as conn:
             contract = conn.execute("SELECT tviews.contract_version()").fetchone()
     except psycopg.Error:
@@ -457,8 +457,10 @@ def pg_tviews_target(pg_target: PgTarget) -> PgTarget:
     finally:
         with psycopg.connect(pg_target.dsn(_MAINTENANCE_DB), autocommit=True) as conn:
             conn.execute(f"DROP DATABASE IF EXISTS {probe_db} WITH (FORCE)")
-    if contract is None or contract[0] != CONTRACT:
-        _skip_no_tviews(f"pg_tviews here does not offer read contract {CONTRACT}")
+    if contract is None or contract[0] not in CONTRACTS:
+        _skip_no_tviews(
+            f"pg_tviews here offers no read contract fraisier reads ({CONTRACTS})"
+        )
     return pg_target
 
 
