@@ -188,92 +188,38 @@ class TestConfitureBuild:
         assert "already exists" in result.error
 
 
-class TestViewHelpersForwarding:
-    """Test that migrate_up/dry_run_execute forward view_helpers: auto."""
+class TestViewHelpersAreNeverInstalled:
+    """``migrate_up`` and ``dry_run_execute`` never install confiture's view helpers.
 
-    def _mock_env(self, view_helpers="manual"):
-        """Create a mock Environment with the given view_helpers setting."""
+    confiture 1.48 made them opt-in (``confiture install-helpers``) and removed
+    ``migration.view_helpers``; installing them on a deploy is no longer
+    fraisier's to decide. The ``migration:`` block here is confiture's own
+    default, so a fraisier still keying on that setting fails these tests.
+    """
+
+    def _migrator(self, mock_migrator):
+        from confiture.config.environment import MigrationConfig
+
+        session = MagicMock()
+        up_result = MagicMock()
+        up_result.has_errors = False
+        up_result.migrations_applied = []
+        session.up.return_value = up_result
+        mock_migrator.from_config.return_value.__enter__ = MagicMock(
+            return_value=session
+        )
+        mock_migrator.from_config.return_value.__exit__ = MagicMock(return_value=False)
         env = MagicMock()
-        env.migration.view_helpers = view_helpers
-        env.migration.tracking_table = "tb_confiture"
+        env.migration = MigrationConfig()
         env.database_url = "postgresql:///testdb"
         return env
 
     @patch("fraisier.dbops.confiture.Migrator")
     @patch("fraisier.dbops.confiture._load_env")
-    def test_migrate_up_installs_helpers_when_auto(self, mock_load_env, mock_migrator):
+    def test_migrate_up_never_installs_view_helpers(self, mock_load_env, mock_migrator):
         from fraisier.dbops.confiture import migrate_up
 
-        env = self._mock_env(view_helpers="auto")
-        mock_load_env.return_value = env
-
-        mock_session = MagicMock()
-        mock_up_result = MagicMock()
-        mock_up_result.has_errors = False
-        mock_up_result.migrations_applied = []
-        mock_session.up.return_value = mock_up_result
-        mock_migrator.from_config.return_value.__enter__ = MagicMock(
-            return_value=mock_session
-        )
-        mock_migrator.from_config.return_value.__exit__ = MagicMock(return_value=False)
-
-        mock_vm = MagicMock()
-        mock_vm.helpers_installed.return_value = False
-
-        with patch(
-            "confiture.core.view_manager.ViewManager", return_value=mock_vm
-        ) as mock_vm_cls:
-            migrate_up("confiture.yaml")
-
-        mock_vm_cls.assert_called_once_with(mock_session._conn)
-        mock_vm.helpers_installed.assert_called_once()
-        mock_vm.install_helpers.assert_called_once()
-
-    @patch("fraisier.dbops.confiture.Migrator")
-    @patch("fraisier.dbops.confiture._load_env")
-    def test_migrate_up_skips_helpers_when_already_installed(
-        self, mock_load_env, mock_migrator
-    ):
-        from fraisier.dbops.confiture import migrate_up
-
-        env = self._mock_env(view_helpers="auto")
-        mock_load_env.return_value = env
-
-        mock_session = MagicMock()
-        mock_up_result = MagicMock()
-        mock_up_result.has_errors = False
-        mock_up_result.migrations_applied = []
-        mock_session.up.return_value = mock_up_result
-        mock_migrator.from_config.return_value.__enter__ = MagicMock(
-            return_value=mock_session
-        )
-        mock_migrator.from_config.return_value.__exit__ = MagicMock(return_value=False)
-
-        mock_vm = MagicMock()
-        mock_vm.helpers_installed.return_value = True
-
-        with patch("confiture.core.view_manager.ViewManager", return_value=mock_vm):
-            migrate_up("confiture.yaml")
-
-        mock_vm.install_helpers.assert_not_called()
-
-    @patch("fraisier.dbops.confiture.Migrator")
-    @patch("fraisier.dbops.confiture._load_env")
-    def test_migrate_up_skips_helpers_when_manual(self, mock_load_env, mock_migrator):
-        from fraisier.dbops.confiture import migrate_up
-
-        env = self._mock_env(view_helpers="manual")
-        mock_load_env.return_value = env
-
-        mock_session = MagicMock()
-        mock_up_result = MagicMock()
-        mock_up_result.has_errors = False
-        mock_up_result.migrations_applied = []
-        mock_session.up.return_value = mock_up_result
-        mock_migrator.from_config.return_value.__enter__ = MagicMock(
-            return_value=mock_session
-        )
-        mock_migrator.from_config.return_value.__exit__ = MagicMock(return_value=False)
+        mock_load_env.return_value = self._migrator(mock_migrator)
 
         with patch("confiture.core.view_manager.ViewManager") as mock_vm_cls:
             migrate_up("confiture.yaml")
@@ -282,33 +228,17 @@ class TestViewHelpersForwarding:
 
     @patch("fraisier.dbops.confiture.Migrator")
     @patch("fraisier.dbops.confiture._load_env")
-    def test_dry_run_execute_installs_helpers_when_auto(
+    def test_dry_run_execute_never_installs_view_helpers(
         self, mock_load_env, mock_migrator
     ):
         from fraisier.dbops.confiture import dry_run_execute
 
-        env = self._mock_env(view_helpers="auto")
-        mock_load_env.return_value = env
+        mock_load_env.return_value = self._migrator(mock_migrator)
 
-        mock_session = MagicMock()
-        mock_up_result = MagicMock()
-        mock_up_result.has_errors = False
-        mock_session.up.return_value = mock_up_result
-        mock_migrator.from_config.return_value.__enter__ = MagicMock(
-            return_value=mock_session
-        )
-        mock_migrator.from_config.return_value.__exit__ = MagicMock(return_value=False)
-
-        mock_vm = MagicMock()
-        mock_vm.helpers_installed.return_value = False
-
-        with patch(
-            "confiture.core.view_manager.ViewManager", return_value=mock_vm
-        ) as mock_vm_cls:
+        with patch("confiture.core.view_manager.ViewManager") as mock_vm_cls:
             dry_run_execute("confiture.yaml")
 
-        mock_vm_cls.assert_called_once_with(mock_session._conn)
-        mock_vm.install_helpers.assert_called_once()
+        mock_vm_cls.assert_not_called()
 
 
 class TestConfitureMigrate:

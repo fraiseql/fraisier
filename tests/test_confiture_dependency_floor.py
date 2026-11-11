@@ -64,7 +64,6 @@ CONFITURE_IMPORT_SURFACE: dict[str, tuple[str, ...]] = {
     # update a dry run cannot (1.45.0). See the signature test below.
     "confiture.core.pg_tviews_update": ("CatalogUpdate", "bring_up_to_date"),
     "confiture.core.restorer": ("DatabaseRestorer", "RestoreOptions"),
-    "confiture.core.view_manager": ("ViewManager",),
     "confiture.exceptions": ("ConfigurationError", "MigrationError", "RestoreError"),
     "confiture.models.migration": ("Migration",),
     # ``doctor``'s ``pg_tviews_contract`` asks confiture's own check (1.34.0).
@@ -363,3 +362,27 @@ def test_environment_from_file_expands_its_urls_on_read(
     assert environment.database_url == "postgresql:///acme_db"
     assert environment.scratch_url == "postgresql://scratch.acme.test/postgres"
     assert environment.written_database_url == "${ACME_DB_URL}"
+
+
+def test_view_helpers_are_not_a_migration_setting(tmp_path: Path) -> None:
+    """No ``migration:`` setting installs confiture's view helpers (1.48.0).
+
+    ``migration.view_helpers`` is gone and an unknown key in the block is
+    refused, so a config still carrying it fails loudly rather than deploying
+    without the helpers it asked for. ``migrate_up`` installs nothing either;
+    ``confiture install-helpers`` is the one way in.
+    """
+    from confiture.config.environment import Environment, MigrationConfig
+    from confiture.exceptions import ConfigurationError
+
+    assert "view_helpers" not in MigrationConfig.model_fields
+    config = tmp_path / "production.yaml"
+    config.write_text(
+        "database_url: postgresql:///acme_db\nmigration:\n  view_helpers: auto\n"
+    )
+
+    with pytest.raises(ConfigurationError) as refused:
+        Environment.from_file(config)
+
+    assert refused.value.error_code == "CONFIG_002"
+    assert "view_helpers" in str(refused.value)

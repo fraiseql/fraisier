@@ -3,12 +3,12 @@
 The guard refuses a preflight whose ledger restored empty beside a populated
 schema. A database where confiture ran but applied nothing holds an empty ledger
 and confiture's own tables: its checkpoint and lock-holder tables, and
-``confiture.saved_views`` / ``saved_view_indexes`` under ``view_helpers: auto``.
-Counting those read a never-migrated backup as a failed ledger restore. A restored
-database can also hold fraisier's own receipt schema.
+``confiture.saved_views`` / ``saved_view_indexes`` once ``confiture
+install-helpers`` has run. Counting those read a never-migrated backup as a failed
+ledger restore. A restored database can also hold fraisier's own receipt schema.
 
-The database is made by the real ``confiture migrate up``, never by hand, so the
-test sees what confiture leaves.
+The database is made by the real ``confiture migrate up`` and ``confiture
+install-helpers``, never by hand, so the test sees what confiture leaves.
 """
 
 from __future__ import annotations
@@ -30,33 +30,36 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.integration
 
 
-def _migrate_nothing(url: str, tmp_path: Path) -> None:
-    """``confiture migrate up`` with no migrations: the bookkeeping alone.
-
-    The config sits where a project keeps it: ``migrate up`` reads its
-    ``migration:`` settings, ``view_helpers: auto`` (the default) among them,
-    only from ``db/environments/<name>.yaml``.
-    """
-    migrations = tmp_path / "db" / "migrations"
-    migrations.mkdir(parents=True)
-    config = tmp_path / "db" / "environments" / "acme.yaml"
-    config.parent.mkdir()
-    config.write_text(f"name: acme\ndatabase_url: {url}\n")
+def _confiture(*args: str, cwd: Path) -> None:
     subprocess.run(
-        [
-            confiture_executable(),
-            "migrate",
-            "up",
-            "--config",
-            str(config),
-            "--migrations-dir",
-            str(migrations),
-        ],
+        [confiture_executable(), *args],
         check=True,
         capture_output=True,
         text=True,
+        cwd=cwd,
+    )
+
+
+def _migrate_nothing(url: str, tmp_path: Path) -> None:
+    """``confiture migrate up`` with no migrations, then the view helpers.
+
+    Every relation confiture's bookkeeping can leave: ``migrate up`` installs no
+    view helpers (confiture 1.48), so they are installed the one way there is.
+    """
+    migrations = tmp_path / "db" / "migrations"
+    migrations.mkdir(parents=True)
+    config = tmp_path / "confiture.yaml"
+    config.write_text(f"name: acme\ndatabase_url: {url}\n")
+    _confiture(
+        "migrate",
+        "up",
+        "--config",
+        str(config),
+        "--migrations-dir",
+        str(migrations),
         cwd=tmp_path,
     )
+    _confiture("install-helpers", "--config", str(config), cwd=tmp_path)
 
 
 @pytest.fixture

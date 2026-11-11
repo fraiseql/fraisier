@@ -64,7 +64,6 @@ def _dry_run() -> ConfitureConfigurationError:
 
 def _env() -> MagicMock:
     env = MagicMock()
-    env.migration.view_helpers = "manual"
     return env
 
 

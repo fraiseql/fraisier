@@ -645,17 +645,6 @@ def dry_run_execute(
                 connection_factory=migration_connection,
             ) as m,
         ):
-            if env.migration.view_helpers == "auto":
-                from confiture.core.view_manager import ViewManager
-
-                assert m._conn is not None, (
-                    "Connection must be available inside context"
-                )
-                vm = ViewManager(m._conn)
-                if not vm.helpers_installed():
-                    vm.install_helpers()
-                    log.info("Auto-installed confiture view helper functions")
-
             result = m.up(dry_run_execute=True)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -795,16 +784,6 @@ def migrate_up(
             connection_factory=migration_connection,
         ) as m,
     ):
-        # Auto-install view helpers if configured (mirrors confiture CLI behavior).
-        if env.migration.view_helpers == "auto":
-            from confiture.core.view_manager import ViewManager
-
-            assert m._conn is not None, "Connection must be available inside context"
-            vm = ViewManager(m._conn)
-            if not vm.helpers_installed():
-                vm.install_helpers()
-                log.info("Auto-installed confiture view helper functions")
-
         # Register migration hooks if configured
         _register_migration_hooks(m, hooks_config)
 

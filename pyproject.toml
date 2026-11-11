@@ -785,9 +785,28 @@ dependencies = [
   #     `_migrator.events`, `error_codes` or `exceptions`; CONFIG_016's text is
   #     unchanged. The floor moves with the cap: `from_file` and
   #     `bookkeeping_schemas` are 1.47's.
+  # **1.48.0.**
+  #   * ⚠️ View helpers are opt-in (#833): `migrate up` installs none, and
+  #     `migration.view_helpers` is removed. fraisier's own copy of the `auto`
+  #     install (`migrate_up`, `dry_run_execute`) is gone with it; nothing in
+  #     fraisier imports `ViewManager` now. Measured: `migrate up` with no
+  #     migrations leaves no `confiture` schema; `install-helpers` adds the two
+  #     tables the #262 guard leaves out.
+  #   * ⚠️ The `migration:` block has one reader (`migration_block`), applies from
+  #     a config at any path (#832), and refuses an unknown key: `view_helpers:
+  #     auto` is `CONFIG_002` from `Environment.from_file`, so a deploy, `db
+  #     migrate`, the drift gate's `migrate validate` and the template rule's
+  #     preflight refuse such a config. The restore preflight's config is
+  #     fraisier's own and holds only `tracking_table`.
+  #   * `--exit-codes-json` adds `CONFIG_017` (exit 5: `install-helpers` refuses a
+  #     `confiture` schema on the role's search_path) and moves nothing else; the
+  #     class table fraisier vendors is unchanged. No change to
+  #     `pg_tviews_update`, `restorer`, `hooks`, `builder`, `exceptions` or the
+  #     ledger's functions; the `view_helpers_installed` event is gone, and
+  #     fraisier never read it. The floor moves with the cap.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.47.0,<1.48",
+  "fraiseql-confiture>=1.48.0,<1.49",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0.1,<7.0",

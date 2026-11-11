@@ -46,8 +46,6 @@ class _FakeMigrator:
         self._result = result
         self._raises = raises
         self._conn = MagicMock()
-        self.migration = MagicMock()
-        self.migration.view_helpers = "off"
 
     def __enter__(self):
         return self
@@ -66,7 +64,6 @@ def _run_migrate_up(tmp_path: Path, migrator: _FakeMigrator):
     from fraisier.dbops import confiture as dbops
 
     env = MagicMock()
-    env.migration.view_helpers = "off"
 
     with (
         patch.object(dbops, "_load_env", return_value=env),
