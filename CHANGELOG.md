@@ -198,7 +198,6 @@ reconciles its units, failing on drift by default (#506).
   CLI's next steps printed exited 1. They now say
   `sudo fraisier scaffold-install`. A deploy stopped by a pending operator
   install says so and names it, instead of advising a retry that cannot help.
-||||||| parent of d6e7e08 (fix(tviews): read pg_tviews 0.1.0-beta.35, and name the grant that works there)
 
 ## [0.96.1] - 2026-11-05
 
