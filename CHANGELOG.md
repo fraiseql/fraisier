@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.99.0] - 2026-11-12
+
+**One ⚠️ change to read before upgrading:** a configuration `nginx -t` refuses now
+fails `scaffold-install` (exit 1), where it used to skip the reload and report success.
+
 ### Added
 
 - **`scaffold-install --only <category>` and `--path <file>` install part of
@@ -23,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A configuration `nginx -t` refuses now fails `scaffold-install`.**
+- ⚠️ **A configuration `nginx -t` refuses now fails `scaffold-install`.**
   `install.sh` ran `nginx -t && systemctl reload nginx`, a list `set -e` does
   not stop on: nginx was not reloaded, the install still exited 0 and the root
   policy was written. It now stops with exit 1 and says why.
