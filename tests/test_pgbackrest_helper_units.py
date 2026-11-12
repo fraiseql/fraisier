@@ -195,7 +195,11 @@ class TestInstallation:
         (marker,) = [
             i for i, line in enumerate(lines) if "Installing pgBackRest helper" in line
         ]
-        assert lines[marker - 1].strip() == 'if _scope_active "api" "staging"; then'
+        # The host gate, then the --only / --path filter (#501).
+        assert lines[marker - 2].strip() == 'if _scope_active "api" "staging" && \\'
+        assert lines[marker - 1].strip() == (
+            f'_wants systemd "systemd/{socket_unit}" "systemd/{service_unit}"; then'
+        )
         block = "\n".join(lines[marker : marker + 10])
         # #279's sequence: the running .service holds the OLD argv, so it is
         # stopped and the socket restarted rather than `enable --now`-ed.

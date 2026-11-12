@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`scaffold-install --only <category>` and `--path <file>` install part of
+  the scaffold** ([#501](https://github.com/fraiseql/fraisier/issues/501)).
+  Categories are `nginx`, `systemd` and `sudoers` (`scripts` and `ci` are
+  accepted and install nothing: they are used in place). The filter runs in
+  the rendered `install.sh`, so `nginx -t` and `visudo -c` still guard their
+  category, and the diff before the prompt lists the selected files only. The
+  root policy changes only for the selected entries, so a partial install needs
+  a policy already in place. `scaffold-diff` takes the same options, and
+  `sudo fraisier scaffold-diff --apply --only …` installs through
+  scaffold-install. A deploy still refuses while anything is pending; its error
+  now names the categories and the `--only` command that clears them.
+
+### Fixed
+
+- **A configuration `nginx -t` refuses now fails `scaffold-install`.**
+  `install.sh` ran `nginx -t && systemctl reload nginx`, a list `set -e` does
+  not stop on: nginx was not reloaded, the install still exited 0 and the root
+  policy was written. It now stops with exit 1 and says why.
+
 ## [0.98.0] - 2026-11-11
 
 **Four ⚠️ changes to read before upgrading:** confiture 1.48 is required and a deploy

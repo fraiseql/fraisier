@@ -232,8 +232,9 @@ class TestInstallation:
                 for i, line in enumerate(lines)
                 if f'_install_artifact "systemd/{unit}"' in line
             ]
-            assert (
-                lines[index - 1].strip() == 'if _scope_active "api" "production"; then'
+            # The host gate, then the --only / --path filter (#501).
+            assert lines[index - 1].strip() == (
+                f'if _scope_active "api" "production" && _wants systemd "systemd/{unit}"; then'
             )
         (index,) = [
             i
@@ -241,7 +242,10 @@ class TestInstallation:
             if f"systemctl enable --now {timer}" in line
         ]
         preceding = [line.strip() for line in lines[max(0, index - 4) : index]]
-        assert 'if _scope_active "api" "production"; then' in preceding
+        assert (
+            f'if _scope_active "api" "production" && _wants systemd "systemd/{timer}"; then'
+            in preceding
+        )
 
     def test_renderer_and_manifest_read_one_naming_authority(
         self, tmp_path, monkeypatch

@@ -29,6 +29,9 @@ VALIDATE_ONLY=false
 VERBOSE=false
 STANDALONE=false
 SCAFFOLD_DIR=""
+# Part of the scaffold (#501): `--only <category>` (repeatable) or `--path <file>`.
+_FILTER_ONLY=" "
+_FILTER_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -53,6 +56,18 @@ while [[ $# -gt 0 ]]; do
       STANDALONE=true
       shift 2
       ;;
+    --only|--path)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: $1 needs a value" >&2
+        exit 2
+      fi
+      if [[ "$1" == "--only" ]]; then
+        _FILTER_ONLY+="$2 "
+      else
+        _FILTER_PATH="$2"
+      fi
+      shift 2
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo ""
@@ -62,6 +77,9 @@ while [[ $# -gt 0 ]]; do
       echo "  --verbose, -v             Enable verbose output"
       echo "  --standalone              Run without requiring PROJECT_DIR to exist"
       echo "  --scaffold-dir <path>     Path to scaffold files (implies --standalone)"
+      echo "  --only <category>         Install one category: nginx, systemd, sudoers"
+      echo "                            (repeatable; scripts and ci install nothing)"
+      echo "  --path <file>             Install one file, relative to the scaffold tree"
       echo "  --help, -h                Show this help message"
       exit 0
       ;;
@@ -82,6 +100,62 @@ PROJECT_DIR="/opt/{{ project_name }}"
 if [[ -z "$SCAFFOLD_DIR" ]]; then
   SCAFFOLD_DIR="$(dirname "$(realpath "$0")")"
 fi
+
+# ---------------------------------------------------------------------------
+# Part of the scaffold (#501).
+#
+# Checked before anything else runs: a filter that names nothing must not
+# install everything, and one that names a file outside the tree must not
+# install that. Without a filter every gate below is open, so a full install
+# plans exactly what it did before.
+#
+# `--path` selects its category too, read off the file's place in the tree, so
+# the category's check still runs: `nginx -t` before the reload, `visudo -c`
+# before the sudoers install.
+_filter_refuse() {
+  echo "Error: $*" >&2
+  echo "Nothing has been changed." >&2
+  exit 2
+}
+if [[ "$_FILTER_ONLY" != " " && -n "$_FILTER_PATH" ]]; then
+  _filter_refuse "give either --only or --path, not both"
+fi
+for _category in $_FILTER_ONLY; do
+  case "$_category" in
+    nginx|systemd|sudoers|scripts|ci) ;;
+    *) _filter_refuse "unknown category '${_category}': choose from nginx, systemd, sudoers, scripts, ci" ;;
+  esac
+done
+if [[ -n "$_FILTER_PATH" ]]; then
+  case "/${_FILTER_PATH}/" in
+    //*|*/../*|*/./*|*//*)
+      _filter_refuse "--path '${_FILTER_PATH}' must be relative to the scaffold tree" ;;
+  esac
+  if [[ ! -f "${SCAFFOLD_DIR}/${_FILTER_PATH}" ]]; then
+    _filter_refuse "--path '${_FILTER_PATH}' is not in ${SCAFFOLD_DIR}"
+  fi
+  case "$_FILTER_PATH" in
+    nginx/*) _FILTER_ONLY=" nginx " ;;
+    sudoers) _FILTER_ONLY=" sudoers " ;;
+    *.service|*.socket|*.timer) _FILTER_ONLY=" systemd " ;;
+    *) _filter_refuse "--path '${_FILTER_PATH}' is not a file this script installs" ;;
+  esac
+fi
+# _section <category>: does this run install anything of <category>?
+_section() { [[ "$_FILTER_ONLY" == " " || "$_FILTER_ONLY" == *" $1 "* ]]; }
+# _wants <category> <source>...: is one of these rendered files selected?
+_wants() {
+  _section "$1" || return 1
+  shift
+  [[ -z "$_FILTER_PATH" ]] && return 0
+  local source
+  for source in "$@"; do
+    [[ "$source" == "$_FILTER_PATH" ]] && return 0
+  done
+  return 1
+}
+# _sweeps <category>: the category's housekeeping, which no single file selects.
+_sweeps() { _section "$1" && [[ -z "$_FILTER_PATH" ]]; }
 
 # Helper function to run commands conditionally
 _run() {
@@ -557,6 +631,11 @@ if [[ "$DRY_RUN" != "true" ]] && ! _nginx_brotli_ready; then
 fi
 {% endif %}
 
+# Host setup: users, directories, uv, the root fraisier copy and packages. Units
+# depend on all of it, so it runs with every install that writes a unit; an
+# nginx or sudoers-only install leaves it alone.
+if _section systemd; then
+
 # Create deploy user if it does not exist
 if ! id -u "${DEPLOY_USER}" &>/dev/null; then
     echo "  Creating user ${DEPLOY_USER}"
@@ -675,6 +754,8 @@ _run sudo apt-get install -y -qq --no-install-recommends \
     certbot \
     python3-certbot-nginx
 
+fi
+
 # ---------------------------------------------------------------------------
 # Manifest preflight — verify the whole tree BEFORE installing any of it.
 #
@@ -728,6 +809,7 @@ echo "  ${_MANIFEST_CHECKED} artifact(s) match the manifest"
 # instead. A missing source now means the render did not produce this
 # machine's unit, and there is nothing safe to install in its place.
 {% set webhook_service = 'fraisier-' ~ project_name ~ '-webhook.service' %}
+if _wants systemd "${_FRAISIER_WEBHOOK_UNIT}"; then
 WEBHOOK_SRC="${SCAFFOLD_DIR}/${_FRAISIER_WEBHOOK_UNIT}"
 WEBHOOK_DST="/etc/systemd/system/{{ webhook_service }}"
 if [ ! -f "${WEBHOOK_SRC}" ]; then
@@ -768,11 +850,13 @@ if _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
 fi
 {% endfor %}
 {% endfor %}
+fi
 
 # Install systemctl helper service and socket (replaces old systemctl wrapper)
 HELPER_SERVICE_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.service"
 HELPER_SOCKET_SRC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-systemctl-helper.socket"
-if [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
+if _wants systemd "${HELPER_SERVICE_SRC#"${SCAFFOLD_DIR}/"}" "${HELPER_SOCKET_SRC#"${SCAFFOLD_DIR}/"}" && \
+   [ -f "${HELPER_SERVICE_SRC}" ] && [ -f "${HELPER_SOCKET_SRC}" ]; then
     echo "  Installing systemctl helper service and socket"
     _run sudo cp "${HELPER_SERVICE_SRC}" \
        /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.service
@@ -802,7 +886,8 @@ fi
 # Install scaffold-install-helper service and socket (runs as root, no sudo needed)
 SCAFFOLD_INSTALL_HELPER_SVC="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-scaffold-install-helper.service"
 SCAFFOLD_INSTALL_HELPER_SOCK="${SCAFFOLD_DIR}/systemd/fraisier-{{ project_name }}-scaffold-install-helper.socket"
-if [ -f "${SCAFFOLD_INSTALL_HELPER_SVC}" ] && [ -f "${SCAFFOLD_INSTALL_HELPER_SOCK}" ]; then
+if _wants systemd "${SCAFFOLD_INSTALL_HELPER_SVC#"${SCAFFOLD_DIR}/"}" "${SCAFFOLD_INSTALL_HELPER_SOCK#"${SCAFFOLD_DIR}/"}" && \
+   [ -f "${SCAFFOLD_INSTALL_HELPER_SVC}" ] && [ -f "${SCAFFOLD_INSTALL_HELPER_SOCK}" ]; then
     echo "  Installing scaffold-install helper"
     _run sudo cp "${SCAFFOLD_INSTALL_HELPER_SVC}" \
        /etc/systemd/system/fraisier-{{ project_name }}-scaffold-install-helper.service
@@ -816,7 +901,7 @@ fi
 # Install sudoers fragment
 SUDOERS_SRC="${SCAFFOLD_DIR}/sudoers"
 SUDOERS_DST="/etc/sudoers.d/{{ project_name }}"
-if [ -f "${SUDOERS_SRC}" ]; then
+if _wants sudoers sudoers && [ -f "${SUDOERS_SRC}" ]; then
     echo "  Installing sudoers fragment"
     # Validate the STAGED file before installing it. Validating the installed
     # copy would leave an invalid fragment in /etc/sudoers.d/ — which sudo
@@ -849,7 +934,7 @@ fi
 # is load-bearing and a generic executor would discard the reasoning for it.
 echo "  Installing systemd units"
 {% for artifact in artifact_manifest.with_disposition('plain') %}
-if {{ host_gate(artifact.fraise, artifact.environment) }}; then
+if {{ host_gate(artifact.fraise, artifact.environment) }} && _wants systemd "{{ artifact.source }}"; then
     _install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
 fi
 {% endfor %}
@@ -882,7 +967,7 @@ echo "  Installing timers"
 # keep out.
 _TIMERS_INSTALLED=false
 {% for artifact in enabled_timers %}
-if {{ host_gate(artifact.fraise, artifact.environment) }}; then
+if {{ host_gate(artifact.fraise, artifact.environment) }} && _wants systemd "{{ artifact.source }}"; then
     _install_artifact "{{ artifact.source }}" "{{ artifact.destination }}"
     _TIMERS_INSTALLED=true
 fi
@@ -892,7 +977,7 @@ if [ "$_TIMERS_INSTALLED" = true ]; then
 fi
 {% for artifact in enabled_timers if artifact.source.endswith('.timer') %}
 {% set timer_unit = artifact.source | replace('systemd/', '') %}
-if {{ host_gate(artifact.fraise, artifact.environment) }}; then
+if {{ host_gate(artifact.fraise, artifact.environment) }} && _wants systemd "{{ artifact.source }}"; then
     echo "  Enabling {{ timer_unit }}"
     _run sudo systemctl enable --now {{ timer_unit }}
 fi
@@ -906,7 +991,7 @@ echo "  Checking for stale WatchdogSec directives in systemd service files"
 {% for env_name, env_config in fraise.get('environments', {}).items() %}
 {% set svc = env_config.service_base %}
 {% if svc %}
-if _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
+if _sweeps systemd && _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
     SERVICE_FILE="/etc/systemd/system/{{ svc }}.service"
     if [ -f "$SERVICE_FILE" ] && grep -q "^WatchdogSec=" "$SERVICE_FILE"; then
         echo "  Removing stale WatchdogSec from $SERVICE_FILE"
@@ -925,7 +1010,7 @@ fi
 {% set socket_unit = deploy_socket_name(env_config, env_name, fraise.name) %}
 {% set legacy_socket = 'fraisier-' ~ env_name ~ '.socket' %}
 {% if socket_unit != legacy_socket %}
-if _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
+if _sweeps systemd && _scope_active "{{ fraise.name }}" "{{ env_name }}"; then
     if [ -f /etc/systemd/system/{{ legacy_socket }} ]; then
         echo "  Removing stale pre-0.7.1 socket unit {{ legacy_socket }}"
         _run sudo systemctl disable --now {{ legacy_socket }} || true
@@ -943,17 +1028,21 @@ fi
 # installed by the manifest-driven block above, together with every other
 # generically-copied unit.
 
-_run sudo systemctl daemon-reload
+if _section systemd; then
+    _run sudo systemctl daemon-reload
+fi
 
 # Enable and start the systemctl helper socket (socket-activated, runs as root)
-if [ -f /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.socket ]; then
+if _wants systemd "systemd/fraisier-{{ project_name }}-systemctl-helper.socket" && \
+   [ -f /etc/systemd/system/fraisier-{{ project_name }}-systemctl-helper.socket ]; then
     echo "  Enabling fraisier-{{ project_name }}-systemctl-helper.socket"
     _run sudo systemctl enable --now fraisier-{{ project_name }}-systemctl-helper.socket
 fi
 
 {% for ish in install_helper_sockets %}
 # Install helper socket for {{ ish.fraise_name }}-{{ ish.env_name }} (runs as {{ ish.install_user }})
-if _scope_active "{{ ish.fraise_name }}" "{{ ish.env_name }}"; then
+if _scope_active "{{ ish.fraise_name }}" "{{ ish.env_name }}" && \
+   _wants systemd "systemd/{{ ish.socket_unit }}" "systemd/{{ ish.service_unit }}"; then
     if [ -f "${SCAFFOLD_DIR}/systemd/{{ ish.socket_unit }}" ] && \
        [ -f "${SCAFFOLD_DIR}/systemd/{{ ish.service_unit }}" ]; then
         echo "  Installing install helper for {{ ish.fraise_name }}-{{ ish.env_name }}"
@@ -994,7 +1083,8 @@ fi
 #
 # Gated on _scope_active: only a host that deploys this fraise in this
 # environment may carry a root daemon that restores its cluster.
-if _scope_active "{{ pair.fraise }}" "{{ pair.environment }}"; then
+if _scope_active "{{ pair.fraise }}" "{{ pair.environment }}" && \
+   _wants systemd "{{ pair.socket.source }}" "{{ pair.service.source }}"; then
     echo "  Installing pgBackRest helper for {{ pair.fraise }}-{{ pair.environment }}"
     _run_strict sudo cp "${SCAFFOLD_DIR}/{{ pair.socket.source }}" \
        {{ pair.socket.destination }}
@@ -1023,7 +1113,8 @@ fi
 # _run_strict throughout, also #279's reason: a half-applied re-bake leaves the
 # helper accepting connections with a stale allowlist, which surfaces as a
 # "not allowed" deep inside a later deploy rather than here.
-if _env_active "{{ pair.environment }}"; then
+if _env_active "{{ pair.environment }}" && \
+   _wants systemd "{{ pair.socket.source }}" "{{ pair.service.source }}"; then
     echo "  Installing unit-installer helper for {{ pair.environment }}"
     _run_strict sudo cp "${SCAFFOLD_DIR}/{{ pair.socket.source }}" \
        {{ pair.socket.destination }}
@@ -1052,31 +1143,43 @@ fi
 {% for vhost in artifact_manifest.with_disposition('nginx_vhost') %}
 {% set link = vhost.destination.split('/')[-1] %}
 {% if vhost.environment %}
-if {{ host_gate(vhost.fraise, vhost.environment) }}; then
+if {{ host_gate(vhost.fraise, vhost.environment) }} && _wants nginx "{{ vhost.source }}"; then
     echo "  Installing nginx config for {{ link }}"
     _run sudo cp "${SCAFFOLD_DIR}/{{ vhost.source }}" "{{ vhost.destination }}"
     _run sudo ln -sf "{{ vhost.destination }}" /etc/nginx/sites-enabled/{{ link }}
 fi
 {% else %}
-echo "  Installing nginx gateway config"
-_run sudo cp "${SCAFFOLD_DIR}/{{ vhost.source }}" "{{ vhost.destination }}"
-_run sudo ln -sf "{{ vhost.destination }}" /etc/nginx/sites-enabled/{{ link }}
+if _wants nginx "{{ vhost.source }}"; then
+    echo "  Installing nginx gateway config"
+    _run sudo cp "${SCAFFOLD_DIR}/{{ vhost.source }}" "{{ vhost.destination }}"
+    _run sudo ln -sf "{{ vhost.destination }}" /etc/nginx/sites-enabled/{{ link }}
+fi
 {% endif %}
 {% endfor %}
 
 # Remove legacy /etc/nginx/conf.d/rate_limit.conf if gateway.conf now contains
 # limit_req_zone — having both causes a duplicate-zone crash on nginx reload.
-if [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ] && \
+if _wants nginx nginx/gateway.conf && [ -f "${SCAFFOLD_DIR}/nginx/gateway.conf" ] && \
    grep -q "limit_req_zone" "${SCAFFOLD_DIR}/nginx/gateway.conf" && \
    [ -f /etc/nginx/conf.d/rate_limit.conf ]; then
     echo "  Removing legacy /etc/nginx/conf.d/rate_limit.conf (now handled by gateway.conf)"
     _run sudo rm -f /etc/nginx/conf.d/rate_limit.conf
 fi
 
+# `nginx -t` before the reload, and a refusal fails the install. Written as
+# `nginx -t && reload` this was a list `set -e` does not stop on: a config nginx
+# refused skipped the reload and the install still exited 0.
+if _section nginx; then
 if [[ "$VALIDATE_ONLY" != "true" && "$DRY_RUN" != "true" ]]; then
-    sudo nginx -t && sudo systemctl reload nginx
+    if ! sudo nginx -t; then
+        echo "  ✗ nginx -t refused the configuration, so nginx was not reloaded." >&2
+        echo "    The new files are in /etc/nginx/sites-available; fix fraises.yaml and re-run." >&2
+        exit 1
+    fi
+    sudo systemctl reload nginx
 elif [[ "$DRY_RUN" == "true" ]]; then
     echo "    [would run] sudo nginx -t && sudo systemctl reload nginx"
+fi
 fi
 
 {% if has_database %}
