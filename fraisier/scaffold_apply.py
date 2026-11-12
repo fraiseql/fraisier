@@ -38,6 +38,7 @@ from fraisier.scaffold.artifacts import (
     SYSTEMD_DIR,
     host_artifacts,
 )
+from fraisier.scaffold.selection import operator_remedy
 from fraisier.unit_validator import Refusal, check_scaffold_unit_name, validate_unit
 
 if TYPE_CHECKING:
@@ -80,8 +81,8 @@ class ApplyOutcome:
         lines += [f"failed: {item}" for item in self.failed]
         if self.pending:
             lines.append(
-                "An operator must approve this change: run `sudo fraisier "
-                "scaffold-install` against the deployed commit's fraises.yaml."
+                "An operator must approve this change, against the deployed "
+                "commit's fraises.yaml. " + operator_remedy(self.pending)
             )
         return "\n".join(lines)
 

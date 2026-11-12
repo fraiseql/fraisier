@@ -763,6 +763,29 @@ list them with their owner; `--prune-foreign` disables and deletes them.
 | `--yes`, `-y` | Skip confirmation prompt (useful for automation) |
 | `--verbose`, `-v` | Enable verbose output |
 | `--prune-foreign` | Disable and delete units owned by a fraise that does not run on this host. Never happens by default; run `scaffold-diff` first to see what would go. |
+| `--only <category>` | Install one category: `nginx`, `systemd` or `sudoers` (repeatable). `scripts` and `ci` are accepted and install nothing: those files are used in place from the scaffold tree. |
+| `--path <file>` | Install one file, relative to the rendered tree, e.g. `nginx/api.example.com.conf` or `systemd/api.service`. |
+
+**Part of the scaffold** ([#501](https://github.com/fraiseql/fraisier/issues/501))
+
+`--only` and `--path` narrow the whole command: the diff shown before the
+prompt lists the selected files only, and the rendered `install.sh` runs with
+the same filter. The category's check still runs: `nginx -t` before nginx is
+reloaded (a refusal reloads nothing and fails the install), `visudo -c` before
+the sudoers file is installed. Host setup (users, directories, packages) runs
+only with a full install or a `systemd` one.
+
+The root policy changes only for what was installed: the selected entries come
+from this render, every other entry keeps what an operator last approved. That
+needs a policy already in place, so the first install on a host is a full one.
+
+A deploy still refuses while any root-owned file differs from its render. Its
+error names the pending categories and the command that clears them, such as
+`sudo fraisier scaffold-install --only nginx`.
+
+`fraisier scaffold-diff` takes the same two options to narrow what it shows.
+`sudo fraisier scaffold-diff --apply --only <category>` (or `--path`) installs
+through this command, as root, with the same checks and policy update.
 
 **Restarts under a live deploy** (v0.63.0)
 
@@ -803,6 +826,9 @@ fraisier scaffold-install --yes
 
 # Install with verbose output
 fraisier scaffold-install --verbose
+
+# Install one nginx vhost, nothing else
+sudo fraisier scaffold-install --path nginx/api.example.com.conf
 ```
 
 **Typical Workflow:**

@@ -832,6 +832,7 @@ class BaseDeployer(StatusRecordMixin, ABC):
         """
         from fraisier.config_watcher import ConfigWatcher
         from fraisier.errors import DeploymentError
+        from fraisier.scaffold.selection import operator_remedy
 
         logger.info("Installing updated scaffold files")
         config_path = Path(config_path)
@@ -851,13 +852,7 @@ class BaseDeployer(StatusRecordMixin, ABC):
             pending = getattr(socket_result, "pending", [])
             # A pending file is the operator's to install (#433): retrying the
             # deploy cannot help, so the default "retry" hint would mislead.
-            remedy = (
-                "These files are installed by an operator: run `sudo fraisier "
-                "scaffold-install` on this host (it shows the diff and asks), "
-                "then deploy again."
-                if pending
-                else ""
-            )
+            remedy = operator_remedy(pending) if pending else ""
             raise DeploymentError(
                 f"Failed to install scaffold files via socket helper: "
                 f"{self._combine_output(socket_result)}"

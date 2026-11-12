@@ -301,7 +301,9 @@ class TestHostGating:
                 if f'_install_artifact "systemd/{unit}"' not in line:
                     continue
                 gate = lines[index - 1].strip()
-                assert gate == 'if _env_active "development"; then', (
+                # The host gate, then the --only / --path filter (#501).
+                expected = f'if _env_active "development" && _wants systemd "systemd/{unit}"; then'
+                assert gate == expected, (
                     f"{unit} is installed under {gate!r}; a received corpus "
                     f"has no owning fraise, so it must not route through "
                     f"_scope_active"
@@ -320,7 +322,10 @@ class TestHostGating:
             if f"systemctl enable --now {timer}" in line
         ]
         preceding = [line.strip() for line in lines[max(0, index - 4) : index]]
-        assert 'if _env_active "development"; then' in preceding
+        assert (
+            f'if _env_active "development" && _wants systemd "systemd/{timer}"; then'
+            in preceding
+        )
 
 
 class TestTimerDisposition:

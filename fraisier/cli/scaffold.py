@@ -20,6 +20,7 @@ from .main import main
 
 if TYPE_CHECKING:
     from fraisier.root_policy import RootPolicy
+    from fraisier.scaffold.selection import Selection
 
 # Distinct exit code for --strict-sudoers aborts (#224). 1 stays generic;
 # this lets CI/automation distinguish "sudoers would change" from any other
@@ -61,11 +62,45 @@ def _report_foreign_units(config, *, server: str | None = None) -> None:
     )
 
 
+def _selection_options(command):
+    """``--only`` / ``--path`` (#501), shared by scaffold-diff and scaffold-install."""
+    command = click.option(
+        "--path",
+        "path",
+        default=None,
+        help=(
+            "Only this file, relative to the rendered scaffold tree "
+            "(e.g. nginx/api.example.com.conf)."
+        ),
+    )(command)
+    return click.option(
+        "--only",
+        "only",
+        multiple=True,
+        metavar="CATEGORY",
+        help=(
+            "Only this category: nginx, systemd or sudoers (repeatable). "
+            "scripts and ci are used in place and install nothing."
+        ),
+    )(command)
+
+
+def _parse_selection_or_exit(only: tuple[str, ...], path: str | None):
+    from fraisier.scaffold.selection import SelectionError, parse_selection
+
+    try:
+        return parse_selection(only, path)
+    except SelectionError as exc:
+        console.print(f"[red]Error:[/red] {exc}", markup=True, highlight=False)
+        raise SystemExit(2) from exc
+
+
 @main.command(name="scaffold-diff")
 @click.argument("fraise", required=False)
 @click.argument("environment", required=False)
 @click.option("--apply", is_flag=True, help="Apply diffs (re-install changed files)")
 @click.option("--server", "-s", default=None, help="Only include paths for this server")
+@_selection_options
 @click.pass_context
 def scaffold_diff(
     ctx: click.Context,
@@ -73,6 +108,8 @@ def scaffold_diff(
     environment: str | None,
     apply: bool,
     server: str | None,
+    only: tuple[str, ...],
+    path: str | None,
 ) -> None:
     """Compare scaffold files against installed system files.
 
@@ -90,10 +127,25 @@ def scaffold_diff(
         fraisier scaffold-diff                    # all fraises/environments
         fraisier scaffold-diff api production    # specific fraise/env
         fraisier scaffold-diff --apply           # apply all differences
+        fraisier scaffold-diff --only nginx      # one category
+        sudo fraisier scaffold-diff --apply --path nginx/api.example.com.conf
+
+    With --only or --path, --apply is `sudo fraisier scaffold-install` with
+    the same filter: rendered as root, `nginx -t` / `visudo -c` before the
+    change takes effect, and the root policy updated for what it installed.
     """
     from fraisier.scaffold.diff import compute_scaffold_diff
 
     config = require_config(ctx)
+    selection = _parse_selection_or_exit(only, path)
+    if apply and selection is not None and _euid() != 0:
+        console.print(
+            "[red]Error:[/red] a filtered --apply installs root-owned files the "
+            "way scaffold-install does, and must run as root. Run: sudo "
+            f"fraisier scaffold-diff --apply {' '.join(selection.install_args())}",
+            highlight=False,
+        )
+        raise SystemExit(1)
 
     # Compute differences
     diffs = compute_scaffold_diff(
@@ -104,6 +156,13 @@ def scaffold_diff(
     )
 
     _report_foreign_units(config, server=server)
+
+    if selection is not None:
+        diffs = [
+            d
+            for d in diffs
+            if selection.covers(str(d.installed_path), d.generated_path)
+        ]
 
     if not diffs:
         console.print("[green]✓[/green] No scaffold differences found")
@@ -138,16 +197,29 @@ def scaffold_diff(
     total_files = len(diffs)
     console.print(f"\nSummary: {changed_count}/{total_files} files differ")
 
+    if apply and changed_count > 0 and selection is not None:
+        console.print("\n[cyan]Applying through scaffold-install...[/cyan]")
+        _root_install(
+            config,
+            selection=selection,
+            dry_run=False,
+            validate_only=False,
+            yes=True,
+            verbose=False,
+            strict_sudoers=False,
+        )
+        raise SystemExit(0)
+
     if apply and changed_count > 0:
         from fraisier.scaffold.diff import apply_scaffold_diffs
 
         console.print("\n[cyan]Applying changes...[/cyan]")
         applied, failures = apply_scaffold_diffs(config, diffs, server=server)
 
-        for path in applied:
-            console.print(f"[green]✓[/green] Updated {path}")
-        for path, error in failures:
-            console.print(f"[red]✗[/red] Failed {path}: {error}")
+        for updated in applied:
+            console.print(f"[green]✓[/green] Updated {updated}")
+        for failed, error in failures:
+            console.print(f"[red]✗[/red] Failed {failed}: {error}")
 
         if failures:
             console.print(f"\n[red]{len(failures)} file(s) failed to apply.[/red]")
@@ -254,6 +326,7 @@ def _build_install_cmd(
     dry_run: bool,
     validate_only: bool,
     verbose: bool,
+    selection_args: list[str] | tuple[str, ...] = (),
 ) -> list[str]:
     """Build the ``sudo install.sh`` argv."""
     cmd: list[str] = ["sudo", install_script]
@@ -263,6 +336,7 @@ def _build_install_cmd(
         cmd.append("--validate-only")
     if verbose:
         cmd.append("--verbose")
+    cmd.extend(selection_args)
     return cmd
 
 
@@ -280,14 +354,15 @@ def _run_script(cmd: list[str]) -> int:
 
 
 def _build_preview_cmd(cmd: list[str]) -> list[str]:
-    """Build a preview command by adding --dry-run flag."""
+    """Build a preview command by adding --dry-run flag.
+
+    Right after the script: counting the trailing ``--`` flags put it between
+    ``--only`` and its value.
+    """
     if "--dry-run" in cmd:
         return cmd
     preview = list(cmd)
-    # Insert before other flags
-    flag_count = sum(1 for c in preview if c.startswith("--"))
-    insert_pos = len(preview) - flag_count
-    preview.insert(insert_pos, "--dry-run")
+    preview.insert(2, "--dry-run")
     return preview
 
 
@@ -434,6 +509,16 @@ def _read_installed(path: str) -> bytes | None:
     return read_installed(path)
 
 
+def _load_current_policy(project: str) -> RootPolicy | None:
+    """The installed root policy, if root alone could have written it."""
+    from fraisier.root_policy import RootPolicyError, load_policy, policy_path
+
+    try:
+        return load_policy(policy_path(project))
+    except RootPolicyError:
+        return None
+
+
 def _read_current_policy(path: Path) -> str | None:
     try:
         return path.read_text()
@@ -561,11 +646,17 @@ def _draft_root_policy(config, tree: Path, payload: dict, hostname: str):
         return None
 
 
-def _print_policy_diff(draft) -> None:
+def _print_policy_diff(draft, against: RootPolicy | None = None) -> None:
+    """The policy this install writes, as a diff of the one in place.
+
+    A partial install diffs against the trusted policy it merged into.
+    """
     from fraisier.root_policy import dump_policy, policy_path
 
     path = policy_path(draft.policy.project)
-    current = _read_current_policy(path) or ""
+    current = (
+        dump_policy(against) if against is not None else _read_current_policy(path)
+    ) or ""
     new = dump_policy(draft.policy)
     console.print(f"\n[cyan]Root policy ({path}):[/cyan]")
     if current == new:
@@ -617,6 +708,7 @@ def _print_policy_diff(draft) -> None:
         "scaffold-diff' first to see what would go."
     ),
 )
+@_selection_options
 @click.pass_context
 def scaffold_install(
     ctx: click.Context,
@@ -627,6 +719,8 @@ def scaffold_install(
     strict_sudoers: bool,
     output_dir_opt: str | None,
     prune_foreign: bool,
+    only: tuple[str, ...],
+    path: str | None,
 ) -> None:
     """Render the scaffold as root and install it, after showing what changes.
 
@@ -642,8 +736,16 @@ def scaffold_install(
         sudo fraisier scaffold-install --dry-run       # Preview changes
         sudo fraisier scaffold-install --validate-only # Check prerequisites
         sudo fraisier scaffold-install --yes           # Install without prompt
+        sudo fraisier scaffold-install --only nginx    # One category
+        sudo fraisier scaffold-install --path nginx/api.example.com.conf
+
+    --only / --path install part of the tree, through the same install.sh, and
+    change only the matching entries of the root policy. They need a root
+    policy already in place; a deploy still refuses while anything else is
+    pending.
     """
     config = require_config(ctx)
+    selection = _parse_selection_or_exit(only, path)
 
     if _euid() != 0:
         console.print(
@@ -664,19 +766,55 @@ def scaffold_install(
     if prune_foreign and not (dry_run or validate_only):
         _prune_foreign_units(config, yes=yes)
 
+    _root_install(
+        config,
+        selection=selection,
+        dry_run=dry_run,
+        validate_only=validate_only,
+        yes=yes,
+        verbose=verbose,
+        strict_sudoers=strict_sudoers,
+    )
+
+
+def _root_install(config, *, selection: Selection | None, **flags) -> None:
+    """Render as root, install, write the policy, remove the render."""
     tree = _render_root_tree(config)
     try:
-        _install_root_tree(
-            config,
-            tree,
-            dry_run=dry_run,
-            validate_only=validate_only,
-            yes=yes,
-            verbose=verbose,
-            strict_sudoers=strict_sudoers,
-        )
+        _install_root_tree(config, tree, selection=selection, **flags)
     finally:
         shutil.rmtree(tree, ignore_errors=True)
+
+
+def _narrow_to_selection(config, selection: Selection, chosen, draft):
+    """This host's selected artifacts, the merged policy and the one it merged
+    into, or exit 2."""
+    from dataclasses import replace
+
+    from fraisier.scaffold.selection import (
+        SelectionError,
+        merge_policy,
+        select_artifacts,
+    )
+
+    try:
+        picked = select_artifacts(chosen or [], selection)
+    except SelectionError as exc:
+        console.print(f"[red]Error:[/red] {exc}", highlight=False)
+        raise SystemExit(2) from exc
+    if draft is None:
+        return picked, None, None
+    current = _load_current_policy(config.project_name)
+    if current is None:
+        console.print(
+            "[red]Error:[/red] a partial install changes part of the root policy, "
+            "and this host has no root policy only root could have written. Run "
+            "the whole install once first: sudo fraisier scaffold-install",
+            highlight=False,
+        )
+        raise SystemExit(2)
+    merged = merge_policy(current, draft.policy, selection, selected=picked)
+    return picked, replace(draft, policy=merged), current
 
 
 def _install_root_tree(
@@ -688,15 +826,19 @@ def _install_root_tree(
     yes: bool,
     verbose: bool,
     strict_sudoers: bool,
+    selection: Selection | None = None,
 ) -> None:
     from fraisier.scaffold.artifacts import host_artifacts
+    from fraisier.scaffold.selection import category_of
 
+    selection_args = selection.install_args() if selection else []
     install_script = tree / "install.sh"
     cmd = _build_install_cmd(
         str(install_script),
         dry_run=dry_run,
         validate_only=validate_only,
         verbose=verbose,
+        selection_args=selection_args,
     )
 
     # Show what will happen
@@ -712,6 +854,13 @@ def _install_root_tree(
     payload = _host_payload(tree)
     chosen = host_artifacts(payload, hostname)
     draft = _draft_root_policy(config, tree, payload, hostname)
+    shows_sudoers = True
+    merged_into = None
+    if selection is not None:
+        chosen, draft, merged_into = _narrow_to_selection(
+            config, selection, chosen, draft
+        )
+        shows_sudoers = any(category_of(a["destination"]) == "sudoers" for a in chosen)
 
     def _show_changes() -> None:
         """Every root-owned file and the policy, then the sudoers check.
@@ -722,7 +871,9 @@ def _install_root_tree(
         if chosen is not None:
             _print_root_file_diffs(tree, chosen)
         if draft is not None:
-            _print_policy_diff(draft)
+            _print_policy_diff(draft, merged_into)
+        if not shows_sudoers:
+            return
         diff = _print_sudoers_diff(
             sudoers_src=sudoers_src,
             project_name=config.project_name,
@@ -789,6 +940,6 @@ def _install_root_tree(
                 ("--verbose", verbose),
             )
             if on
-        ]
+        ] + selection_args
         _print_install_failure(returncode=returncode, rerun_flags=rerun, phase=phase)
         raise SystemExit(returncode)
