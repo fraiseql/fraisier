@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `install.sh` ran `nginx -t && systemctl reload nginx`, a list `set -e` does
   not stop on: nginx was not reloaded, the install still exited 0 and the root
   policy was written. It now stops with exit 1 and says why.
+- **The test suite runs under `git commit`.** git exports `GIT_INDEX_FILE` to
+  its hooks, and the pytest hook passed it to every test that builds its own
+  repository: 22 errors on commit that `pre-commit run` never showed, and the
+  same variable set by hand let a test replace the caller's index. The suite now
+  drops git's repository variables before any test runs.
 
 ## [0.98.0] - 2026-11-11
 

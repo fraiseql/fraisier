@@ -1,6 +1,7 @@
 """Shared test fixtures and configuration."""
 
 import asyncio
+import os
 import uuid
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,32 @@ from tests.fixtures.git_env import git_deploy_env as git_deploy_env  # noqa: PLC
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+#: What ``git rev-parse --local-env-vars`` lists: the variables that tie a git
+#: command to one repository. ``git commit`` exports some of them to its hooks
+#: (``GIT_INDEX_FILE`` always), and the pytest hook handed them on, so every test
+#: that builds its own repository used the index of the commit in progress.
+#: Removed once, before any test runs, so neither a test nor a child it starts
+#: can see the repository of whoever ran the suite.
+_GIT_REPOSITORY_ENV = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+)
+for _name in _GIT_REPOSITORY_ENV:
+    os.environ.pop(_name, None)
 
 
 @pytest.fixture(autouse=True)
