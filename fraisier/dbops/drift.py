@@ -749,7 +749,58 @@ def _coverage_lost(code: str | None) -> str:
     )
 
 
-def _no_verdict_reason(run: subprocess.CompletedProcess[str], exc: ValueError) -> str:
+#: The marker ``confiture build`` writes before each file it concatenates, in each
+#: of its built-in separator styles: ``/* ===`` / `` * File: x`` / `` * === */``,
+#: ``-- File: x`` and ``# File: x``, each closed by a rule line and a blank line.
+_BUILT_FILE_MARKER = re.compile(r"^\W*File: (?P<path>.+?)\s*$")
+_BUILT_RULE = "=" * 42
+#: Lines from a file marker to that file's first line: the closing rule, a blank.
+_MARKER_TO_FIRST_LINE = 3
+
+
+def _source_line(built: list[str], line: int) -> str | None:
+    """``path:line`` in the tree for *line* of a built schema, if it can be told.
+
+    ``None`` for a line before any file, on a separator, or under a separator
+    style this does not recognise — a custom template has no fixed shape.
+    """
+    for index in range(min(line, len(built)) - 1, -1, -1):
+        marker = _BUILT_FILE_MARKER.match(built[index])
+        if marker is None:
+            continue
+        closed = (
+            index + 2 < len(built)
+            and _BUILT_RULE in built[index + 1]
+            and not built[index + 2].strip()
+        )
+        in_file = line - (index + 1) - (_MARKER_TO_FIRST_LINE - 1)
+        return f"{marker['path']}:{in_file}" if closed and in_file >= 1 else None
+    return None
+
+
+def _in_the_tree(message: str, built: Path, text: str) -> str:
+    """*message* with each ``<built>:<line>`` restated as where the tree writes it.
+
+    confiture 1.49 locates a ``DIFFER_403`` in the file it was handed, which for
+    the gate is the schema it built into a temporary directory: gone by the time
+    the message is read, and not a file the operator edits. The build marks each
+    file it concatenates, so the line maps back to the file under the tree.
+    """
+    lines = text.splitlines()
+
+    def located(found: re.Match[str]) -> str:
+        line = int(found["line"])
+        return _source_line(lines, line) or f"line {line} of the built schema"
+
+    return re.sub(re.escape(str(built)) + r":(?P<line>\d+)", located, message)
+
+
+def _no_verdict_reason(
+    run: subprocess.CompletedProcess[str],
+    exc: ValueError,
+    *,
+    built: tuple[Path, str] | None = None,
+) -> str:
     """Why ``migrate validate`` gave no readable report — in confiture's words.
 
     Under ``--format json`` confiture writes its error envelope to **stdout** and
@@ -771,6 +822,8 @@ def _no_verdict_reason(run: subprocess.CompletedProcess[str], exc: ValueError) -
         remedy = envelope_error_actionable(run.stdout)
         tail = f" {remedy}" if remedy else ""
         lost = _coverage_lost(code)
+        if built is not None:
+            said = _in_the_tree(said, *built)
         return f"confiture migrate validate exit {run.returncode}: {said}{tail}{lost}"
     stderr = run.stderr.strip()[:200]
     detail = f"; {stderr}" if stderr else ""
@@ -1007,16 +1060,22 @@ def check_schema_drift(
             env=child_env,
         )
 
-    try:
-        reports = _reports(validate.stdout)
-    except ValueError as exc:
-        return DriftResult(
-            passed=False,
-            exit_code=validate.returncode,
-            checks=selected,
-            build_notes=notes,
-            error=_no_verdict_reason(validate, exc),
-        )
+        try:
+            reports = _reports(validate.stdout)
+        except ValueError as exc:
+            # Read while the build is still there: the refusal can locate a
+            # name in it, and the operator needs that line in their own tree.
+            try:
+                built = (expected, expected.read_text(encoding="utf-8"))
+            except OSError:
+                built = None
+            return DriftResult(
+                passed=False,
+                exit_code=validate.returncode,
+                checks=selected,
+                build_notes=notes,
+                error=_no_verdict_reason(validate, exc, built=built),
+            )
 
     risen, warnings = _escalate(_items(reports, "warning"), escalate)
     critical = _items(reports, "critical") + _stale_overloads(reports) + risen
