@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.100.0] - 2026-11-13
+
 ### Changed
 
 - **confiture 1.49.0 is required** (`>=1.49.0,<1.50`). Its code and exit code
