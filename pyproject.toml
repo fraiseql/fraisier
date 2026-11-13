@@ -804,9 +804,26 @@ dependencies = [
   #     `pg_tviews_update`, `restorer`, `hooks`, `builder`, `exceptions` or the
   #     ledger's functions; the `view_helpers_installed` event is gone, and
   #     fraisier never read it. The floor moves with the cap.
+  # **1.49.0.**
+  #   * `platform.parse_schema` and `platform.introspect` refuse a name that
+  #     needs quotes (`DIFFER_403`, exit 5), as the differ and drift already did;
+  #     their only CLI reader is `confiture schema dump-model`. fraisier calls
+  #     neither, nor that command: the drift gate's `migrate validate` refused
+  #     such a tree already, and doctor's `post_migrate_check_names_conform`
+  #     still predicts it.
+  #   * `DIFFER_403`'s message names the file and line for a tree, and its
+  #     registry `message_template` is reworded; code, severity and exit code are
+  #     unchanged. fraisier matches the code only, and the class table it
+  #     vendors is unchanged. The file is the one `migrate validate` was handed:
+  #     for the drift gate, its temporary build, so `drift._in_the_tree` maps
+  #     the line back through `confiture build`'s `File:` markers.
+  #   * A quoted schema keeps its case in an identity (`ObjectRef`, the differ,
+  #     the live reader); a name that needs quotes is refused before any
+  #     comparison, so no gate verdict changes. No floor moves in confiture's
+  #     own dependencies; the floor moves with the cap.
   # 1.34.0 is the first confiture to publish the pg_tviews check that doctor
   # calls. The Python floor is still 1.30.0's.
-  "fraiseql-confiture>=1.48.0,<1.49",
+  "fraiseql-confiture>=1.49.0,<1.50",
   "fastapi>=0.109.0,<1.0",
   "uvicorn>=0.27.0,<1.0",
   "pyyaml>=6.0.1,<7.0",
@@ -828,7 +845,7 @@ license = {text = "MIT"}
 name = "fraisier"
 readme = "README.md"
 requires-python = ">=3.14"
-version = "0.99.0"
+version = "0.100.0"
 
 [project.optional-dependencies]
 all-databases = [

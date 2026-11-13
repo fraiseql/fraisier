@@ -1010,3 +1010,21 @@ class TestARefusedComparisonHidesEveryOtherFinding:
 
         assert "NO drift was measured" in result.summary(), result.summary()
         assert "not clean" in result.summary()
+
+    def test_the_refusal_names_the_file_the_operator_wrote(
+        self, tmp_path, drift_db
+    ) -> None:
+        """confiture 1.49 says where the name is written — in the file it was given.
+
+        That file is the schema the gate built into a temporary directory, gone
+        by the time anyone reads the message. The operator needs the file in
+        the tree, named as ``confiture build`` names it (relative to the schema
+        directories), and the line in it: ``"createdAt"`` is line 3 of
+        ``040_quoted.sql``.
+        """
+        project = self._project_with_a_quoted_name(tmp_path, drift_db)
+
+        result = _gate(project)
+
+        assert " at 040_quoted.sql:3," in str(result.error), result.error
+        assert "fraisier-drift-" not in str(result.error), result.error

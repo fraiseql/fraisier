@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.100.0] - 2026-11-13
+
+### Changed
+
+- **confiture 1.49.0 is required** (`>=1.49.0,<1.50`). Its code and exit code
+  for a name that needs quotes (`DIFFER_403`, exit 5) are unchanged, and no gate
+  verdict changes: such a tree was already refused before any comparison.
+  confiture's `platform.parse_schema` and `platform.introspect` now refuse those
+  names too; fraisier calls neither.
+
+### Fixed
+
+- **The drift gate's `DIFFER_403` names the file you wrote.** confiture 1.49
+  locates the name in the file it compared, which for the gate is the schema it
+  built into a temporary directory, deleted before the report is read. The gate
+  now restates that location as the schema file and line, as `confiture build`
+  names the file (`at 040_quoted.sql:3`), or as the line of the built schema
+  when a custom separator template leaves the file unmarked.
+
 ## [0.99.0] - 2026-11-12
 
 **One ⚠️ change to read before upgrading:** a configuration `nginx -t` refuses now
