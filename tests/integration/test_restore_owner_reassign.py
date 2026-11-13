@@ -58,7 +58,12 @@ def owned_database(pg_target) -> Iterator[tuple[str, str, str, str]]:
 
     admin = pg_target.dsn("postgres")
     with psycopg.connect(admin, autocommit=True) as conn:
-        conn.execute(f"CREATE ROLE {source} NOLOGIN")
+        # CREATEDB as the restore path guarantees: the role that reassigns is
+        # the one that just recreated the database, and `refuse_without_createdb`
+        # stops a restore before the drop unless it may. PostgreSQL 18.7 makes
+        # REASSIGN OWNED need CREATEDB to move a database it owns, as ALTER
+        # DATABASE OWNER always has; 18.6 moved it without.
+        conn.execute(f"CREATE ROLE {source} NOLOGIN CREATEDB")
         conn.execute(f"CREATE ROLE {target} NOLOGIN")
         # REASSIGN requires the caller to hold privileges of the target role.
         conn.execute(f"GRANT {target} TO {source}")
